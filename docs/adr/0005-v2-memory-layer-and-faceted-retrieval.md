@@ -1749,27 +1749,26 @@ equality.
 
 #### 4.2 `api ↔ frontend`
 
-The frontend under `ui/` is not rewritten, but four payload changes
-reach it and **three are breaking**:
+The frontend was not rewritten, but four payload changes reached it and **three were
+breaking**:
 
-1. **`Answer.provenance` carries `normative_force`** and the UI reads it
-   (`components/chat/step-row.tsx:415`). Deleting `NoteAsset` empties a rendered
-   chat section.
-2. **`/columns/{id}/related`'s `rules` array is sourced only from notes**
-   (`viz/presenter.py:751-761`) and becomes permanently empty.
-3. **`/knowledge-graph`'s `kind` is a strict client-side `z.enum`**
-   (`lib/schemas.ts:137-145`) and `parse()` throws — a new `schema` kind
-   **hard-fails the whole graph page** rather than degrading.
-4. **`/corpus/assets` already ships a field named `summary`** — a synthesized
-   display one-liner. After v2 the name means the ≤250-char indexed field.
+1. **`Answer.provenance` carried `normative_force`** and the v1 UI read it. Deleting
+   `NoteAsset` empties a rendered chat section.
+2. **`/columns/{id}/related`'s `rules` array was sourced only from notes** and becomes
+   permanently empty.
+3. **`/knowledge-graph`'s `kind` was a strict client-side `z.enum`** and `parse()` throws —
+   a new `schema` kind **hard-fails the whole graph page** rather than degrading.
+4. **`/corpus/assets` already shipped a field named `summary`** — a synthesized display
+   one-liner. After v2 the name means the ≤250-char indexed field.
 
-Also: only 2 of the 9 read routes carry `description` at all, and `body` is
-exposed by none — a schema browser that showed documentation would start showing
-a retrieval artifact.
+Also: only 2 of the 9 read routes carried `description` at all, and `body` was exposed by
+none — a schema browser that showed documentation would start showing a retrieval artifact.
 
-**These are deliverables, not observations.** UI edits are a numbered step in
-the implementation order: add `body` to the read routes, widen the graph-kind
-enum, replace the notes-sourced `rules` array, rename the display field.
+**These were deliverables, not observations**, and they were delivered. `normative_force`
+appears nowhere in `ui/`; `browse_routes.py` sources `rules` from `table.rules` and serves
+`description` as `body` falling back to `summary`; `ui/lib/schemas.ts` types the graph node
+kind against the backend's `asset_type` rather than a frozen enum. The record stays because
+item 4 is the reason `summary` means two things in git history.
 
 #### 4.3 `Stage` taxonomy
 

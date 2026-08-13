@@ -1,474 +1,179 @@
 # 0004: Local-first conversation + run logging
 
-> **Superseded (2026-08-03).** The implementation this ADR describes was deleted
-> in commit `2347ae3`. Its premise survives — logging is local-first and durable,
-> written at existing middleware seams rather than through a new sink — but the
-> field-by-field design is replaced by a **declared register**: 
-> [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §4 and
-> `src/governed_bi/register/record.py`, where every logged field names its
-> producing stage and states whether absence is an error. The reason for the change
-> is in `lessons-from-v1.md` (deleted with v1): a hand-maintained field list
-> let a degradation counter reach the summary that no gate ever read.
-
-- **Status:** Superseded (2026-08-03) — see the note above. This line read
-  "Accepted (2026-07-22). M2 metadata track + durable conversation checkpointer
-  shipped; M5 gated full-content + deep-agent logging in progress." Corrected
-  2026-08-06 (audit §11): **the durable checkpointer did not ship.** The tree has
-  only `InMemorySaver`, in `serve/graph.py` and `api/routes.py`, and
-  `pyproject.toml` records that `langgraph-checkpoint-sqlite` and `-postgres` were
-  deliberately not taken because they had zero importers. So conversation state
-  does not survive a restart, and a status line saying it shipped is how a reader
-  would learn otherwise the hard way.
+- **Status:** Accepted and built (2026-07-22; rewritten against the tree 2026-08-12).
+  The turn log is built and is the conversation history. **The durable checkpointer half
+  was never built and is withdrawn**, not deferred — see §5. This page was rewritten
+  because the version it replaced described a v1 implementation deleted in `2347ae3`
+  and enumerated seams (`stack.py`, `middleware.py`, `governance.py`, `analyst/agent.py`)
+  that no longer exist; it also closed with "portable record format … both implemented;
+  default SQLite", which was never true in either tree.
 - **Deciders:** project owner + design session
-- **Related:** [0001](0001-langgraph-server-chat-runtime.md) (LangGraph
-  Server threads = persistence); [0002](0002-governed-agentic-serve-runtime.md)
-  (governance ledger, Inv #10; this ADR builds its deferred durable audit
-  sink); [0003](0003-governed-notes-tri-modal-retrieval.md);
-  [design-decisions.md](../design-decisions.md) (D8 serve-time memory; audit
-  dispositions R3 + R5)
-- **Refines:** **D8** (working memory is ephemeral today,
-  [design-decisions.md:137-147](../design-decisions.md)) and is the concrete
-  build of audit findings **R3** (vendor-independent interaction log,
-  [design-decisions.md:428-455](../design-decisions.md)) and **R5** (persist
-  ledger + add token/cost/duration/ts,
-  [design-decisions.md:488-517](../design-decisions.md)).
+- **Related:** [0002](0002-governed-agentic-serve-runtime.md) (the governance ledger this
+  log persists — Inv #10's deferred durable sink is this file);
+  [0005](0005-v2-memory-layer-and-faceted-retrieval.md) §4 (the declared register, which owns
+  *which fields* a record carries); [0007](0007-http-surface-and-the-ui-contract.md) and
+  [0009](0009-browsing-and-filtering-api.md) (the `/audit/*` routes that project it).
 
 ## Context
 
-- **The need (from the owner).** Keep durable **conversation history to
-  reference later**, with **metadata alongside**. The storage backend is not
-  prescribed ("I don't care how it's stored, as long as it is stored"); it
-  must live in the **DeepAgents/LangGraph backend**, so it is
-  **frontend-agnostic**: the Next.js UI, CLI, and eval all inherit it rather
-  than each building their own.
-- **This maps directly onto two already-deferred audit findings.** R3
-  (`design-decisions.md:428-455`) called for "a dedicated, queryable,
-  vendor-independent interaction log" keyed by turn + `corpus_release_hash`,
-  "capture-first, interpret-later," and "feedback is a validated hypothesis,
-  never a direct edit." R5 (`design-decisions.md:488-517`) found the ledger
-  "records a `verdict` per data-touching tool ... but carries no timing, no
-  token/cost, and no timestamp, and it is not durably persisted," and with
-  tracing off there is "no vendor-independent record" of latency or cost.
-- **Current gaps, cited:**
-  - **Tokens were captured nowhere (the pre-M2 state this ADR fixes).**
-    `eval/run_experiment.py:213` used to hard-code `"usage": None` in every
-    eval row, and nothing in the repo read `usage_metadata` off a model
-    response (a repo-wide search for the string returned zero hits at the
-    time). The M2 work below (§2, §3) closes both gaps.
-  - **Observability is cloud-only and a silent no-op without keys.** v1's
-    `git-history:src/governed_bi/obs.py` (deleted in `2347ae3` with the rest of v1)
-    documented "two tracers, both opt-in by environment and both no-ops when unset":
-    LangSmith gated on env vars, and `tracing_callbacks()` returned `[]` when the
-    Langfuse keys were unset. There is no local, vendor-independent fallback in the
-    tree today either, and no module has taken that file's place — tracing is
-    whatever the LangSmith environment variables the SDK reads say it is. The
-    finding is what motivates this ADR and it is still open.
-  - **Conversation history is ephemeral, or lives in a checkpointer nobody
-    attaches.** `InMemoryWorkingMemory` (`memory/store.py:36-70`, D8) is
-    explicitly "ephemeral by design (lost on restart)." Separately,
-    ~~`build_chat_graph` (`api/graph_app.py:99-107`)~~ is "Compiled **without** a
-    checkpointer by default: on LangGraph Server the runtime injects
-    persistence" ~~(`graph_app.py:103-104`)~~, and the actual `compile(...)` call
-    only attaches one if the caller passes it in
-    ~~(`graph_app.py:181`)~~. The plain REST `/chat` path never passes one. The
-    only checkpointer instantiated anywhere in serve is ~~`stack.py`'s
-    per-process `InMemorySaver`, and it exists solely for the **inner** agent's
-    `ask_user` HITL interrupt/resume, not for conversation durability
-    (`api/stack.py:53-54` field + comment, `stack.py:172-178` construction,
-    `stack.py:222` wiring into `ServeStack`)~~.
+The owner's need was **durable conversation history to reference later, with metadata
+alongside**, held by the engine rather than by a client, so the UI, the CLI and eval inherit
+one record instead of each building their own. The storage backend was explicitly not
+prescribed.
 
-    > **Citations corrected 2026-08-07 (v2).** `build_chat_graph`, `api/stack.py`
-    > and `ServeStack` no longer exist in `src/governed_bi/`; the struck references
-    > point at v1 files that were deleted with the stale-DAG serve path (ADR 0002).
-    > The finding survives the rename in full, and there are now **two**
-    > `InMemorySaver`s, not one:
-    >
-    > - **`serve/graph.py::compile_graph`** — the default for every
-    >   in-process caller (eval harness, CLI, tests). `checkpointer=None` means
-    >   "make me an `InMemorySaver`"; `checkpointer=False` is the explicit
-    >   no-saver option, which also means no `ask_user`, since a saver-less graph
-    >   cannot interrupt. Its own docstring records that the saver grows
-    >   unboundedly and that `eval/harness.py` calls `delete_thread` per question
-    >   to contain it.
-    > - **`api/routes.py::_graph`** — the REST `/chat` fallback's
-    >   process-wide saver, compiled once so `thread_id` stays meaningful across
-    >   turns.
-    >
-    > The server entry is **`api/graph_app.py::make_graph`**, which
-    > `langgraph.json` points `graphs.serve` at and which compiles with **no**
-    > checkpointer. So the third v1 claim — "compiled without one, the runtime
-    > injects persistence" — is the one that is not merely still true but now
-    > mandatory: see the framework check below.
-    >
-    > What changed materially is the *scope* of the surviving finding. In v1 the
-    > only saver was the inner agent's HITL saver, so conversation durability had
-    > no store at all. In v2 the two savers above do serve conversation state
-    > across turns of a live process — they are just in-memory, so the gap this
-    > ADR opened is now "does not survive a restart" rather than "is not kept."
-    > ADR 0010's Consequences records the second-order defect that falls out of
-    > having two of them: one `session_id` names two unrelated checkpoints,
-    > so a REST fallback mid-conversation serves its turn in isolation.
+Two properties of the runtime make that need sharper than it sounds:
 
-  - **The framework half of the claim above is correct, verified 2026-08-07
-    against the installed `langgraph-api` 0.12.0.** LangGraph Server does inject
-    a checkpointer: `get_graph` yields `graph_obj.copy(update={"checkpointer":
-    checkpointer, "store": store})` (`langgraph_api/graph.py:409-415`) and
-    forwards it through `config["configurable"][CONFIG_KEY_CHECKPOINTER]` on the
-    factory path (`graph.py:382-385`). It is stronger than "injects", which is why
-    `make_graph()` must not bring its own: under `API_VARIANT == "local_dev"` a
-    registered `Pregel` carrying a `BaseCheckpointSaver` is a **hard startup
-    error** — *"persistence is handled automatically by the platform … will be
-    ignored when deployed"* (`graph.py:806-829`). Compiling `make_graph()` with a
-    saver would not degrade `langgraph dev`; it would refuse to start it.
-  - **The governance ledger is in-state, not durable.** `ledger:
-    Annotated[list, operator.add]` (`analyst/middleware.py:47`, on `GovState`)
-    accumulates one entry per governed tool call for the turn, but it lives
-    only in agent state; ADR 0002 Inv #10 explicitly left the durable sink as
-    a "seam for later" (`docs/adr/0002-governed-agentic-serve-runtime.md`,
-    Inv #10 / Q3).
+- **A checkpoint is not a transcript.** `serve/accept.py` applies `PER_TURN_RESET` at the top
+  of every turn, so a thread's checkpoint only ever describes its *newest* turn. Read the
+  checkpoint back and the earlier turns of the same conversation are gone.
+- **Cloud tracing is a no-op without keys and is vendor-shaped.** Tracing is whatever the
+  LangSmith environment variables the SDK reads say it is; there is no module in the tree
+  that owns it. A record that only exists when someone configured a vendor is not a record.
 
 ## Decision
 
-Make **LangGraph's native persistence the store**, capture metadata at the
-interception points ADR 0002 already owns, and add **one thin, decoupled
-portable append** for longevity and eval reuse.
+### 1. One append-only JSONL turn log, written by the engine
 
-### 1. A durable checkpointer is the conversation store
+`api/trace_store.append_turn` writes **one JSON object per line** to
+`runs/serve/<YYYY-MM-DD>.jsonl`. `TURN_LOG_DIR` is overridable
+(`GOVERNED_BI_TURN_LOG_DIR`) so a test never writes into the repository's own log.
 
-> **Re-cited 2026-08-07.** Every `build_chat_graph` / `graph_app.py:181` /
-> `stack.py` / `api/app.py` / `answer_question_agent` reference in this section
-> names a v1 symbol that no longer exists in `src/governed_bi/`. Read them against
-> the v2 map in the Context correction above: the server entry is
-> `api/graph_app.py::make_graph` (no checkpointer, and it must stay
-> that way — the platform errors on a graph that brings its own), the in-process
-> default is `serve/graph.py::compile_graph` (`InMemorySaver`), and the
-> REST fallback is `api/routes.py::_graph`. The decision itself is unaffected: no
-> durable saver shipped on any of the three, which is what the status note at the
-> top of this file records.
+Each entry is `asked_at`, `question`, `answer_text`, `outcome`, and `record`. The first four
+sit **beside** the record rather than merged into it: merged, every record read back out of
+this file would fail `register/record.undeclared_keys`.
 
-Swap the ephemeral setup (no checkpointer at all on `build_chat_graph`,
-`graph_app.py:181`, and an in-memory saver scoped only to inner-agent HITL,
-`stack.py:172-178`) for a durable checkpointer: `SqliteSaver` (a local
-file) in dev, `PostgresSaver` in prod. This is NOT a pure config flip.
-`SqliteSaver` / `PostgresSaver` ship in the separate `langgraph-checkpoint-sqlite`
-/ `langgraph-checkpoint-postgres` packages, neither of which is a current
-dependency (`pyproject.toml` lists only the base `langgraph` package), and
-there is no checkpointer path or DSN config field on `Settings` or
-`DataSourceConfig` today (`config.py`). Phase 1 has to add the dependency and
-a checkpointer/DSN config field as explicit work. The dev to prod pattern
-`memory/store.py:3-4` states for durable memory ("Dev backing = in-memory /
-SQLite / files; prod = Postgres + pgvector (a config flip)") describes an
-unimplemented aspiration for those durable memory stores, not a precedent
-already wired up in this codebase. Once added, attach a durable saver where
-the chat graph is compiled standalone; on LangGraph Server the runtime injects
-the durable backend, so `build_chat_graph` stays checkpointer-less for the
-server entry (`graph_app.py:103-104`). Conversation history is then the
-persisted `messages` on `ChatState` (`graph_app.py:38-46`), referenceable
-later through the standard LangGraph thread API (`get_state` /
-`get_state_history` / list threads) that every client on the streaming /
-`useStream` path shares. This is the ADR 0001 thread model, made durable and
-frontend-agnostic for that path. **It covers the LangGraph-Server /
-`useStream` path only, not the plain REST `/chat` route**, which calls
-`answer_question_agent` directly. **Today `/chat` is checkpointed with a
-process-local `InMemorySaver`** (multi-turn + HITL within one process; lost on
-restart; dual universe vs the Server path). Historical ADR text called it
-"stateless by design" — that referred to an earlier per-request memory and is
-no longer accurate. Durable (Postgres) checkpointing for `/chat` remains a
-separate migration; `/capabilities` reports `checkpoint_durable: false` and
-`hitl_survives_process_restart: false`. Making REST `/chat` durable means
-swapping the saver (or routing it through the Server), not inventing a second
-transcript store.
+`append_turn` **never raises**. It returns `(turn_id, error)` and the caller decides — a turn
+that answered is not a turn that failed because the log could not be written. On the REST path
+that error surfaces to the client as `audit_error`; on the served path `record_node` swallows
+it, because nothing follows `record` that could receive a `crashed` stamp.
 
-**Naming the roles.** The checkpointer is the thread resume / UX store: it is
-not a cache, it is not the audit record, and it carries no retention guarantee
-across LangGraph upgrades. Once the write-consistency contract and the
-full terminal-outcome coverage in Decision §3 hold, the portable append is the
-authoritative historical / audit record, the artifact to query for "history
-to reference later."
+### 2. The record's field set is declared, not hand-maintained
 
-### 2. Metadata captured at the existing seams, persisted alongside the turn
+What a record *contains* is `register/record.RECORD_REGISTER` (ADR 0005 §4), where every field
+names its producing stage, its tier, and what absence means. This ADR does not re-author that
+list, and a reader who wants the fields should read the register.
 
-- **Tokens.** Read `usage_metadata` (input/output/total tokens; Anthropic and
-  OpenAI populate it natively via LangChain) off the model response and roll it
-  up in the shared finalize-and-log helper (below, Decision §3). The capture
-  seam is `GovernanceMiddleware.wrap_model_call` (`middleware.py:159`, already
-  present to force sequential tool calls), which receives the model response.
-  Capture `usage_metadata` from the PRE-coercion response, before it reaches
-  `_coerce_single_tool_call` (`middleware.py:175`, rebuild logic at
-  `middleware.py:189-216`): that helper rebuilds the `AIMessage` from only
-  `content`, `tool_calls[:1]`, `id`, and `additional_kwargs`, so it drops
-  `usage_metadata` on any turn where the model emitted parallel tool calls.
-  Confirm the exact state-write path against the installed middleware API (an
-  `after_model` hook, or reading usage off the returned AIMessages) rather than
-  assuming it can mirror the `ledger`'s `wrap_tool_call` `Command(update=...)`
-  write (`middleware.py:43-47`): `wrap_model_call` returns a `ModelResponse`, so
-  its channel-write mechanism differs. This is the one genuinely new capture;
-  today tokens are dropped (`run_experiment.py:213`). `wrap_model_call` only
-  wraps the inner serve agent, so it does not see every model call in the
-  system: the schema router's `pick_schema` / `router_chat` (`agent.py:394`),
-  the narrator (`narrate_node`, `agent.py:855`), and the curator/SME graphs
-  (`curator/deep_agent.py:285`, `curator/sme.py:164`) each make model calls
-  outside this seam and need their own capture points. Add a fallback that
-  records a failed-call outcome when a model call raises before returning a
-  response, so an error mid-call does not silently vanish from the
-  token/cost record.
-- **Ledger + duration + ts.** `wrap_tool_call` (`middleware.py:219`) already
-  writes a ledger entry per governed action (`middleware.py:234-361`, e.g. the
-  `pass` entry at `middleware.py:347-354`); add `duration_ms` and a timestamp
-  to each entry (R5 item 1, `design-decisions.md:509-510`).
-- **Roll-up.** `_finalize_success` (`analyst/governance.py:561`, invoked from
-  `agent_core_node` in `analyst/agent.py:837`) is the SUCCESS path's merge of
-  `base_provenance` with `governance_ledger` and turn facts into
-  `Answer.provenance` (`governance.py:587-599`); extend that merge to also
-  write model + tier, token sums plus a per-call breakdown, an estimated cost
-  (from a price table), latency, outcome, the two-axis stamp
-  (`safety_clearance` / `semantic_assurance`), `tables_used`, routed
-  schema(s), the ledger, `corpus_release_hash` / `corpus_pin`,
-  `serve_config_hash` (a hash of the governance/routing config: thresholds,
-  `top_k`, RRF weights, flags, so an identical corpus with a different config
-  is distinguishable), `producer` / `data_split` / `export_allow`, stable
-  immutable `turn` / `run` / `thread` ids, session/identity, and `serve_path`.
-  Recommended future work, not built now: note-lifecycle events, content and
-  context digests, and curator/SME to note lineage; the real corpus-release
-  identity stays deferred to D11. `base_provenance` is threaded from
-  `ServeRailsState` (`agent.py:141`; populated at `agent.py:445`, consumed at
-  `agent.py:746`), so this is additive to an existing seam, not a new one.
-  `_finalize_success` is the ONLY success finalizer, called from this one
-  site; every other terminal outcome returns through a different function: a
-  cache hit through `_try_cache_hit`'s `assemble(...)` (`governance.py:401`,
-  `governance.py:457`); a refusal, a safety block, or a graded/unverified
-  delivery through `_finish_unsuccessful`'s `refusal(...)` /
-  `graded_delivery(...)` (`governance.py:460`, `governance.py:497,518,542,550`);
-  a `GovernanceHardStop` caught directly in `agent.py`, e.g. `agent.py:691`;
-  and the `ask_user` clarify / declined paths (`agent.py:671,675`). The
-  roll-up above cannot live inside `_finalize_success` alone: it has to move
-  into a shared finalize-and-log helper that every one of those
-  terminal-outcome functions calls, so a refusal or a safety block carries the
-  same metadata as a success (see Decision §3).
+That indirection is the correction of the v1 design, which listed fields in prose here. A
+hand-maintained list is how a degradation counter reached the summary that no gate ever read.
 
-  > **2026-07-28:** the cache-hit terminal is gone — `_try_cache_hit` and the
-  > `cache` node were deleted with the never-wired semantic cache, so that branch
-  > of the enumeration no longer exists and M5 has one fewer call site to cover.
-  > The remaining line numbers in this bullet predate that deletion; treat the
-  > function names as authoritative and re-locate them.
+`missing_required` is computed **at read time**, not stored, so an entry written before a
+register row existed is judged by today's register: "is this turn quotable" is a question about
+the current declaration, not about the day it was written.
 
-### 3. One thin decoupled portable append (the only addition beyond pure-native)
+### 3. Two producers, one per topology, both after `stamp`
 
-The roll-up in §2 and this portable append must both run from a single shared
-finalize-and-log helper, invoked by EVERY terminal-outcome function, not from
-`_finalize_success` alone: success (`_finalize_success`, `governance.py:561`),
-~~a cache hit (`_try_cache_hit`, `governance.py:401`, which returns via
-`assemble(...)` at `governance.py:457`)~~ *(deleted 2026-07-28 with the
-never-wired semantic cache — no longer a terminal to cover)*, a refusal, a safety block, or a
-graded/unverified delivery (`_finish_unsuccessful`, `governance.py:460`, via
-`refusal(...)` / `graded_delivery(...)` at `governance.py:497,518,542,550`), a
-`GovernanceHardStop` (caught directly in `agent.py`, e.g. `agent.py:691`), and
-the `ask_user` clarify / declined paths (`agent.py:671,675`). Routing the
-roll-up and the append solely through `_finalize_success` would silently
-exclude refusals and blocks, the turns an auditor most wants, from the log;
-the shared helper is what closes that gap.
+The record is assembled by `serve/nodes/stamp.py`. Appending it happens at exactly two sites,
+because there are exactly two served topologies:
 
-That shared helper appends **one portable record per turn** (a SQLite row or
-JSONL line) OUTSIDE LangGraph's internal checkpoint schema, one record for
-every terminal outcome above, not only on success. Rationale: the checkpoint
-tables are LangGraph-version-coupled and shaped for resume, not for reading
-back a year later or reusing in eval. This decoupled record is the durable,
-portable, human-readable "reference-it-in-the-future" log, keyed by turn +
-`corpus_release_hash`, exactly R3's key (`design-decisions.md:450-451`, "a
-dedicated, queryable, vendor-independent interaction log ... keyed by turn +
-`corpus_release_hash`"). `corpus_release_hash` itself is not implemented
-today (zero occurrences of the term in `src/`) and depends on the
-`CorpusRelease` decision (D11, `design-decisions.md:453`), which is still
-pending; until D11 lands, a git-SHA-per-checkpoint stand-in is the interim
-key, per R3's own caveat. It also closes the `run_experiment.py:213`
-`"usage": None` gap, because eval reads tokens/cost from the same append
-instead of hard-coding `None`.
+| Topology | Where the append happens |
+|---|---|
+| The graph `langgraph.json` runs (`accept` in front, streamed) | the optional `record` node `serve/graph.build_graph` mounts after `stamp`, supplied by `api/graph_app.record_node` |
+| The REST `/chat` fallback (no `accept`, whole `ServeState` in and out) | `api/routes._logged` |
 
-### 4. Scope: serve conversations, and one producer only
+Both are downstream of the terminal funnel rather than of a success path, which is the part of
+the v1 design that mattered and survived: a node exception writes `failure: NodeFailure` and
+routes to `stamp`, which stamps `Outcome.crashed` with the failing stage. Refusals, caps,
+crashes and clarifications are logged on the same edge as answers. Turns paused for
+clarification carry no `turn_id` and are skipped until they resume.
 
-**One mechanism, one producer.** The serve turn is the only graph that emits a portable
-per-turn record. It is a LangGraph `StateGraph` whose agent step is a nested `create_agent`
-node (`serve/nodes/agent_core.py::agent_core_node`, ADR 0002), the record is assembled by
-`serve/nodes/stamp.py` against `register/record.py`'s declared field set, and the append is
-the optional `record` node `build_graph` mounts after `stamp`
-(`api/trace_store.py::append_turn`, writing `runs/serve/<date>.jsonl`).
+There is **no `Sink` port and no `record/` package**, and the turn log is passed in rather than
+imported, so a test can watch what a served turn writes without redirecting the repository's own
+`runs/serve`.
 
-**The scope stops there, and stating why is the point of this section.** A curator producer and
-an SME producer would be the obvious second and third, built on Deep Agents. They are not in
-scope: **Deep Agents is not used in this project** and there is no curator module in
-`src/`: the corpus is authored out of tree (`../BIRD-corpus`) and is not rebuildable from
-anything committed here. So there is no `create_deep_agent`, no `curator/deep_agent.py`, no
-`curator/sme.py`, no `emit_run_record`, and no `GovernanceMiddleware` / `build_agent_core`
-pair — governance in v2 is the *absence* of a tool plus `check()` at execution time
-(ADR 0006), not a middleware.
+### 4. Write-only on the live path
 
-What survives the narrowing is the part that was never about the framework: a record is
-written on **every terminal outcome**, not only on success. The serve graph gets that from
-its wrap-every-node rule — a node exception writes `failure: NodeFailure` and routes to
-`stamp`, which stamps `Outcome.crashed` with the failing stage — rather than from a
-streaming call pattern. `.invoke()` returning accumulated state only on success is exactly
-the shape that made a `GraphRecursionError` unmeasurable, and the fix is that the terminal
-funnel is a graph edge instead of a return value.
+Nothing reads the turn log back to influence the current turn. It is a historical sink.
 
-### Owner invariants + local-first posture
+The readers are `list_turns` and `get_turn`, projected onto `/audit/turns` and
+`/audit/turns/{id}/trace` by `api/routes.turns_page` / `trace_for` (ADR 0009 owns those shapes).
+`get_turn` is a linear scan, newest first, with no index: over one developer's log volume an
+index would be a second source of truth for a millisecond lookup.
 
-- **The metadata log is write-only during a run: a historical sink, never a
-  live-path source.** Nothing reads the *token/cost/ledger metadata or the
-  portable append* back to influence the current turn. (The conversation
-  `messages` in the checkpointer *are* read each turn to build follow-up context,
-  `graph_app.py:119-120`; that is the intended "history to reference" and a
-  legitimate live-path read, so the invariant scopes to the metadata + portable
-  record, not the conversation store.) This preserves R3's capture-first /
-  "feedback is a validated hypothesis, never a direct edit" stance
-  (`design-decisions.md:437-446`) and avoids the degenerate feedback loop R2/R3
-  warns against. (This bullet originally contrasted the write-only log against
-  `SqlCache` in `analyst/cache.py` as a component that *was* a live-path input by
-  design. That cache was deleted 2026-07-28 — it turned out never to have been wired
-  into any caller, so it was not in fact a live-path input; see
-  `design-decisions.md`. The write-only invariant stated here is unaffected: there is
-  now no live-path read of any durable store, which makes it easier to hold, not
-  harder.)
-- **Metadata-only default; full content opt-in (H11 — resolved).** Three tiers:
-  **Tier A** metadata always (turn id, tokens, cost, duration, outcome, ledger
-  verdicts — no verbatim question / SQL / answer / rows); **Tier B** verbatim
-  question / SQL / answer text under `log_full_content`; **Tier C** row previews
-  under `log_row_previews` AND `log_full_content`. Default is B/C off. Retention:
-  `log_full_content_ttl_days` (default 30) — `prune_full_content` nulls Tier B/C
-  while keeping Tier A. Store posture: POSIX file `0600` in parent dir `0700`;
-  on win32, `os.chmod` cannot restrict group/other — document the single-operator
-  caveat, do not pretend. Prod gate: `environment=prod` + `log_full_content`
-  without `log_full_content_ack` fails loud at `build_stack`. Cloud-tracer
-  masking was independent of this and no longer exists at all:
-  `GOVERNED_BI_TRACE_MAX_CHARS` went with Langfuse on 2026-08-02 and LangSmith
-  exports content in full by decision (v1's `git-history:src/governed_bi/obs.py`).
-  This ADR's tiering is
-  therefore the only content control in the repo.
-- **Local-first, on by default.** Unlike the cloud tracer, which is a no-op when
-  unset, the local **metadata** log is on by default and needs no keys.
-  Full-content tiers stay opt-in.
+This is the capture-first posture: a log the live path could read is one edit away from
+auto-learning from its own output.
+
+### 5. Conversation state is not durable, and the durable checkpointer is withdrawn
+
+Three compile sites, none of them durable:
+
+- **`serve/graph.compile_graph`** — `InMemorySaver` by default; `checkpointer=False` is the
+  explicit no-saver option, which also means no `ask_user`, since a saver-less graph cannot
+  interrupt. The eval harness calls `delete_thread` per question to contain its growth.
+- **`api/routes._graph`** — the REST `/chat` fallback's process-wide `InMemorySaver`, compiled
+  once so `thread_id` stays meaningful across turns of a live process.
+- **`api/graph_app.make_graph`** — the server entry, compiled with **no** checkpointer. This is
+  not an omission: LangGraph Server injects its own, and under `API_VARIANT == "local_dev"` a
+  registered `Pregel` carrying a `BaseCheckpointSaver` is a hard startup error. Bringing one
+  would not degrade `langgraph dev`; it would refuse to start it.
+
+`/capabilities` reports `checkpoint_durable: false` and `hitl_survives_process_restart: false`.
+`langgraph-checkpoint-sqlite` and `-postgres` are deliberately not dependencies; `pyproject.toml`
+carries the reasoning.
+
+**So conversation state does not survive a restart, and the turn log is the only place every
+turn of a conversation survives.** That is the inversion of the original decision, which named
+the checkpointer as the conversation store and the append as a secondary audit copy. Withdrawn
+rather than deferred: a durable saver would store the newest turn per thread, which is the one
+thing the log already holds, and the two would then be two answers to "what was said".
+
+### 6. Unredacted, and local-first by default
+
+Records are written verbatim: the question, the answer, and `executed_sql`. There is no
+redaction column, no content tier, no TTL and no `log_full_content` knob — the v1 design
+declared all four and enforced none, and `register/record.py` records why the column was
+removed: this is a local-first single-user tool and the log is the user's own transcript. A
+redaction vocabulary needs a threat model first; a declaration with no enforcer reads as
+behaviour.
+
+The log is on by default and needs no keys. **`runs/` is gitignored, so it is not a backup** —
+if a turn matters, it needs a second home.
 
 ## Consequences
 
 **Positive**
-- Durable, frontend-agnostic conversation history plus metadata on the
-  LangGraph-Server / `useStream` path (REST `/chat` uses process-local
-  `InMemorySaver` today — multi-turn within a process only; not durable across
-  restart. See `/capabilities.checkpoint_durable`).
-- A concrete build of R3 / R5 and the ADR 0002 Inv #10 durable audit sink,
-  rather than another deferred seam.
-- Fixes D8 ephemerality for chat history and the governance ledger on that path.
-  (HITL resume uses a separate inner `clarify_checkpointer`; H10 / M5-F7 makes
-  it durable via the same factory with a distinct path, or `InMemorySaver`
-  when kind is `memory`.)
-- Closes the eval `usage: None` gap (`run_experiment.py:213`); token/cost/
-  latency finally measurable locally, without a vendor dashboard.
-- Deep-agent (curator/SME) runs get the same durable record as serve turns: one
-  mechanism, not three bespoke ones. For the curator that record is the portable
-  append alone, with no checkpointer behind it (§4), and it carries `n_tool_calls` /
-  `n_steps` as well as tokens and latency.
+
+- Every turn of every conversation survives in one vendor-independent, greppable file, keyed by
+  `turn_id` / `run_id` / `thread_id`, with the governance ledger and token counts attached.
+- The audit surface is a projection of that file rather than a second store, so a transcript
+  rebuilt after the fact shows the same governance badge the live turn showed.
+- Refusals, caps and crashes are logged on the same edge as answers, which is what makes the
+  outcome distribution readable at all.
 
 **Negative / costs**
-- The durable checkpointer needs a real database in prod (Postgres), the
-  same deployment note ADR 0001 already carries.
-- A full-content local log is a sensitive artifact: verbatim questions, SQL,
-  and row previews. Per H11 it is opt-in (Tier B/C), TTL-pruned, POSIX-permissioned
-  with an explicit win32 caveat, and prod-ack gated — not on by default.
-- The portable append is a second write per turn, on top of the checkpointer
-  write. Cheap, but not free, and it is a second place that can drift from the
-  checkpoint state if the two writes are not kept in lockstep. The two writes
-  need one concrete write-consistency contract: at-least-once delivery with an
-  idempotent upsert keyed by a stable turn/run id, or a single-writer outbox
-  with reconciliation, and the append must be replay-idempotent on a
-  LangGraph resume. Writing both from one shared helper is a starting point,
-  not itself a durability guarantee.
+
+- **Conversation state is lost on restart.** Threads resume within a process and not across one.
+  A user who reloads mid-conversation on the REST path gets a fresh thread.
+- **The log is a sensitive artifact.** Verbatim questions, SQL and answers in plaintext under
+  `runs/serve/`, protected by nothing but the filesystem. Acceptable for a single-operator local
+  tool and not for anything else; a deployment that changes that premise has to build the tier
+  system this ADR withdrew.
+- **A linear scan is the read path.** Fine at one developer's volume, and the first thing to
+  break under a real one.
+- **Two write sites** (`record_node`, `_logged`) can drift. They are held together by both
+  taking the record `stamp` produced and by `tests/api/test_audit_surface.py`, not by a shared
+  helper.
 
 ## Alternatives considered
 
-- **Cloud tracers only (Langfuse/LangSmith — LangSmith alone since 2026-08-02).**
-  Rejected: vendor-locked, a
-  silent no-op without keys (`git-history:src/governed_bi/obs.py`), not a backend-owned
-  frontend-agnostic record, and no local source of truth, exactly the R5 gap
-  ("with tracing off ... there is no vendor-independent record",
-  `design-decisions.md:501-503`).
-- **A dedicated normalized analytics SQLite (the earlier two-store
-  proposal).** Deferred: over-built for "keep history to reference." The
-  portable append covers the same need and can be upgraded to relational
-  tables later without touching the capture seams (`wrap_model_call` /
-  `wrap_tool_call` / `_finalize_success`).
-- **Overload the checkpointer for analytics.** Rejected: the checkpoint
-  schema is version-coupled and shaped for resume, not for ad hoc reads a year
-  later or eval reuse, which is exactly why the decoupled portable append exists
-  instead.
-- **Make the log a live-path input (read past turns to steer the run).**
-  Rejected by the owner: the log is write-only, and auto-learning from it is the
-  degenerate loop R3 guards against (`design-decisions.md:437-446`). Live reuse was
-  to be `SqlCache`'s job; that cache was deleted 2026-07-28 as never-wired, so today
-  nothing reuses a past turn on the live path at all.
+- **A durable checkpointer as the conversation store** (`SqliteSaver` in dev, `PostgresSaver` in
+  prod). Withdrawn — §5. It would need a new dependency, a DSN config field, and would still
+  hold only the newest turn per thread.
+- **A normalized analytics SQLite.** Rejected: over-built for "keep history to reference", and a
+  schema is a migration surface. JSONL is append-only, greppable, and trivially upgradable to
+  tables later without touching the two write sites.
+- **Cloud tracers only (LangSmith).** Rejected: vendor-locked, a silent no-op without keys, and
+  not a backend-owned frontend-agnostic record.
+- **Making the log a live-path input** (read past turns to steer the run). Rejected by the owner
+  — §4.
+- **A second and third producer (curator, SME) on Deep Agents.** Not in scope and not possible as
+  written: Deep Agents is not used in this project (`pyproject.toml` carries the reasoning) and
+  there is no curator module in `src/` — the corpus is authored out of tree in `../BIRD-corpus`.
 
-## Migration (phased; each phase independently shippable)
+## What this ADR does not cover
 
-1. Add the `langgraph-checkpoint-sqlite` / `langgraph-checkpoint-postgres`
-   dependency (neither ships with the base `langgraph` dependency in
-   `pyproject.toml` today) and a checkpointer/DSN config field on `Settings` /
-   `DataSourceConfig` (`config.py`, which has no such field today). Then
-   attach a durable saver on standalone/local compilation of the chat graph so
-   the LangGraph-Server / `useStream` path persists conversation history (native,
-   no new schema; `build_chat_graph` stays checkpointer-less for the server
-   entry, `graph_app.py:103-104`, to avoid colliding with the platform's injected
-   persistence). Making the REST `/chat` route durable (route it through the
-   checkpointed graph, or persist inside `answer_question_agent`,
-   `api/app.py:414-459`) is a distinct follow-on step.
-2. Capture tokens in `wrap_model_call` (`middleware.py:159`) into a new
-   `token_usage` channel, reading `usage_metadata` off the PRE-coercion
-   response before `_coerce_single_tool_call` (`middleware.py:175`, rebuild
-   logic at `middleware.py:189-216`) can drop it; add separate capture points
-   for the schema router (`pick_schema` / `router_chat`, `agent.py:394`),
-   the narrator (`narrate_node`, `agent.py:855`), and the curator/SME graphs
-   (`curator/deep_agent.py:285`, `curator/sme.py:164`), all of which call
-   models outside the `wrap_model_call` seam; stamp each ledger entry with
-   `duration_ms` + ts (`middleware.py:219`); and add a fallback that records a
-   failed-call outcome when a model call raises before returning a response.
-3. Enumerate every terminal-outcome function (success, cache hit, refusal,
-   safety block, graded/unverified delivery, hard stop, and clarify/declined;
-   see Decision §3) and route each one through a single shared
-   finalize-and-log helper, so the roll-up onto `Answer.provenance` and the
-   portable append below cover every outcome, not only success.
-4. Add the thin portable per-turn append as METADATA-ONLY first (turn id,
-   tokens, cost, duration, outcome; no verbatim content), written from the
-   shared helper, keyed by turn + `corpus_release_hash` (interim: a
-   git-SHA-per-checkpoint stand-in until the `CorpusRelease` decision, D11,
-   lands); wire `run_experiment.py` to read tokens/cost from it instead of
-   hard-coding `"usage": None` (`run_experiment.py:213`).
-5. Add FULL-CONTENT logging (verbatim questions, SQL, row previews) under H11
-   tiers + TTL + POSIX perms + prod-ack (M5). Metadata-only remains the default.
-6. Extend to DeepAgents: `emit_run_record` for the curator and SME invokes (one
-   mechanism, three producers); usage via `UsageMetadataCallbackHandler`;
-   failed-invoke fallback record. The `make_durable_checkpointer` half is **not**
-   wanted on the curator: it invokes once and never resumes, nothing read the saver
-   back, and the open handle broke Windows builds. See §4.
-7. (Deferred) optional relational upgrade of the portable store for
-   dashboards/metrics, per R5 items 4-5 (`design-decisions.md:513-514`:
-   OpenTelemetry/Prometheus surface, fail-loud tracing). Retention/rotation for
-   Tier B/C is **not** deferred — see H11 / `prune_full_content`.
-
-## Resolved decisions (2026-07-22)
-
-Canonical record: [D18](../design-decisions.md#d18-local-first-conversation--run-logging).
-
-1. **[H11] Log privacy / retention.** Metadata-only (Tier A) default-on;
-   Tier B under `log_full_content`; Tier C row previews under `log_row_previews`
-   AND `log_full_content`; 30-day TTL on B/C via `prune_full_content`; POSIX
-   `0600`/`0700` with documented win32 single-operator caveat; prod refuses
-   `log_full_content` without `log_full_content_ack` (fail loud at `build_stack`).
-2. **[H10] Durable `clarify_checkpointer`.** Same factory as the conversation
-   saver (`make_durable_checkpointer`) with a distinct path/namespace; 
-   `InMemorySaver` when kind is `memory` (offline tests / ephemeral).
-
-## Open questions
-
-- Portable record format: SQLite row (queryable, still trivially exportable,
-  recommended) vs. JSONL (dead-simple append/grep) — both implemented; default
-  SQLite.
-- Cost price-table location and when to compute it (config, at finalize).
-- Prod checkpointer: reuse the serving Postgres or a separate logging
-  database.
+- **Which fields a record carries** — ADR 0005 §4 and `register/record.py`.
+- **The HTTP shape of `/audit/turns` and `/audit/turns/{id}/trace`** — ADR 0007 and ADR 0009.
+- **Cost in currency.** There is none. `measure/price.py` is deleted and no price table replaced
+  it; the record carries tokens and latency, and USD is whatever the provider bills.
+- **Eval's own artifacts.** The eval driver writes `runs/eval/`, not `runs/serve/`, on its own
+  row schema. `docs/measurement.md` is that story.

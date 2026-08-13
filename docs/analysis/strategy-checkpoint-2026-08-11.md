@@ -27,7 +27,7 @@ arm / corpus，否则不可引用。
 | [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) | 混淆湖 + `eval_dataset/` | 本地目录须为 `../BIRD-Data-Obfuscation`（**GitHub 名 ≠ 工具默认路径**） |
 
 - 湖 dump 在 Hugging Face：`minhaozhang/BIRD_Obfuscation`（≈12–13 GB），sibling 仓已有 `docker compose` + `pg_restore`；本仓**没有**一键下载脚本。
-- 本仓 `data/bird/beer_factory.sqlite`（~1 MB）只供 tests/CI，**不是** LangGraph serve 数据源；serve 要 Postgres。
+- SQLite 只是 tests/CI 的离线基底（`datasource/sqlite.py` + 各 test 用 `sqlite3` 现建 `tmp_path` 库），**不是** LangGraph serve 数据源；serve 要 Postgres。本仓**没有**任何随仓提交的 `.sqlite` 文件——早先此处写的 `data/bird/beer_factory.sqlite` 在树里不存在。
 - serve 要 `GOVERNED_BI_API_KEY`（`api/auth.py`）：未设不是「开放」，是每个请求 401；一把 key 即一个 principal。UI 侧 `NEXT_PUBLIC_GOVERNED_BI_API_KEY` 须与之相等（`docs/usage.md`）。
 
 ### 当前可引用测量（v4）
@@ -44,7 +44,7 @@ arm / corpus，否则不可引用。
 ### UI / HITL 现状（契约债）
 
 - ADR 0007：答案卡用 `{outcome, text, …}`；**禁止**合成 `tier` / `safety_clearance` / `semantic_assurance`。
-- UI 仓**代码已改对**（`lib/schemas.ts` 明写这三个字段不得回来）；**文案没有**：`README.md` 仍卖 two-axis stamp、仍把 bundled SQLite 说成公开 demo、启动命令仍是过时的 `uv run --extra agents --extra api`，且与 `AGENTS.md` / `DESIGN_QUESTIONS.md` 一起指向已删的 `docs/ui-frontend-handoff.md`。
+- `ui/` 的代码与文案现已一致（校对于 2026-08-12）：`lib/schemas.ts` 明写这三个字段不得回来，`ui/README.md` 同样写明「没有 reliability tier、没有 `safety_clearance` / `semantic_assurance` stamp」和「There is no SQLite deployment」。`ui/AGENTS.md` 与 `ui/DESIGN_QUESTIONS.md` 不存在，指向已删 `docs/ui-frontend-handoff.md` 的链接也已清干净。
 - **Clarification HITL**（`ask_user`）已落地：进程内可用；`checkpoint_durable: false`、`hitl_survives_process_restart: false`（`api/routes.py`），进程重启丢 pause；`stream.submit(null, {command: {resume}})` 直达 `Command(resume=…)`，**不过** `resume_authorised`（ADR 0007 §6，明列为 out of scope）。
 - **Post-answer 工程审阅 / 批准工作流不存在，也不建**（§2.11）。`reflect` 不挡交付；`ProvenanceStatus.certified` 是语料元数据，不是答案门闩。
 
@@ -99,7 +99,7 @@ arm / corpus，否则不可引用。
 6. **不当「假治理」叙事。** 禁止把 abstention precision 说成「知道哪些题难」。WrenAI 只能**框住**主张，不能**归因**；真正归因臂是放宽 Layer 6 allowlist、固定模型与 corpus——未做之前措辞保持窄。
 7. **不当把 corpus/lake 吞进 monorepo「图省事」。** 测量身份与资产外置不变。
 8. **不当第二套「谁算 attempt / 预算是多少」实现。** 一层 stack、一个 register、一本 ledger；双读是本仓反复付过的税。
-9. **不当把 SQLite fixture 当公开 demo 湖。** UI README「bundled SQLite」与引擎 serve 路径矛盾。
+9. **不当把 SQLite fixture 当公开 demo 湖。** SQLite 是 tests/CI 基底，serve 走 Postgres；两者不可混为一谈。（当初触发这条的 UI README「bundled SQLite」文案已于 2026-08-11 改掉。）
 10. **不当 free-SQL 过滤器冒充 compile-through 语义层。** 全覆盖仍错 257 次是主桶；与 MetricFlow「能答则近确定」不是同一品类。
 11. **不当没有审阅者的审阅门。** 交付前的人工批准工作流只有在有人真的审的时候才是治理；此处没有第二个人。给一个空门配上 interrupt 与状态机，就是 §5.6 那种置信度剧院，而且它会把「治理边界是缺一个工具」这句唯一有力的话稀释成「我们加了个流程」。
 
@@ -143,10 +143,9 @@ per-caller token）一项没动，所以这四条的处置**不变**。留着的
 
 > 每条标准在动手**前**写下；数字出来后再改标准不算标准。
 
-**(0) 修 UI 仓自相矛盾的文案。** 目标：`README.md` / `AGENTS.md` / `DESIGN_QUESTIONS.md` 里不再出现
-two-axis stamp、bundled SQLite demo、`uv run --extra agents --extra api`，以及指向已删
-`docs/ui-frontend-handoff.md` 的链接。成功 = 陌生人照 UI README 走一遍，得到的心智模型与
-`lib/schemas.ts` 一致。
+**(0) 修 UI 文案。已完成（2026-08-11）。** `ui/README.md` 里 two-axis stamp、bundled SQLite demo、
+`uv run --extra agents --extra api` 和指向已删 `docs/ui-frontend-handoff.md` 的链接都已清掉；
+陌生人照 UI README 走一遍，得到的心智模型与 `lib/schemas.ts` 一致。
 
 **(1) README 头条改序。** 拒答与 precision@coverage 在前，EX 在后且带口径。凡出现弃权数字处，必须同时
 出现「上下文不足」「priced subset 62」「非题难校准」；禁止「calibrated abstention」单独作为能力出现。

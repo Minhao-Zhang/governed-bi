@@ -10,92 +10,79 @@ not answer.**
 
 governed-bi turns a business question into read-only SQL, checks that SQL before it runs, and
 hands back the statement along with the answer. When it cannot find what a question needs, it
-says so instead of guessing.
+says so instead of guessing. It is for data teams who need an answer they can audit.
 
 ![A full turn at real speed: the question is sent, the governance stages report themselves as they
 run, and the answer arrives with the SQL behind it](docs/images/answered-turn.gif)
 
-<sup>One turn, at real speed. About eighteen seconds from question to answer.</sup>
+<sup>One turn, at real speed — about eighteen seconds from question to answer. The stage tree is
+the engine reporting itself as each stage finishes, not a progress animation.</sup>
 
-**What to look for while it runs:**
+**Read the SQL, not the answer.** `negocios`, `estrellas` and `estado = 'AZ'` are physical names
+nobody typed — the question said "Arizona businesses" and "star rating". The schema is
+deliberately obfuscated: this is the
+[BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) lake, where names carry no
+English meaning. Mapping business vocabulary onto them, and knowing Arizona is `'AZ'`, is the job
+of the semantic layer you curate. That layer is the product.
 
-| on screen | what it is |
-|---|---|
-| the tree filling in, `Reading the question` through `Answered` | the engine's own stage events, each appearing when that stage finished. Not a progress animation |
-| `negocios`, `estrellas`, `estado = 'AZ'` | physical names nobody typed. The question said "Arizona businesses" and "star rating" |
-| `LIMIT 200001` | a row guard the engine appends to every statement |
-| `1 passed governance` | the deterministic check the statement cleared *before* the database saw it |
-
-Read the SQL, not the answer. The schema is deliberately obfuscated, because this is the
-[BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) lake, where table and column
-names carry no English meaning. The mapping from business vocabulary onto them lives in the
-semantic layer you curate, and so does knowing that Arizona is `'AZ'`. That layer is the product.
-
-> **A demonstration, not a measurement.** One turn on a live stack rather than a run, so nothing in
-> the clip is a quotable figure. For those, see [how well it works](#how-well-it-works).
+> A demonstration, not a measurement. One turn on a live stack, so nothing in the clip is a
+> quotable figure. Those are [below](#how-well-it-works).
 
 ## What makes it different
 
 **The model never touches your database.** It proposes SQL and never holds a connection. A tool
-body checks every statement against a deterministic stack first and runs it read-only, so the
-boundary is the absence of a tool rather than a prompt asking the model to behave.
+body checks every statement first and runs it read-only, so the boundary is the *absence of a
+tool* rather than a prompt asking the model to behave.
 
-**A miss becomes a refusal, not a wrong number.** Retrieval decides which tables a question
-licenses, and a statement reaching for anything else is blocked before it runs. Ask for something
-the semantic layer does not cover and the engine says so, or pauses and asks you, instead of
-computing a confident and plausible number over whatever tables happened to be nearby. That is the
-half the clip above does not show, and it is the half the design exists for.
-[Failure modes](docs/failure-modes.md) is what it does instead, per class, with the numbers.
+**A miss becomes a refusal, not a wrong number.** Ask for something the semantic layer does not
+cover and the engine says so, or pauses and asks you, instead of computing a plausible number over
+whatever tables happened to be nearby. [Failure modes](docs/failure-modes.md) is what it does
+instead, per class, with the numbers.
 
-**Permissions withhold, they do not only refuse.** Point `GOVERNED_BI_ACCESS_POLICY` at a roles
-file and, in one sentence: *a grant withholds an asset from everything this repository shows a
-caller — the model's prompt, all four of its tools, and every HTTP route that projects a corpus
-asset — and it withholds nothing from a database, from a row, from an answer's prose, or from the
-curation problems `/audit/corpus` reports.* Refusing a statement that names a column is a weaker
-property than never showing the column, and the first half of that sentence is what makes it the
-second. On an unmodified checkout the shipped adapter authorizes everything, so every rule fires
-and every rule says yes. [ADR 0012](docs/adr/0012-access-seam-principal-and-authorization.md) §8
-is the boundary in full; [the fork guide](docs/enterprise-fork.md) is how to move it.
+**Permissions withhold, they do not only refuse.** A grant hides an asset from everything a caller
+sees — the model's prompt, its tools, and every route that serves one. Never showing a column is a
+stronger property than refusing a statement that names it. The shipped adapter authorizes
+everything; [the fork guide](docs/enterprise-fork.md) is how to change that.
 
-**Every figure here carries its own error bar.** Accuracy is quoted at a stated coverage, arms are
-compared with a paired test rather than by subtracting two scores, and
-[open work](docs/open-work.md) lists every defect this project has found in itself, including the
-defects in its own measuring instrument.
+**Every figure says what it cannot support.** Accuracy is quoted at a stated coverage,
+configurations are compared with a paired test rather than by subtracting two scores, and
+[open work](docs/open-work.md) lists every defect this project has found in itself — including
+the defects in its own measuring instrument.
 
-## What the layers actually do
+**What "governed" means concretely.** Six checks run over every statement before the database sees
+it, and any one of them can refuse. It must parse as a single read; it must contain no write;
+every function it calls must be on an allowlist; every reference must bind to exactly one column,
+which is what rejects a bare `SELECT *`; no column may be one the corpus excludes; and no table
+may be one the question did not license. Every turn then leaves a record of what ran, what was
+rejected and why. [Architecture](docs/architecture.md) has the wiring.
 
-Every statement is parsed and inspected before the database sees it. The stack rejects writes,
-rejects a function call it does not permit, rejects a bare `SELECT *`, rejects a reference it
-cannot bind to exactly one source, rejects an excluded column, and rejects any table the question
-did not license. A seventh layer, cost, is declared and ships disabled.
+## The semantic layer
 
-Each turn also leaves a record of what ran, what was rejected, and why, so you can audit an answer
-after the fact rather than taking it on faith. [Architecture](docs/architecture.md) has the
-wiring; [ADR 0006](docs/adr/0006-execution-time-governance.md) has the layer stack and the ten
-bypasses it was built against.
+governed-bi does not read your database and guess. It reads a semantic layer you curate: files
+describing your tables, columns, joins, metrics and business vocabulary. That is where "active
+customer" gets the definition your finance team agrees with, and where the engine learns that a
+question about Arizona means `estado = 'AZ'`.
 
-## Installation
+A ready-made one for the BIRD lake is in a separate repository,
+[BIRD-corpus](https://github.com/Minhao-Zhang/BIRD-corpus) — 13,304 assets across 57 schemas.
+Point `GOVERNED_BI_CORPUS_DIR` at your own to serve your own data; the format is in
+[corpus format](docs/corpus-format.md).
 
-It ships as three things: a Python library, a LangGraph server with a streaming HTTP API, and the
-Next.js web client in [`ui/`](ui/) shown above. The engine needs none of the frontend to run.
+## Quick start
 
-**Requirements**
-
-| | |
-|---|---|
-| [uv](https://docs.astral.sh/uv/) | dependency management |
-| Python 3.13 | `requires-python = ">=3.13"` |
-| Postgres | the engine's served datasource |
-| A semantic layer | [see below](#the-semantic-layer). Bring your own, or clone the ready-made one |
-| Node 22 | the web interface only. The library, CLI and server need none of it |
-
-**1. Install the engine.**
+You need PostgreSQL, Python 3.13, Node 22, and a model provider — OpenAI by default, Bedrock
+supported. Queries cost whatever that provider charges. To reproduce the demo above you also
+need its two inputs, cloned as siblings of this repository: the
+[obfuscated lake](https://github.com/Minhao-Zhang/BIRD-Obfuscation) (a Postgres dump, restored with
+the `docker compose` in that repo) and the
+[semantic layer](https://github.com/Minhao-Zhang/BIRD-corpus).
 
 ```bash
-uv sync
+uv sync                       # the engine
+npm --prefix ui ci            # the web client, optional
 ```
 
-**2. Configure it.** Copy `.env.example` to `.env` and fill in three values:
+Copy `.env.example` to `.env` and fill in three values:
 
 ```bash
 GOVERNED_BI_PG_DSN=host=127.0.0.1 port=5432 dbname=... user=... password=...
@@ -103,143 +90,75 @@ OPENAI_API_KEY=sk-...
 GOVERNED_BI_CORPUS_DIR=../BIRD-corpus
 ```
 
-`GOVERNED_BI_CORPUS_DIR` points outside the repository, deliberately rather than by omission. The
-semantic layer is the treatment identity of every number in [measurement](docs/measurement.md), so
-vendoring it would mean an unrelated code change moved `corpus_content_hash`.
-
-**3. Install the web interface**, if you want it. Its dependencies are its own and are not part of
-`uv sync`:
+Then start the two processes:
 
 ```bash
-npm --prefix ui ci
+GOVERNED_BI_API_KEY=$(openssl rand -hex 32) uv run langgraph dev   # engine  :2024
+npm --prefix ui run dev                                            # client  :3000
 ```
 
-Use `ci` here rather than `install`. The reason `npm --prefix ui install` fails with ENOENT is
-worth reading before you debug it: [usage § UI](docs/usage.md#ui).
+The API key is required on every route but `GET /livez`; unset means refuse, not open. Copy
+[`ui/.env.example`](ui/.env.example) to `ui/.env.local` and give the client the same key.
 
-## Usage
+Chat is one of five views. The others show the semantic layer as an ER diagram and a knowledge
+graph, page through every corpus asset, list past conversations, and replay any served turn stage
+by stage. Leave `NEXT_PUBLIC_LANGGRAPH_URL` unset and the client runs on mock fixtures with no
+engine attached.
 
-Two processes: the engine, and the web client that talks to it. The clip at the top of this page
-is what you get.
-
-**1. Start the engine.**
-
-```bash
-GOVERNED_BI_API_KEY=$(openssl rand -hex 32) uv run langgraph dev
-```
-
-That serves http://localhost:2024. The key is the shared credential every route but `GET /livez`
-requires. Leaving it unset does not leave the server open; it makes the server refuse every
-request with 401.
-
-**2. Start the interface.**
-
-```bash
-npm --prefix ui run dev
-```
-
-That serves http://localhost:3000. Copy [`ui/.env.example`](ui/.env.example) to `ui/.env.local`
-and point it at the engine, with `NEXT_PUBLIC_GOVERNED_BI_API_KEY` set to the same value as
-`GOVERNED_BI_API_KEY` above. The two files stay separate even in one repository: Next.js inlines a
-`NEXT_PUBLIC_` variable into the browser bundle at build time and never reads `.env`. If they
-disagree, every request answers 401 and the panels render empty.
-
-Chat is one of five views. The others show the semantic layer as an ER diagram and a typed
-knowledge graph, page through every corpus asset the engine loaded, list past conversations, and
-replay any turn the server has served stage by stage, including the SQL and what governance did
-to it.
-
-Leave `NEXT_PUBLIC_LANGGRAPH_URL` unset and the UI runs on neutral mock fixtures instead. Every
-surface renders with no engine, no database and no API key, which is useful for working on the
-interface and easy to mistake for a working stack.
-
-Every environment variable and both API surfaces are in [the usage guide](docs/usage.md).
-
-## The semantic layer
-
-governed-bi does not read your database and guess. It reads a semantic layer you curate: files
-describing your tables, columns, joins, metrics and business vocabulary. That is where "Oklahoma"
-learns to mean `'OKC'`, and where "active customer" gets a definition your finance team agrees
-with.
-
-A ready-made one for the BIRD benchmark lake is in a separate repository,
-[BIRD-corpus](https://github.com/Minhao-Zhang/BIRD-corpus): 13,304 assets across 57 schemas. Point
-`GOVERNED_BI_CORPUS_DIR` at your own to serve your own data. The format is in
-[corpus format](docs/corpus-format.md).
+Everything else — every environment variable, both API surfaces, and the UI's own quirks — is in
+[the usage guide](docs/usage.md).
 
 ## How well it works
 
-Arm `v4`, engine `3c0079a`, corpus [`BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus) @
-`30872d3`, 1,351 questions across 57 schemas.
+Measured on [BIRD](https://bird-bench.github.io/), a public text-to-SQL benchmark, in the
+obfuscated variant linked above: 1,351 questions across 57 schemas. *EX* is the benchmark's own
+score — the query ran and its result matched the reference answer. A configuration is fixed and
+named before a run so two of them can be compared; this one is `v4`, engine `3c0079a`, corpus
+[`BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus) @ `30872d3`.
 
 | | |
-|---|---:|
+| --- | ---: |
 | Correct, among the questions it answered | **0.714** (n = 1,278, 94.6% coverage) |
 | Questions it declined | 73 (5.4%) |
-| Declined questions it would have got wrong | **77.4%** (48 of the 62 that can be priced) |
-| Correct over all 1,351 turns, unfiltered BIRD EX | 0.676 |
+| Declined questions it would have got wrong | **77.4%** (48 of the 62 where that is knowable) |
+| Correct over all 1,351 turns, unfiltered EX | 0.676 |
 
-Two things keep that table honest.
+For scale, [WrenAI](https://github.com/Canner/WrenAI) — an open-source engine with no abstention —
+scores 0.678 on the same questions and the same database, graded by its own harness. That is a
+sense of the neighbourhood, not a head-to-head: it differs on every dimension at once, so it can
+bound a claim but cannot attribute one.
 
-The declines are not a difficulty estimate. The 73 are 20 refusals, 4 clarifications, and 49 turns
-that spent all five query attempts without a passing statement. Every refusal and clarification is
-a retrieval failure: 19 of the 20 end on `r_table_not_licensed`, and all 4 clarifications licensed
-nothing at all. Of the 49 capped turns, 26 were not fully covered either. What abstention tracks is
-whether this engine had enough context on the turn, not how hard the question is.
+Three caveats travel with the table. The declines are **not** a difficulty estimate — they track
+whether this engine had enough context on the turn, and every refusal and clarification among them
+is a retrieval failure. Roughly 4 points of any score on this benchmark are output *shape* rather
+than reasoning, since the grader compares result rows and column choice moves them; that is a
+confounder in the metric every system carries, not a discount on this one. And two runs with the
+configuration held fixed disagree on 12.7% of outcomes, so a gap under about 2 percentage points
+is not a result. [Measurement](docs/measurement.md) and [failure modes](docs/failure-modes.md)
+carry all three in full.
 
-A governance-off contrast arm puts a bound on that. WrenAI runs the same questions against the
-same database with a refusal rate of 0; it answers all 73 declined questions and gets 56.2% of
-them right, against 68.5% on the 1,278 this engine commits to. The ratio is 1.22×, so the declined
-set is mostly answerable. That arm differs from this engine on every dimension at once, so it
-bounds the claim rather than attributing it. And 77.4% is a figure over a subset the dataset
-selected rather than a random one: 62 of the 73 carry a gold fingerprint, and for the other 11
-what the engine would have got is unknown rather than zero.
-
-About 4 points of that EX are shape rather than retrieval. Arm `v5` is `v4` with one paragraph
-about result-column selection deleted from the prompt and nothing else changed. EX falls from
-0.676 to 0.635, a drop of 4.07pp (paired McNemar p = 4.9e-06, 143 discordant). The grader hashes result rows, so
-aligning the output column set to the reference answer is worth points that nothing inside the
-engine checks. Every system reporting EX on this benchmark carries some of that, and measuring it
-costs a second arm.
-
-And comparing two arms takes more than subtracting their scores. Two runs of this engine with the
-configuration held fixed disagree on 12.7% of outcomes (172 of 1,351), which puts SE(net) near
-1.0pp, or 0.83pp with routing pinned, so the smallest effect a 1,351-question arm resolves at 80%
-power is about 2.3pp. That is why the arms above are compared with paired McNemar over discordant
-pairs, and why the threshold is written down before the run rather than once the number is visible.
-
-Those are all numbers about answering. What the governance layers themselves are worth is a
-separate measurement, and unlike everything above it costs nothing to reproduce: the layer stack
-is deterministic, so it needs no credential, no database and no model call, and two runs of it are
-identical. The suite is 95 cases carried as data in
-[`govern/adversarial.toml`](src/governed_bi/govern/adversarial.toml) — 49 attacks and 46 ordinary
-analytics statements — and one file is read by both the test that fails a build and the driver
-that prints the rates.
+What the governance layers themselves are worth is a separate measurement, and unlike the above it
+costs nothing to reproduce: the stack is deterministic, so it needs no credential, no database and
+no model call. The suite is 95 cases — 49 attacks and 46 ordinary analytics statements — carried
+as data in [`govern/adversarial.toml`](src/governed_bi/govern/adversarial.toml).
 
 | | |
-|---|---:|
+| --- | ---: |
 | Attacks that reached executable SQL | **0** (of 49) |
 | Attacks refused, but by the wrong layer or rule | **0** (of 49) |
 | Ordinary statements wrongly refused | **0** (of 46) |
 | Cases where a layer crashed instead of deciding | **0** (of 95) |
-| Per-layer recall, over the attacks each layer owns | **1.000** (PARSE 7/7, NO_WRITE 7/7, FUNCTIONS 13/13, BINDING 9/9, COLUMNS 7/7, TABLES 6/6) |
+| Per-layer recall, over the attacks each layer owns | **1.000** (all six layers) |
 
 Read that with its bound, which is not small: 49 is the number of attacks somebody sat down and
-wrote, so zero bypasses is a fact about those 49 and not a claim about attacks nobody thought of.
-The same goes the other way — 0 false refusals is over 46 benign statements, not over the space of
-queries an analyst writes. Five of the ten bypass families this project tracks have no SQL surface
-to aim a statement at and are covered by argument rather than by a case; the suite declares that
-per family rather than leaving it to be assumed. And the COST layer owns no attack, so it has no
-rate at all and is printed as not measured rather than as a pass. Reproduce with
+wrote, so zero bypasses is a fact about those 49, not a claim about attacks nobody thought of. The
+same holds in reverse for the 46 benign statements. Reproduce with
 `uv run --frozen python tools/govern_bench.py`.
-
-How the measurement works, and where the engine still gets things wrong, are in
-[measurement](docs/measurement.md) and [failure modes](docs/failure-modes.md).
 
 ## Documentation
 
 | | |
-|---|---|
+| --- | --- |
 | [Usage](docs/usage.md) | install, configure, serve |
 | [Architecture](docs/architecture.md) | how a turn is put together |
 | [Corpus format](docs/corpus-format.md) | writing a semantic layer |

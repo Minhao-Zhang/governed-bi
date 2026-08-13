@@ -406,65 +406,84 @@ export const MOCK_ASSETS: AssetRow[] = [
 /* ── Chat: a placeholder answer + a refusal, for the mock transport ──────── */
 
 /**
- * The ADR 0004 run-log + instrumentation block the engine stamps onto EVERY
- * terminal answer (`METADATA_PROVENANCE_KEYS` in `analyst/run_log.py`). It reaches
- * the client verbatim — `_redact_provenance_for_client` only strips ledger row
- * bodies and reasons — so the mock carries it too, or the offline drawer would
- * never exercise the grouping that keeps it from burying the governance fields.
+ * The turn record the engine's `stamp` node projects onto EVERY terminal answer. It reaches
+ * the client verbatim — nothing is redacted on the way out — so the mock carries it too, or
+ * the offline drawer would never exercise the grouping that keeps it from burying the
+ * governance fields.
  *
- * Values are synthetic but shape-faithful, including the deliberate `null`s: ADR
- * 0004 defaults unmeasured instrumentation to null so "not measured" stays
- * distinguishable from "measured zero".
+ * **Keys and value shapes are the register's** (`register/record.py`), checked against a real
+ * `runs/serve` turn on 2026-08-12; only the values are synthetic. The previous fixture was
+ * shaped like v1's deleted run log — 16 of its 21 keys named no register field — so the mock
+ * drove a drawer no live turn produces, and after `lib/provenance.ts` was re-derived it would
+ * have rendered entirely under "Other".
+ *
+ * The deliberate `null`s are load-bearing: the register encodes an unmeasured field as null so
+ * "not measured" stays distinguishable from "measured zero" (ADR 0005 §6). `guardrail_errors: 0`
+ * is the measured zero; `reflect_verdict: null` is the absence.
+ *
+ * Absent-by-design, matching a real answered turn: `budget_dropped`,
+ * `budget_best_dropped_score` and `abstention` are `Absence.not_applicable` and simply do not
+ * appear when nothing dropped and the policy is off. A mock that invented them would exercise
+ * rows the drawer never shows.
  */
 export const MOCK_RUN_RECORD: Record<string, unknown> = {
-  turn_id: "turn_mock_0001",
-  run_id: "run_mock_0001",
-  thread_id: "thread_mock",
-  producer: "serve",
-  data_split: "dev",
-  export_allow: true,
-  corpus_release_hash: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
-  corpus_pin: "sales",
-  serve_config_hash: "cfg_9f8e7d6c",
-  prompt_set_hash: "ps_1a2b3c4d",
-  prompt_variants: { analyst_system: "baseline", schema_pick: "baseline" },
-  token_usage: [
-    { source: "agent_core", model: "gpt-5.6-luna", usage_metadata: { input_tokens: 4120, output_tokens: 260, total_tokens: 4380 } },
-  ],
-  token_sum: { input_tokens: 4120, output_tokens: 260, total_tokens: 4380 },
-  cost_est_usd: 0.01032,
-  latency_ms: 3410,
-  // A `register/stages.py` Outcome. It was `"finalize"` — a v1 *stage* name in the
-  // outcome field, which is not a member of `answered | refused | clarification |
-  // capped | crashed` and so classified as nothing at all.
+  /* Tier.identity */
+  run_id: "93aacb3752844310",
+  turn_id: "272a8b9f34e7fac6",
+  thread_id: "019ff347-e719-70b3-809a-ecb1dbfebb16",
+  question_id: "c79749267012c5de",
+  db_id: "BIRD-corpus",
+  attempt_id: "ca9bed0e39d0bb07",
+
+  /* Tier.treatment */
+  evicted: null,
+  context_hash: "68de872dea5744c98bf0a24eb723396d215590a6ae68abb82989fbb4283e54ff",
+  delivery_hash: "f04255af03ff1ce43b05502196def2030e1c5d76ab0108516193535c90b8b299",
+  tool_delivered: {},
+  corpus_content_hash: "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5",
+  prompt_set_hash: "b1f9e4d7d230cb97",
+  knobs_resolved: { summary_max_chars: 250, schema_top_n: 3, lexical_weight: 0.5 },
+
+  /* Tier.decision */
+  facet_hits: {
+    facet_schema: { queries: ["customers per region"], hits: [{ asset_id: "gbi_demo_sales.customers", asset_type: "table", lexical: 2.9, semantic: 0.81 }] },
+  },
+  facet_degraded: true,
+  schema_ranking: [["gbi_demo_sales", 2.9], ["gbi_demo_support", 2.62], ["gbi_demo_hr", 1.14]],
+  schemas: ["gbi_demo_sales"],
+  pulled_in: { "gbi_demo_sales.customers.region_id": "resolve", "gbi_demo_sales.regions.id": "connect" },
+  licensed: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
+  crossings: [],
+  lexical_coverage: 0.8,
+  rewrite: null,
+  guard: { outcome: "clear", rule_id: null, detail: null },
+  negative: { outcome: "disabled", tau: null, top_score: null, matched_id: null },
+  execution: { attempts: [], terminal: "no_sql", guardrail_errors: 0 },
+  reflect_verdict: null,
+  n_re_served: 0,
+
+  /* Tier.outcome */
   outcome: "answered",
-  model: "gpt-5.6-luna",
-  serve_path: "agent",
-  // Stage names and per-stage detail keys are `register/stages.py`'s, matching
-  // MOCK_AGENT_EVENTS above — the drawer's timing rows and the live timeline
-  // describe one turn, so they may not use two vocabularies.
-  stage_events: [
-    { stage: "accept", status: "ok", ms: 3.1, detail: { turn_index: 2 } },
-    { stage: "guard", status: "ok", ms: 1.4 },
-    { stage: "rewrite", status: "ok", ms: 388.2, detail: { rewritten: true } },
-    { stage: "negative_gate", status: "ok", ms: 0.9, detail: { gate: "disabled" } },
-    { stage: "facet_schema", status: "ok", ms: 191.7, detail: { n_hits: 6 } },
-    { stage: "facet_term", status: "ok", ms: 94.0, detail: { n_hits: 2 } },
-    { stage: "facet_metric", status: "ok", ms: 88.5, detail: { n_hits: 1 } },
-    { stage: "facet_entity", status: "ok", ms: 86.2, detail: { n_hits: 0 } },
-    { stage: "facet_example", status: "ok", ms: 143.6, detail: { n_hits: 3 } },
-    { stage: "route", status: "ok", ms: 412.5, detail: { n_candidates: 4 } },
-    { stage: "resolve", status: "ok", ms: 21.8, detail: { n_pulled_in: 4 } },
-    { stage: "connect", status: "ok", ms: 34.9, detail: { n_crossings: 1 } },
-    { stage: "assemble", status: "ok", ms: 12.0, detail: { n_chars: 4820 } },
-    { stage: "agent_core", status: "ok", ms: 1980.4, detail: { n_attempts: 2 } },
-    { stage: "check", status: "blocked", ms: 8.2, detail: { attempt: 1, layer: "table" } },
-    { stage: "check", status: "ok", ms: 4.6, detail: { attempt: 2 } },
-    { stage: "execute", status: "ok", ms: 604.2, detail: { row_count: 4 } },
-    { stage: "stamp", status: "ok", ms: 5.7, detail: { outcome: "answered" } },
+  terminal_reason: null,
+  failed_stage: null,
+  error_type: null,
+  generated_sql: null,
+
+  /* Tier.cost */
+  usage: [
+    { turn_index: 1, stage: "guard", model: "gpt-5.6-luna", input_tokens: 134, output_tokens: 4, cache_read_tokens: 0, cache_write_tokens: 0 },
+    { turn_index: 1, stage: "agent_core", model: "gpt-5.6-luna", input_tokens: 4120, output_tokens: 260, cache_read_tokens: 10060, cache_write_tokens: 10287 },
   ],
-  n_tool_calls: { read_body: 1, inspect_schema: 1, sample_rows: 1, check: 2, execute: 1 },
-  by_guardrail_layer: { L1: 0, L2: 0, L3: 0, L5: 0 },
+  cache_read_tokens: 10060,
+  cache_write_tokens: 10287,
+  latency_sec: 39.31,
+
+  /* Tier.health */
+  facet_channels: {
+    facet_schema: { lexical: "ran", semantic: "ran" },
+    facet_entity: { lexical: "ran", semantic: "failed" },
+  },
+  guardrail_errors: 0,
 };
 
 export const MOCK_ANSWER: AnswerView = {
@@ -477,6 +496,9 @@ export const MOCK_ANSWER: AnswerView = {
   error_type: null,
   refused_by: null,
   record: {
+    // The full register-shaped block first, so the offline drawer exercises all three named
+    // groups; then this answer's own values, which win.
+    ...MOCK_RUN_RECORD,
     outcome: "answered",
     generated_sql: "SELECT r.name AS region, count(c.id) AS customers FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.name;",
     execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", verdict_layer: null, path: "agent" }], guardrail_errors: 0 },
@@ -500,6 +522,9 @@ export const MOCK_GRADED_ANSWER: AnswerView = {
   error_type: null,
   refused_by: null,
   record: {
+    // The full register-shaped block first, so the offline drawer exercises all three named
+    // groups; then this answer's own values, which win.
+    ...MOCK_RUN_RECORD,
     outcome: "answered",
     generated_sql: "SELECT r.name AS region, count(c.id) AS customers FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.name;",
     execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", verdict_layer: null, path: "agent" }], guardrail_errors: 0 },
@@ -719,6 +744,9 @@ export const MOCK_AGENT_ANSWER: AnswerView = {
   error_type: null,
   refused_by: null,
   record: {
+    // The full register-shaped block first, so the offline drawer exercises all three named
+    // groups; then this answer's own values, which win.
+    ...MOCK_RUN_RECORD,
     outcome: "answered",
     generated_sql: "SELECT r.name AS region, count(c.id) AS customers FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.name;",
     execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", verdict_layer: null, path: "agent" }], guardrail_errors: 0 },
@@ -762,6 +790,9 @@ export const MOCK_CLARIFIED_ANSWER: AnswerView = {
   error_type: null,
   refused_by: null,
   record: {
+    // The full register-shaped block first, so the offline drawer exercises all three named
+    // groups; then this answer's own values, which win.
+    ...MOCK_RUN_RECORD,
     outcome: "answered",
     generated_sql: "SELECT r.name AS region, count(c.id) AS customers FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.name;",
     execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", verdict_layer: null, path: "agent" }], guardrail_errors: 0 },
@@ -784,6 +815,9 @@ export const MOCK_REFUSAL: AnswerView = {
   error_type: null,
   refused_by: "check",
   record: {
+    // The full register-shaped block first, so the offline drawer exercises all three named
+    // groups; then this answer's own values, which win.
+    ...MOCK_RUN_RECORD,
     outcome: "refused",
     generated_sql: null,
     execution: { terminal: "refused", attempts: [{ passed: false, reason_code: "r_table_not_licensed", verdict_layer: 3, path: "agent" }], guardrail_errors: 0 },

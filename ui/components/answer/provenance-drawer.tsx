@@ -28,11 +28,11 @@ import { cn } from "@/lib/utils";
  *  1. **Steps** — the governed loop replayed from the recorded ledger, through the
  *     same renderer the live run used (live == audit).
  *  2. **Stage timings** — `stage_events` as readable rows rather than a JSON blob.
- *  3. **Grouped key/values** — governance first, then stage counters and the ADR
- *     0004 run record (both collapsed: operator metadata, not governance).
+ *  3. **Grouped key/values** — governance first, then instrumentation and the run
+ *     record (both collapsed: operator metadata, not governance).
  *
- * The grouping lives in `lib/provenance.ts`; see the note there on why a flat dump
- * stopped working once run logging started stamping ~21 keys per answer.
+ * The grouping lives in `lib/provenance.ts` and is the engine register's six tiers
+ * paired into three; a Python test fails the build if the two disagree.
  */
 export function ProvenanceDrawer({ provenance }: { provenance: Record<string, unknown> }) {
   const groups = groupProvenance(provenance);

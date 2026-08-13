@@ -5,8 +5,7 @@ this page wins. Binding design detail is in the [ADRs](adr/).
 
 | Term | Definition |
 |---|---|
-| **Corpus** | Human-owned semantic substrate: typed YAML assets (schemas, tables, columns, joins, metrics, terms, few-shots, notes, negatives) loaded by `corpus/`. |
-| **Note** (`NoteAsset`) | Governed annotation attachable to assets or namespace scopes. See [ADR 0003](adr/0003-governed-notes-tri-modal-retrieval.md). |
+| **Corpus** | Human-owned semantic substrate: typed YAML assets loaded by `corpus/`. **Eight types**, enumerated in `corpus/schema.py::ASSET_CLASSES`: schema, table, column, join, metric, term, few-shot, negative-example. There is no note or skill asset — ADR 0003 proposed one and [ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) reversed it, putting `summary` / `body` and a `Governance` block on all eight instead. |
 | **Facet** | One retrieval channel (schema / term / metric / entity / example) with its own query rewrite. See [ADR 0011](adr/0011-two-model-split-and-facet-query-rewriting.md). |
 | **Route / resolve / connect** | Schema selection, pass-two budgets, then Steiner-tree join completion over retrieved components. |
 | **Assemble** | Render the retrieval context block injected into model calls. |
@@ -18,6 +17,7 @@ this page wins. Binding design detail is in the [ADRs](adr/).
 | **Grant** | What an `AccessPolicy` returns for a principal: a reach (`every_table` / `listed`), authorized tables, denied columns, and declared row predicates. Validated on construction; folded against the corpus's spelling by `govern/access.resolve_grant`. |
 | **Ledger** | Attempt book for governed tool calls (not the eval run registry). |
 | **Turn record** | What `stamp` projects, declared in `register/record.py`: `outcome`, `guardrail_errors`, `terminal_reason`, `execution` (the per-attempt ledger), `latency_sec`, and the treatment hashes. **There is no reliability stamp** — no field summarises a turn's trustworthiness, and a test bars `safety_clearance` and `semantic_assurance` from `src/`. |
+| **Turn log** | The append-only JSONL under `runs/serve/<date>.jsonl` that `api/trace_store.append_turn` writes, one line per finished turn. It is the conversation history: checkpoints hold only a thread's newest turn (`PER_TURN_RESET`), and no checkpointer here is durable. `/audit/turns` projects it. See [ADR 0004](adr/0004-local-first-conversation-run-logging.md). Not `runs/eval/`, which is the measurement driver's own artifact. |
 | **Graded delivery** | Re-execute a statement after a `COST`-layer refusal instead of hard-refusing (ADR 0006 §5). Ships disabled with the cost layer. Not “graded against gold”, and it emits no assurance value — the record has no such field. |
 | **Knob** | Declared setting in `register/knobs.py` (defaults, roles, hash participation). |
 | **Main model / utility model** | Large model for SQL generation vs small model for scope gate / facet rewrite ([ADR 0011](adr/0011-two-model-split-and-facet-query-rewriting.md)). |

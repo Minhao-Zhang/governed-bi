@@ -1,84 +1,114 @@
 /**
  * Grouping the provenance record for the audit drawer.
  *
- * `AnswerResponse.provenance` is an open `Record` and the engine keeps widening
- * it. ADR 0004 (run logging) now stamps ~21 keys onto *every* terminal answer via
- * `finalize_and_log` — `METADATA_PROVENANCE_KEYS` in `analyst/run_log.py` — and
- * `_redact_provenance_for_client` only strips ledger row bodies and reasons, so
- * all of them reach us verbatim. Dumped flat, that block buries the handful of
- * fields a reviewer actually opens the drawer for, and `stage_events` /
- * per-source `token_usage` land as unreadable `JSON.stringify` blobs (the
- * latter is folded into a one-line `token_sum`).
+ * The drawer's input is `answer.record` (`provenanceOf` in `answer-delivery.ts`) — the
+ * turn record the engine's `stamp` node projects against `register/record.py`'s declared
+ * register (ADR 0005 §4). It is an open `Record` on this side and the engine keeps widening
+ * it; **nothing is redacted** on the way out (`register/record.py` records why the redaction
+ * column was removed). Dumped flat, that block buries the handful of fields a reviewer
+ * actually opens the drawer for, and the wide ones — `usage`, `knobs_resolved`, `facet_hits`
+ * — land as unreadable `JSON.stringify` blobs (`usage` is folded into one summary line).
  *
  * So the drawer reads through three named groups instead of one list:
  *
- *  - **Governance** — the answer's own decisions (route, joins, flags, refusal).
- *  - **Stages** — per-turn instrumentation: timings and counters.
- *  - **Run record** — ADR 0004 operator/eval metadata (ids, hashes, cost, tokens).
+ *  - **Governance** — what the engine decided and how the turn ended.
+ *  - **Instrumentation** — degradation counters, tokens, latency.
+ *  - **Run record** — identity and treatment: ids, pins, hashes.
  *
  * Anything unrecognized falls through to a fourth catch-all group, so a key the
  * engine adds tomorrow is still shown today — never silently dropped.
+ *
+ * **The three lists are the register's six tiers, paired.** `Tier` is declared in
+ * `register/record.py` with a stated meaning per member, so pairing tiers is the one grouping
+ * that cannot disagree with the engine about what a field is *for*:
+ *
+ * | group | tiers |
+ * |---|---|
+ * | Governance | `outcome` + `decision` |
+ * | Instrumentation | `health` + `cost` |
+ * | Run record | `identity` + `treatment` |
+ *
+ * A pure client cannot import the register, so the names below are copied by hand and
+ * `tests/api/test_provenance_groups_match_the_register.py` fails the build when the copy and
+ * the register disagree in either direction. Do not add a key here without a register row.
+ *
+ * This replaced a set of lists written against the deleted v1 `analyst/run_log.py`. Measured
+ * 2026-08-12 before the fix: 32 of the listed keys were names the v2 record never emits and 35
+ * of the register's 41 fields were on no list, so the three named groups were near-empty and
+ * everything real landed in the catch-all.
  */
 
-/** Reviewer-first: what the engine decided about this answer. */
+/** `Tier.outcome` then `Tier.decision` — how the turn ended, then what decided it.
+ * `guardrail_errors` reads as governance and is deliberately **not** here: the register files
+ * it under `health`, because it is a degradation counter feeding a quotability gate. */
 const GOVERNANCE_KEYS = [
-  "route",
-  "bound_terms",
-  "metric_id",
-  "tables_used",
-  // Assemble-time seed license (which tables the guardrails will permit this turn).
-  "licensed_tables",
-  "join_ids",
-  "min_join_confidence",
-  "attempts",
-  "uncertainty_flags",
-  "clarifications",
-  "graded_delivery",
-  "coverage_best_effort",
-  "routed_schemas",
-  // Which ranking channel actually ran: a silent `bm25_fallback` roughly halves
-  // schema-routing recall, so it belongs beside the routing fields (handoff §13.6).
-  "schema_route_channel",
-  "selected_schema",
-  "candidate_schemas",
-  "suspect_columns",
-  "cache_hit",
-  "refused_by",
-  "negative_example",
-] as const;
-
-/** Per-turn instrumentation (`_INSTRUMENTATION_KEYS`, minus the two that read as
- * governance and are grouped above: `cache_hit` / `attempts`). */
-const STAGE_KEYS = ["stage_events", "n_tool_calls", "by_guardrail_layer"] as const;
-
-/** ADR 0004 run-log metadata: identity, pins, prompt set, cost/latency.
- * Per-source `token_usage` is hidden — folded into the one `token_sum` row. */
-const RUN_RECORD_KEYS = [
+  // Tier.outcome
   "outcome",
-  "latency_ms",
-  "cost_est_usd",
-  "token_sum",
-  "model",
-  "serve_path",
-  "producer",
-  "turn_id",
-  "run_id",
-  "thread_id",
-  "data_split",
-  "export_allow",
-  "corpus_release_hash",
-  "corpus_pin",
-  "serve_config_hash",
-  "prompt_set_hash",
-  "prompt_variants",
+  "terminal_reason",
+  "failed_stage",
+  "error_type",
+  "generated_sql",
+  // Tier.decision, in register order — which is pipeline order: retrieve, route, budget,
+  // license, connect, rewrite, guard, then how the attempt actually went.
+  "facet_hits",
+  "facet_degraded",
+  "schema_ranking",
+  "schemas",
+  "budget_dropped",
+  "budget_best_dropped_score",
+  "pulled_in",
+  "licensed",
+  "crossings",
+  "lexical_coverage",
+  "rewrite",
+  "guard",
+  "negative",
+  "abstention",
+  "execution",
+  "reflect_verdict",
+  "n_re_served",
 ] as const;
 
-/** Rendered as the dedicated "Steps" timeline, not as a key/value row.
- * `token_usage` is the per-source dump — folded into `token_sum` below. */
-const HIDDEN_KEYS = new Set<string>(["governance_ledger", "token_usage"]);
+/** `Tier.health` then `Tier.cost` — what degraded, and what the turn spent. */
+const INSTRUMENTATION_KEYS = [
+  // Tier.health
+  "facet_channels",
+  "guardrail_errors",
+  // Tier.cost
+  "usage",
+  "cache_read_tokens",
+  "cache_write_tokens",
+  "latency_sec",
+] as const;
+
+/** `Tier.identity` then `Tier.treatment` — what joins this turn to a run, and what the
+ * delivery gate reads to decide two turns are comparable. */
+const RUN_RECORD_KEYS = [
+  // Tier.identity
+  "run_id",
+  "turn_id",
+  "thread_id",
+  "question_id",
+  "db_id",
+  "attempt_id",
+  // Tier.treatment, in register order
+  "evicted",
+  "context_hash",
+  "delivery_hash",
+  "tool_delivered",
+  "corpus_content_hash",
+  "prompt_set_hash",
+  "knobs_resolved",
+] as const;
+
+/** Rendered elsewhere, so suppressed as a key/value row. `execution` is the attempt ledger
+ * the "Steps" section replays; it stays in `GOVERNANCE_KEYS` too, because that section only
+ * renders when `buildStepsFromLedger` finds something to draw and the audit must not lose it
+ * when that returns empty — which today it always does (see the drawer's note). */
+const HIDDEN_KEYS = new Set<string>([]);
 
 export interface ProvenanceGroup {
-  id: "governance" | "stages" | "run" | "other";
+  id: "governance" | "instrumentation" | "run" | "other";
   title: string;
   /** Operator metadata starts collapsed; governance never does. */
   collapsed: boolean;
@@ -97,7 +127,7 @@ function pick(provenance: Record<string, unknown>, keys: readonly string[]): [st
 export function groupProvenance(provenance: Record<string, unknown>): ProvenanceGroup[] {
   const claimed = new Set<string>([
     ...GOVERNANCE_KEYS,
-    ...STAGE_KEYS,
+    ...INSTRUMENTATION_KEYS,
     ...RUN_RECORD_KEYS,
     ...HIDDEN_KEYS,
   ]);
@@ -106,19 +136,6 @@ export function groupProvenance(provenance: Record<string, unknown>): Provenance
     .sort()
     .map((k) => [k, provenance[k]] as [string, unknown]);
 
-  // Prefer summing the detailed `token_usage` snapshots (includes cache_read)
-  // into the single `token_sum` row the drawer shows.
-  const runEntries = pick(provenance, RUN_RECORD_KEYS).map(([key, value]) => {
-    if (key !== "token_sum") return [key, value] as [string, unknown];
-    const fromUsage = summarizeTokenUsage(provenance.token_usage);
-    if (fromUsage) return [key, provenance.token_usage] as [string, unknown];
-    return [key, value] as [string, unknown];
-  });
-  // If the engine omitted token_sum but sent token_usage, still show one row.
-  if (!("token_sum" in provenance) && summarizeTokenUsage(provenance.token_usage)) {
-    runEntries.push(["token_sum", provenance.token_usage]);
-  }
-
   const groups: ProvenanceGroup[] = [
     {
       id: "governance",
@@ -126,16 +143,93 @@ export function groupProvenance(provenance: Record<string, unknown>): Provenance
       collapsed: false,
       entries: pick(provenance, GOVERNANCE_KEYS),
     },
-    { id: "stages", title: "Stages", collapsed: true, entries: pick(provenance, STAGE_KEYS) },
-    { id: "run", title: "Run record", collapsed: true, entries: runEntries },
+    {
+      id: "instrumentation",
+      title: "Instrumentation",
+      collapsed: true,
+      entries: pick(provenance, INSTRUMENTATION_KEYS),
+    },
+    { id: "run", title: "Run record", collapsed: true, entries: pick(provenance, RUN_RECORD_KEYS) },
     { id: "other", title: "Other", collapsed: true, entries: other },
   ];
   return groups.filter((g) => g.entries.length > 0);
 }
 
+/** The register field names this module claims, for the conformance test to read. */
+export const CLAIMED_KEYS = {
+  governance: GOVERNANCE_KEYS,
+  instrumentation: INSTRUMENTATION_KEYS,
+  run: RUN_RECORD_KEYS,
+} as const;
+
+/**
+ * What a `null` means, per field — the register's `Absence` column, copied by hand and held
+ * to the register by the same test as the key lists.
+ *
+ * **All three encode as JSON `null` and this map is the only thing distinguishing them**, which
+ * is `register/record.py`'s own words. Rendering every null as "not measured" is a claim the
+ * client cannot back: on an answered turn `generated_sql` is null because there was no SQL, and
+ * "not measured" says the engine failed to record it. `never` is the interesting third case —
+ * the register says that field cannot be absent, so a null there is a defect, not a value.
+ */
+const ABSENCE: Record<string, "never" | "not_measured" | "not_applicable"> = {
+  // Tier.outcome
+  outcome: "never",
+  terminal_reason: "not_applicable",
+  failed_stage: "not_applicable",
+  error_type: "not_applicable",
+  generated_sql: "not_applicable",
+  // Tier.decision
+  facet_hits: "not_applicable",
+  facet_degraded: "not_applicable",
+  schema_ranking: "not_applicable",
+  schemas: "not_applicable",
+  budget_dropped: "not_applicable",
+  budget_best_dropped_score: "not_applicable",
+  pulled_in: "not_applicable",
+  licensed: "not_applicable",
+  crossings: "not_applicable",
+  lexical_coverage: "not_measured",
+  rewrite: "not_applicable",
+  guard: "never",
+  negative: "not_applicable",
+  abstention: "not_applicable",
+  execution: "never",
+  reflect_verdict: "not_measured",
+  n_re_served: "never",
+  // Tier.health
+  facet_channels: "not_applicable",
+  guardrail_errors: "never",
+  // Tier.cost
+  usage: "never",
+  cache_read_tokens: "not_measured",
+  cache_write_tokens: "not_measured",
+  latency_sec: "not_measured",
+  // Tier.identity
+  run_id: "never",
+  turn_id: "never",
+  thread_id: "never",
+  question_id: "never",
+  db_id: "never",
+  attempt_id: "never",
+  // Tier.treatment
+  evicted: "not_applicable",
+  context_hash: "not_applicable",
+  delivery_hash: "not_applicable",
+  tool_delivered: "not_applicable",
+  corpus_content_hash: "never",
+  prompt_set_hash: "never",
+  knobs_resolved: "never",
+};
+
 /* ── stage_events ────────────────────────────────────────────────────────── */
 
-/** One `StageRecorder` record: `{stage, status, ms, detail}` (governance.py). */
+/** One stage record: `{stage, status, ms, detail}`.
+ *
+ * **`stage_events` is not a register field**, so no logged turn carries one and the drawer's
+ * stage-timings section never renders from the audit path. Kept because the shape is the one
+ * the live stream emits (ADR 0010) and this is where it would be parsed if the record ever
+ * carried it; see the drawer's own note on why "live == audit" is an intention. */
 export interface StageEvent {
   stage: string;
   status: string;
@@ -203,8 +297,12 @@ function usageInt(usage: Record<string, unknown>, ...keys: string[]): number {
 }
 
 /**
- * Collapse ADR 0004 `token_usage` (per-source snapshots) or a flat `token_sum`
- * into `input N · output N · cache N`. Cache is `cache_read` when present.
+ * Collapse the register's `usage` — an array of one record per model call, including the
+ * facet and rewrite calls — into `input N · output N · cache N`.
+ *
+ * The alias lists are deliberately wide: `usage` rows carry `cache_read_tokens`, but the same
+ * summary is applied to whatever a provider hands back, and LangChain's `usage_metadata` spells
+ * the same three counts three other ways. An unrecognised spelling reads as 0, never as absent.
  */
 export function summarizeTokenUsage(value: unknown): string | null {
   let input = 0;
@@ -216,7 +314,13 @@ export function summarizeTokenUsage(value: unknown): string | null {
     saw = true;
     input += usageInt(usage, "input_tokens", "prompt_tokens");
     output += usageInt(usage, "output_tokens", "completion_tokens");
-    cache += usageInt(usage, "cache_read", "cache_read_input_tokens", "cache_tokens");
+    cache += usageInt(
+      usage,
+      "cache_read_tokens",
+      "cache_read",
+      "cache_read_input_tokens",
+      "cache_tokens",
+    );
   };
 
   if (Array.isArray(value)) {
@@ -243,19 +347,32 @@ export function summarizeTokenUsage(value: unknown): string | null {
  * everything non-scalar falls back to JSON so nothing is hidden from the audit. */
 export function formatProvenanceValue(key: string, value: unknown): string {
   if (value === null || value === undefined) {
-    // ADR 0004 defaults unmeasured instrumentation to null on purpose: "not
-    // measured" is a distinct claim from "measured zero". Say which one it is.
-    return "not measured";
+    // Three different claims arrive as one `null`; say which. ADR 0005 §6 requires "not
+    // measured" stay distinguishable from "measured zero", and this is the other half of it:
+    // "not applicable" must stay distinguishable from "not measured" too.
+    switch (ABSENCE[key]) {
+      case "not_applicable":
+        return "n/a";
+      case "never":
+        // The register says this field cannot be absent. A null here is a recording defect,
+        // and an audit surface that renders it as an ordinary blank hides one.
+        return "MISSING (required)";
+      case "not_measured":
+        return "not measured";
+      default:
+        // Not a register field — the catch-all group. Claim nothing about why it is empty.
+        return "—";
+    }
   }
-  if (key === "latency_ms" && typeof value === "number") return `${value} ms`;
-  if (key === "cost_est_usd" && typeof value === "number") return `$${value.toFixed(6)}`;
-  // Quiet metadata: BM25 fallback roughly halves routing recall vs embedding.
-  if (key === "schema_route_channel" && value === "bm25_fallback") {
-    return "bm25_fallback (degraded ranking)";
-  }
-  if (key === "token_usage" || key === "token_sum") {
+  // `latency_sec`, not `latency_ms`: the register records wall clock in seconds. There is no
+  // currency row to format — `measure/price.py` is deleted and the record carries no USD.
+  if (key === "latency_sec" && typeof value === "number") return `${value.toFixed(2)} s`;
+  if (key === "usage") {
     const summary = summarizeTokenUsage(value);
+    // An empty `usage` is a measured zero-model-call turn, not an absence. Say so rather than
+    // dropping to the JSON branch, which would render `[]`.
     if (summary) return summary;
+    if (Array.isArray(value) && value.length === 0) return "no model calls";
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return "—";

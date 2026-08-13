@@ -21,15 +21,22 @@ SQLite is the offline test/CI substrate.
 
 ## Decision records (ADRs)
 
-Point-in-time decisions. An ADR is never edited to match later reality — a
-superseding ADR or a code change wins. Living how-to docs may drift; ADRs do not.
+Point-in-time decisions. **The decision an ADR records is never edited to match later
+reality** — a superseding ADR or a code change wins, and the reasoning is kept even when it
+was reasoning toward the wrong answer.
+
+What *is* edited is everything around the decision. A superseded ADR is rewritten as a
+reversal record: what was decided, what is true instead, and what was learned. It does not
+keep coordinates into files that no longer exist, and its Status line does not describe a
+build in the present tense after that build was deleted. ADR 0003 and ADR 0004 were rewritten
+that way on 2026-08-12, having drifted into 121 citations of v1 modules between them.
 
 | ADR | Title |
 |---|---|
 | [0001](adr/0001-langgraph-server-chat-runtime.md) | Chat via LangGraph Server + `useStream` |
 | [0002](adr/0002-governed-agentic-serve-runtime.md) | Serve runtime as a governed agentic core |
-| [0003](adr/0003-governed-notes-tri-modal-retrieval.md) | Governed notes and tri-modal retrieval |
-| [0004](adr/0004-local-first-conversation-run-logging.md) | Local-first conversation + run logging |
+| [0003](adr/0003-governed-notes-tri-modal-retrieval.md) | Governed notes and tri-modal retrieval — **reversed in full by 0005** |
+| [0004](adr/0004-local-first-conversation-run-logging.md) | Local-first conversation + run logging — the turn log; the durable checkpointer half is withdrawn |
 | [0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) | Memory layer and faceted retrieval |
 | [0006](adr/0006-execution-time-governance.md) | Execution-time governance |
 | [0007](adr/0007-http-surface-and-the-ui-contract.md) | HTTP surface and the UI contract |
@@ -38,6 +45,7 @@ superseding ADR or a code change wins. Living how-to docs may drift; ADRs do not
 | [0010](adr/0010-live-stage-events.md) | Live stage events |
 | [0011](adr/0011-two-model-split-and-facet-query-rewriting.md) | Two models and a query per facet |
 | [0012](adr/0012-access-seam-principal-and-authorization.md) | The access seam: principal, authorization, and the Layer 6 split |
+| [0013](adr/0013-the-declared-abstention-policy.md) | The declared abstention policy |
 
 ## Measurement findings
 

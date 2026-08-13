@@ -21,7 +21,10 @@ PARCELS: dict[str, tuple[str, str]] = {
     "D": ("corpus", "ADR 0005 §1"),
     "E": ("retrieve", "ADR 0005 §2"),
     "F": ("serve", "ADR 0002"),
-    "G": ("eval", "ADR 0004"),
+    # Not an ADR: `eval/` has no decision record of its own. ADR 0004 used to be cited here
+    # and never specified this package -- it owns the served turn log (`runs/serve/`), not the
+    # measurement driver's rows (`runs/eval/`).
+    "G": ("eval", "docs/measurement.md"),
     "I": ("model", "ADR 0011"),
     "J": ("api", "ADR 0007"),
 }

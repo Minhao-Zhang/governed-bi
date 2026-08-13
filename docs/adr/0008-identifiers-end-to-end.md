@@ -104,19 +104,25 @@ matches `address.CBSA` and the table layer allows it. Nothing then rewrites the
 spelling, so Postgres receives the folded name and cannot find the relation.
 
 ADR 0006 §3 step 2 exists precisely to prevent this — *"rewrite each identifier to
-the corpus's declared spelling"* — and it is **not wired**:
+the corpus's declared spelling"* — and on 2026-08-04 it **was not wired**:
 
-- `prepare()` declares `spellings` and `ambiguous_folds` as *optional*
-  (`pipeline.py:169–170`);
-- the only production caller, `serve/tools.py:485`, passes neither, so
-  `canonicalise` runs with `spellings={}` and rewrites nothing;
-- `fold_map()`, which produces those two arguments, **has no caller in `src/`** —
-  only `tests/govern/test_guard_pipeline_ledger.py`, which hands it a hand-written
-  three-entry dict.
+- `govern/pipeline.prepare` declared `spellings` and `ambiguous_folds` as *optional*;
+- the one production caller passed neither, so `canonicalise` ran with `spellings={}`
+  and rewrote nothing;
+- `govern/identifiers.fold_map`, which produces those two arguments, had no caller in
+  `src/` — only `tests/govern/test_guard_pipeline_ledger.py`, which handed it a
+  hand-written three-entry dict.
 
-So the control has a producer with no caller, a consumer whose argument nobody
-passes, and two green tests that exercise it in isolation. This is L§7's vacuous
+So the control had a producer with no caller, a consumer whose argument nobody
+passed, and two green tests that exercised it in isolation. This is L§7's vacuous
 test in a governance layer.
+
+> **Wired in Phase 1** (see Status). `govern/pipeline.spellings_for` now derives the three
+> arguments from the corpus and the turn's licensed set, `serve/fetch.py` passes all three
+> at both its `prepare()` call sites (the `sample` path and the `agent` path), and
+> `fold_map` has two callers inside `spellings_for` itself. This paragraph is the 2026-08-04
+> diagnosis, kept because P1's blast-radius numbers are quoted below and they were measured
+> against the unwired state.
 
 And wiring it is **not sufficient**. `canonicalise` sets `this` without touching
 `quoted`, so sqlglot emits the declared spelling unquoted and Postgres folds it
