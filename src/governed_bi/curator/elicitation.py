@@ -351,7 +351,6 @@ def generate_candidate_questions(
     tables: Sequence[Any],
     assets_by_id: dict[str, Any],
     *,
-    existing: Sequence[ClarificationRecord] = (),
     observed_values: Mapping[str, tuple[str, ...]] | None = None,
     cardinalities: Mapping[str, Any] | None = None,
 ) -> list[ClarificationRecord]:
@@ -366,10 +365,16 @@ def generate_candidate_questions(
     governed statements one admin click issues is a different quantity: it bounds the round trips,
     never the report, and it truncates in a stated order so what it does cost is visible.
 
-    ``existing`` is the ledger's current records — used only to make this idempotent: a
-    candidate whose ``scope`` already exists among prior ``source="elicitation_wizard"``
-    records is dropped before it is returned. Returns only the newly proposed records (the
-    caller appends them to the ledger); ``existing`` itself is never mutated or re-returned.
+    **Every candidate the gates find, including ones the ledger already holds.** The scope
+    idempotency filter used to be the last line of this function and is now
+    ``curator/scan_report.diff_scan_against_ledger``'s first, for two reasons that are really
+    one. It was written twice — here for the keyword half and in
+    ``api/curation_routes.py::elicitation_generate`` for the structural half, because
+    ``curator/gaps.py`` has no ``existing`` parameter — so "already proposed" had two
+    implementations over one ledger. And the re-run report needs the *unfiltered* set: telling an
+    admin that 16 questions are carried forward from an earlier scan is only possible if
+    something still knows this scan re-derived them. A generator that pre-filters its own output
+    destroys exactly the information the report is made of.
 
     ``observed_values`` is :func:`read_observed_values`'s mapping, keyed by column id. B and E
     are the only categories that use it, and a column with no entry — never read, or read and
@@ -389,7 +394,6 @@ def generate_candidate_questions(
     from governed_bi.curator.elicitation_terms import propose_term_questions
 
     live_tables = _live_tables(tables)
-    existing_scopes = {r.scope for r in existing if r.source == ELICITATION_SOURCE}
     observed = observed_values or {}
 
     candidates: list[ClarificationRecord] = []
@@ -402,7 +406,7 @@ def generate_candidate_questions(
     # what made the column a candidate. A column E already covered gets no second card.
     candidates += _propose_s6(live_tables, assets_by_id, observed, covered=candidates)
     candidates += _propose_b(live_tables, assets_by_id, observed)
-    return [c for c in candidates if c.scope not in existing_scopes]
+    return candidates
 
 
 #: C's fixed choice list: month number -> "N - Name". Built once; identical for every schema.

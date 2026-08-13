@@ -156,15 +156,23 @@ def drop_already_answered(
     assets_by_id: Mapping[str, Any],
     *,
     schema: str | None,
-) -> list[ClarificationRecord]:
-    """Candidates minus the ones the corpus already answers.
+) -> tuple[list[ClarificationRecord], list[ClarificationRecord]]:
+    """``(candidates the corpus does not answer, the ones it does)``.
+
+    **Both halves are returned, and the second one is the point of the pair.** This used to
+    return the kept list alone, which made a suppressed candidate indistinguishable from one no
+    detector found — the same "an empty result is a clean bill of health" defect
+    ``curator/gaps.DetectorCoverage`` exists to close one layer up.
+    ``curator/scan_report.py`` needs the dropped records to tell an admin that a question is
+    absent *because it is answered*, so this reports them instead of discarding them. Nothing
+    about which records are kept changed.
 
     **Not the same rule as scope idempotency, and not in tension with "list ALL gaps".** The
-    scope filter in :func:`generate_candidate_questions` stops one ledger proposing one candidate
-    twice. This asks the broader question the ledger cannot: has this been *answered* somewhere
-    else? A gap that is already filled is not a gap, and the owner's decision is about never
-    truncating a finding to fit a quota -- it is not a licence to ask an admin something they
-    have already told us.
+    scope filter in ``curator/scan_report.diff_scan_against_ledger`` stops one ledger proposing
+    one candidate twice. This asks the broader question the ledger cannot: has this been
+    *answered* somewhere else? A gap that is already filled is not a gap, and the owner's decision
+    is about never truncating a finding to fit a quota -- it is not a licence to ask an admin
+    something they have already told us.
 
     Two settlings, and each is exact rather than a similarity judgment:
 
@@ -200,24 +208,25 @@ def drop_already_answered(
     folded = _folded_question_ids(assets_by_id, schema)
     terms = _certified_terms(assets_by_id)
     kept: list[ClarificationRecord] = []
-    settled_ids: set[str] = set()
+    settled: list[ClarificationRecord] = []
     for record in records:
         if _record_id_for_question(record.question, schema) in folded:
-            settled_ids.add(record.id)
+            settled.append(record)
             continue
         if record.scope.startswith("elicitation:term:"):
             if record.scope.rsplit(":", 1)[-1].casefold() in terms:
-                settled_ids.add(record.id)
+                settled.append(record)
                 continue
         kept.append(record)
+    settled_ids = {r.id for r in settled}
     if not settled_ids:
-        return kept
+        return kept, settled
     return [
         replace(record, blocked_by=tuple(b for b in record.blocked_by if b not in settled_ids))
         if settled_ids & set(record.blocked_by)
         else record
         for record in kept
-    ]
+    ], settled
 
 
 def _record_id_for_question(question: str, schema: str | None) -> str:

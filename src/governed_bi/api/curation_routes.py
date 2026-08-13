@@ -570,9 +570,22 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     free-form corpus editor surface ``can_edit`` gates).
 
     Idempotent: a candidate whose ``scope`` already exists among prior
-    ``source="elicitation_wizard"`` ledger records (open or answered) is never proposed twice --
-    ``curator/elicitation.py::generate_candidate_questions``'s own dedup, over the full
-    ``existing`` ledger passed in here.
+    ``source="elicitation_wizard"`` ledger records (open or answered) is never proposed twice.
+    That filter now runs once, in ``curator/scan_report.diff_scan_against_ledger``, over both
+    generators' output -- it used to run twice, inside the keyword generator for its own half and
+    here for the structural half, which is two implementations of one rule over one ledger.
+
+    **``report`` is the account a re-run owes, and it is why the filter moved.** The owner's third
+    standing decision (``utku-ai-setup-wizard-gap-model.md`` § "Three owner decisions") is that a
+    re-run diffs against already-confirmed content and *says so in words when nothing is new*.
+    ``n_generated: 0`` does not say that: it is the same number a structurally blind detector
+    returns, which is the defect ``coverage`` already answers for the other half of the sentence.
+    So the response now carries ``new`` / ``still_open`` / ``settled`` / ``stranded`` counts, an
+    explicit ``nothing_new`` boolean, and the sentence the wizard prints -- composed on this side
+    rather than in the client, so ``curl`` and the UI read the same words. Producing it needs the
+    *unfiltered* candidate set (a generator that pre-filters cannot say what it re-derived) and
+    the records the corpus dedup dropped (``drop_already_answered`` returns both halves now), and
+    that is the whole of the change to this route's pipeline.
 
     **Categories B and E read the live database, through the governed path.** Both are about a
     column's real value vocabulary, and both used to gate on ``ColumnAsset.sample_values``, which
@@ -621,12 +634,12 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
         enforce_audience_language,
     )
     from governed_bi.curator.elicitation import (
-        ELICITATION_SOURCE,
         generate_candidate_questions,
         read_observed_values,
     )
     from governed_bi.curator.elicitation_terms import read_term_cardinalities
     from governed_bi.curator.gaps import apply_cluster_dependencies, detect_structural_gaps
+    from governed_bi.curator.scan_report import diff_scan_against_ledger, scan_report_payload
 
     session = _curation_session()
     if session.corpus_root is None:
@@ -672,41 +685,40 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     keyword_records = generate_candidate_questions(
         tables,
         session.assets_by_id,
-        existing=existing,
         observed_values=observed,
         cardinalities=cardinalities,
     )
-    # Idempotency for the structural half, by the same rule ``generate_candidate_questions``
-    # applies to its own output: a scope already in the ledger is not proposed again. The
-    # detectors are a pure function of the corpus and the data, so a second click re-derives the
-    # same scopes and this is what keeps it from re-appending them.
-    known_scopes = {r.scope for r in existing if r.source == ELICITATION_SOURCE}
-    structural_records = [r for r in scan.records if r.scope not in known_scopes]
-    # Then the two rules about the *presented set* rather than about any one candidate, in the
-    # order they have to run: dependency stamping, then "is this already answered", then "can
-    # its audience read it". The dedup runs *after* the stamp because a prerequisite that is
-    # already answered is a prerequisite that is met, and only the stamped list knows which
-    # records were waiting on the one being dropped -- `drop_already_answered` clears those
-    # edges as it goes (found live: without that, suppressing an answered cluster question left
-    # two E cards permanently "Waiting" on an id in no ledger).
+    # Then the rules about the *presented set* rather than about any one candidate, in the order
+    # they have to run: dependency stamping, then "is this already answered", then "can its
+    # audience read it", then "have we asked this before". The corpus dedup runs *after* the
+    # stamp because a prerequisite that is already answered is a prerequisite that is met, and
+    # only the stamped list knows which records were waiting on the one being dropped --
+    # `drop_already_answered` clears those edges as it goes (found live: without that,
+    # suppressing an answered cluster question left two E cards permanently "Waiting" on an id in
+    # no ledger).
+    #
+    # The scope filter runs *last*, inside the diff, and that ordering is what the report is made
+    # of: everything upstream of it now sees the whole re-derived set, so "16 carried forward
+    # from an earlier scan" is a measurement rather than an absence.
     #
     # `_reload_assets`, not `session.assets_by_id`: the frozen mapping is a run constant, and the
     # whole point of the dedup is that an answer folded a minute ago on this same server should
     # already have settled its question (`/corpus/conflicts` reloads for the same reason).
-    new_records = enforce_audience_language(
-        drop_already_answered(
-            apply_cluster_dependencies(
-                [*structural_records, *keyword_records], scan.gated_columns
-            ),
-            {a.id: a for a in _reload_assets(session)},
-            schema=session.db_id,
-        )
+    kept, settled_by_corpus = drop_already_answered(
+        apply_cluster_dependencies([*scan.records, *keyword_records], scan.gated_columns),
+        {a.id: a for a in _reload_assets(session)},
+        schema=session.db_id,
     )
+    report = diff_scan_against_ledger(
+        enforce_audience_language(kept), settled_by_corpus, existing
+    )
+    new_records = list(report.new)
     if new_records:
         write_clarifications(session.corpus_root, [*existing, *new_records])
     return {
         "generated": [_clarification_row(r) for r in new_records],
         "n_generated": len(new_records),
+        "report": scan_report_payload(report),
         "ledger": [dict(row) for row in (*scan.ledger, *value_ledger, *cardinality_ledger)],
         "coverage": [
             {

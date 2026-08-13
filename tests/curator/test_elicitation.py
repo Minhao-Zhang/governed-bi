@@ -185,7 +185,13 @@ def test_d_is_never_generated_as_a_standalone_candidate() -> None:
     assert all(rec.category != "D" for rec in records)
 
 
-def test_generate_is_idempotent_against_existing_ledger() -> None:
+def test_the_generator_re_derives_the_same_set_every_run() -> None:
+    """Idempotency is no longer *this* function's job — the scope filter moved to
+    ``curator/scan_report.diff_scan_against_ledger``, which needs the unfiltered set to say what
+    a re-run carried forward. What this function still owes is that a second call on unchanged
+    inputs proposes the identical candidates, byte for byte: the diff keys on ``scope``, and a
+    generator whose scopes moved between runs would report its whole output as new every time.
+    """
     from governed_bi.curator.elicitation import generate_candidate_questions
 
     tables, assets_by_id = _schema()
@@ -193,10 +199,8 @@ def test_generate_is_idempotent_against_existing_ledger() -> None:
         tables, assets_by_id, connector=_ScriptedConnector(_REAL_VALUES)
     )
     first = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
-    second = generate_candidate_questions(
-        tables, assets_by_id, existing=first, observed_values=observed
-    )
-    assert second == []
+    second = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
+    assert first and second == first
 
 
 #: Value-gated columns for :func:`_uncapped_schema`, all four of each kind past the retired cap
@@ -789,7 +793,9 @@ def test_a_bare_corpus_settles_nothing() -> None:
     from governed_bi.curator.candidate_rules import drop_already_answered
 
     records, assets_by_id = _wizard_records()
-    assert drop_already_answered(records, assets_by_id, schema="shop") == records
+    kept, settled = drop_already_answered(records, assets_by_id, schema="shop")
+    assert kept == records
+    assert settled == []
 
 
 def test_a_term_the_corpus_already_defines_is_not_asked_about_again() -> None:
@@ -803,7 +809,9 @@ def test_a_term_the_corpus_already_defines_is_not_asked_about_again() -> None:
     assert any(r.scope == "elicitation:term:amount" for r in records)
 
     assets_by_id["term.amount"] = _term_asset("amount", certified=True)
-    kept = {r.scope for r in drop_already_answered(records, assets_by_id, schema="shop")}
+    kept_records, settled = drop_already_answered(records, assets_by_id, schema="shop")
+    kept = {r.scope for r in kept_records}
+    assert [r.scope for r in settled] == ["elicitation:term:amount"]
     assert "elicitation:term:amount" not in kept
     assert "elicitation:termcolumn:amount" in kept, "a definition is not a column binding"
     assert "elicitation:termcolumn:total" in kept, "only the settled one goes"
@@ -816,7 +824,7 @@ def test_a_proposed_definition_does_not_settle_a_term() -> None:
 
     records, assets_by_id = _wizard_records()
     assets_by_id["term.amount"] = _term_asset("amount", certified=False)
-    kept = drop_already_answered(records, assets_by_id, schema="shop")
+    kept, _settled = drop_already_answered(records, assets_by_id, schema="shop")
     assert any(r.scope == "elicitation:term:amount" for r in kept)
 
 
@@ -834,9 +842,10 @@ def test_a_question_already_answered_and_folded_is_not_asked_again() -> None:
     folded = draft_from_clarification(answered.question, "US and CA", schema="shop")
     assets_by_id[folded.id] = folded
 
-    kept = drop_already_answered(records, assets_by_id, schema="shop")
+    kept, settled = drop_already_answered(records, assets_by_id, schema="shop")
     assert answered.scope not in {r.scope for r in kept}
     assert len(kept) == len(records) - 1
+    assert [r.scope for r in settled] == [answered.scope], "and it is reported, not just dropped"
 
 
 def test_dropping_a_settled_prerequisite_unblocks_what_was_waiting_on_it() -> None:
@@ -865,7 +874,7 @@ def test_dropping_a_settled_prerequisite_unblocks_what_was_waiting_on_it() -> No
     folded = draft_from_clarification(blocker.question, "US and CA", schema="shop")
     assets_by_id[folded.id] = folded
 
-    kept = drop_already_answered([blocker, waiting], assets_by_id, schema="shop")
+    kept, _settled = drop_already_answered([blocker, waiting], assets_by_id, schema="shop")
     (survivor,) = kept
     assert survivor.blocked_by == ("elicit.other",), "the settled prerequisite is met, not lost"
     assert unmet_prerequisites(survivor, kept) == ("elicit.other",)
@@ -880,4 +889,4 @@ def test_a_folded_answer_from_another_schema_settles_nothing_here() -> None:
     folded = draft_from_clarification(answered.question, "US and CA", schema="other_db")
     assets_by_id[folded.id] = folded
 
-    assert drop_already_answered(records, assets_by_id, schema="shop") == records
+    assert drop_already_answered(records, assets_by_id, schema="shop") == (records, [])
