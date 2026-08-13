@@ -61,6 +61,41 @@ def test_long_question_and_answer_are_truncated_in_summary_but_not_body() -> Non
     assert question.strip() in draft.body
 
 
+def test_a_long_question_never_truncates_the_answer_out_of_the_summary() -> None:
+    """**Found live** on a real ``POST /clarifications/{id}/answer``: only ``summary`` is
+    indexed (I1), and ``summary`` was ``question — answer`` truncated at 250 characters — so a
+    Setup Wizard question, which is a sentence or two of context, pushed the admin's answer past
+    the cap and the corpus fact ended up carrying only the question. The record read
+    ``converted_to_corpus: true`` and nothing that could be retrieved had been written.
+
+    The question is context; the answer is the fact. So the answer is what survives.
+    """
+    from governed_bi.curator.clarification import draft_from_clarification
+    from governed_bi.register.knobs import knob_default
+
+    question = (
+        "`app_store.playstore.Content Rating` and `app_store.playstore.content_rating` hold "
+        "different values on 3664 of 10840 rows, and read as two names for one thing. Which one "
+        "is authoritative? Is the other a legacy copy, an import artefact, or a different field "
+        "entirely?"
+    )
+    answer = "playstore.Content Rating is authoritative."
+    draft = draft_from_clarification(question, answer, schema="app_store")
+
+    assert len(draft.summary) <= int(knob_default("summary_max_chars"))
+    assert answer in draft.summary, draft.summary
+    assert question in draft.body and answer in draft.body
+
+
+def test_an_answer_longer_than_the_cap_is_itself_truncated_rather_than_overflowing() -> None:
+    from governed_bi.curator.clarification import draft_from_clarification
+    from governed_bi.register.knobs import knob_default
+
+    draft = draft_from_clarification("short question?", "answer " * 100, schema="s")
+    assert len(draft.summary) <= int(knob_default("summary_max_chars"))
+    assert draft.summary.startswith("answer answer")
+
+
 def test_draft_submits_and_is_invisible_until_approved(tmp_path: Path) -> None:
     from governed_bi.corpus.analyst import for_analyst
     from governed_bi.corpus.drafts import approve_draft, submit_draft

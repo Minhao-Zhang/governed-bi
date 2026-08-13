@@ -55,11 +55,32 @@ def resolved_answer_text(body: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _truncated(text: str) -> str:
-    cap = int(knob_default("summary_max_chars"))
+def _truncated(text: str, cap: int | None = None) -> str:
+    cap = int(knob_default("summary_max_chars")) if cap is None else cap
     if len(text) <= cap:
         return text
     return text[: cap - 1].rstrip() + "…"
+
+
+def _qa_summary(question: str, answer: str) -> str:
+    """``question — answer``, trimmed to ``summary_max_chars`` **from the question end**.
+
+    **The answer is the fact; the question is context.** Only ``summary`` is indexed (ADR 0005
+    I1), so whatever is dropped here is dropped out of retrieval entirely -- and truncating
+    ``f"{question} — {answer}"`` from the right drops the answer, which is the only part a later
+    turn needs. Found live on a real ``POST /clarifications/{id}/answer``: a Setup Wizard
+    question is a sentence or two of context, so it consumed the whole 250-character budget on
+    its own and the corpus fact that came back said nothing but the question. The record read
+    ``converted_to_corpus: true`` and there was nothing retrievable behind it.
+
+    An answer that does not fit on its own is truncated in its own right rather than dropping
+    the question first and then overflowing anyway -- the same direction, applied once more.
+    """
+    tail = f" — {answer}"
+    cap = int(knob_default("summary_max_chars"))
+    if len(tail) >= cap:
+        return _truncated(answer)
+    return _truncated(question, cap - len(tail)) + tail
 
 
 def draft_from_clarification(question: str, answer: str, *, schema: str) -> TermAsset:
@@ -71,12 +92,20 @@ def draft_from_clarification(question: str, answer: str, *, schema: str) -> Term
     model call would misfile more often than a generic term captures correctly. The admin
     reviewing the drafts queue (corpus/drafts.py::approve_draft) is exactly where a
     misclassified draft gets corrected before it ever serves.
+
+    **One type for every Setup Wizard category too, checked rather than assumed.** A wizard
+    answer can be a value grouping, a default exclusion, a join key or a free-text description of
+    a table, and this repo has no ``NoteAsset`` -- the eight types are schema/table/column/join/
+    metric/term/few-shot/negative-example (``corpus/schema.py``). ``TermAsset.body`` is free text
+    and ``summary`` is what retrieval sees, so a table description is carried perfectly well by
+    this shape; what it needs is a *composed sentence* that names the object it is about, which
+    is ``curator/elicitation_answers.py``'s job and not this function's.
     """
     digest = hashlib.sha256(question.encode("utf-8")).hexdigest()[:16]
     return TermAsset(
         id=f"clarification.{schema}.{digest}",
         name=_truncated(question),
-        summary=_truncated(f"{question} — {answer}"),
+        summary=_qa_summary(question, answer),
         body=f"Q: {question}\nA: {answer}",
     )
 
