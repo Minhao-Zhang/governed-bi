@@ -271,7 +271,7 @@ def resolve_answer_text(record: ClarificationRecord) -> str | None:
     **Category-tagged bypass (Setup Wizard, Phase 2), ported from v1's own
     ``resolve_answer_text`` unchanged.** A ``category``-tagged record's ``answer`` is already a
     fully composed, self-contained sentence
-    (``curator/elicitation.py::compose_elicitation_answer_text``, written into ``answer`` at
+    (``curator/elicitation_answers.py::compose_elicitation_answer_text``, written into ``answer`` at
     answer time by ``api/curation_routes.py::answer_clarification_route``) — the label+freeform
     concatenation below is specifically what would corrupt it: a bare picked-choice label like
     ``"sales.total_amount"`` means nothing on its own, which is the whole reason the composed

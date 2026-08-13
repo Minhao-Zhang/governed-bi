@@ -238,32 +238,31 @@ def test_mark_converted_to_corpus_leaves_other_fields_untouched(tmp_path: Path) 
 
 def test_resolve_answer_text_returns_a_category_tagged_records_answer_verbatim() -> None:
     """A category-tagged record's ``answer`` is already a fully composed, self-contained
-    sentence (``curator/elicitation.py::compose_elicitation_answer_text``, written at answer
-    time) -- the generic picked-choice-label-plus-freeform concatenation below would lose that
-    context (a bare label like ``"payments.revenue_amount"`` means nothing on its own), so a
+    sentence (``curator/elicitation_answers.py::compose_elicitation_answer_text``, written at
+    answer time) -- the generic picked-choice-label-plus-freeform concatenation below would lose
+    that context (a bare label like ``"payments.revenue_amount"`` means nothing on its own), so a
     category-tagged record skips it entirely and returns ``answer`` untouched.
     """
-    from governed_bi.curator.elicitation import compose_elicitation_answer_text
     from governed_bi.curator.clarifications import resolve_answer_text
+    from governed_bi.curator.elicitation_answers import compose_elicitation_answer_text
 
-    composed = compose_elicitation_answer_text(
-        _record(
-            category="A",
-            choices=({"id": "payments.revenue_amount", "label": "payments.revenue_amount"},),
-        ),
-        choice_id="payments.revenue_amount",
-    )
-    rec = _record(
+    # A real wizard scope, not the module fixture's generic ``table:orders``: composition is
+    # dispatched on the scope's kind, so a record with no wizard scope exercises the fallback
+    # rather than the branch this test is about.
+    wizard = dict(
+        scope="elicitation:term:revenue",
         category="A",
-        answer_choice_id="payments.revenue_amount",
         choices=({"id": "payments.revenue_amount", "label": "payments.revenue_amount"},),
-        answer=composed,
     )
+    composed = compose_elicitation_answer_text(
+        _record(**wizard), choice_id="payments.revenue_amount"
+    )
+    rec = _record(**wizard, answer_choice_id="payments.revenue_amount", answer=composed)
     # Without the bypass this would double up as "payments.revenue_amount — 'revenue' maps to
     # payments.revenue_amount." -- the picked choice's own label glued onto the composed
     # sentence that already names it.
     assert resolve_answer_text(rec) == composed
-    assert resolve_answer_text(rec) == "'orders' maps to payments.revenue_amount."
+    assert resolve_answer_text(rec) == "'revenue' maps to payments.revenue_amount."
 
 
 def test_resolve_answer_text_bypass_ignores_choices_entirely_for_a_category_tagged_record() -> None:

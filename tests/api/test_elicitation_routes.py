@@ -416,7 +416,9 @@ def test_answering_an_e_candidate_composes_the_exclusion_sentence(monkeypatch, t
 
     response = client.post(f"/clarifications/{e_rec['id']}/answer", json={"choice_id": "exclude"})
     assert response.status_code == 200, response.text
-    assert "apply this exclusion by default" in response.json()["answer"]
+    # The question is in business words ("review status"); the fact names the physical column,
+    # because its reader is the retrieval layer and not the person who answered.
+    assert response.json()["answer"].startswith("orders.review_status — Leave out the rows")
 
 
 def test_answering_a_b_candidate_composes_the_checklist_sentence(monkeypatch, tmp_path: Path) -> None:
@@ -429,7 +431,7 @@ def test_answering_a_b_candidate_composes_the_checklist_sentence(monkeypatch, tm
     assert response.status_code == 200, response.text
     body = response.json()
     assert all(v in body["answer"] for v in picked)
-    assert "grouping asked about" in body["answer"]
+    assert body["answer"].startswith("In orders.country_code, these values count as one group:")
 
 
 # ── D join-path auto-follow-up ──────────────────────────────────────────────────────────────
@@ -489,7 +491,11 @@ def test_answering_the_d_followup_with_freeform_is_accepted(monkeypatch, tmp_pat
     d_row = _join_followups(client.get("/elicitation/candidates").json())[0]
     response = client.post(f"/clarifications/{d_row['id']}/answer", json={"answer": "orders.id = payments.order_id"})
     assert response.status_code == 200, response.text
-    assert response.json()["answer"] == "orders.id = payments.order_id"
+    # Prefixed with the object it is about: the freeform alone folds into the corpus as a
+    # sentence with no subject.
+    assert response.json()["answer"] == (
+        "payments.revenue_amount: orders.id = payments.order_id."
+    )
 
 
 # ── end-to-end fold into the corpus (A/E/B, via the shared fold_ledger_answer_into_corpus) ──
@@ -525,7 +531,7 @@ def test_e_answer_folds_the_composed_sentence_into_the_corpus(monkeypatch, tmp_p
 
     assets, _ = load(tmp_path, schemas=["shop"])
     (draft,) = assets
-    assert "apply this exclusion by default" in draft.summary
+    assert body["answer"] in draft.summary, draft.summary
 
 
 def test_b_answer_folds_the_composed_sentence_into_the_corpus(monkeypatch, tmp_path: Path) -> None:
@@ -644,7 +650,7 @@ def test_answering_the_generated_cluster_question_unblocks_the_value_questions(
     assert answer.json()["unmet_prerequisites_at_answer"] == []
     # The picked choice survives composition and reaches the corpus. Found live: the D branch
     # returned freeform only, so a column-picker answer composed "" and folded nothing.
-    assert answer.json()["answer"] == "orders.country_code is authoritative"
+    assert answer.json()["answer"] == "orders.country_code is authoritative."
     assert answer.json()["converted_to_corpus"] is True
 
     after = {r["scope"]: r for r in client.get("/elicitation/candidates").json()}

@@ -445,10 +445,10 @@ def answer_clarification_route(clarification_id: str, body: dict[str, Any] | Non
     ``session.assets_by_id`` -- same reason ``/corpus/conflicts`` reloads rather than trusts it.
 
     **Setup Wizard composition (Phase 2)**, answering a category-tagged (``elicitation_wizard``)
-    candidate: the record's own category decides how ``choice_id``/``choice_ids``/``answer`` are
-    reduced to text (``curator/elicitation.py::compose_elicitation_answer_text``) rather than the
-    generic picked-label/freeform concatenation ``resolve_answer_text`` falls back to for every
-    other record -- computed here, against the record as it stood *before* this call, and handed
+    candidate: the record's own ``scope`` decides how ``choice_id``/``choice_ids``/``answer`` are
+    reduced to text (``curator/elicitation_answers.py::compose_elicitation_answer_text``) rather
+    than the generic picked-label/freeform concatenation ``resolve_answer_text`` falls back to for
+    every other record -- computed here, against the record as it stood *before* this call, and handed
     to ``answer_clarification`` as the ``answer`` it writes so every downstream reader
     (this row, the ledger view, and the fold below, via ``resolve_answer_text``'s own
     ``category is not None`` bypass) sees the same composed sentence.
@@ -468,10 +468,8 @@ def answer_clarification_route(clarification_id: str, body: dict[str, Any] | Non
         append_if_new_scope,
         load_clarifications,
     )
-    from governed_bi.curator.elicitation import (
-        compose_elicitation_answer_text,
-        maybe_generate_join_followup,
-    )
+    from governed_bi.curator.elicitation import maybe_generate_join_followup
+    from governed_bi.curator.elicitation_answers import compose_elicitation_answer_text
 
     session = _curation_session()
     if session.corpus_root is None:

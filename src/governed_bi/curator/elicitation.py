@@ -8,7 +8,9 @@ once — every one its keyword gates find, with no per-category quota (see
 exact same :class:`~governed_bi.curator.clarifications.ClarificationRecord` ledger + fold
 pipeline (``api/curation_routes.py::answer_clarification_route`` ->
 ``curator/clarification.py::fold_ledger_answer_into_corpus``) as every other clarification
-source — no new storage path.
+source — no new storage path. **What an answer composes to** is
+``curator/elicitation_answers.py``, split out along the seam the sentence above already draws:
+this module decides what to ask, that one decides what an answer to it means.
 
 Five categories, fixed priority order (highest first) — :data:`CATEGORY_PRIORITY`:
 
@@ -789,86 +791,6 @@ def _propose_b(
                 )
             )
     return out
-
-
-def compose_elicitation_answer_text(
-    rec: ClarificationRecord,
-    *,
-    choice_id: str | None = None,
-    choice_ids: list[str] | None = None,
-    freeform: str | None = None,
-) -> str:
-    """Build the self-contained sentence a category-tagged answer folds as (v1, ported
-    unchanged in behavior).
-
-    A bare picked-choice label (e.g. ``"sales.total_amount"``) loses the term/rule context that
-    made the label meaningful once it is written as a corpus note's summary — this reconstructs
-    that context using the question's ``category``/``scope``/``target_table``/``target_column``.
-    Written into ``ClarificationRecord.answer`` at answer time
-    (``api/curation_routes.py::answer_clarification_route``); from then on
-    ``curator/clarifications.py::resolve_answer_text`` returns it verbatim for a category-tagged
-    record (its own "category is not None" bypass).
-
-    Every category accepts either a picked choice or freeform text (a user may answer either
-    way) — each branch below handles whichever one was actually supplied, not just the
-    modality the question was designed around, or the other input silently vanishes instead of
-    folding (the exact "choice-picked answer disappears" bug class this codebase has hit and
-    fixed before, just for the opposite input shape).
-    """
-    choices_by_id = {c["id"]: c["label"] for c in (rec.choices or ())}
-    freeform = (freeform or "").strip()
-
-    if rec.category == "A":
-        term = rec.scope.rsplit(":", 1)[-1]
-        if choice_id is not None:
-            label = choices_by_id.get(choice_id, choice_id)
-            return f"'{term}' maps to {label}."
-        if freeform:
-            return f"'{term}' maps to {freeform}."
-        return ""
-    if rec.category == "C":
-        if freeform:
-            return f"Fiscal year starts in month {freeform}."
-        if choice_id is not None:
-            label = choices_by_id.get(choice_id, choice_id)
-            return f"Fiscal year starts in month {label}."
-        return ""
-    if rec.category == "E":
-        if choice_id == "exclude":
-            label = choices_by_id.get(choice_id, "")
-            return f"{label} — apply this exclusion by default."
-        if choice_id == "include":
-            return f"{rec.target_table}.{rec.target_column}: no default exclusion (include all values)."
-        if freeform:
-            return f"{rec.target_table}.{rec.target_column}: {freeform}"
-        return ""
-    if rec.category == "B":
-        selected = [choices_by_id.get(cid, cid) for cid in (choice_ids or ())]
-        if selected:
-            return (
-                f"For {rec.target_table}.{rec.target_column}, these values count as the "
-                f"grouping asked about: {', '.join(selected)}."
-            )
-        if freeform:
-            return f"For {rec.target_table}.{rec.target_column}, the grouping asked about: {freeform}"
-        return ""
-    if rec.category == "D":
-        # Freeform first, because the join follow-up this branch was written for offers no
-        # choices at all -- but never *only* freeform. **Found live** on real ``app_store``:
-        # ``curator/gaps.py``'s near-duplicate cluster question is also a D, and it is a column
-        # picker, so answering "playstore.Content Rating is authoritative" through the wizard
-        # composed the empty string, `answer_clarification` stored it, and
-        # `fold_ledger_answer_into_corpus`'s "no answer text" gate then silently folded nothing
-        # -- losing the admin's decision on the highest-severity question the wizard asks. This
-        # is the same "a picked choice disappears" bug class the rest of this function was
-        # written against, reached from the one branch that had no choices to lose.
-        #
-        # The picked label verbatim, not a composed frame: the cluster question's labels already
-        # read as sentences ("X is authoritative"), and the join-key record's are bare
-        # identifiers that a frame would have to guess the verb for. Wording is a later phase's;
-        # not dropping the answer is this one's.
-        return freeform or choices_by_id.get(choice_id or "", choice_id or "")
-    return freeform or choices_by_id.get(choice_id or "", "")
 
 
 def maybe_generate_join_followup(rec: ClarificationRecord, picked_choice_id: str) -> ClarificationRecord | None:
