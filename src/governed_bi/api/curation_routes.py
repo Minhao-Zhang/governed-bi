@@ -573,7 +573,10 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     ``serve/fetch.compare_column_pair`` per name-alike column pair (bounded by
     ``gaps.MAX_PAIR_COMPARISONS``), which is a row-wise ``IS DISTINCT FROM`` count and not a
     value-set read -- the two columns that made this detector necessary hold the *identical* 554
-    distinct customer ids and disagree on 6 305 of 6 312 rows.
+    distinct customer ids and disagree on 6 305 of 6 312 rows -- plus one
+    ``serve/fetch.count_distinct_values`` per candidate join key (bounded by
+    ``gaps.MAX_KEY_PROBES``), because whether a column identifies a row is the one thing the
+    seeded corpus cannot say and ``pg_rename_decoy`` declares no constraint to read it from.
 
     ``ledger`` in the response is every attempt row from both -- named as ``GET /turns/{id}``
     already names the same thing (``routes.py``: ``"ledger": execution["attempts"]``). It is
@@ -611,6 +614,17 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
 
     tables = [a for a in session.assets_by_id.values() if a.asset_type.value == "table"]
     existing = load_clarifications(session.corpus_root)
+    # The value read runs first because *both* halves consume it now: the keyword generator's B,
+    # E and S6, and the structural scan's join detector, which asks whether two look-alike
+    # columns of two tables draw on the same domain. One read per column, shared -- reading them
+    # twice would double the governed statements for one fact.
+    observed, value_ledger = read_observed_values(
+        tables,
+        session.assets_by_id,
+        connector=session.connector,
+        corpus=session.corpus,
+        policy=session.policy,
+    )
     scan = detect_structural_gaps(
         tables,
         session.assets_by_id,
@@ -621,13 +635,7 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
         # holds them, and reconciling a join's ``left_table`` spelling to a table id a second
         # time here would bind an edge to the wrong table rather than merely lose it.
         join_edges=session.structure.join_edges,
-    )
-    observed, value_ledger = read_observed_values(
-        tables,
-        session.assets_by_id,
-        connector=session.connector,
-        corpus=session.corpus,
-        policy=session.policy,
+        observed_values=observed,
     )
     keyword_records = generate_candidate_questions(
         tables, session.assets_by_id, existing=existing, observed_values=observed

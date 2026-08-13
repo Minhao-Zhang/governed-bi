@@ -18,8 +18,11 @@ one of two sources only:
    first source split into its own module: :func:`~governed_bi.curator.gap_signals.name_similarity`
    and the cheap gates that decide which pairs are worth paying for, with no connector and no
    record in sight.
-2. **Rows in the database**, read through ``serve/fetch.compare_column_pair`` — the same
-   ``prepare()``-checked, ledgered path the live agent's own tools take. That is this module.
+2. **Rows in the database**, read through ``serve/fetch.compare_column_pair`` and
+   ``serve/fetch.count_distinct_values`` — the same ``prepare()``-checked, ledgered path the
+   live agent's own tools take. That is this module, and ``curator/gap_joins.py``, which is the
+   one detector whose reads are chosen by a second measurement and which therefore carries its
+   own budget and threshold rather than sharing this file's.
 
 **Evidence, not suspicion.** The headline detector requires *both* halves: a near-duplicate name
 **and** a measured row-level disagreement. Either alone is a false-positive machine —
@@ -35,7 +38,9 @@ truncate; stratify by severity so the admin can stop at any tier", so no detecto
 finding to fit a quota and no two detectors share a budget — the arrangement that would let 93
 undescribed columns crowd out one disagreeing join key is structurally absent, not merely
 avoided by ordering. What *is* bounded is how many governed statements one admin click issues
-(:data:`MAX_PAIR_COMPARISONS`), which is a different quantity with a different justification.
+(:data:`MAX_PAIR_COMPARISONS` here, ``gap_joins.MAX_KEY_PROBES`` there — two budgets, so that a
+wide table full of look-alike pairs cannot spend the join detector's measurements), which is a
+different quantity with a different justification.
 
 **Ordering is a constraint, not a preference.** :func:`apply_cluster_dependencies` writes
 ``blocked_by`` from the near-duplicate detector's output onto every A/B/E question about a
@@ -60,17 +65,17 @@ from governed_bi.curator.clarifications import ClarificationRecord
 # with the keyword generator rather than re-derived here (ADR 0005 §6): a second answer to
 # "excluded tables are skipped, in id order" is a second answer to what the wizard scans.
 from governed_bi.curator.elicitation import ELICITATION_SOURCE, _columns_of, _live_tables, _record_id
+from governed_bi.curator.gap_joins import MAX_KEY_PROBES, join_records, key_matches, measure_keys
 from governed_bi.curator.gap_signals import (
-    candidate_keys,
     comparison_candidates,
     evidence_strength,
     frame_siblings,
     type_class,
-    unjoined_pairs,
 )
 
 __all__ = [
     "CARDINALITY_COMPARABILITY",
+    "MAX_KEY_PROBES",
     "MAX_PAIR_COMPARISONS",
     "SEVERITY_ORDER",
     "DetectorCoverage",
@@ -162,7 +167,9 @@ def detect_structural_gaps(
     corpus: Any,
     policy: Any,
     join_edges: frozenset[tuple[str, str]] = frozenset(),
+    observed_values: Mapping[str, tuple[str, ...]] | None = None,
     max_comparisons: int = MAX_PAIR_COMPARISONS,
+    max_key_probes: int = MAX_KEY_PROBES,
 ) -> GapScan:
     """Run every structural detector, near-duplicate clusters first.
 
@@ -178,6 +185,14 @@ def detect_structural_gaps(
     ``structure.py``'s single implementation and a second one would bind an edge to the wrong
     table rather than merely losing it (ADR 0005 §2.8.2). Empty means "no joins declared", which
     is the honest reading for a caller that has no structure to offer.
+
+    ``observed_values`` is ``curator/elicitation.read_observed_values``'s mapping — the capped
+    distinct values already read for every column on the way here. The join detector needs them
+    to ask whether two look-alike columns draw on the same domain, and taking them from the
+    caller rather than re-reading is the difference between one value read per column and two.
+    Omitted means the caller has no values to offer, and the join detector then has no evidence
+    that a name match is a real reference: it emits nothing and says so in its coverage note,
+    which is the honest result rather than a fallback to the name convention this replaced.
     """
     live = _live_tables(tables)
     columns_by_table = {
@@ -197,7 +212,16 @@ def detect_structural_gaps(
     duplicates, gated = _duplicate_records(
         candidates[:max_comparisons], agreements, columns_by_table
     )
-    joins, join_note = _join_records(live, columns_by_table, join_edges, agreements)
+    matches = key_matches(live, columns_by_table, join_edges, observed_values or {})
+    keys, key_ledger, key_probes = measure_keys(
+        sorted({target.id for _s, _t, target, _sources in matches})[:max_key_probes],
+        assets_by_id=assets_by_id,
+        connector=connector,
+        corpus=corpus,
+        policy=policy,
+    )
+    ledger.extend(key_ledger)
+    joins, join_note = join_records(live, matches, keys, join_edges, agreements, key_probes)
     coverage_records, uncovered_columns = _coverage_records(live, columns_by_table)
     reliability = _reliability_records(live, columns_by_table)
 
@@ -223,7 +247,7 @@ def detect_structural_gaps(
                 detector="join_path",
                 gap_type="S2",
                 considered=len(live) * (len(live) - 1) // 2,
-                measured=0,
+                measured=key_probes,
                 found=len(joins),
                 note=join_note,
             ),
@@ -445,152 +469,6 @@ def _duplicate_records(
             for name in qualified:
                 gated[name] = record.id
     return records, gated
-
-
-# ── S2 / D: join paths, proactively ─────────────────────────────────────────────────────────
-
-
-def _join_records(
-    live: Sequence[Any],
-    columns_by_table: Mapping[str, list[Any]],
-    join_edges: frozenset[tuple[str, str]],
-    agreements: Mapping[tuple[str, str], Any],
-) -> tuple[list[ClarificationRecord], str]:
-    """One record per ambiguous key set (T1) or per candidate key column (T3).
-
-    **The two shapes are never collapsed, and the difference is what happens if nobody answers.**
-    Two candidate keys that disagree means the engine picks one and silently attaches data to the
-    wrong entity — ``transaktion.kunde_id`` against ``transaktions_kunde_id`` disagree on 6 305
-    of 6 312 rows, so every per-customer answer in the schema is wrong for one of the choices.
-    One candidate, or none, means the engine cannot traverse and refuses, which costs an answer
-    and never corrupts one.
-
-    **The emission unit is the column, not the pair**, following the design doc against the
-    arithmetic: 28 unjoined pairs on ``beer_factory`` versus 16 FK-looking columns, and "pairs
-    are combinatorial noise, columns are the actual decision". A pair with no candidate key on
-    either side therefore produces no question — there is nothing grounded to ask, and inventing
-    choices for it is what the grounded-choices discipline forbids. Those pairs are **counted in
-    the coverage note** instead, so the distinction stays visible rather than being dropped
-    silently.
-
-    That unit is enforced by keying on the record's own ``scope``, and the reason is a defect
-    found live rather than a precaution: ``candidate_keys`` is keyed by *target* column, and a
-    target table with two columns that both read as its key (``standort.standort_id`` and
-    ``standort_nummer``) matched ``kunden.ort`` twice — so six T3 records reached the ledger with
-    the same scope and the same id, and the wizard rendered duplicate React keys. One source
-    column joining to one table is one decision no matter how many of the target's columns it
-    resembles.
-    """
-    records: list[ClarificationRecord] = []
-    without_candidates = 0
-    ambiguous_pairs = 0
-    for left_table, right_table in unjoined_pairs(live, join_edges):
-        pair_records: dict[str, ClarificationRecord] = {}
-        ambiguous: list[tuple[Any, Any, list[Any], Any]] = []
-        for source_table in (left_table, right_table):
-            other = right_table if source_table is left_table else left_table
-            for target_id, sources in candidate_keys(
-                source_table, other, columns_by_table
-            ).items():
-                del target_id
-                conflict = _disagreeing_pair(sources, agreements)
-                if conflict is not None:
-                    ambiguous.append((source_table, other, sources, conflict))
-                    continue
-                for source in sources:
-                    record = _single_key_record(source_table, other, source)
-                    pair_records.setdefault(record.scope, record)
-        if ambiguous:
-            ambiguous_pairs += 1
-            records.append(_ambiguous_key_record(left_table, right_table, ambiguous))
-            continue
-        if not pair_records:
-            without_candidates += 1
-            continue
-        records.extend(pair_records.values())
-    note = (
-        f"{len(unjoined_pairs(live, join_edges))} table pairs have no declared join: "
-        f"{ambiguous_pairs} carry two or more candidate keys whose values disagree (T1, a wrong "
-        f"answer), and {without_candidates} have no candidate key at all (T3, a refusal — no "
-        "question emitted, because there is nothing grounded to offer as a choice). The rest "
-        "are asked per candidate column, not per pair."
-    )
-    return records, note
-
-
-def _disagreeing_pair(
-    sources: Sequence[Any], agreements: Mapping[tuple[str, str], Any]
-) -> Any | None:
-    """The first measured pair of competing keys that actually disagrees, if any.
-
-    Reads the near-duplicate detector's measurements rather than issuing its own: competing keys
-    for one target are columns of one table, so their disagreement is the same governed
-    comparison, and asking twice would be two answers to one question.
-    """
-    for index, left in enumerate(sources):
-        for right in sources[index + 1 :]:
-            agreement = agreements.get((left.id, right.id)) or agreements.get((right.id, left.id))
-            if agreement is not None and agreement.n_differing > 0:
-                return agreement
-    return None
-
-
-def _ambiguous_key_record(
-    left_table: Any, right_table: Any, ambiguous: Sequence[tuple[Any, Any, list[Any], Any]]
-) -> ClarificationRecord:
-    source_table, target_table, sources, agreement = ambiguous[0]
-    ids = sorted((left_table.id, right_table.id))
-    scope = f"elicitation:joinkeys:{ids[0]}|{ids[1]}"
-    names = sorted(f"{source_table.physical_name}.{c.physical_name}" for c in sources)
-    return ClarificationRecord(
-        id=_record_id(scope),
-        scope=scope,
-        question=(
-            f"`{left_table.physical_name}` and `{right_table.physical_name}` have no declared "
-            f"join, and `{source_table.physical_name}` offers {len(sources)} columns that could "
-            f"be the key into `{target_table.physical_name}`: {', '.join(names)}. They disagree "
-            f"on {agreement.n_differing} of {agreement.n_rows} rows, so the wrong one attaches "
-            "every row to the wrong record. Which column joins these tables?"
-        ),
-        category="D",
-        ui_modality="column_picker",
-        severity="T1",
-        audience="data",
-        choices=tuple({"id": name, "label": name} for name in names),
-        allow_freeform=True,
-        target_table=source_table.physical_name,
-        raised_by=("elicitation_wizard",),
-        source=ELICITATION_SOURCE,
-    )
-
-
-def _single_key_record(
-    source_table: Any, target_table: Any, source: Any
-) -> ClarificationRecord:
-    scope = (
-        f"elicitation:joinkey:{source_table.physical_name}.{source.physical_name}"
-        f":{target_table.physical_name}"
-    )
-    return ClarificationRecord(
-        id=_record_id(scope),
-        scope=scope,
-        question=(
-            f"No declared join uses `{source_table.physical_name}.{source.physical_name}`, which "
-            f"reads like a key into `{target_table.physical_name}`. How do "
-            f"`{source_table.physical_name}` and `{target_table.physical_name}` join, and is "
-            "this the column that does it?"
-        ),
-        category="D",
-        ui_modality=None,
-        severity="T3",
-        audience="data",
-        choices=None,
-        allow_freeform=True,
-        target_table=source_table.physical_name,
-        target_column=source.physical_name,
-        raised_by=("elicitation_wizard",),
-        source=ELICITATION_SOURCE,
-    )
 
 
 # ── S1: objects the semantic layer does not describe ────────────────────────────────────────

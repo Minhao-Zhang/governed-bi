@@ -53,22 +53,24 @@ def test_unrelated_names_score_below_the_gate() -> None:
         assert name_similarity(a, b) < NEAR_DUPLICATE_SIMILARITY, (a, b)
 
 
-def test_a_short_name_inside_a_long_one_is_not_a_key_into_that_table() -> None:
-    """``betriebsstandorte.ort`` scored 1.0 against its own table name because ``ort`` is three
-    characters that happen to sit inside it — the coincidence ``_MIN_KEY_NAME_RUN`` was added
-    for, measured doing damage on real ``beer_factory``. Kept scoped to this predicate: the same
-    floor inside ``name_similarity`` would cost the real ``playstore.App``/``app_name`` decoy.
+def test_a_short_name_inside_a_long_one_is_caught_by_values_and_not_by_a_run_length() -> None:
+    """The coincidence class, now answered with evidence instead of a character-count floor.
+
+    ``ort`` scores a perfect 1.0 against ``betriebsstandorte`` because three characters happen to
+    sit inside it, and ``maissirup`` scores 0.6 against ``email`` for the same reason (``mai``).
+    A minimum-run floor was what caught these, and it also cost ``betrieb_informationen.ort`` /
+    ``geografisch.ortschaft`` on ``restaurant`` — a real join, whose whole shared run is also
+    three characters. What separates them is not the name at all: the coincidence shares no
+    value and the join shares its whole domain.
     """
-    from types import SimpleNamespace
+    from governed_bi.curator.gap_signals import name_similarity, values_overlap
 
-    from governed_bi.curator.gap_signals import identifies_rows, name_similarity
+    assert name_similarity("ort", "betriebsstandorte") == 1.0
+    assert name_similarity("maissirup", "email") >= 0.6
 
-    column = SimpleNamespace(physical_name="ort")
-    table = SimpleNamespace(physical_name="betriebsstandorte")
-    assert name_similarity(column.physical_name, table.physical_name) == 1.0
-    assert identifies_rows(column, table) is False
-    assert identifies_rows(SimpleNamespace(physical_name="kunde_id"),
-                           SimpleNamespace(physical_name="kunden")) is True
+    assert not values_overlap(("ja", "nein"), ("a@b.de", "c@d.de"))
+    assert values_overlap(("alameda", "berkeley"), ("alameda", "albany", "berkeley"))
+    assert not values_overlap((), ("alameda",)), "a column nobody read is not evidence"
 
 
 def test_evidence_strength_discounts_a_tiny_denominator() -> None:

@@ -22,6 +22,7 @@ from typing import Any
 from gaps_fixtures import (  # noqa: E402 - sibling fixture module, as tests/serve/ does
     BEER_FACTORY_AGREEING_DECOYS,
     BEER_FACTORY_DECOY_PAIRS,
+    BEER_FACTORY_OBSERVED,
     BEER_FACTORY_SYNONYM_DECOYS,
     MeasuredConnector,
     beer_factory_assets,
@@ -38,6 +39,7 @@ def _scan(assets: dict[str, Any], *, connector: Any = None, **kwargs: Any) -> An
 
     structure, _problems = build_structure(list(assets.values()))
     tables = [a for a in assets.values() if a.asset_type.value == "table"]
+    kwargs.setdefault("observed_values", BEER_FACTORY_OBSERVED)
     return detect_structural_gaps(
         tables,
         assets,
@@ -271,9 +273,21 @@ def test_the_number_of_governed_comparisons_is_capped_and_the_cap_keeps_the_best
     table sorted first."""
     connector = MeasuredConnector()
     scan = _scan(beer_factory_assets(), connector=connector, max_comparisons=5)
-    assert len(connector.statements) == 5
+    comparisons = [s for s in connector.statements if "IS DISTINCT FROM" in s]
+    assert len(comparisons) == 5
     assert len(_pairs(scan.records)) <= 5
     assert ("kunden", "email", "email_adresse") in _pairs(scan.records, "T1")
+
+
+def test_the_two_governed_budgets_are_separate_so_neither_can_starve_the_other() -> None:
+    """A wide table full of look-alike pairs must not be able to spend the join detector's one
+    measurement. Two bounds, two statement kinds, and truncating either leaves the other whole."""
+    connector = MeasuredConnector()
+    _scan(beer_factory_assets(), connector=connector, max_key_probes=3)
+    kinds = [("IS DISTINCT FROM" in s, "n_distinct" in s and "n_differing" not in s)
+             for s in connector.statements]
+    assert sum(1 for pair, _card in kinds if pair) == 33, "every name-alike pair still measured"
+    assert sum(1 for _pair, card in kinds if card) == 3, "and only three key probes"
 
 
 def test_a_refused_comparison_skips_the_pair_and_keeps_its_row() -> None:
@@ -304,6 +318,66 @@ def test_a_refused_comparison_skips_the_pair_and_keeps_its_row() -> None:
 
 
 # ── join paths: proactively proposed, and split T1 from T3 ───────────────────────────────────
+
+
+def test_a_key_not_named_after_its_table_is_still_found() -> None:
+    """**The complete miss this replaced**, on the shape that caused it. ``restaurant`` has 5
+    tables, 0 declared joins, 10 unjoined pairs and its key is called ``lokal_id`` on a table
+    called ``allgemeine_informationen`` -- so "a key is named after what it identifies" holds for
+    nothing in the schema, and the detector emitted **0** questions on the worst join gap in the
+    fixture set.
+
+    Measured uniqueness has no such blind spot: ``lokal_id`` holds one value per row on both
+    sides, and the two columns share their smallest values, which is what says they are the same
+    domain rather than two unrelated integers.
+    """
+    assets = _two_tables_joined_by_an_unconventional_key()
+    scan = _scan(
+        assets,
+        connector=MeasuredConnector(
+            {}, {("allgemeine_informationen", "lokal_id"): (9590, 9590),
+                 ("betrieb_informationen", "lokal_id"): (9590, 9590)}
+        ),
+        observed_values={
+            "r.allgemeine_informationen.lokal_id": ("1", "2", "3"),
+            "r.betrieb_informationen.lokal_id": ("1", "2", "3"),
+        },
+    )
+    joins = [r for r in scan.records if r.scope.startswith("elicitation:joinkey:")]
+    assert {r.scope for r in joins} == {
+        "elicitation:joinkey:allgemeine_informationen.lokal_id:betrieb_informationen",
+        "elicitation:joinkey:betrieb_informationen.lokal_id:allgemeine_informationen",
+    }, sorted(r.scope for r in joins)
+    assert {r.severity for r in joins} == {"T3"}
+
+
+def test_a_name_match_with_no_shared_value_is_not_a_join_key() -> None:
+    """**The junk finding this removes**, named: ``wurzelbiermarke.bundesland`` and ``land`` were
+    reported as competing keys into ``kunden`` at T1, on the strength of the four characters
+    ``unde`` appearing in both ``bundesland`` and ``kunden``. Two German state columns, and a
+    card telling the admin that picking wrong would attach every row to the wrong customer.
+
+    Both halves of the fix are visible here: no column of ``kunden`` identifies a row *and* is
+    named like a state, and the state columns share no value with anything ``kunden`` keys on.
+    """
+    scan = _scan(beer_factory_assets(with_joins=False))
+    scopes = {r.scope for r in scan.records if r.scope.startswith("elicitation:joinkey")}
+    assert "elicitation:joinkeys:beer_factory.kunden|beer_factory.wurzelbiermarke" not in scopes
+    assert not [s for s in scopes if "maissirup" in s or "bundesland" in s or ".land:" in s], scopes
+
+
+def test_whether_a_column_identifies_a_row_costs_a_governed_statement() -> None:
+    """The one fact the corpus cannot supply: the seed path writes no ``is_unique`` and
+    ``pg_rename_decoy`` declares zero constraints, so it is counted -- on the same
+    ``prepare()``-checked path, with its own ledger row, and bounded separately from the pair
+    budget so neither detector can starve the other."""
+    connector = MeasuredConnector()
+    scan = _scan(beer_factory_assets(), connector=connector)
+    probes = [s for s in connector.statements if "n_distinct" in s and "n_differing" not in s]
+    assert probes, "no cardinality statement was issued at all"
+    assert all("COUNT(DISTINCT" in s for s in probes), probes
+    assert len(scan.ledger) == len(connector.statements)
+    assert all(row["path"] == "sample" for row in scan.ledger)
 
 
 def test_two_competing_candidate_keys_that_disagree_are_t1() -> None:
@@ -636,6 +710,28 @@ def _differing_counts(question: str) -> tuple[int, int]:
     found = re.search(r"on (\d+) of (\d+) rows", question)
     assert found is not None, question
     return int(found.group(1)), int(found.group(2))
+
+
+def _two_tables_joined_by_an_unconventional_key() -> dict[str, Any]:
+    """``restaurant``'s shape, minimally: the key is ``lokal_id`` on a table called
+    ``allgemeine_informationen``, so nothing in the schema is named after what it identifies."""
+    from governed_bi.corpus.schema import ColumnAsset, TableAsset
+
+    assets: list[Any] = []
+    for name in ("allgemeine_informationen", "betrieb_informationen"):
+        column = ColumnAsset(
+            id=f"r.{name}.lokal_id", schema="r", parent_table=f"r.{name}",
+            physical_name="lokal_id", summary="lokal_id", physical_type="bigint",
+            body="described",
+        )
+        assets += [
+            column,
+            TableAsset(
+                id=f"r.{name}", schema="r", physical_name=name, summary=name,
+                body="Restaurants.", grain="one row per restaurant", columns=(column.id,),
+            ),
+        ]
+    return {a.id: a for a in assets}
 
 
 def _identical_pair_schema(*, differing: int, right_type: str = "bigint") -> dict[str, Any]:

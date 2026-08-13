@@ -287,3 +287,144 @@ def test_a_missing_corpus_raises_rather_than_recording_a_verdict() -> None:
             corpus=None,
             policy=GovernancePolicy(),
         )
+
+
+# ── the cardinality read: does this column identify a row ───────────────────────────────────
+
+
+class _CountRows:
+    dialect = "postgres"
+
+    def __init__(self, row: tuple[int, ...] = (9590, 9590)) -> None:
+        self.row = row
+        self.statements: list[str] = []
+
+    def execute(self, sql: str, **_kwargs: Any) -> tuple[list[str], list[tuple[Any, ...]], bool]:
+        self.statements.append(sql)
+        return (["n_rows", "n_distinct"], [self.row], False)
+
+
+def _count(column: str, *, connector: Any, licensed: frozenset[str] | None = None,
+           **policy_kw: Any) -> tuple[Any, Any]:
+    from governed_bi.corpus.analyst import for_analyst
+    from governed_bi.govern.bounds import ToolBounds
+    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.serve.fetch import count_distinct_values
+
+    assets = _assets()
+    return count_distinct_values(
+        column,
+        bounds=ToolBounds(
+            licensed=licensed if licensed is not None else frozenset({"shop.customers"})
+        ),
+        assets=assets,
+        connector=connector,
+        corpus=for_analyst(list(assets.values())),
+        policy=GovernancePolicy(**policy_kw),
+    )
+
+
+def test_the_cardinality_statement_counts_rows_and_distinct_values() -> None:
+    """The question ``distinct_values_statement`` cannot answer. A capped value list says a
+    column has *at least* twenty distinct values; whether it has exactly as many as there are
+    rows -- which is what makes it a key -- needs the counts."""
+    import sqlglot
+
+    from governed_bi.serve.fetch import column_cardinality_statement
+
+    sql = column_cardinality_statement(
+        schema="shop", table="customers", column="customer_id", dialect="postgres"
+    )
+    tree = sqlglot.parse_one(sql, dialect="postgres")
+    assert [a.alias for a in tree.expressions] == ["n_rows", "n_distinct"]
+    assert list(tree.find_all(sqlglot.exp.Distinct)), sql
+    assert len(list(tree.find_all(sqlglot.exp.Table))) == 1, sql
+
+
+def test_the_cardinality_statement_cannot_escape_its_identifiers() -> None:
+    """``physical_name`` holds the engine's identifier verbatim and is deliberately
+    unconstrained, so the statement is built from nodes and rendered -- never interpolated."""
+    import sqlglot
+
+    from governed_bi.serve.fetch import column_cardinality_statement
+
+    sql = column_cardinality_statement(
+        schema="shop", table="customers", column='ev"il" FROM x; DROP TABLE y --',
+        dialect="postgres",
+    )
+    tree = sqlglot.parse_one(sql, dialect="postgres")
+    assert len(list(tree.find_all(sqlglot.exp.Table))) == 1, sql
+    assert "DROP" not in sql.upper().replace('EV""IL"" FROM X; DROP TABLE Y --', "")
+
+
+def test_count_returns_both_counts_and_a_ledger_row() -> None:
+    connector = _CountRows((9590, 9590))
+    cardinality, attempt = _count("shop.customers.customer_id", connector=connector)
+    assert (cardinality.n_rows, cardinality.n_distinct) == (9590, 9590)
+    assert attempt["path"] == "sample" and attempt["passed"]
+    assert attempt["executed_sql"] == connector.statements[0]
+
+
+def test_an_unlicensed_column_is_refused_before_any_statement_exists() -> None:
+    connector = _CountRows()
+    cardinality, attempt = _count(
+        "shop.orders.order_id", connector=connector, licensed=frozenset({"shop.customers"})
+    )
+    assert (cardinality, attempt) == (None, None)
+    assert not connector.statements
+
+
+def test_a_suspect_column_is_refused_and_still_gets_its_row() -> None:
+    """A refusal is a governance decision the audit trail is owed, exactly as it is for the pair
+    comparison -- and the caller's correct response is to skip the column, never to count it
+    some other way."""
+    import dataclasses
+
+    from governed_bi.corpus.analyst import for_analyst
+    from governed_bi.corpus.schema import Reliability, ReliabilityStatus
+    from governed_bi.govern.bounds import ToolBounds
+    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.serve.fetch import count_distinct_values
+
+    assets = _assets()
+    assets["shop.customers.customer_id"] = dataclasses.replace(
+        assets["shop.customers.customer_id"],
+        reliability=Reliability(status=ReliabilityStatus.suspect),
+    )
+    connector = _CountRows()
+    cardinality, attempt = count_distinct_values(
+        "shop.customers.customer_id",
+        bounds=ToolBounds(licensed=frozenset({"shop.customers"})),
+        assets=assets,
+        connector=connector,
+        corpus=for_analyst(list(assets.values())),
+        policy=GovernancePolicy(hard_block_suspect=True),
+    )
+    assert cardinality is None
+    assert attempt["reason_code"] == "r_column_suspect" and attempt["executed_sql"] is None
+    assert not connector.statements
+
+
+def test_no_connector_is_a_refusal_with_a_row_not_a_crash_for_the_count() -> None:
+    cardinality, attempt = _count("shop.customers.customer_id", connector=None)
+    assert cardinality is None
+    assert attempt["reason_code"] == "r_not_a_read"
+
+
+def test_a_missing_corpus_raises_rather_than_recording_a_verdict_for_the_count() -> None:
+    """G1: a missing corpus is a wiring failure, and refusing on it would record a governance
+    verdict for a bug."""
+    from governed_bi.govern.bounds import ToolBounds
+    from governed_bi.govern.check import GovernanceUsageError
+    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.serve.fetch import count_distinct_values
+
+    with pytest.raises(GovernanceUsageError):
+        count_distinct_values(
+            "shop.customers.customer_id",
+            bounds=ToolBounds(licensed=frozenset({"shop.customers"})),
+            assets=_assets(),
+            connector=_CountRows(),
+            corpus=None,
+            policy=GovernancePolicy(),
+        )

@@ -31,11 +31,11 @@ __all__ = [
     "evidence_strength",
     "type_class",
     "comparable_type",
-    "identifies_rows",
+    "values_overlap",
     "comparison_candidates",
     "frame_siblings",
     "unjoined_pairs",
-    "candidate_keys",
+    "name_matched_keys",
 ]
 
 #: How alike two identifiers must read before their values are worth comparing.
@@ -46,10 +46,12 @@ __all__ = [
 #: detector reports 26 of the 34 manifest pairs with 4 non-manifest pairs; at 0.5 it gains 2 more
 #: manifest pairs and 8 more non-manifest ones. 0.6 is where the trade stops being worth it.
 #:
-#: The same constant gates three different readings of "these two identifiers name the same
-#: thing", which is why it is one constant: two columns of one table (a duplicate), a column of
-#: one table against a column of another (a join key), and a column against its own table's name
-#: (whether that column identifies rows at all).
+#: The same constant gates two readings of "these two identifiers name the same thing", which is
+#: why it is one constant: two columns of one table (a duplicate), and a column of one table
+#: against a column of another (a join key). It gated a third — a column against its own table's
+#: name, standing in for "does this column identify a row" — until that convention was measured
+#: and found to hold for nothing on ``restaurant`` and to fire on a coincidence on
+#: ``beer_factory``. That question is now answered by counting rows, in ``gaps.py``.
 NEAR_DUPLICATE_SIMILARITY = 0.6
 
 #: Coarse physical-type classes, matched as substrings of the raw engine type.
@@ -135,8 +137,9 @@ def _longest_common_run_ratio(left: str, right: str) -> float:
     any short name contained in a long one scores 1.0, so ``app`` inside ``app_name`` (a real
     decoy pair) and ``ort`` inside ``betriebsstandorte`` (a coincidence) are indistinguishable
     here. Telling them apart needs context this function does not have, so it is not attempted
-    here — see :data:`_MIN_KEY_NAME_RUN` for the one caller where the coincidence was measured
-    doing damage.
+    here — :func:`values_overlap` is where the coincidence is caught, on evidence, in the one
+    caller where it was measured doing damage (``wurzelbiermarke.maissirup`` matched
+    ``kunden.email`` on the three characters ``mai`` and shares not one value with it).
     """
     a, b = _alphanumeric_run(left), _alphanumeric_run(right)
     if not a or not b:
@@ -229,36 +232,24 @@ def comparable_type(left: Any, right: Any) -> bool:
     return type_class(left) == type_class(right)
 
 
-#: Shortest shared run that counts as "this column is named after this table".
-#:
-#: Added because the flaw was **observed, not anticipated**: on ``beer_factory``,
-#: ``betriebsstandorte.ort`` scored 1.0 against its own table name, because
-#: :func:`_longest_common_run_ratio` normalises by the shorter name and ``ort`` is three
-#: characters that happen to sit inside ``betriebsstandorte``. That one coincidence made every
-#: text column of ``standort`` a candidate key into ``betriebsstandorte`` and put a pair with
-#: *zero* name similarity (``bezeichnung`` / ``ort``) into the comparison budget.
-#:
-#: Four, and scoped to this one predicate. A floor inside :func:`name_similarity` itself would
-#: cost real findings — ``playstore.App`` / ``app_name`` is a measured decoy pair whose whole
-#: shared run is three characters — and the difference is that a column-to-column match has the
-#: row-level evidence behind it while a column-to-table match has nothing but the name.
-_MIN_KEY_NAME_RUN = 4
+def values_overlap(left: Sequence[str], right: Sequence[str]) -> bool:
+    """Whether two capped value reads have any value in common.
 
+    **A foreign key's values live in the referenced key's domain**, and that is the half of "is
+    this a join" that names cannot supply. Both sides come from the same
+    ``SELECT DISTINCT … ORDER BY … LIMIT`` shape, so for two columns over one domain these are
+    the same twenty smallest values and they coincide; for two columns over different domains
+    they cannot.
 
-def identifies_rows(column: Any, table: Any) -> bool:
-    """Whether ``column`` reads like something that identifies a row of ``table``.
-
-    The corpus cannot answer this directly: ``is_unique``, ``role`` and ``references`` are all
-    unset by the live-schema seed path, and ``nullable`` is ``true`` on every column. So the
-    available signal is that a key is conventionally named after the thing it identifies —
-    ``kunde_id`` for ``kunden``, ``standort_id`` for ``standort`` — which is the same
-    character-level test :func:`name_similarity` already is, applied to the table's own name.
-    Conventional, therefore fallible; it is a *candidate* gate whose findings are confirmed by
-    row-level evidence before anything is called T1.
+    A **single** shared value, not a containment ratio, because the read is capped: a genuine
+    foreign key covering a sparse subset of a 9 539-row key shares only some of the twenty
+    smallest, and demanding a proportion would turn the cap into a recall ceiling. What this has
+    to separate is "the same domain" from "no relationship at all", and on all three measured
+    schemas that gap is total — every real pair overlaps and every junk pair
+    (``wurzelbiermarke.maissirup`` against ``kunden.email``, matched on the three characters
+    ``mai``) shares nothing.
     """
-    if _longest_common_run(column.physical_name, table.physical_name) < _MIN_KEY_NAME_RUN:
-        return False
-    return name_similarity(column.physical_name, table.physical_name) >= NEAR_DUPLICATE_SIMILARITY
+    return bool(set(left) & set(right))
 
 
 def comparison_candidates(
@@ -278,7 +269,7 @@ def comparison_candidates(
     shared run between them (``acct_id`` and ``customer_ref`` for one target) would be reported
     as two T3s rather than one T1. Letting them in was tried and measured: it put a pair with
     *zero* name similarity into the comparison budget, because one three-character coincidence
-    upstream (see :data:`_MIN_KEY_NAME_RUN`) is enough to make an arbitrary column a candidate.
+    upstream is enough to make an arbitrary column a candidate.
 
     Sorted by similarity descending, which is what makes ``gaps.MAX_PAIR_COMPARISONS`` degrade
     recall gracefully.
@@ -354,19 +345,29 @@ def unjoined_pairs(
     return out
 
 
-def candidate_keys(
+def name_matched_keys(
     source_table: Any, target_table: Any, columns_by_table: Mapping[str, list[Any]]
 ) -> dict[str, list[Any]]:
-    """``{target column id: source columns that could join to it}``.
+    """``{target column: source columns that read like it}`` — the *name* half of a join guess.
 
-    A column of ``source_table`` is a candidate key into ``target_table`` when it reads like a
-    column of ``target_table`` that identifies ``target_table``'s rows. Two or more candidates
-    for one target column is the ambiguity the doc's T1 ``D`` row is about.
+    Deliberately only that half. The predicate this replaced also decided whether the target
+    identified anything, by asking whether it was *named after its own table* (``kunde_id`` for
+    ``kunden``) — a convention, and one that on real ``restaurant`` holds for nothing: 5 tables,
+    0 declared joins, and **0** questions emitted, a complete miss on the schema with the worst
+    join gap in the fixture set. The same convention fired on a coincidence in the other
+    direction, reading the four characters ``unde`` shared by ``bundesland`` and ``kunden`` as
+    "``bundesland`` identifies a customer" and producing a T1 about competing keys that were two
+    German state columns.
+
+    So "does this column identify a row" is now measured rather than read off a name, and it is
+    measured in ``gaps.py`` because it costs a governed statement. What is left here is what
+    names can honestly say: which columns of ``source_table`` read like which column of
+    ``target_table``, at the same threshold and with the same type gate every other pairing in
+    this module uses. Two or more sources for one target is the ambiguity the doc's T1 ``D`` row
+    is about — after the evidence gates, not before them.
     """
     out: dict[str, list[Any]] = {}
     for target in columns_by_table.get(target_table.id) or []:
-        if not identifies_rows(target, target_table):
-            continue
         matches = [
             source
             for source in columns_by_table.get(source_table.id) or []
