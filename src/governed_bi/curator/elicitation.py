@@ -57,6 +57,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 from governed_bi.curator.clarifications import (
@@ -73,7 +75,8 @@ __all__ = [
     "MAX_VALUE_READS",
     "generate_candidate_questions",
     "read_observed_values",
-    "compose_elicitation_answer_text",
+    "plain_name",
+    "enforce_audience_language",
     "maybe_generate_join_followup",
 ]
 
@@ -213,6 +216,109 @@ def _name_hits(column: Any, hints: tuple[str, ...]) -> bool:
     (B's list and E's list), so "which columns does this category care about" has one answer."""
     lowered = column.physical_name.lower()
     return any(hint in lowered for hint in hints)
+
+
+# ── what a question may say, and to whom ────────────────────────────────────────────────────
+
+#: A lowercase-or-digit immediately followed by an uppercase: the camelCase seam.
+_CAMEL_SEAM = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+#: Everything that is not a letter or a digit — ``_``, ``.``, ``-``, spaces, anything a quoted
+#: identifier can legally hold.
+_NOT_ALNUM = re.compile(r"[^A-Za-z0-9]+")
+
+
+def plain_name(physical_name: str) -> str:
+    """A physical identifier rendered as words, for a question a business owner reads.
+
+    ``content_rating`` -> ``content rating``; ``Sentiment_Polarity`` -> ``Sentiment Polarity``;
+    ``in_dosen_erh_ltlich`` -> ``in dosen erh ltlich``. Deliberately **not** a translation or a
+    prettifier: it drops the separators and the case seams that make a token read as an
+    identifier and changes nothing else, so the words an admin sees are the customer's own
+    vocabulary rather than a guess at what they meant.
+
+    This is what makes the business templates pass :func:`enforce_audience_language` by
+    construction rather than by review. The output holds only letters, digits and spaces, so it
+    cannot contain a dotted path, a snake_case token or a camelCase run — the three shapes
+    ``serve/schema_term_guard.find_schema_leak`` looks for. The guard is still applied at
+    runtime, because "the templates are careful" is a convention and the next edit to one is not
+    bound by it.
+
+    An all-punctuation name (nothing survives the split) falls back to itself. That is the one
+    input this cannot render, and returning the original keeps the question about a real object
+    instead of about nothing — the guard is what catches it if the original is identifier-shaped.
+    """
+    words = [w for w in _NOT_ALNUM.split(_CAMEL_SEAM.sub(" ", physical_name)) if w]
+    return " ".join(words) or physical_name
+
+
+def _authored_labels(record: ClarificationRecord) -> list[str]:
+    """The choice labels this module *wrote*, excluding the ones that are database values.
+
+    A choice built as ``{"id": v, "label": v}`` is one distinct value read out of the column —
+    B's whole payload, and the reason B exists: a domain owner must never *type* a value that
+    can drift from the stored format, so what they pick has to be byte-exact. Every other choice
+    on this surface has an id that names an option (``exclude``, ``different_fields``, a month
+    number, a ``table.column``) and a label that is a sentence someone here composed.
+
+    That distinction is the answer to :func:`~governed_bi.serve.schema_term_guard.find_schema_leak`'s
+    own documented limitation. A camelCase proper noun is structurally indistinguishable from a
+    leak — and measured live, the case is not hypothetical: ``app_store.playstore.Type`` holds
+    ``NaN``, which the guard flags. But a proper noun can only honestly reach a business question
+    as a *value*, never as prose, because prose is ours to phrase and a value is not ours to
+    change. So the line is drawn there: authored text is guarded, stored values are exempt and
+    shown verbatim.
+    """
+    return [
+        str(choice.get("label") or "")
+        for choice in (record.choices or ())
+        if choice.get("id") != choice.get("label")
+    ]
+
+
+def enforce_audience_language(
+    records: Sequence[ClarificationRecord],
+) -> list[ClarificationRecord]:
+    """Move a business-audience question that names a raw identifier onto the data tab.
+
+    **Applied asymmetrically, and the asymmetry is the point** — a future reader who "fixes" the
+    inconsistency breaks one of the two pilots. ``serve/schema_term_guard.find_schema_leak``
+    already blocks dotted paths, snake_case and camelCase from reaching a business user in a live
+    ``ask_user`` clarification, for Kindling: a restaurant owner cannot answer a question
+    containing ``playstore.Type``. Running the same guard over **data**-audience questions would
+    be the mirror-image defect — Power Kiosk's DBA is asked exactly which of two look-alike
+    columns is authoritative, and stripping the identifiers leaves a question nobody can act on.
+    Same text, opposite verdict, because the audience is different.
+
+    **Reclassify, never drop and never rewrite.** The owner's standing decision is "list ALL
+    gaps, don't truncate", so a question that reaches this branch is still asked — of the person
+    who can read it. Rewriting it here instead would be a second, worse phrasing of a template
+    that should be fixed where it is written; dropping it would delete a finding to hide a
+    wording bug. The record's own text is returned unchanged so that what an admin sees is always
+    what some template says.
+
+    A backstop rather than the mechanism: every business template composes its object names
+    through :func:`plain_name`, whose output cannot be identifier-shaped, so on all three
+    measured schemas nothing takes this branch. That is the intended state. What this buys is
+    that it stays true — a prompt instruction is not a control (``schema_term_guard``'s own
+    docstring, ADR 0005 §1.5), and neither is a convention about how to write an f-string.
+
+    Applied once, by ``POST /elicitation/generate``, over the assembled output of *both*
+    generators — the same place and for the same reason ``gaps.apply_cluster_dependencies`` is
+    applied there. Business-audience records come from both halves (B/C/E/S6 here, S1's
+    describe-this-table question in ``gaps.py``), and a per-generator call would be two places to
+    forget.
+    """
+    from governed_bi.serve.schema_term_guard import find_schema_leak
+
+    out: list[ClarificationRecord] = []
+    for record in records:
+        if record.audience != "business":
+            out.append(record)
+            continue
+        leak = find_schema_leak(record.question, *_authored_labels(record))
+        out.append(replace(record, audience="data") if leak is not None else record)
+    return out
 
 
 def _value_read_columns(
@@ -464,6 +570,14 @@ def _propose_e(
     reachable in practice — this gate only fires on status/rating-like columns, whose whole
     point is a small closed vocabulary, and the sentinels it looks for (``n/a``, ``null``,
     ``pending``, ``-1``, …) sort early in most of them.
+
+    **The "not yet rated" gloss is gone**, and for the same reason B's "(e.g. 'domestic')" is:
+    it was v1's worked example for a *rating* column, and :data:`_STATUS_HINTS` admits
+    ``status``, ``state`` and ``grade`` too, so a live ``content_rating`` question and a
+    ``review_status`` one both asked whether the value "means 'not yet rated'". The detector
+    never measured that; what it measured is that the value is null-like, and the question now
+    says only that. It also stopped asking two questions ("is there a value…? should it be…?")
+    behind one two-option widget that could only answer the second.
     """
     severity, audience = CATEGORY_CLASSIFICATION["E"]
     out: list[ClarificationRecord] = []
@@ -480,21 +594,15 @@ def _propose_e(
                     id=_record_id(scope),
                     scope=scope,
                     question=(
-                        f"Is there a value in `{table.physical_name}.{column.physical_name}` "
-                        f"that means 'not yet rated' (seen: {sentinel!r})? Should it be "
-                        "excluded from analysis by default?"
+                        f"{plain_name(column.physical_name)!r} is sometimes recorded as "
+                        f"{sentinel!r}. If that means the information is missing rather than a "
+                        "real value, should those rows be left out of counts and averages?"
                     ),
                     category="E",
                     ui_modality="checkbox",
                     severity=severity,
                     audience=audience,
-                    choices=(
-                        {
-                            "id": "exclude",
-                            "label": f"Exclude rows where {column.physical_name} = {sentinel!r}",
-                        },
-                        {"id": "include", "label": "Include them"},
-                    ),
+                    choices=_exclusion_choices(column, sentinel),
                     allow_freeform=True,
                     target_table=table.physical_name,
                     target_column=column.physical_name,
@@ -503,6 +611,22 @@ def _propose_e(
                 )
             )
     return out
+
+
+def _exclusion_choices(column: Any, sentinel: str) -> tuple[Mapping[str, str], ...]:
+    """E's and S6's two options. One definition, because the two questions differ in *what made
+    the column a candidate*, never in what an answer to them means.
+
+    Both labels name the column and the value, in business words. That is not decoration: the
+    composed corpus fact is built from the picked label
+    (``curator/elicitation_answers.py``), so a label that said only "yes" would fold into the
+    semantic layer as an exclusion of nothing in particular.
+    """
+    field = plain_name(column.physical_name)
+    return (
+        {"id": "exclude", "label": f"Leave out the rows where {field} is {sentinel!r}"},
+        {"id": "include", "label": f"Count them; {sentinel!r} is a real value here"},
+    )
 
 
 def _sentinel_in(values: Sequence[str]) -> str | None:
@@ -591,22 +715,15 @@ def _propose_s6(
                     id=_record_id(scope),
                     scope=scope,
                     question=(
-                        f"`{table.physical_name}.{column.physical_name}` is used to group or "
-                        f"average, and one of its values is {sentinel!r}. Does that value mean "
-                        "'no data' rather than a real category? Should those rows be left out "
-                        "of totals and breakdowns by default?"
+                        f"Totals get broken down by {plain_name(column.physical_name)!r}, and "
+                        f"one of its values is {sentinel!r}. If that means the information is "
+                        "missing rather than a real category, should those rows be left out?"
                     ),
                     category="E",
                     ui_modality="checkbox",
                     severity=severity,
                     audience=audience,
-                    choices=(
-                        {
-                            "id": "exclude",
-                            "label": f"Exclude rows where {column.physical_name} = {sentinel!r}",
-                        },
-                        {"id": "include", "label": "Include them"},
-                    ),
+                    choices=_exclusion_choices(column, sentinel),
                     allow_freeform=True,
                     target_table=table.physical_name,
                     target_column=column.physical_name,
@@ -629,6 +746,16 @@ def _propose_b(
     was: ``SELECT DISTINCT … LIMIT 20`` returns ``min(cardinality, 20)`` rows, and 20 is above
     :data:`_B_MAX_DISTINCT`, so 16 or more rows back means the column really has more than 15
     distinct values and fewer means the count is exact.
+
+    **The question asks for the group's name, which v1's never did.** v1's template ended
+    "...as one group when a business user asks about it (e.g. 'domestic')?" — the parenthetical
+    was the only thing naming *which* grouping, and it was a worked example written for a country
+    column that shipped unchanged onto every column the gate admits (measured live: a Free/Paid
+    column asked about "domestic"). Without it the question has no referent at all, which is also
+    why the composed answer used to read "these values count as the grouping asked about" when no
+    grouping had been asked about. So the ask is now "check the ones that belong together, and
+    say what you call them": the checklist carries the values and the freeform carries the term,
+    and ``curator/elicitation_answers.py`` composes a fact out of whichever arrive.
     """
     severity, audience = CATEGORY_CLASSIFICATION["B"]
     out: list[ClarificationRecord] = []
@@ -645,9 +772,9 @@ def _propose_b(
                     id=_record_id(scope),
                     scope=scope,
                     question=(
-                        f"Which values of `{table.physical_name}.{column.physical_name}` "
-                        "should count together as one group when a business user asks about "
-                        "it (e.g. 'domestic')? Check all that apply."
+                        f"Do any of these {plain_name(column.physical_name)!r} values mean the "
+                        "same thing in everyday language? Check the ones that belong together, "
+                        "and say what you call them."
                     ),
                     category="B",
                     ui_modality="checklist",

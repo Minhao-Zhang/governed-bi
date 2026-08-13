@@ -64,7 +64,13 @@ from governed_bi.curator.clarifications import ClarificationRecord
 # One implementation of "which tables does a scan look at, and what are their columns", shared
 # with the keyword generator rather than re-derived here (ADR 0005 §6): a second answer to
 # "excluded tables are skipped, in id order" is a second answer to what the wizard scans.
-from governed_bi.curator.elicitation import ELICITATION_SOURCE, _columns_of, _live_tables, _record_id
+from governed_bi.curator.elicitation import (
+    ELICITATION_SOURCE,
+    _columns_of,
+    _live_tables,
+    _record_id,
+    plain_name,
+)
 from governed_bi.curator.gap_joins import MAX_KEY_PROBES, join_records, key_matches, measure_keys
 from governed_bi.curator.gap_signals import (
     comparison_candidates,
@@ -383,6 +389,72 @@ def _parallel_frame(
     return None
 
 
+#: The choice every branch offers for "neither of these is a copy of the other".
+_BOTH_CORRECT = "different_fields"
+
+
+def _duplicate_wording(
+    table: Any,
+    qualified: Sequence[str],
+    agreement: Any,
+    *,
+    sibling: Any | None,
+    disagrees: bool,
+) -> tuple[str, tuple[Mapping[str, str], ...]]:
+    """The three tiers' question text and options. **What each one claims is what was measured.**
+
+    * **T1 — disagree, no sibling.** The pair really does read as two names for one thing, so
+      "which is authoritative" is the question, and the count is the evidence for it.
+    * **T2 — disagree, but a third column wears the same frame.** The demoted card must stop
+      asking which is authoritative: the detector no longer believes either is a decoy, so
+      offering "X is authoritative" first invites an answer the evidence does not support. It
+      also must not claim the sibling was measured — it was **not** compared against anything.
+      ``frame_siblings`` found it by name and ``_parallel_frame`` confirmed only that its
+      vocabulary is comparably sized, so the text says exactly that and no more. The previous
+      wording read "…hold different values on N of M rows, and so does ``breitengrad``", which
+      asserted a row-wise comparison that was never issued.
+    * **T4 — agree.** The old text opened with the disagreement sentence and then contradicted
+      itself eleven words later ("hold different values on 0 of N rows — they agree everywhere").
+      A branch reusing another branch's frame is the same defect class as v1's worked examples,
+      one template in rather than one column over.
+
+    ``on N of M rows`` survives verbatim in the two disagreeing branches because
+    :func:`_severity_sort_key` reads the ranking's evidence back out of it. T4's does not need
+    it — with ``differing == 0`` both sort terms are zero either way.
+    """
+    left, right = qualified[0], qualified[1]
+    both_correct = {"id": _BOTH_CORRECT, "label": "They are different fields, both correct"}
+    if sibling is not None:
+        question = (
+            f"`{left}` and `{right}` hold different values on {agreement.n_differing} of "
+            f"{agreement.n_rows} rows. `{table.physical_name}.{sibling.physical_name}` is named "
+            "the same way and holds a comparable range of values, so the three read as parallel "
+            "fields rather than as one field stored twice. Is that right, or is one of them a "
+            "copy of another?"
+        )
+        return question, (
+            both_correct,
+            {"id": left, "label": f"No — `{left}` is the real one and `{right}` copies it"},
+            {"id": right, "label": f"No — `{right}` is the real one and `{left}` copies it"},
+        )
+    authoritative = tuple(
+        {"id": name, "label": f"{name} is authoritative"} for name in qualified
+    )
+    if disagrees:
+        question = (
+            f"`{left}` and `{right}` hold different values on {agreement.n_differing} of "
+            f"{agreement.n_rows} rows, and read as two names for one thing. Which one is "
+            "authoritative? Is the other a legacy copy, an import artefact, or a different "
+            "field entirely?"
+        )
+        return question, (*authoritative, both_correct)
+    question = (
+        f"`{left}` and `{right}` agree on every one of {agreement.n_rows} rows, so one of them "
+        "is redundant. Which should the semantic layer treat as the real one?"
+    )
+    return question, (*authoritative, both_correct)
+
+
 def _duplicate_records(
     candidates: Sequence[tuple[Any, Any, Any, float]],
     agreements: Mapping[tuple[str, str], Any],
@@ -424,38 +496,22 @@ def _duplicate_records(
             else None
         )
         qualified = [f"{table.physical_name}.{name}" for name in names]
+        question, choices = _duplicate_wording(
+            table, qualified, agreement, sibling=sibling, disagrees=disagrees
+        )
         record = ClarificationRecord(
             id=_record_id(scope),
             scope=scope,
-            question=(
-                f"`{qualified[0]}` and `{qualified[1]}` hold different values on "
-                f"{agreement.n_differing} of {agreement.n_rows} rows, and so does "
-                f"`{table.physical_name}.{sibling.physical_name}`, which is named the same way "
-                "— so these read as parallel fields rather than as one field stored twice. Are "
-                "they different facts, or is one of them a copy of another?"
-                if sibling is not None
-                else f"`{qualified[0]}` and `{qualified[1]}` hold different values on "
-                f"{agreement.n_differing} of {agreement.n_rows} rows, and read as two names for "
-                "one thing. Which one is authoritative? Is the other a legacy copy, an import "
-                "artefact, or a different field entirely?"
-                if disagrees
-                else f"`{qualified[0]}` and `{qualified[1]}` hold different values on "
-                f"{agreement.n_differing} of {agreement.n_rows} rows — they agree everywhere. "
-                "One of them is redundant: which should the semantic layer treat as the real "
-                "one?"
-            ),
+            question=question,
             # D, not a sixth letter: the doc's D row is "join path where >=2 candidate keys
             # exist and disagree", and a disagreeing identity-ish pair within one table is
             # exactly that seen from the column side. Reusing the category keeps
-            # ``compose_elicitation_answer_text``'s freeform D branch as the fold path.
+            # ``curator/elicitation_answers.py``'s D fold path.
             category="D",
             ui_modality="column_picker",
             severity=("T2" if sibling is not None else "T1") if disagrees else "T4",
             audience="data",
-            choices=(
-                *({"id": name, "label": f"{name} is authoritative"} for name in qualified),
-                {"id": "different_fields", "label": "They are different fields, both correct"},
-            ),
+            choices=choices,
             allow_freeform=True,
             target_table=table.physical_name,
             raised_by=("elicitation_wizard",),
@@ -506,8 +562,8 @@ def _coverage_records(
                     id=_record_id(scope),
                     scope=scope,
                     question=(
-                        f"Nothing in the semantic layer says what `{table.physical_name}` is. In "
-                        "one line, what does one row of it represent?"
+                        f"Nothing on file says what your {plain_name(table.physical_name)} "
+                        "records are. In one line, what does a single entry in it represent?"
                     ),
                     category="A",
                     ui_modality=None,
@@ -530,8 +586,8 @@ def _coverage_records(
                 scope=scope,
                 question=(
                     f"{len(undescribed)} columns of `{table.physical_name}` have no description. "
-                    "Describe the ones whose meaning is not obvious from the name; leave the "
-                    "rest."
+                    "Check the ones whose meaning is not obvious from the name, and say what "
+                    "they hold."
                 ),
                 category="A",
                 ui_modality="checklist",

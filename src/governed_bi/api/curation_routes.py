@@ -603,6 +603,7 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     from governed_bi.curator.clarifications import load_clarifications, write_clarifications
     from governed_bi.curator.elicitation import (
         ELICITATION_SOURCE,
+        enforce_audience_language,
         generate_candidate_questions,
         read_observed_values,
     )
@@ -646,8 +647,8 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     # same scopes and this is what keeps it from re-appending them.
     known_scopes = {r.scope for r in existing if r.source == ELICITATION_SOURCE}
     structural_records = [r for r in scan.records if r.scope not in known_scopes]
-    new_records = apply_cluster_dependencies(
-        [*structural_records, *keyword_records], scan.gated_columns
+    new_records = enforce_audience_language(
+        apply_cluster_dependencies([*structural_records, *keyword_records], scan.gated_columns)
     )
     if new_records:
         write_clarifications(session.corpus_root, [*existing, *new_records])
