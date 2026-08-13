@@ -101,11 +101,17 @@ lever than effort did, because what the rewrites produce is *what gets retrieved
 cheaper rewriter that phrases a facet's query worse moves routing recall, and routing recall
 moves everything after it.
 
-One boundary, stated because it is easy to read as a bug: the knob is written inside the branch
-that requires an `agent_model`, so a deployment with a utility model and no agent model records
-neither. That configuration has no answering model at all, which `/capabilities` reports
-separately, and a knob describing which model performed work in a run that performed none would
-be the same absence-as-a-value defect wearing the opposite sign.
+One boundary was decided here and has since moved. As decided, the knob was written inside the
+branch that requires an `agent_model`, so a deployment with a utility model and no agent model
+recorded neither — that configuration has no answering model at all, which `/capabilities`
+reports separately as `has_live_model: false`, and a knob describing which model performed work
+in a run that performed none would be the same absence-as-a-value defect wearing the opposite
+sign. `session.py` no longer does that: it resolves `resolved_utility = utility_model or
+agent_model` up front and writes `llm_utility_model`, `llm_utility_provider` and
+`llm_utility_timeout_s` from their own `if resolved_utility is not None` branch, beside — not
+inside — the `agent_model` branch that writes `chat_model`. So a utility-model-only deployment
+now records the utility model and no `chat_model`. The argument above is the one to answer
+before changing that back.
 
 ### 5. One prompt per facet — and the LLM implementation chosen over the deterministic one
 
@@ -172,8 +178,14 @@ it. A rewrite reaching only BM25 would miss the point of rewriting.
 
 The cost is up to four extra embedding calls per turn — one per rewriting facet. They are concurrent with the facets that
 issue them, they are small, and each one is cheap against the model call that produced the text
-being embedded. An embedder failure falls back to the question's vector rather than dropping the
-channel, so the worst case is the behaviour of yesterday.
+being embedded. As decided, an embedder failure fell back to the question's vector rather than
+dropping the channel, so the worst case was the behaviour of yesterday. That was reversed by
+audit I7 and `serve/runtime.py::vector_for_query` no longer does it: the returned vector is the
+rewritten query's or nothing, and a raised embed reports `semantic: failed`. Falling back scored
+BM25 over the rewrite against cosine over the question, blended them into one number, and
+recorded the channel as having run — a degraded channel that reports itself is a measurement,
+and one that substitutes another text's vector is a fabricated one. The fallback survives only
+where it is provably the same text: `query == question`, which is the no-rewrite case.
 
 `facets["<stage>"]["queries"]` now carries the text that actually went to the index rather than
 the question the user asked. That is what makes the two cases distinguishable in a trace: a

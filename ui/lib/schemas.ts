@@ -127,7 +127,9 @@ export const schemaSummaryResponseSchema = z.object({
 /* ── /graph (full knowledge graph over all asset types) ──────────────────── */
 
 // Node kinds the backend emits (= asset_type): tables + the non-table assets.
-// Matches KnowledgeGraphNodeResponse.kind (governed_bi.api.schemas).
+// The producer is `api/routes.py::_knowledge_payload`, whose vocabulary is
+// `_SEMANTIC_NODE_KINDS` there. There is no response model to match — the route
+// returns a plain dict.
 export const graphNodeKindSchema = z.enum([
   "table",
   "join",
@@ -191,8 +193,8 @@ export const graphScopeSchema = z.object({
 
 /** `/graph` + `/knowledge-graph` meta. **Names follow the engine (ADR 0009 D2).**
  *
- * These were `total_nodes` / `returned_nodes` / `total_edges`, taken from v1's deleted
- * `governed_bi.api.schemas`. The engine has always emitted `n_nodes` / `n_edges`, so
+ * These were `total_nodes` / `returned_nodes` / `total_edges`, taken from a v1 response model
+ * that no longer exists. The engine has always emitted `n_nodes` / `n_edges`, so
  * `z.object` was stripping every field and defaulting `truncated` to `false` — the UI could
  * not have shown a truncated graph even once the server started bounding them. Aligned to
  * the engine because ADR 0009 is now the spec for this route and the old names describe a
@@ -222,7 +224,7 @@ export const knowledgeGraphSchema = z.object({
 });
 
 /* ── /graph (ER: tables + joins, with FK cardinality + predicate) ─────────── */
-// Mirrors SchemaGraphNode/Edge (governed_bi.api.schemas). Unlike the knowledge
+// Mirrors what `api/routes.py::_graph_payload` emits. Unlike the knowledge
 // graph, ER edges carry the join equality (`on`) and `cardinality`, which powers
 // the column-level ER diagram (combined with per-column detail from /schema).
 

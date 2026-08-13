@@ -60,18 +60,23 @@ Git history is the record of what changed.
 |---|---|
 | [Measurement](measurement.md) | how to produce a finding: the eval driver's flags, the prompt registry, the measurement row schema, and the quotability gates |
 | [Failure modes](failure-modes.md) | how the engine answers wrongly, per failure class, with the causal repair experiments — arm `v4`, engine `3c0079a`, corpus `30872d3` |
+| [Risk coverage on `v4`](analysis/risk-coverage-v4.md) | whether a better operating point exists at all: out-of-fold precision on delivered answers under a coverage constraint, with bootstrapped intervals — arm `v4`, corpus `30872d3`, replicated on `v3-fold` |
 | [Selective delivery on `v4`](analysis/selective-delivery-v4.md) | whether any signal the artifact records beats the engine's own operating point: risk-coverage curves, AURC against an oracle and a no-ranking reference, and what each trade costs in right answers — arm `v4`, corpus `30872d3`, replicated across all seven artifacts in `runs/eval/` |
+| [Declared machinery with no consumer](analysis/declared-not-consumed.md) | a sweep for the knobs, record fields, state channels and env vars that something declares and nothing reads — six artifacts, 1,351 rows each, corpus `30872d3` |
 | [Open work](open-work.md) | the unfinished items those findings imply, re-verified against the current tree |
 | [Strategy checkpoint 2026-08-11](analysis/strategy-checkpoint-2026-08-11.md) | temporary checkpoint for the repository as a portfolio artifact: what is true, what it declines to be, and the work queue — not an ADR; replace when superseded |
 
-## Architecture reviews
+## Audits and reviews
 
-Not measurements — readings of the tree, looking for modules whose interface is nearly as wide as
-their implementation. Line numbers are anchored to the commit named in each document and drift.
+Not measurements — readings of the tree. Each names the commit it was taken at, and **line numbers
+in all of them have drifted**: resolve a citation by symbol.
 
 | Doc | What it covers |
 |---|---|
+| [Implementation audit 2026-08-10](analysis/audit-2026-08-10.md) | findings and remediation plan at tree `c625da8`, including the memory-profile rows — read P3 before trusting any diagnosis in them |
+| [Decisions taken working that audit](analysis/decisions-2026-08-10.md) | every call made without asking, with the reasoning and what would reverse it, so a reviewer can disagree with one without re-deriving it |
 | [Architecture review 2026-08-11](analysis/architecture-review-2026-08-11.md) | ten deepening candidates across `serve/`, `eval/`, `api/` and the `ui/` seam, at tree `506ad9b`, each marked verified-here or reported |
+| [Hand-parsed model replies](analysis/parsed-model-output.md) | every place `src/` parses a model reply by hand, and the two fail-open defects that found — both fixed at `95e3b07` |
 
 ## Frontend, and external data
 

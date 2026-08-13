@@ -1,5 +1,10 @@
 # Declared machinery with no consumer
 
+**Tree swept: `75554be` (2026-08-10)**, the commit `tools/check_declared_is_consumed.py` was
+written into. The counts and the closure notes below were re-derived on 2026-08-12 by running the
+checker against the tree of that day. **Line numbers are anchored to the sweep and have drifted** —
+resolve a citation by the symbol beside it, not by the coordinate.
+
 A sweep for the defect class in `open-work.md` §3.10: something is declared — a knob, a record
 field, a state channel, an env var, a docstring promise — and nothing on the other end reads it.
 
@@ -7,7 +12,11 @@ Two instruments. The mechanical one is the six artifacts this sweep ran over, 1,
 on corpus `86ed1dbf…` (`../BIRD-corpus` @ `30872d3`): a field constant across all 8,106 rows of
 all six arms is evidence of no writer, which is how `facet_degraded` and `git_sha` were originally
 caught. The static one is `tools/check_declared_is_consumed.py`, written in the same pass. It
-found 27 of the items below when it was written, 14 on 2026-08-10, and finds **6** now.
+found 27 of the items below when it was written, 14 on 2026-08-10, and finds **6** now. The rule for
+that last number is the checker's own output — `uv run --frozen python
+tools/check_declared_is_consumed.py` prints one line per violation and the four-rule breakdown is
+[at the bottom of this page](#the-checker) — so it is re-derivable in one command rather than by
+counting sections here.
 
 Findings are ranked by consequence. Tier 1 means a **recorded number is wrong**, not missing.
 

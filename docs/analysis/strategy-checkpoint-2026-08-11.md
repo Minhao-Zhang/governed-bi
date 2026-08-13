@@ -59,7 +59,7 @@ arm / corpus，否则不可引用。
 | 定位 | 跨平台 / 仓外 / 偏脏数据，对位 Cortex / Genie——讲强制预执行门禁，不讲仓内 ACL |
 | 简历叙事 | 卖**判断力 + 治理拓扑**；成对报 precision@coverage；**EX 不当头条** |
 
-**唯一明确未定的一项：UI 仓是否并入本仓。** 它跟 §2.7 是两个问题，此前被混为一谈过一次。corpus / lake 外置是测量身份问题，已拍板且不重开；UI 并仓不碰 `corpus_content_hash`，是发现性与契约漂移问题——[open-work](../open-work.md) §5.3 记着这次分裂的代价。在决定前，本表不代它拍板。
+**UI 并仓：已决，并入。** `506ad9b`（2026-08-11）把前端搬进 `ui/`，与 §1 事实页首段一致；本行此前写着「唯一明确未定」，是队列先于事实页过期的一例。它跟 §2.7 仍是两个问题，此前被混为一谈过一次：corpus / lake 外置是测量身份问题，已拍板且不重开；UI 并仓不碰 `corpus_content_hash`，是发现性与契约漂移问题——[open-work](../open-work.md) §5.3 记着那次分裂的代价。
 
 ### 引擎里真正值钱的性质
 
@@ -86,10 +86,19 @@ arm / corpus，否则不可引用。
    | 行级谓词**声明**，且默认 `refuse`——声明了却不能执行就拒答 | 把谓词注入语句。ADR 0012 §5：违反 0006 G4，且在 OUTER JOIN / UNION 分支 / 同名 CTE 下语义就是错的。RLS 归数据库角色 |
 
    **为什么翻。** 原文对「作品集」这个目标是对的，目标在 2026-08-12 改了：本仓要成为**可 fork 的企业底座**。
-   但「有接缝」和「是权限产品」不是一回事，上表右列就是这条界线本身。三件事约束这次翻案不滑坡：
-   默认 grant 是**开放**的（`govern/policy.py` import 期断言），95 个既有对抗用例逐字节判定不变；
-   接缝目前**只在 `govern/` 内生效**，`serve/` 与 `api/` 谁都没构造过非开放 grant（ADR 0012 §8 列了欠的四根线）；
-   grant 的 digest **还没进任何 knob**，所以第一个非开放 grant 上线前必须先补那根线，否则两个 arm 的配置哈希相同（§7）。
+   但「有接缝」和「是权限产品」不是一回事，上表右列就是这条界线本身。三件事约束这次翻案不滑坡，
+   其中两件当天就补上了：
+   默认 grant 仍是**开放**的（两处 import 期断言：`govern/policy.py::_assert_policy_tracks_the_register`
+   查默认 `access_grant.is_open`，`govern/access.py::_assert_the_default_adapter_is_inert` 查解析后的三个谓词恒定），
+   95 个既有对抗用例逐字节判定不变（套件现为 115 例 = 62 attack / 53 benign，新增的四张虚构表只承载新维度）；
+   接缝**已不止在 `govern/` 内生效**——ADR 0012 §8 欠的四根线于 2026-08-12 全部落地：
+   `api/graph_app.py::resolve_access_grant`（组装根问一次策略）、
+   `serve/delivery.py::tool_bounds_from_state`（把 grant 折进 `ToolBounds`）、
+   `serve/session.py::_resolved_knobs`（§7 那根）、
+   以及渲染器 `serve/context.py::withheld_by_grant`（同一集合既收窄 prompt 又从 `readable_assets` 里减去）；
+   §8.5 当天复审后又补了 `api/visibility.py`，用**同一个** `withheld_by_grant` 收窄 browse 路由；
+   grant 的 digest **已进 knob**——`serve/session.py::_resolved_knobs` 把 `policy.access_grant.digest()`
+   写成 `access_grant`（`Role.comparability`，因此进配置哈希），所以「两个 arm 授权不同却哈希相同」这条已关（§7）。
 
    §2.6 的措辞纪律不变：Layer 6 归因臂**仍未跑**，对外不得升级为「治理层独立贡献了 X pp」。ADR 0012 只是把那个臂
    从「改代码」降成「换一个 `Grant`」。
@@ -122,7 +131,7 @@ arm / corpus，否则不可引用。
 | 序 | 项 | 事实 |
 |---:|---|---|
 | 1 | A6 | `/chat/resume` 是同线程校验而非同调用方（`_identity` 回落到 `{"token": thread_id}`），且 `/chat` 可覆写已存 identity |
-| 2 | A5 | 流式传输完全没有 identity 绑定（`_accept_node` 不传 `identity`） |
+| 2 | A5 | 流式传输完全没有 identity 绑定：该节点 2026-08-11 从 `api/graph_app.py::_accept_node` 搬到 `serve/accept.py::accept_node`，`identity` 仍然一个字都没传 |
 | 3 | B1 | `get_state`、`values` 帧与 `POST /threads/search` 会回 `identity` 与 `delivery.context_block`；`output_schema` 只收窄 `invoke` |
 | 4 | A9 | checkpoint 明文落 `.langgraph_api/*.pckl`，含 identity token 与渲染后的语料 |
 | 5 | J3 | 规则 V5 禁 `summary` 写字面量，于是它们进了 `body`——而 `body` 每次命中都进 prompt，`summary` 从不进。无任何 gate 检查 `body` 的 PII |
@@ -147,8 +156,11 @@ per-caller token）一项没动，所以这四条的处置**不变**。留着的
 `uv run --extra agents --extra api` 和指向已删 `docs/ui-frontend-handoff.md` 的链接都已清掉；
 陌生人照 UI README 走一遍，得到的心智模型与 `lib/schemas.ts` 一致。
 
-**(1) README 头条改序。** 拒答与 precision@coverage 在前，EX 在后且带口径。凡出现弃权数字处，必须同时
-出现「上下文不足」「priced subset 62」「非题难校准」；禁止「calibrated abstention」单独作为能力出现。
+**(1) README 头条改序。已完成（2026-08-11，`5c162c8`）。** 事前标准是：拒答与 precision@coverage 在前，
+EX 在后且带口径；凡出现弃权数字处，必须同时出现「上下文不足」「priced subset 62」「非题难校准」；禁止
+「calibrated abstention」单独作为能力出现。核对现表：0.714（n = 1,278，94.6% coverage）在第一行，
+declined 73 在第二行，77.4%（48 of the 62）在第三行，unfiltered EX 0.676 在第四行；表下三条 caveat 写明
+declines 不是难度估计、跟踪的是本回合上下文；「calibrated abstention」在 README 里一次都没有出现。
 
 **(2) 录一段短 demo。** 一道答得出的题 + 一道拒答，**ledger 可见**：跑了什么、拒在哪一层、为什么。
 成功 = 不加旁白也能看出「模型没有句柄」；失败 = 只看见一个答案卡。不为录屏改引擎行为（§5.1）。
@@ -173,12 +185,16 @@ per-caller token）一项没动，所以这四条的处置**不变**。留着的
 
 配套落地了 `arms.toml`：arm 的 treatment 从此committed 且可 diff，不再只活在某台机器的 `.env` 里。
 
-**(5) 测试完整性债。** [open-work](../open-work.md) §3.9：25 处变异里 **8 处**在全绿套件下存活，形状只有
-一种——**断言常量等于自己**。其中两处正是 `corpus_content_hash` / `prompt_set_hash` 置 `None` 不被发觉
-（`test_a_measured_row_names_both_treatment_identities` 断的是 `"corpus_content_hash" in row`，`None` 满足），
-而这道门恰恰就是眼下替 D9 遮丑的那道。§3.10 是同一病的另一半：声明了没人消费，28 项修掉 14 项，
-`tools/check_declared_is_consumed.py` 刻意未入 CI，条件写在 `tests/conformance/test_register_closure.py`。
-事前标准：八处逐一变异 → 看红 → 还原；改不到会红的断言直接删——报告自己没有的覆盖率比没有测试更坏。
+**(5) 测试完整性债。前半已完成（2026-08-11），后半仍在走。** [open-work](../open-work.md) §3.9：25 处变异里
+**8 处**在全绿套件下存活，形状只有一种——**断言常量等于自己**。其中两处正是 `corpus_content_hash` /
+`prompt_set_hash` 置 `None` 不被发觉（`test_a_measured_row_names_both_treatment_identities` 断的是
+`"corpus_content_hash" in row`，`None` 满足），而这道门恰恰就是当时替 D9 遮丑的那道。
+事前标准是「八处逐一变异 → 看红 → 还原；改不到会红的断言直接删」，已照此执行：八处全部以 `s39-` 前缀
+声明进 `tools/mutation_catalogue.py`（现为 9 条，两处 routing_pinned 各占一条），2026-08-11 验证逐条被杀。
+§3.10 是同一病的另一半，**还没走完**：声明了没人消费，一轮扫出 28 项，检查器现报 **6** 项（写这条时是
+28 修掉 14）；`tools/check_declared_is_consumed.py` 仍刻意未入 CI，条件写在
+`tests/conformance/test_register_closure.py`，其中 `test_the_declared_but_unconsumed_set_does_not_grow`
+按**名字**钉住这 6 项，多一项与少一项都会红。剩下 6 项里 3 项要的是决策不是接线。
 这是 §5 全部风险里唯一一条能被工具挡住的。
 
 **(6) R2：抬高可答集质量——检索 / licensing（最大可赢桶）。**

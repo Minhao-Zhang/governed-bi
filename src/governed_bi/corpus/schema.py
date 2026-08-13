@@ -118,8 +118,9 @@ class Governance:
 
     ``excluded=True`` removes the asset from everything the analyst sees, in every
     environment. **No tool writes this**: exclusion is human-only, enforced by the absence
-    of a tool plus the phase-boundary guard that re-stamps model-authored ``governance``
-    blocks (ADR 0005 §1.5). This class is the shape, not the enforcement.
+    of a tool. There is no phase-boundary re-stamper — ``corpus/provenance.py`` was deleted
+    on 2026-08-06 for having zero callers, and ``tests/corpus/test_analyst_view.py`` is the
+    control that replaced it. This class is the shape, not the enforcement.
     """
 
     excluded: bool = False

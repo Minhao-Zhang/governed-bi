@@ -480,8 +480,10 @@ def resume_identity_problem(
         if pinned_rows:
             problems.append(
                 f"  {pinned_rows} row(s) had their routing replayed from another artifact and "
-                "this run routes for itself. --replay-routing is part of the treatment and is "
-                "not in the artifact tag, so nothing else would have caught this."
+                "this run routes for itself. --replay-routing is part of the treatment. The "
+                "driver's default filename now carries a _pinned segment, so the two arms "
+                "normally land in different files -- but --out names the file directly and "
+                "bypasses the tag, which is the case this check still has to catch."
             )
 
     if problems:

@@ -43,9 +43,9 @@ Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 
 | Variable | Role |
 |---|---|
-| `GOVERNED_BI_PG_DSN`, else `PG_RENAME_DECOY_DSN` | Postgres DSN — required for LangGraph serve and for the eval driver. Those two names in that precedence, from `tools/credentials.PG_DSN_NAMES` |
+| `GOVERNED_BI_PG_DSN`, else `PG_RENAME_DECOY_DSN` | Postgres DSN — required for LangGraph serve and for the eval driver. Those two names in that precedence, from `credentials.PG_DSN_NAMES` in `src/governed_bi/` |
 | `OPENAI_API_KEY` | Model access on the `openai` gateway — the default one |
-| `GOVERNED_BI_API_KEY` | **Required to serve.** Transport auth for every route but `GET /livez` (`api/auth.py`, wired by `langgraph.json`'s `auth.path`; the custom routes enforce it in `api/routes.py`'s own middleware, which reuses that comparison). Unset means the server refuses every request and names this variable in the 401 — it does not mean "open". Clients send it as `x-api-key` or `Authorization: Bearer`; the sibling UI reads it from `NEXT_PUBLIC_GOVERNED_BI_API_KEY` and both values must match. One key is one principal, so it is transport auth and not per-user authorization |
+| `GOVERNED_BI_API_KEY` | **Required to serve.** Transport auth for every route but `GET /livez` (`api/auth.py`, wired by `langgraph.json`'s `auth.path`; the custom routes enforce it in `api/routes.py`'s own middleware, which reuses that comparison). Unset means the server refuses every request and names this variable in the 401 — it does not mean "open". Clients send it as `x-api-key` or `Authorization: Bearer`; the UI in `ui/` reads it from `NEXT_PUBLIC_GOVERNED_BI_API_KEY` and both values must match. One key is one principal, so it is transport auth and not per-user authorization |
 | `GOVERNED_BI_PROVIDER` | Gateway for every surface: `openai` (default), `bedrock`, `proxy` |
 | `GOVERNED_BI_MODEL_PROVIDER`, `GOVERNED_BI_UTILITY_PROVIDER`, `GOVERNED_BI_EMBEDDING_PROVIDER` | Per-surface override of the above. The three surfaces resolve independently |
 | `GOVERNED_BI_AWS_REGION`, else `AWS_REGION`, else `AWS_DEFAULT_REGION` | Bedrock region, in that precedence — the engine's own name wins over whatever the shell exports for other tooling |
@@ -54,6 +54,7 @@ Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 | `GOVERNED_BI_PROXY_REGION` | AWS region for that secret lookup. Unset falls through to boto3's own resolution chain |
 | `GOVERNED_BI_PROXY_CA_BUNDLE` | Path to a CA bundle for the proxy's TLS chain. Unset disables verification |
 | `GOVERNED_BI_CORPUS_DIR` | Corpus directory (else one dir under `corpora/`, or seed via schema) |
+| `GOVERNED_BI_ACCESS_POLICY` | Path to a `StaticRoleAccessPolicy` TOML file ([ADR 0012](adr/0012-access-seam-principal-and-authorization.md) §2), resolved against the repo root. Unset means `OpenAccessPolicy`, which authorizes every table and is what this repository ships. Set to a path that is not a file and the server **refuses to start** rather than serving open under a policy the operator believes is in force |
 | `GOVERNED_BI_SCHEMA` | Optional: seed / pin schema from the live database |
 | `GOVERNED_BI_MODEL` | Main chat model; unset → `has_live_model: false` |
 | `GOVERNED_BI_UTILITY_MODEL` | Small model for facet rewrite / scope gate |
@@ -119,7 +120,7 @@ uv run python -m governed_bi.serve --schema <schema> -q "…" --no-model
 uv run --frozen pytest -q -rs
 ```
 
-That is what CI runs: ~70 s, peaking around 1.4 GB of working set. `-rs` prints
+That is what CI runs: 1,448 tests in ~100 s, peaking around 1.4 GB of working set. `-rs` prints
 every skip with its reason — the Postgres and OpenAI-backed contracts skip
 without credentials, and a silent skip reads as a pass.
 
@@ -149,9 +150,11 @@ directory, and `--prefix` only redirects where the tree is written — so
 exits ENOENT. `ci` and `run` both resolve from the prefix. Inside `ui/`, plain
 `npm install` works.
 
-That serves http://localhost:3000. Two variables in `ui/.env.local` point it at
-the engine, and both must be set or the app falls back to fixtures and looks like
-it is working:
+That serves http://localhost:3000. Three variables in `ui/.env.local` point it at
+the engine, and all three have to be right. Leave `NEXT_PUBLIC_LANGGRAPH_URL`
+unset and `ui/lib/env.ts` puts the whole app on the mock fixtures in
+`ui/lib/mock/fixtures.ts`, which renders a complete, plausible UI against no
+engine at all:
 
 | | |
 |---|---|

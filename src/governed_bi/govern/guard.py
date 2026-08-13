@@ -163,11 +163,14 @@ _WARNED: set[str] = set()
 
 
 def guard(question: str, knobs: GovernancePolicy) -> GuardVerdict:
-    """Screen one input. Called on ``question``, and again on ``rewrite.after``.
+    """Screen one input. **One call site today: ``guard_node``, on ``question``.**
 
-    The second pass is load-bearing: ADR 0005's ``rewrite`` is a model call with
-    unguarded history in scope and every downstream node reads its output, so without
-    it the guarded artifact is never the delivered artifact.
+    ADR 0006 §6 requires a second pass over ``rewrite.after`` and it is not built. That
+    pass is load-bearing, which is why the gap is worth naming here rather than only in
+    the ADR: ADR 0005's ``rewrite`` is a model call with unguarded history in scope and
+    every downstream node reads its output, so until it exists the guarded artifact is
+    not the delivered artifact. This docstring used to describe the second pass in the
+    present tense, which is how a reader stops looking for it.
 
     ``knobs.guard_rules_enabled`` must be explicit — a default would be a decision
     about what is enabled, made where nobody would look for it.

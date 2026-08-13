@@ -14,8 +14,10 @@ still declares `fastapi`, `uvicorn`, `langgraph-cli[inmem]` and pins `langgraph-
 `/threads` and `/runs/stream`; `tools/check_imports.py` still declares an `api` layer. So the
 dependency surface survived the deletion and the code did not.
 
-`docs/openapi.json` is still tracked and is v1's spec for all twelve routes. It is the
-spec-of-record for the rebuild, not a historical artifact.
+`docs/openapi.json` is still tracked and is, at the time of this decision, v1's spec for all
+twelve routes. It is the spec-of-record for the rebuild, not a historical artifact. (It has
+since been rewritten: it carries `"version": "2"` and the fifteen paths the app actually
+mounts, `AnswerResponse` included.)
 
 ## The decisions
 
@@ -25,10 +27,11 @@ spec-of-record for the rebuild, not a historical artifact.
 `ASSISTANT_ID = "serve"` comes from) and `http.app` for the custom routes.
 
 The graph **cannot** be loaded as a bare compiled object. Every node needs live objects on
-`config["configurable"]` — `policy` (a `GovernancePolicy` dataclass, subscripted unguarded at
-`guard.py:21`), `agent_model`, `corpus`, `index`, `structure`, `connector`, `assets_by_id` —
-and LangGraph Server can only put **JSON** in `configurable`. `state.py` already records the
-same constraint for `policy`: *"the checkpointer cannot msgpack the dataclass."*
+`config["configurable"]` — `policy` (a `GovernancePolicy` dataclass, subscripted unguarded in
+`serve/nodes/guard.py::guard_node`), `agent_model`, `corpus`, `index`, `structure`,
+`connector`, `assets_by_id` — and LangGraph Server can only put **JSON** in `configurable`.
+`serve/state.py` records the same constraint for `policy` at its `ServeState` declaration: the
+policy rides `configurable["policy"]` because it is not msgpack-safe.
 
 So `make_graph` builds a `Session` at server start and closes over it. This is the reason
 §2.8.2.2's session seam had to exist before the server could: the server is simply its
@@ -95,9 +98,11 @@ its own ADR.
 > `openapi.json`'s `AnswerResponse` was v1's `AnswerView` verbatim, eight required fields the
 > engine produces none of, and is replaced with the shape this section specifies.
 
-Note this is a hard failure today, not a soft one, and it fails in the worst direction:
-`parseAnswer` `safeParse`s and **returns null on mismatch**, so a run completes, no answer
-card renders, and no error appears.
+Note this was a hard failure at the time, not a soft one, and it failed in the worst
+direction: `parseAnswer` `safeParse`s and **returns null on mismatch**, so a run completed, no
+answer card rendered, and no error appeared. The parse is still that shape — `parseAnswer` in
+`ui/lib/stream-messages.ts` — but `answerViewSchema` is now v2's record, so the two sides
+agree.
 
 ### 4. `answer.text` is system copy; the model's answer lives in `messages`
 
@@ -140,7 +145,8 @@ Duplicating the model's text into `answer.text` would create two fields that mus
 apart.** `messagesKey` names a key, not a graph level. LangGraph streams a nested graph's whole
 state under `values|<node>:<task_id>`, and the SDK applies the values of any namespace it does
 not recognise as a subagent — the test is a `tools:` segment, which `agent_core:<task_id>` does
-not have — straight onto *root* state (`@langchain/langgraph-sdk` `dist/ui/manager.js:413`). So
+not have — straight onto *root* state (`@langchain/langgraph-sdk`, the `isSubagentNamespace`
+branch of the `values` handler in `dist/ui/manager.js`). So
 mid-run, `stream.messages` **is the nested agent's message list**, rendered as the root
 transcript. `agent_core` put the delivered context block in that list as a `HumanMessage`, and
 8.6 KB of scaffolding appeared as the user's own chat bubble for the duration of every turn,
@@ -222,7 +228,10 @@ It is the UI's **first** request; without it the chat panel pins at a skeleton f
 fields, and each is an observation: `environment`, `dialect`, `model`, `has_live_model` iff a
 model is actually configured, `can_stream` true, **`can_edit` false** with `edit_mode: "none"`
 (the curator is out of scope), `can_clarify` iff the `ask_user` tool is bound *and* a model is
-configured, `can_scope` true, `can_search` false, and the two durability flags
+configured — re-decided the next day, and [ADR 0009](0009-browsing-and-filtering-api.md) D12 is
+what `capabilities_for` computes now: `can_stream and agent_model is not None`, because the flag
+is the switch that mounts the prompt and the REST transport has no prompt to mount —
+`can_scope` true, `can_search` false, and the two durability flags
 `checkpoint_durable` / `hitl_survives_process_restart`, both false because pause/resume does not
 survive a process restart on either transport.
 

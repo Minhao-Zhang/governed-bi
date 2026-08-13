@@ -16,12 +16,12 @@ Wired in [`serve/graph.py`](../src/governed_bi/serve/graph.py). Nodes live under
             ├─ facet_metric
             ├─ facet_entity
             └─ facet_example
-  → route → resolve → connect → assemble
+  → route → resolve → connect → assemble → abstain
   → agent_core → reflect → narrate → stamp → [record] → END
 
-guard blocked ─────────────────────→ refuse  ─┐
-negative hit / route / connect ────→ decline ─┼─→ stamp
-any node raising (wrap_node) ─────────────────┘
+guard blocked ───────────────────────────────→ refuse  ─┐
+negative hit / route / connect / abstain ────→ decline ─┼─→ stamp
+any node raising (wrap_node) ───────────────────────────┘
 ```
 
 `accept` and `record` are bracketed because both are optional arguments to
@@ -33,12 +33,13 @@ routes there rather than letting it escape the graph.
 
 | Stage | Role |
 |---|---|
-| `guard` | Five deterministic rules first, then a model-backed BI-scope gate on the utility model |
+| `guard` | Five deterministic rules (`govern/guard.py::GUARD_RULES`), then a model-backed BI-scope gate on the utility model. **Enabled per rule id, and `guard_rules_enabled` ships `UNSET`** — the served app (`api/graph_app.py`) turns on `g_bi_scope` and nothing else; the eval driver, the one-turn CLI and `tools/` all pass `{}`, so no guard rule fires on any measured arm |
 | `rewrite` | Stub rail today; facet query rewriting lives inside `facet_*` |
-| `negative_gate` | Negative-example refuse path |
+| `negative_gate` | Negative-example decline path. A stub today: `negative_tau` ships `UNSET` and the served corpus holds no `negative_example` asset, so the node writes `outcome: disabled` on every turn and the `decline` branch is unreachable |
 | `facet_*` | Parallel retrieval channels (each may rewrite its query) |
 | `route` / `resolve` / `connect` | Schema pick, budgets, Steiner join |
 | `assemble` | Render retrieval context block |
+| `abstain` | The declared abstention policy — deterministic predicates over recorded state, no score. `abstention_policy_enabled` ships `False`, so it writes a `disabled` verdict and routes on ([ADR 0013](adr/0013-the-declared-abstention-policy.md)) |
 | `agent_core` | Nested `create_agent` loop (read-only tools) |
 | `reflect` | Post-hoc observer; never routes the turn |
 | `narrate` | Short answer over the result table (must not crash an answered turn) |
@@ -63,13 +64,18 @@ security argument is unwired. Adding a new executor that skips `check()` is caug
 by `govern/`'s G2 invariant and its tests, not by the topology. Layers, rules and
 executor paths: [ADR 0006](adr/0006-execution-time-governance.md).
 
-**Authorization is a seam, and on this tree it is unwired.** `govern/access.py` holds an
-`AccessPolicy` port with two adapters, and the TABLES and COLUMNS layers ask the resulting grant
-(`r_table_not_authorized`, `r_column_not_authorized`, `r_row_predicate_unenforced`). The default
-grant authorizes everything and **nothing in `serve/` or `api/` constructs another**, so those
-rules are unreachable in the served app until the wires in
-[ADR 0012 §8](adr/0012-access-seam-principal-and-authorization.md) exist. What a fork implements,
-in what order: [enterprise fork](enterprise-fork.md).
+**Authorization is a wired seam that ships open.** `govern/access.py` holds an `AccessPolicy`
+port with two adapters, and the TABLES and COLUMNS layers ask the resulting grant
+(`r_table_not_authorized`, `r_column_not_authorized`, `r_row_predicate_unenforced`).
+`api/graph_app.py::access_policy_from_environment` is the composition root and the only place in
+`src/` that chooses one: `OpenAccessPolicy` unless `GOVERNED_BI_ACCESS_POLICY` names a
+`StaticRoleAccessPolicy` TOML file, and a `RuntimeError` rather than a fallback if that file is
+missing. `resolve_access_grant` asks it once for the principal
+`api/auth.py::authenticated_principal` resolves, and the grant rides on `GovernancePolicy`. The
+default grant authorizes everything, so on a stock install those three rules never fire — what the
+grant *does* narrow when one is configured, and what it deliberately does not, is
+[ADR 0012 §8](adr/0012-access-seam-principal-and-authorization.md). What a fork implements, in
+what order: [enterprise fork](enterprise-fork.md).
 
 `AgentMiddleware` *is* used in `agent_core`, for two things that are **not**
 governance: injecting the retrieval context block on every model call (via

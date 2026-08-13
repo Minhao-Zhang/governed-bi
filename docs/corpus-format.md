@@ -22,31 +22,48 @@ tree, so a number is reproducible only if the corpus commit is known. Quote the 
 any figure, and write nothing into that checkout except assets — anything else becomes part of
 the corpus's identity.
 
-The corpus is versioned and **not rebuildable**. `tools/corpus_rebuild/01–03` write the
-mechanical half — schema, table and column structure, join edges, few-shots — and leave every
-summary as a `TODO` marker. The prose half has no producer anywhere in this repository. Versioned
-and reproducible-from-source are different guarantees, and only the first one holds.
+The corpus is versioned and **not rebuildable**. `tools/corpus_rebuild/01–03` are the only scripts
+that write into it, and they write the mechanical half — schema, table and column structure, join
+edges, few-shots — leaving every summary as a `TODO <identifier>` marker. `04–07` write nothing
+into the corpus either: they stage BIRD's evidence clauses, column documentation and column value
+samples into `tools/corpus_rebuild/_build/` and split them into one packet per schema, as *input*
+for whoever writes the prose. The prose half — every summary, body and rule, and every term and
+metric asset — has no producer anywhere in this repository. Versioned and
+reproducible-from-source are different guarantees, and only the first one holds.
 
 ## Layout
 
 ```
 <corpus root>/
   <schema>/
-    tables/      tbl_<schema>_<name>.yaml
-    joins/       join_<left>_<right>.yaml
+    <schema>.yaml                 the SchemaAsset
+    tables/      tbl_<schema>_<name>.yaml      columns live inline, ids derived
+    joins/       join_<schema>_<left>_<right>_<on digest>.yaml
     few-shots/   fs_<schema>_<n>.yaml
-    terms/       term_<name>.yaml
-    metrics/     metric_<name>.yaml
-    notes/       note_<name>.yaml
-    negatives/   neg_<schema>_<n>.yaml
+    terms/       term_<schema>_<name>.yaml
+    metrics/     metric_<schema>_<name>.yaml
 ```
 
 `<schema>` is a schema namespace, not a database name. One connection may hold many schemas. The
 loader and the asset ids both use the field name `schema`.
 
-A `_generated/` directory under any schema holds derived projections — the search index,
-embeddings, the compiled graph (ADR 0005 D9). Nothing authors those directly, so nothing commits
-them.
+**The subtrees are a convention, not a rule.** `corpus/store.py::load` walks the whole tree and
+reads every `.yaml` it finds wherever it sits, and `corpus/store.py::write` writes
+`<root>/<namespace>/<id>.yaml` with no subdirectory at all — so the layout above is what
+`tools/corpus_rebuild/` produced, and nothing on the read path checks it. What the loader does
+enforce is per asset: `corpus/identity.py::validate_asset_id` on every id, because an id becomes a
+filename. The namespace directory is validated on the **write** path only
+(`identity.py::validate_path_component`, a bare identifier), and the manifest passed to `load`
+decides which subtrees are read at all — a schema left out of it is not read, so a leftover
+subtree cannot enter a measurement.
+
+Six of the eight asset types appear above. `column` has no directory because columns are authored
+inline under their table and `corpus/identity.py::derive_column_id` mints their ids.
+`negative_example` has none because the shipped BIRD-corpus contains not one — so `negative_gate`
+never fires on it, and any measurement of that rail is a measurement of a different corpus.
+
+Nothing derived is written into the corpus, because the corpus tree is the treatment identity.
+The vector store lives outside it, under `GOVERNED_BI_VECTOR_CACHE` (default `runs/vectors/`).
 
 ## Field tiers
 

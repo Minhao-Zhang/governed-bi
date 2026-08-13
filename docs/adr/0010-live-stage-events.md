@@ -60,10 +60,11 @@ worked.** `routes.py` recorded a second reason to keep streaming off: a synchron
 would trip `blockbuster` inside the server's worker. `blockbuster` is armed only in the in-mem
 run queue (`langgraph_runtime_inmem/queue.py:110`), and LangGraph runs a `def` node in an
 executor thread where it does not fire, so the sync nodes are safe and a full streamed run
-against live Postgres completes. `.env` sets `LANGGRAPH_ALLOW_BLOCKING=true` and **the CLI
-ignores it**: `langgraph_api/cli.py:283` patches the variable from the `--allow-blocking` flag
+against live Postgres completes. `.env` set `LANGGRAPH_ALLOW_BLOCKING=true` and **the CLI
+ignored it**: `langgraph_api/cli.py:283` patches the variable from the `--allow-blocking` flag
 and the loop below skips any `.env` key already patched ("Don't overwrite"). The variable has
-never had an effect. It is kept as documentation of the escape hatch, with a comment saying so.
+never had an effect, so the assignment is gone; `.env` carries the explanation under its
+"Not set, and why" heading instead of a setting that does nothing.
 
 **Amendment 3 (2026-08-11): "sync nodes are safe" is not "the server is safe", and the gap cost
 the semantic channel.** The five facet nodes are `async def`, so their bodies run on the loop
@@ -104,7 +105,7 @@ the stream modes (`pregel/main.py:3257-3266`). It emits `tool-started` / `tool-o
 region M5 said nothing could reach. Three separate reasons it is still unusable here, none of
 them the one written above:
 
-1. **It is not in the `StreamMode` Literal** (`langgraph/types.py:120-122` lists
+1. **It is not in the `StreamMode` Literal** (`langgraph/types.py::StreamMode` lists
    `values, updates, checkpoints, tasks, debug, messages, custom` and nothing else), so it is
    an undeclared mode reached only by string.
 2. **It is rejected with HTTP 422 on the non-v2 streaming routes.**
@@ -112,10 +113,11 @@ them the one written above:
    `{"tools", "lifecycle"}` and refuses unless the run carries the v2 event-streaming config
    key, on the stated grounds that v2-shaped events would leak into v1 consumers. Our request
    (§"The request the client must send") is a v1 request.
-3. **`tool-finished` ships the whole `ToolMessage`.** `_tools.py:164-181` puts LangChain's
-   `on_tool_end` output on the wire verbatim, and that output is
-   `_format_output(content, artifact, tool_call_id, name, status)` — a `ToolMessage` with the
-   tool's prose in it (`langchain_core/tools/base.py:1101-1102`, `1232-1233`). §4 keeps result
+3. **`tool-finished` ships the whole `ToolMessage`.** `StreamToolCallHandler._end`
+   (`pregel/_tools.py`) puts LangChain's `on_tool_end` output on the wire verbatim, and that
+   output is `_format_output(content, artifact, tool_call_id, name, status)` — a `ToolMessage`
+   with the tool's prose in it (`langchain_core/tools/base.py`, the `_format_output` call in
+   `BaseTool.run` and in `BaseTool.arun`). §4 keeps result
    rows and driver text off the stream; this mode puts them on it. The governance and cost half
    of M5 stands regardless: no framework mode reports a layer verdict or an attempt number.
 
@@ -156,7 +158,7 @@ namespace the same way:
 | mode | where the producer survives |
 | --- | --- |
 | `updates` | the chunk is keyed by node name (`pregel/_io.py:134-171`, `updated.append((task.name, …))`) |
-| `tasks` | `TaskPayload.name` is the node, plus a task `id` (`langgraph/types.py:142-162`) |
+| `tasks` | `TaskPayload.name` is the node, plus a task `id` (`langgraph/types.py::TaskPayload`) |
 | `messages` | namespace truncated identically (`pregel/_messages.py:141-149`), but the metadata dict travels beside the message and carries `langgraph_node` (`pregel/_algo.py:849`) |
 | `tools` | namespace truncated identically (`pregel/_tools.py:116`), but the payload carries `tool_name` and `tool_call_id` (`_tools.py:155-163`) |
 | `custom` | nothing |
@@ -290,12 +292,21 @@ config and return `runtime.stream_writer` (`config.py:195-196`). That runtime's 
 also a no-op (`langgraph/runtime.py:107`, `206`, `288`), so even a partially-configured context
 degrades to silence rather than to an exception.
 
-So the guard stays, for the narrower reason: `emit` is reached from `serve/tools.py`,
-`serve/wrap.py` and `serve/nodes/stamp.py`, and a unit test or a direct node call that never
+So the guard stays, for the narrower reason: a unit test or a direct node call that never
 enters Pregel is a caller with no `var_child_runnable_config` set. That is the whole population
 of raising callers this repo has, and it is a test population — which also means the guard is
 buying much less than this section claimed, and the *real* silence on the eval and CLI paths is
 bought by the no-op writer inside LangGraph, not by our `except`.
+
+`emit`'s call sites have grown past §1's three since this was written. Six modules reach it:
+`serve/wrap.py` (every rail), `serve/tools.py` (the tools and the verdicts),
+`serve/nodes/stamp.py` (`final`), `serve/nodes/agent_core.py` (the `cap` row from the
+attempt-cap middleware, with `serve/tools.py`'s backstop behind
+`AttemptBook.cap_recorded`), and `serve/nodes/reflect.py` and `serve/nodes/abstain.py`, the two
+`stream=False` nodes that emit their own single row on the turns where they judged something.
+The last three are the boundaries §1 did not have to name because the nodes did not exist; the
+argument in §1 — one emitter per boundary, and a boundary is somewhere `wrap_node` cannot see —
+is what admits them.
 
 ### 6. `can_stream` is true, and `can_clarify` follows
 
@@ -494,8 +505,8 @@ unrecognised `step` as renderable-but-unlabelled rather than as an error.
   bullet claimed; the mechanism is not, and the difference decides whether `events.py`'s guard
   is load-bearing.
 - Local serving requires no flags. `--allow-blocking` is not needed (M4, Amendment 3: the one
-  call that tripped `blockbuster` now runs off the loop) and `LANGGRAPH_ALLOW_BLOCKING` in
-  `.env` never worked.
+  call that tripped `blockbuster` now runs off the loop) and `LANGGRAPH_ALLOW_BLOCKING`
+  never worked from `.env`, which is why `.env` no longer sets it.
 - **`POST /chat` becomes a degradation path, and it does not share a memory with the streamed
   one.** `routes.py` compiles its own `InMemorySaver`; `graph_app.make_graph` compiles with none
   so the server can supply its own, which is what makes `/threads` work. So one `session_id`

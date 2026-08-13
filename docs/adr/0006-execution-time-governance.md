@@ -1,12 +1,17 @@
 # 0006: Execution-time governance
 
-- **Status:** Accepted in part (2026-08-03; state of the tree re-checked 2026-08-09).
-  `govern/` is on the `v2` branch, and two of §7's four executors are wired: `agent`
+- **Status:** Accepted in part (2026-08-03; state of the tree re-checked 2026-08-12).
+  `govern/` is on `main` — the `v2` branch was merged and no longer exists. Two of §7's
+  four executors are wired: `agent`
   (`serve/fetch.py::run_query`) and `sample` (`serve/fetch.py::sample_rows`). `graded`
-  and `profile` have no writer. The red-team corpus does not exist, so `guard`'s
+  and `profile` have no writer, and graded delivery itself is declared but unwired —
+  `govern/check.py::graded_delivery_eligible` has no caller in `src/` (§5). The red-team
+  corpus does not exist, so `guard`'s
   deterministic injection rules ship disabled (`guard_rules_enabled` is `UNSET` until
   OQ3's two numbers exist); the one rule enabled in the served app is `g_bi_scope`
-  (`api/graph_app.py`). A hard dependency of
+  (`api/graph_app.py`). §11's retention table is withdrawn, not deferred — see the note
+  there. Amended by [ADR 0012](0012-access-seam-principal-and-authorization.md) at §8
+  and in Consequences. A hard dependency of
   [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md).
 - **Deciders:** project owner + design session (2026-08-02)
 - **Scope:** everything between "the agent produced a string" and "the database
@@ -130,7 +135,7 @@ class CheckVerdict(TypedDict):
     passed: bool
     failed_layer: Layer | None          # None ⟺ passed
     layers_evaluated: list[Layer]       # a layer with no entry did not run
-    reason_code: str                    # closed vocabulary — see §9
+    reason_code: str                    # closed vocabulary — `govern/layers.py::RULES`
     detail: str                         # free text, ledger-dropped
     bound: dict[str, str]               # each reference → the source it bound to
 ```
@@ -153,7 +158,7 @@ test asserts `failed_layer` is the last element of it.
 
 **Any exception inside `check()` is `passed=False`** — `RecursionError` from
 pathological nesting and tokenizer errors from unterminated literals both
-escaped v1's parse layer. But see §9: a swallowed exception must also be
+escaped v1's parse layer. But see §12: a swallowed exception must also be
 *counted*, or a systematically broken `check()` presents as an arm that refuses
 everything and passes every quotability gate.
 
@@ -339,9 +344,11 @@ Three structural requirements:
   entry *was* the object graded delivery read. In v2 they are two types and the
   conversion runs one way only:
 
-  - `graded_delivery_eligible` (`govern/check.py:335-344`) takes a **`CheckVerdict`**
-    and reads `verdict["failed_layer"]`. A `CheckVerdict` is only ever produced by
-    `check()` (`govern/layers.py:50-63`).
+  - `graded_delivery_eligible` (`govern/check.py::graded_delivery_eligible`) takes a
+    **`CheckVerdict`** and reads `verdict["failed_layer"]`. Every `CheckVerdict` in the
+    tree is built by `govern/layers.py`'s `refuse` / `allow` / `internal_error`, and
+    every call to those three is inside `govern/check.py` — so `check()` is the only
+    producer.
   - The cap row is an **`AttemptRecord`** with a different field, `verdict_layer`, a
     layer *name* rather than a `Layer` (`govern/ledger.py::AttemptRecord`). `attempt_record()`
     projects a verdict into a row (`govern/ledger.py::attempt_record`); nothing projects a row
@@ -352,8 +359,10 @@ Three structural requirements:
   So **the graded-delivery path cannot see a cap row**, structurally, and B3's chain
   is cut in three independent places rather than one. First, the predicate is
   positive — `return verdict["failed_layer"] is Layer.COST` — so `None` is ineligible
-  by construction, which is G3 (`govern/__init__.py:7`, *"`failed_layer=None` never
-  means safe"*) and is what `tests/govern/test_graded_delivery.py:68` pins. Second,
+  by construction, which is G3 (`govern/__init__.py`'s module docstring, *"`failed_layer=None`
+  never means safe"*) and is what
+  `tests/govern/test_graded_delivery.py::test_graded_delivery_forgives_the_cost_layer_and_nothing_else`
+  pins. Second,
   the type gap above means a cap row is not a candidate input in the first place.
   Third, the cap now jumps the loop to `end`, so there is no post-cap turn left for
   anything to re-execute in.
@@ -486,10 +495,13 @@ remembered to, which the Postgres one did not — and `serve/fetch.sample_rows`
 runs it through `prepare()` and ledgers the verdict as `path="sample"`.
 `sample_values` is gone from the port and from both adapters.
 
-The profiler runs at seed time, on the same connector base class, with the same
-session settings as §8 — including `synchronize_seqscans = off`, which 0005 §1.7
-requires for reproducibility and which is therefore a property of the connector,
-not of one code path.
+The profiler was to run at seed time on the same connector, with the same session
+settings as §10 — including `synchronize_seqscans = off`, which 0005 §1.7 requires for
+reproducibility. **The setting shipped and the profiler did not.** `PostgresConnector`
+applies `synchronize_seqscans = off` on open, so it is a property of the connector rather
+than of one code path — but nothing profiles: `corpus/introspect.py::Introspection`
+carries names and types only, `corpus/seed.py::seed` authors no `sample_values`, and the
+`profile` row of the table above is the vocabulary reserved for the writer that would.
 
 ### 8. Tool bounds and the licensed set
 
@@ -572,15 +584,26 @@ SQLite   :  PRAGMA query_only = ON
 read-only database role** — an application bug should never be the last line,
 and §2 exists precisely because read-only does not stop read-side exfiltration.
 
-**The forced row limit lives in the connector base class**, not per connector —
-v1 documented a gateway-wide cap and SQLite was the one path without it.
+**The forced row limit is on every connector**, because v1 documented a gateway-wide cap
+and SQLite was the one path without it. It was decided as a base class and shipped as a
+protocol clause instead: `ports.Connector` states *"There is no shared base class: each
+adapter applies its own `max_rows` by fetching `max_rows + 1`"*, and both
+`PostgresConnector` and `SqliteConnector` take `max_rows` in `__init__` and apply it in
+`execute`. The property holds on both adapters; the mechanism that would make a third
+adapter inherit it does not exist, so a new adapter has to be told.
 
 **Connectors are context-managed.** v1 left 131 unclosed SQLite handles across
 the suite.
 
 **`identity` is provenance, not enforcement**, named as such at the seam. v1
-asserted RLS-as-user on four surfaces and had none. A toggle claiming to enable
-it **raises at construction**.
+asserted RLS-as-user on four surfaces and had none, so nothing here may claim to enable
+it. What ships is [ADR 0012](0012-access-seam-principal-and-authorization.md)'s
+`ports.RowPredicate`: a declared row restriction whose default `PredicateEnforcement.refuse`
+makes the TABLES layer refuse any statement binding the table (`r_row_predicate_unenforced`),
+and whose only other member, `database_role`, records that the *operator* asserts the
+database enforces it. Neither injects a predicate. The rule this section wanted — no
+switch that turns on an enforcement this engine does not perform — holds by the
+vocabulary having no such member, not by a constructor raising.
 
 **`thread_id` alone is not a capability** (B9). A clarification resume is bound
 to `identity` and rejects a mismatch.
@@ -610,8 +633,14 @@ to `identity` and rejects a mismatch.
 >
 > If redaction is wanted, it needs a threat model first, and the threat model
 > decides the vocabulary rather than the other way round. `statement_sha256` and
-> `structural_fingerprint` survive in `govern/ledger.py`: they have real callers
-> and are true facts about a statement, just not a retention policy.
+> `structural_fingerprint` survive in `govern/ledger.py` because they are true facts
+> about a statement, not because they are a retention policy. Only the first has a
+> production caller — `serve/tools.py` stamps `sql_sha256` onto the attempt event.
+> `structural_fingerprint` is reached by one test
+> (`tests/govern/test_guard_pipeline_ledger.py::test_the_structural_fingerprint_still_elides_literals`)
+> and by nothing in `src/`, which is the same "green tests against dead code" shape this
+> note deleted `ledger_entry()` for. It is kept, not wired, and this sentence is the
+> record of that.
 >
 > **Still in force from this section:** every executor writes an entry stamped with
 > its `path` (G2), and the verdict's `detail` is not carried into the row — it is
@@ -698,6 +727,12 @@ to prevent.
 | `g_length_max_chars` | **8,000** — measured, see below |
 | `cost_budget` | **unset**; ships disabled rather than guessed |
 
+A tenth joined the nine above on 2026-08-12: `access_grant`, the digest of the `Grant` this run's
+`AccessPolicy` returned ([ADR 0012](0012-access-seam-principal-and-authorization.md) §7). It
+is here for this section's own reason — authorization is security configuration, and two runs
+under different grants must not hash identically. Harmless while the only shipped grant is
+open, which is why it defaults to `None` in `register/knobs.py` rather than to a digest.
+
 **`run_query_attempt_cap` now has an enforcer, and until 2026-08-07 it did not.** This table
 gave a number and §5's second structural requirement gave the semantics — *"the cap terminates
 the turn, it does not decline a call"* — and between them nothing named the mechanism, so the
@@ -728,12 +763,19 @@ knob:
   checkpointed state, where `attempts_by_call` already lives, so the two reset together. Here
   "thread" means the turn.
 - **Native counting, local ending.** Constructed `exit_behavior="continue"` and the subclass
-  jumps, rather than constructed `"end"`: native's `"end"` raises `NotImplementedError` when
-  the same AI message also calls a different tool (`tool_call_limit.py:344`), which the node
-  would record as `path_kind="crashed"`, and a model that pairs `run_query` with
+  jumps, rather than constructed `"end"`. At the time of the decision native's `"end"` raised
+  `NotImplementedError` when the same AI message also called a different tool — which the node
+  would have recorded as `path_kind="crashed"`, and a model that pairs `run_query` with
   `inspect_schema` reaches that branch routinely. Ending anyway requires answering the stranded
   sibling calls with an error `ToolMessage`, since a tool call with no `ToolMessage` is a
   history most providers reject on the *next* turn.
+
+  **That hole is closed upstream now, and the subclass is still what runs.** On the pinned
+  langchain (1.3.15) `ToolCallLimitMiddleware.after_model` no longer raises: its `"end"` branch
+  emits a `ToolMessage` for each blocked call *and* for every pending sibling before jumping.
+  So the argument above no longer forbids native `"end"` — what still does is the last bullet:
+  native `"end"` writes no cap ledger row, and `_CapEndsTheTurn` does. Adopting native `"end"`
+  is a live option and a measurable one, not a blocked one.
 - **It writes the cap ledger row itself.** Blocking happens a node earlier than the tool, so
   `AttemptBook` never sees the refused call and `execution_from_attempts` would report
   `answered` for a turn the cap ended. `serve/tools.py::build_tools`'s `run_query` keeps the book's own cap branch
@@ -801,8 +843,17 @@ above the statement — 0005 owns retrieval and the graph.
 
 ## Open questions
 
-1. **What is the false-refusal rate of `PERMITTED_FUNCTIONS` on BIRD gold?**
-   Free, no model. Run before enabling.
+1. ~~**What is the false-refusal rate of `PERMITTED_FUNCTIONS` on BIRD gold?**~~
+   **Answered, and it is a standing CI gate rather than a one-off number.**
+   `tests/govern/gold_functions.json` is the committed inventory over 6,743 gold statements
+   (`sql_base`, `BIRD-Data-Obfuscation`, read 2026-08-03, sqlglot 30.12.0): 0 unparsed, 32
+   distinct canonical function names. `tests/govern/test_function_allowlist.py` asserts every
+   one of the 32 is permitted or carries a written reason in
+   `govern.functions.INTENTIONALLY_ABSENT`, and drives the real `check()` over a covering
+   sample to assert no statement is refused at or below `FUNCTIONS` for an unrecorded reason.
+   The rate is therefore not a figure that can drift — it is 0-by-assertion, with the chosen
+   refusals enumerated. The inventory is committed rather than read at test time because the
+   corpus is a sibling repository and a gate that skips when a checkout is absent is not a gate.
 2. **Does `COST` earn its place?** v1's cost layer has no recorded instance of
    blocking something the other layers would have missed. A layer that never
    fires is indistinguishable from a layer that is not wired up. If it goes,
@@ -853,3 +904,22 @@ measuring what it argues about) or with an unguarded agent against Postgres.
 demonstrating the v1 chain and its refusal. That suite is 0005's step-11 gate,
 and it is the same list — the first draft had the two ADRs citing different
 sets.
+
+**Where the order stands (2026-08-12).** Steps 1–6 have landed: `govern/layers.py`,
+`govern/check.py`, `govern/functions.py`, `govern/binding.py`, `govern/pipeline.py`,
+`govern/identifiers.py`, `govern/bounds.py`, `datasource/postgres.py` and
+`datasource/sqlite.py`. Three have not, and each for a different reason.
+
+- **Step 7 is half done.** The five deterministic rules are `govern/guard.py::GUARD_RULES`
+  and the sixth is `serve/nodes/guard.py::_bi_scope`, but the red-team corpus does not
+  exist, so `guard_rules_enabled` is `UNSET` and the served app enables `g_bi_scope` only.
+  OQ3 is the blocker, and it is a corpus, not code.
+- **Step 8 is declared and unwired.** `graded_delivery_eligible` has no caller in `src/`,
+  and neither `terminal="graded"` nor `path="graded"` is ever written (§5, §7).
+- **Step 9's redactor is withdrawn, not pending** — §11's superseding note.
+
+The acceptance suite exists and covers all ten: B1, B2, B4, B5, B6 and B8 in
+`tests/govern/test_bypass_contract.py`; B3 in the same file as the "`failed_layer=None`
+must mean passed" pair; B7 and B9 in `tests/govern/test_guard_pipeline_ledger.py`; B10 in
+`tests/govern/test_check_internals.py`. `govern/adversarial.toml` carries the
+statement-shaped half as data and records which bypasses have no SQL surface.

@@ -38,8 +38,9 @@ browse routes stop serving them — with no code change. Write your own adapter 
 is not where your grants live.
 
 **The sentence to hold us to:** a grant withholds an asset from everything this repository shows a
-caller — the model's prompt, all four of its tools, and every HTTP route that projects a corpus
-asset — and it withholds nothing from a database, from a row, from an answer's prose, or from the
+caller — the model's prompt, all four of the tools that name an asset (`ask_user`, the fifth
+`build_tools` binds, names none), and every HTTP route that projects a corpus asset — and it
+withholds nothing from a database, from a row, from an answer's prose, or from the
 curation problems `/audit/corpus` reports. What you still owe in either case is everything in the
 right-hand column above, and step 4: **this engine does not apply a row-level predicate.**
 
@@ -72,18 +73,27 @@ class DirectoryAccessPolicy:                       # your adapter
 What the engine guarantees, so you do not have to:
 
 - **Keys fold.** Write `Sales.Orders` or `sales.orders`; both match the corpus's declared spelling.
-  Tables are `schema.table`, columns are `schema.table.column`. A key with the wrong number of
-  parts raises at the point you build the grant, not on the query that touches it.
+  Tables are `schema.table`, columns are `schema.table.column`.
+- **A key with the wrong number of parts raises — but know *when*.** The reference adapter refuses
+  it at **file load**, in `_require_keys`, so a typo in a policy file never reaches a query. A
+  `Grant` your own adapter builds is not checked then: `Grant.__post_init__` rejects a blank key
+  and the `every_table`-with-a-table-list contradiction, and nothing else. The part count is
+  checked when `govern/access.py::resolve_grant` folds the grant, which is per statement inside
+  `check()`. So validate keys where you build them if you want the failure at wiring time rather
+  than on the first turn that touches one.
 - **`Grant()` authorizes nothing.** If your adapter returns before deciding, the turn refuses. There
   is no return value meaning "no opinion".
 - **`Reach.every_table` is the only way to say "everything".** There is no `None`-means-open.
-- **It is called once per turn.** Cache accordingly; a policy that changes mid-turn is a policy the
-  ledger cannot describe.
+- **The port says "once per turn"; this tree asks once per process.**
+  `api/graph_app.py::session_from_environment` builds one `Session` and caches it in `_SESSION`, so
+  `resolve_access_grant` calls your adapter at startup and the whole process serves that grant.
+  Cache accordingly — and if your grants have to change while the server runs, or differ per
+  caller, the thing you are changing is the composition root, not your adapter.
 - **Raising is a wiring failure, not a refusal.** If your directory is down, let the exception
   propagate. The engine will not turn it into "this query was unsafe".
 
 The two shipped adapters are in `src/governed_bi/govern/access.py`. Start by reading
-`StaticRoleAccessPolicy` — it is about a hundred lines and it is the shape of the problem.
+`StaticRoleAccessPolicy` — it is about eighty lines and it is the shape of the problem.
 
 ### 2. Decide what a `Principal` is in your system
 
@@ -205,9 +215,10 @@ were, because they are what a fork would otherwise rediscover:
 
 Four things the narrowing does not do, stated so you do not discover them:
 
-- **A few-shot's `sql` is not parsed**, so an example query over a denied table still ships. Same
-  non-fatal reference `session._visible` declines to prune for `governance.excluded`. A metric's
-  `expression` is the same case; what is matched is its `base_table`.
+- **A few-shot's `sql` is not parsed**, so an example query over a denied table still ships — it is
+  the same non-fatal reference that `serve/session.py::_visible` declines to prune for
+  `governance.excluded`, declined here for the same reason. A metric's `expression` is the same
+  case; what is matched is its `base_table`.
 - **`run_query`'s refusal names the denied table back to the model.** The verdict `detail` is
   returned to the agent, so it learns the table exists and is denied. ADR 0012 open question 4.
   If that matters to you, return `OUT_OF_SCOPE_MESSAGE` to the model and keep the true rule in
@@ -237,9 +248,10 @@ without echoing values.
 
 ## What you get for free once it is wired
 
-**Three reason codes that mean three different things.** The whole point of
-[ADR 0012 §3](adr/0012-access-seam-principal-and-authorization.md) is that these are no longer one
-bucket:
+**Three new reason codes, and the three neighbours they must not be collapsed into.**
+`r_table_not_authorized`, `r_row_predicate_unenforced` and `r_column_not_authorized` are what
+[ADR 0012 §3 and §4](adr/0012-access-seam-principal-and-authorization.md) added; the other three
+predate it, and the whole point is that they are no longer one bucket:
 
 | reason code | means | who fixes it |
 |---|---|---|
@@ -270,8 +282,17 @@ uv run --frozen python tools/govern_bench.py     # the adversarial governance su
 uv run --frozen python tools/mutate.py           # does the suite notice when a layer is deleted?
 ```
 
+`tools/mutate.py` **rewrites source files in place and restores them from HEAD**, so commit first
+and run it with nothing else editing the tree. It is nightly here, not per-push.
+
 `tools/govern_bench.py` prints a bypass rate, a misattribution rate and a false-refusal rate, each
-with its denominator. Add cases for **your** policy to `src/governed_bi/govern/adversarial.toml` —
+with its denominator — and, since 2026-08-12, a **disclosure rate and an over-withheld rate** over
+the `[[probe]]` half of the same file. That half is the one a PII fork should read first: a
+`[[case]]` asks whether a statement was refused, a `[[probe]]` asks what the principal was *shown*
+across the rendered block, `inspect_schema`, `read_body` and the `may_sample` bound. Every one of
+the three step-5 disclosure defects above was found by review and none of them is SQL-shaped, so
+the cases alone could not have caught any of them. Add cases and probes for **your** policy to
+`src/governed_bi/govern/adversarial.toml` —
 the world there declares `authorized`, `denied_columns` and row predicates, the loader refuses a
 world that authorizes everything it licenses, and every case has to say why it exists. A benign case
 is a declaration that a statement must pass; the false-refusal rate is the other side of the trade

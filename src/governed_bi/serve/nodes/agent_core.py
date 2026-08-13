@@ -457,11 +457,13 @@ class _CapEndsTheTurn(ToolCallLimitMiddleware):
     ``execution_from_attempts`` would report ``answered`` for a turn the cap ended. The row
     shares :data:`CAP_LEDGER_KEY` with the book's, so both enforcers firing still leaves one.
 
-    **Constructed ``"continue"`` and ended here, not constructed ``"end"``.** Native's ``"end"``
-    raises ``NotImplementedError`` when the AI message also calls a different tool, which
-    ``_run`` records as ``crashed``; falling back to ``"continue"`` there restores the original
-    defect. Ending anyway needs the stranded sibling calls answered, since a tool call with no
-    ``ToolMessage`` is a history most providers reject on the *next* turn.
+    **Constructed ``"continue"`` and ended here, not constructed ``"end"``.** When this was
+    decided, native's ``"end"`` raised ``NotImplementedError`` if the AI message also called a
+    different tool — ``_run`` records that as ``crashed``, and falling back to ``"continue"``
+    restores the original defect. On the pinned langchain (1.3.15) that is no longer true: the
+    ``"end"`` branch now answers every stranded sibling with a ``ToolMessage`` before jumping,
+    which is the concern that made ending unsafe. What still keeps the subclass is the ledger
+    row above — native ``"end"`` writes none, so a capped turn would read as ``answered``.
     """
 
     def __init__(self, cap: int) -> None:

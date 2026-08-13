@@ -47,10 +47,12 @@ class Channel(str, Enum):
 
 #: The members that actually score documents, so ``extraction`` cannot be fused.
 #:
-#: ``fuse`` renormalises over the channels a caller says were consulted, and the nearest
-#: source of that is the ``ran`` set — to which ``_rewritten_query`` also adds
-#: ``extraction``. ``FUSE_WEIGHTS`` has no weight for it, so the ``KeyError`` surfaces as
-#: a facet that retrieved nothing. Named here rather than filtered at three call sites.
+#: ``retrieve.fuse.fuse`` renormalises over the channels a caller says were consulted, and
+#: the nearest source of that is the ``ran`` set — to which ``_rewritten_query`` also adds
+#: ``extraction``. The weight mapping it is handed comes from
+#: ``serve/runtime.py::channel_scale`` and carries only the two scoring channels, so passing
+#: ``extraction`` through as consulted surfaces as a facet that retrieved nothing. Named here
+#: rather than filtered at three call sites.
 SCORING_CHANNELS: frozenset[Channel] = frozenset({Channel.lexical, Channel.semantic})
 
 

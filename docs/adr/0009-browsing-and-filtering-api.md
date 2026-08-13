@@ -16,8 +16,9 @@
 
 ## Context
 
-The UI browses 13 981 assets over 57 schemas, and the read surface it had was three flat
-dumps. Measured against the live engine on 2026-08-04:
+On 2026-08-04 the UI browsed 13 981 assets over 57 schemas, and the read surface it had was
+three flat dumps. Measured against the live engine that day (the asset count is a property of
+the corpus, and the corpus has been rebuilt since):
 
 | route | bytes | note |
 | --- | --- | --- |
@@ -133,7 +134,7 @@ flipped by building the thing, never to unlock a UI path.
 ### D5 — Filtering runs server-side over the loaded corpus, not in the database
 
 The corpus is already in memory in the session — it is what retrieval runs on. Filtering it
-is a scan over at most 13 981 objects, which is microseconds, and it means the browse surface
+is one pass over the loaded assets — order 10⁴ objects, microseconds — and it means the browse surface
 and the retrieval surface are looking at **the same assets**. Pushing these filters into SQL
 would make the corpus browser query the *lake* rather than the semantic layer, so an asset
 that failed to load would still appear in the browser — the corpus would look complete

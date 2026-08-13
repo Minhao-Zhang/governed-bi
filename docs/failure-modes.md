@@ -246,15 +246,16 @@ tables-were-there-and-it-needed-a-join cell.
 The join-assembly analysis below still holds for those 10, but it is no longer what explains the
 bucket.
 
-**It is not timeouts.** `authors` has 18 capped turns out of 21, and their final statements all run
-in seconds:
+**It is not timeouts.** The rest of this section is measured on **run1**, where the bucket was
+large enough to characterise: `authors` has 18 capped turns out of 21 there, and their final
+statements all run in seconds:
 
 ```
 train_3518: 1.0s  rows=5      train_3515: 0.2s  rows=1      train_3510: 0.0s  rows=3
 ```
 
 train_3518's final statement is semantically equivalent to gold. Re-executing the final statement
-of all 133 capped turns:
+of all 133 of run1's capped turns:
 
 ```
 ALREADY_CORRECT   23
@@ -273,8 +274,10 @@ cost, and that cost used to be invisible. `computed_correct` records it now and 
 it. The scoring rule is unchanged.
 
 The mechanism that produces it is in `serve/tools.py`: every `run_query` spends one attempt,
-**including one the governance layers refuse**, and only an infrastructure exception refunds. The
-agent is never told how many attempts remain, so it budgets blind:
+**including one the governance layers refuse**, and only an infrastructure exception refunds
+(`AttemptBook.refund`, on the generic `except` — a `GovernanceUsageError` re-raises and a refusal
+is charged). The agent is never told how many attempts remain, so it budgets blind. Both examples
+are run1 turns; v3-fold and v4 answer all four of the questions named in this section correctly:
 
 ```
 train_5116 (address)  gold needs congress ⋈ zip_congress
@@ -335,7 +338,8 @@ on BIRD.
 
 ## 7. Frozen-literal golds (127)
 
-*(A dataset property. Identical across arms.)*
+*(The 127 is a dataset property and is identical across arms. How many the engine happens to
+match is not: 42 on v4, 39 on v5.)*
 
 For 127 questions the gold is not a query. It is a hard-coded answer literal:
 
@@ -343,8 +347,9 @@ For 127 questions the gold is not a query. It is a hard-coded answer literal:
 SELECT "v"."c0" FROM (VALUES ('captain eli''s')) AS "v"("c0")
 ```
 
-The engine writes a real query, so it can only match by reproducing the frozen shape. It matches 42
-of them, essentially by luck. This is a property of the dataset, not of the engine.
+The engine writes a real query, so it can only match by reproducing the frozen shape. On v4 it
+matches 42 of them, essentially by luck. That the questions are unwinnable by design is a property
+of the dataset, not of the engine.
 
 `attach_quality_flags` now tags these automatically with its fourth flag, `degenerate`. The test is
 the same rule `table_coverage` uses for `gold_reads_no_table` — `gold_tables()` returns an empty
@@ -431,8 +436,8 @@ showed up immediately:
 
 ```
 v3-pinned:  PARSE/r_ambiguous_fold   568 attempts / 119 turns (8.8%)
-              112 of those turns ended capped, and that group scored EX 0.025
-              (the unaffected turns scored 0.668)
+              112 of those 119 turns ended capped; the 119 scored EX 0.025
+              (the unaffected 1,232 scored 0.668)
               they consumed 24% of all input tokens
 ```
 
@@ -529,9 +534,12 @@ that aims at exactly one dimension of the comparator and affects nothing else is
 comparator.
 
 **Method.** v5 is v4 byte-for-byte with **only that paragraph deleted**. Same engine, same corpus
-`30872d3`, same `--replay-routing` pin on `proxy_v3_fold_opus_high_corpus30872d3.jsonl` (1,345 of
-1,351 pinned, residual Jaccard 0.702 against 0.70). It is the cleanest pair in the set: one
-variable. Paired McNemar, not two EX numbers subtracted.
+`30872d3`, same `--replay-routing` pin on `proxy_v3_fold_opus_high_corpus30872d3.jsonl`. Both arms
+flag 1,345 of 1,351 rows `routing_pinned`, but that field recorded the driver's *intent* when
+these rows were written; `replay.pin_realised` is the producer that reads what the turn actually
+ran on, and it counts **1,342 of 1,351 realised on v4 and 1,340 on v5**. Residual mean Jaccard
+over the shortlists that moved is 0.7049 on v4 and 0.7029 on v5. It is the cleanest pair in the
+set: one variable. Paired McNemar, not two EX numbers subtracted.
 
 **Result**:
 

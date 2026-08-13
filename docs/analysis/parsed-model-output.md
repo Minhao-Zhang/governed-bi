@@ -6,7 +6,10 @@ which includes the gate's own instruction sentence — and that class cleared th
 trace. The reflector accepted a verbatim echo of its answer template as a fully-formed `answered`
 verdict with a fabricated reason. Everything else checked is fine and is said so plainly below.
 
-Audited at engine `a5727b0`. This is a code audit; no figure here is measured on a run. The
+Audited at engine `a5727b0`. **Line numbers are anchored to that commit and will drift** — the
+identifiers quoted beside them are the durable part. This is a code audit: every figure in it
+comes from probing a parser in isolation, with the single exception noted in §1.2, which was added
+afterwards and reads one artifact (`runs/eval/proxy_v4_reflect_corpus30872d3.jsonl`). The
 sections below keep the evidence, because each fix is shaped by what the probe found and a fix
 without its evidence is a change nobody can review later.
 
@@ -313,7 +316,10 @@ Worth knowing that the recovery is one join away rather than on the row.
   produce faithful sentences. Only the reply-handling code.
 - Anything outside `src/governed_bi/`, except `tools/score_reflector.py`, which is named only
   because it re-declares a vocabulary `src/` already owns.
-- Whether any of the failure modes above has ever occurred on a real run. No run artifact was
-  read; the two defects are demonstrated against the parsers in isolation.
+- Whether the §1.1 scope-gate failure has ever occurred on a real run. No artifact carries the
+  evidence: the permissive branch records nothing (§1.1), and the rule is off in every eval arm.
+  Both defects are demonstrated against the parsers in isolation. §1.2 is the one place an
+  artifact was read, and only to answer the narrower question of whether the echo ever fired on
+  the single reflected arm.
 - `RetryPolicy` is deliberately not discussed. Re-running a node after it failed resamples a draw
   after seeing it, and none of the fixes above wants one: each is a one-shot parse correction.

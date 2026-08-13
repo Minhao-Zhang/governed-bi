@@ -15,7 +15,7 @@ The 2026-08-10 implementation audit is a separate page, because it is a one-time
 with its own phased remediation order rather than an accumulating list:
 [audit-2026-08-10](analysis/audit-2026-08-10.md). Items migrate from there to here as phases close.
 
-Its **calls** are separate again, in [decisions-2026-08-10](analysis/decisions-2026-08-10.md) — 23
+Its **calls** are separate again, in [decisions-2026-08-10](analysis/decisions-2026-08-10.md) — 30
 choices taken while working it, each with the alternative that was rejected and what would reverse it.
 Read it before re-opening any of them: four entries retract their own earlier reasoning in place, so
 the argument you are about to make may already be there with the measurement that killed it.
@@ -322,20 +322,23 @@ now knows the shape — the resume guard counts them instead of warning, and `re
 `None` as silence rather than as contradiction — but the underlying hole is in `serve/`, not in
 the instrument, and closing it there would make those rows provable rather than merely excused.
 
-### 3.7 What the refusal histogram still does not say
+### 3.7 What the refusal counts still cannot separate
 
 The two fields that reported intent rather than outcome are fixed and the corrections are
-quantified in §3.1 and in `eval/replay.py::licensed_baseline`. What remains is the histogram's
-own shape:
+quantified in §3.1 and in `eval/replay.py::licensed_baseline`. The histogram's own shape is fixed
+too: `eval/report.py::refusal_histogram` now returns `n_refused` out of `n_rows`, a `by_stage`
+split, an `unattributed` bucket for a `refused_by` string in no register, and a `no_reason`
+count — and `refusal_report_lines` prints the total in its header, so a histogram that does not
+add up says so. What remains is upstream of it:
 
-`attempts: []` conflates three distinct facts — a retrieval decline with an empty ledger, an
-absent `execution` record, and a concurrency crash row — and the histogram prints with no total
-and no unattributed bucket, so a run whose refusals are mostly declines reads as "governance
-rarely refused".
+`attempts: []` on the row conflates three distinct facts — a retrieval decline with an empty
+ledger, an absent `execution` record, and a concurrency crash row. `harness._attempt_trace`
+returns the same empty list for all three, so the ledger cannot say which happened and no
+downstream count can either.
 
 For the record, since the `sample_rows` correction was itself reported with a partial number.
 Filtering the ledger through `answering_attempts` moves the printed histogram by, on every
-artifact in `runs/eval/`: **25 attempts on v3-pinned**, 3 on v3-fold, 1 on v4, 1 on v5, 3 on
+proxy arm in `runs/eval/`: **25 attempts on v3-pinned**, 3 on v3-fold, 1 on v4, 1 on v5, 3 on
 v4-reflect — all `PARSE/r_ambiguous_fold`. run1 and run2 record no ledger at all. The earlier note
 gave only three of the five arms and omitted the largest, which is eight times the biggest figure
 it did quote. Failed-attempt totals move 929→904, 370→367, 295→294, 286→285 and 310→307
@@ -346,28 +349,41 @@ v3-fold's **capped** turns hold 24 `sample`-path attempts, 21 passing and the sa
 the whole arm it is 132 attempts, 129 passing. A histogram of *failed* attempts never counted the
 passing ones on either slice.
 
-### 3.8 Two comparability knobs cannot reach the run they name
+### 3.8 The knobs that could not reach the run they name — closed
 
-`w_lexical` and `w_semantic` are `Role.comparability`, enter `config_hash_keys()`, and are bound
-into `FUSE_WEIGHTS` at import. `combine_channels` takes no state and all three readers go through
-it. An arm can declare `w_lexical: 0.9`, move its config hash, and behave identically.
+**Both halves are fixed; the entry stays because the shape recurs and the artifacts still
+predate it.**
+
+`w_lexical`, `w_semantic` and `semantic_scale_ceiling` were module constants built from
+`knob_default` at import, so no request could move them: an arm could declare `w_lexical: 0.9`,
+move its config hash, and behave identically. They now travel as one frozen
+`serve/runtime.py::ChannelScale`, resolved per turn by `channel_scale` through `float_knob` — the
+same state → `knobs_resolved` → register precedence every other knob uses — and passed into
+`combine_channels`, which has no default for it. There is no `FUSE_WEIGHTS` constant left.
+Decision and alternatives: [decisions-2026-08-10](analysis/decisions-2026-08-10.md) D-22.
 
 `GOVERNED_BI_RAIL_NODE_TIMEOUT_S`, `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` and
-`GOVERNED_BI_AGENT_RECURSION_LIMIT` outrank `knobs_resolved`, which is filled from
-`knob_defaults()` alone. Setting one changes behaviour while the record publishes the register
-default and the config hash does not move.
+`GOVERNED_BI_AGENT_RECURSION_LIMIT` still outrank the register at their readers — that is the
+intended precedence — but the record no longer publishes the default underneath them.
+`register/knobs.py::env_override` is the recording half, applied last in
+`session._resolved_knobs`, and it copies the readers' two parsing rules (blank is unset; the
+declared default decides the cast) so the record cannot disagree with the reader.
+`tests/serve/test_the_record_follows_the_knob.py` asserts each **on its value**.
 
-Neither has been exercised: every run record carries the default weights, and none of the three
-environment variables is set anywhere in the repository.
+What is not claimed is that either has been exercised in anger: no arm on disk carries anything
+but the default weights, and no run configuration in this repository exports the three
+variables. Several tests under `tests/serve/` do, which is the point — they are what keeps the
+wire alive.
 
 ### 3.9 The eight tests that could not fail are pinned rather than repaired-and-forgotten
 
-All eight are now declared mutations under the `s39-` prefix in `tools/mutate.py`, verified
-caught on 2026-08-11: `routing_pinned` pinned to either constant, `corpus_content_hash` and
-`prompt_set_hash` set to `None`, `_attempt_trace` returning empty, `computed_correct` always
-`None`, and both ends of the eviction chain. The repairs themselves landed earlier; what was
-missing was the mechanism that re-checks them, which is the whole argument of `mutate.py`'s own
-docstring — a habit does not survive the person who has it.
+All eight are covered by the nine declared mutations under the `s39-` prefix in
+`tools/mutation_catalogue.py`, verified caught on 2026-08-11: `routing_pinned` pinned to either
+constant, `corpus_content_hash` and `prompt_set_hash` set to `None`, `_attempt_trace` returning
+empty, `computed_correct` always `None`, and three anchors along the eviction chain — the
+producer in `assemble`, `stamp`'s key set, and the consumer in the eval row. The repairs
+themselves landed earlier; what was missing was the mechanism that re-checks them, which is the
+whole argument of `mutate.py`'s own docstring — a habit does not survive the person who has it.
 
 What is **not** claimed: that the suite is otherwise good. A mutation nobody declared says
 nothing, and the pattern these eight shared — asserting that a constant equals itself — is
@@ -388,7 +404,8 @@ declaration: it is easy to move and nothing in CI moves it for you.
 Fourteen were fixed in the sweep itself; the
 eight closed on 2026-08-11 are the driver-side identity — `git_sha`, `git_main_sha`,
 `working_tree_dirty`, `diff_sha256`, `serve_workers`, `schemas_under_test`, `split` and
-`question_subset`, all resolved in `eval/provenance.py` and stamped onto every row. Evidence and
+`question_subset`, all resolved in `eval/provenance.py` and stamped onto every row the driver
+writes from now on — which is not the same as every row on disk; see below. Evidence and
 the per-field decisions are in [declared-not-consumed](analysis/declared-not-consumed.md).
 
 Six remain, and none of them currently corrupts a number:
@@ -417,20 +434,24 @@ environment variables outranking `knobs_resolved`, and `sqlglot_version` absent 
 now have writers that fire, each asserted **on its value** in
 `tests/serve/test_the_record_follows_the_knob.py`.
 
-**Which artifacts gain, precisely.** The **six proxy arms** predate the wires and gain nothing, so
-[declared-not-consumed](analysis/declared-not-consumed.md) §1–§5 remain the correct description of
-every number quoted from them — which is every number in this document.
-`runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl` is the exception and is not one
-of the six: it is a two-row smoke artifact written after the wires, and it carries the fixed values
+**Which artifacts gain, precisely.** All **seven proxy arms** in `runs/eval/` predate the wires and
+gain nothing, so [declared-not-consumed](analysis/declared-not-consumed.md) §1–§5 remain the correct
+description of every number quoted from them — which is every number in this document. Its own
+sweep instrument was six of those seven (8 106 rows); `proxy_v4_reflect_corpus30872d3.jsonl` came
+later and is in the same state, so "all six arms" is the scope of the *sweep*, not of the defect.
+`runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl` is the one artifact that is not a
+proxy arm: a two-row smoke written after the wires, carrying the fixed values
 (`llm_reasoning_effort: "xhigh"`, `llm_utility_provider`, `embedding_provider`,
-`chat_model: "gpt-5.6-luna"`, `sqlglot_version: "30.16.0"`) where the six carry `None` or nothing at
-all. Two rows is not a measurement, and nothing here is quoted from it — but "every one predates the
-wires" was false as written, and declared-not-consumed.md's "all six arms" was the correct scope all
-along. No artifact on disk carries `git_sha`; there is no `runs/index.jsonl` on this tree.
+`chat_model: "gpt-5.6-luna"`, `sqlglot_version: "30.16.0"`) where the seven carry `None` or nothing
+at all. It also carries `git_sha`, `git_main_sha`, `working_tree_dirty`, `diff_sha256`,
+`serve_workers`, `schemas_under_test`, `split`, `question_subset` and a resolved `prompt_set` — it
+is the only evidence on disk that the eight closed above actually reach a row. Two rows is not a
+measurement and nothing here is quoted from it. There is no `runs/index.jsonl` on this tree.
 
 **The gate is still not a CI step**, and the reason has changed. It exits 1 on the six findings
-below, so a step would fail every commit, and waiving six genuine findings to go green is the lie
-it was written to catch. Three of the six need a *decision* rather than a wire: `expand_hops` and
+in the table above, so a step would fail every commit, and waiving six genuine findings to go
+green is the lie it was written to catch. Three of the six need a *decision* rather than a wire:
+`expand_hops` and
 `negative_tau` are comparability knobs whose readers would live in `retrieve/`, and
 `clarifications` is a question about the clarification protocol.
 
@@ -688,18 +709,21 @@ report agreement. The wire itself was untested and now is: `arm_startup_refusal`
 `tests/eval/test_the_arm_profile_wire_is_exercised.py`.
 
 **The controls have now been run against the real null pair**, on a machine that has `runs/`. All
-six pass. What that establishes is narrower than it looks and is the reason the four
-artifact-backed ones were downgraded in the first place: every one of the seven artifacts in
-`runs/eval/` is missing the same four comparability knobs — `cost_budget`, `negative_tau`,
-`semantic_scale_ceiling`, `sqlglot_version` — so `knobs_comparable` returns `cannot_evaluate` at
-the absence branch and never reaches the judgement. Re-measured 2026-08-11: still exactly those
-four, on all seven. **No pair on disk can reach this gate**, which is what the two synthetic
-controls exist for.
+six pass (`tests/eval/test_the_delivery_gate_can_fail.py`). What that establishes is narrower than
+it looks and is the reason the four artifact-backed ones were downgraded in the first place: every
+one of the **seven proxy arms** in `runs/eval/` is missing the same four comparability knobs —
+`cost_budget`, `negative_tau`, `semantic_scale_ceiling`, `sqlglot_version` — so `knobs_comparable`
+returns `cannot_evaluate` at the absence branch and never reaches the judgement. Re-measured
+2026-08-12: still exactly those four, on all seven. The eighth artifact carries all four and is the
+two-row smoke of §3.10, so it is not a pair either. **No pair on disk can reach this gate**, which
+is what the two synthetic controls exist for.
 
 What is still owed:
 
-* **No real pair is comparable** until an arm records those four knobs. The absence is
-  `session._resolved_knobs` dropping every `UNSET` knob, which is `serve/`'s to fix.
+* **No real pair is comparable** until an arm records those four knobs. The producing defect is
+  closed — `session._resolved_knobs` writes `None` for an `UNSET` knob instead of omitting the
+  key, and resolves `sqlglot_version` — but every arm on disk was measured before that, so this
+  needs a run, not a fix.
 * **`prompt_set` is `null` on every row of v4 and v5**, and it is the treatment both declare. So
   even past the absence branch the gate would report a replicate, correctly: the artifacts
   cannot show that the declared treatment moved. `prompt_set_hash` *does* differ (v3-fold
@@ -707,8 +731,12 @@ What is still owed:
   declared-not-consumed finding 7.
 * **`compare_to`, `description` and `notes` now have a reader** (the driver prints them under
   `--arm`) but nothing checks `compare_to` against the pair a comparison is actually run on.
-* `measure/gates.py`'s rendered `detail` still asserts the withdrawn 95% rule, and `render()`
-  prints `detail` while omitting the corrected `condition`. That file is not the instrument's.
+* `GateResult.render()` prints `field`, `observed`, `population` and `detail` and **omits
+  `condition`** — the one line saying what the gate actually required. A reader of the driver's
+  output gets the verdict without the criterion. (The withdrawn 95% distinctness rule is no
+  longer asserted anywhere: `CONTEXT_HASH_THRESHOLD` survives only as an unused parameter that
+  `context_hashes_distinct` reports in its detail line as retired, and both that function and
+  `_context_hash_gate` say so in their text.)
 
 ---
 
@@ -718,20 +746,22 @@ Numbered after §4 rather than inserted, because §4.1 and §4.2 are cited by na
 `failure-modes.md` and the ADRs. The work here lives mostly in the frontend, `ui/`, which is now
 part of this tree; each item below was verified by reading it, not inferred from the engine side.
 
-### 5.1 The README still illustrates the engine with terminal transcripts
+### 5.1 The README shows an answer and cannot yet show a refusal
 
-Two captures now exist, in `docs/images/`, taken 2026-08-11 against a live stack: one answered
-turn showing its SQL, and one clarification that paused, was answered, and resumed. Neither is
-referenced from `README.md` yet, which still demonstrates the engine with terminal output and
-points at the UI in two lines below the documentation table. The remaining work is the README
-edit, not the capture.
+`docs/images/answered-turn.gif` is the only capture in the tree, taken 2026-08-11 against a live
+stack, and `README.md` leads with it: embedded above the fold, captioned with what it is, and
+followed by the block that reads the physical names out of the SQL. The terminal transcripts and
+the two-line footnote below the documentation table are both gone. That half is done.
 
-**These are a demonstration, not a measurement, and must never be captioned as one.** They come
-from one small schema restored locally, on a model and corpus combination that is not any arm in
-`runs/eval/`. No number visible in them is quotable.
+What is missing is the other half of the argument. `506ad9b` replaced three PNGs with the single
+GIF and deleted the clarification pair — a turn that paused, was answered, and resumed — so the
+README now demonstrates only the thing every text-to-SQL project can demonstrate. **A governed
+non-answer is what almost none can, and there is currently no capture of one.**
 
-What they show is the argument the prose already makes: an answer is what every text-to-SQL
-demonstration shows, and a governed non-answer is what almost none can.
+**Any such capture is a demonstration, not a measurement, and must never be captioned as one.**
+The existing one comes from one small schema restored locally, on a model and corpus combination
+that is not any arm in `runs/eval/`; the README's caption says so, and a second capture would need
+the same. No number visible in either is quotable.
 
 ### 5.2 A degraded retrieval channel does not stop delivery
 
@@ -745,29 +775,42 @@ dev server's own advice, `--allow-blocking`, resolves it.
 
 **The turn answered anyway.** The UI reported "5 facets · 55 hits, 4 degraded" with four channels
 marked *semantic channel not wired*, retrieval fell back to the lexical channel alone, and the
-engine delivered a correct answer with no outcome-level signal that most of its retrieval had
-failed. The degradation is visible in the reasoning trace and nowhere in the record. This is the
-retrieval analogue of §3.7: a field reporting intent rather than outcome. Whether a turn whose
-semantic channel produced zero hits should be distinguishable from one that worked, in the
-record rather than only in the trace, is an open question and a candidate for §1.
+engine delivered a correct answer whose **outcome** is indistinguishable from one that retrieved
+normally.
+
+The record is not silent about it. `facet_channels` carries the three-valued `ChannelState` per
+facet, `stamp` derives `facet_degraded` from it via `register/facets.py::is_degraded`, and
+`measure/gates.py::_facet_channels_gate` fails an arm on any degraded turn — so an *arm* built
+this way is unquotable rather than quietly wrong.
+
+What is decided but not running is the turn-level answer. ADR 0013's first abstention rule is
+`retrieval_channel_failed`, evaluated before every other rule for exactly this case: the tables
+the turn worked from were chosen by a retriever that is not the declared one. It ships off (§4.1),
+so today the engine still delivers. What is genuinely still open is the narrower question the
+policy does not settle: whether a turn that *delivers* under a failed channel should say so on the
+answer itself, rather than only in the arm-level counter and the trace.
 
 ### 5.3 Client-side references to surface the engine does not have
 
-Three readers in `lib/answer-delivery.ts` — `whyLines`, `routedSchemasLabel`,
+Three readers in `ui/lib/answer-delivery.ts` — `whyLines`, `routedSchemasLabel`,
 `corpusVersionLabel` — consume `provenance.uncertainty_flags`, `suspect_columns`,
-`routed_schemas` and `corpus_release_hash`. None of the four exists in `src/`, and the record
-register declares no such field; the nearest live equivalent to the last is
-`corpus_content_hash` (`register/record.py:151`). The functions are inert rather than wrong, and
+`routed_schemas` and `corpus_release_hash`. None of the four exists in `src/`, and
+`register/record.py`'s `RECORD_REGISTER` declares no such field; the nearest live equivalent to
+the last is the `corpus_content_hash` entry there. The functions are inert rather than wrong, and
 are annotated as such at each site. Repointing the hash is a behaviour change and wants a
 decision, not a patch.
 
-Separately, eight UI files still cite a handoff document that was deleted from this repository,
-and two cite a `D15` that appears nowhere in `docs/`.
+Separately, six UI files cite a handoff document that was deleted from this repository, at eight
+sites (`components/corpus/asset-edit-sheet.tsx`, `components/schema/column-related.tsx`,
+`hooks/use-stream-chat.ts` ×2, `lib/api-client.ts` ×2, `lib/capabilities.ts`,
+`lib/mock/fixtures.ts`). Twelve cite `D15` as a design decision, and `docs/design-decisions.md`
+carries no numbered decisions at all — the only surviving mentions in `docs/` are ADR 0002 and
+ADR 0005, both of which cite it *as* a design-decisions.md entry that is not there. So the
+citation is dead on both sides of the merge, not only the client's.
 
-Every item in this section is a citation or a contract that drifted across the repository
-boundary, and `check_citations.py` would have caught all of them inside one tree — its
-`STRICT_ROOTS` already covers `docs/`, but no gate in either repository can see across the split.
-Whether to merge the UI here is open, and is a separate question from keeping the corpus and the
-lake external: that one is settled by measurement identity, and merging a client would not touch
-`corpus_content_hash`. Recorded in
+The split these drifted across is closed — the UI is `ui/` in this tree since `506ad9b` — but no
+gate reads it. `check_citations.py`'s `STRICT_ROOTS` is `("src", "tools", "docs", "tests")` and
+its `SEARCH_SUFFIXES` does not include `.ts` or `.tsx`, so every citation above is still
+unchecked by anything. Whether to extend the gate over `ui/` is the open call, and it is now a
+one-tree question rather than a cross-repository one. Background in
 [the strategy checkpoint](analysis/strategy-checkpoint-2026-08-11.md).

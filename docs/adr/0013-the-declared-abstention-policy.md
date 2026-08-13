@@ -108,7 +108,7 @@ through a second field only a new reader would know to open.
 >   `tests/serve/test_the_abstention_policy_is_declared.py`'s assertion on it held equally for
 >   `'banana_not_declared_anywhere'` — a check that cannot fail for any member of a vocabulary is
 >   not a check on the vocabulary.
-> - The only histogram that existed, `tools/run_datalake_eval.py::_refusal_layers`, counts
+> - The only histogram that existed, `tools/datalake_report.py::_refusal_layers`, counts
 >   `attempt.reason_code` off the **ledger**. A withheld turn writes no ledger row at all —
 >   acceptance criterion 3 — so the four reasons were not merely uncounted there, they were
 >   unreachable.
@@ -122,7 +122,9 @@ through a second field only a new reader would know to open.
 `REFUSED_BY_TO_STAGE`, and puts anything the table does not declare in a named `unattributed`
 bucket — which is what "closed" has to mean once artifacts exist: a reader can see that the
 histogram does not add up and see which string is why. It reaches every arm summary through
-`summarise()` and the driver prints it beside the layer histogram.
+`eval/report.py::summarise`, and `tools/datalake_report.py::print_report` — the reporting half
+`tools/run_datalake_eval.py` calls after the last question is graded — prints it beside
+`_refusal_layers`' layer histogram.
 
 What actually held the vocabulary closed before that, and still does the day-to-day work, is **two
 import-time guards**, which this section previously barely credited: every reason must map to

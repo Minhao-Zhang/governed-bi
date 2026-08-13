@@ -272,9 +272,11 @@ process entry calls. Optionally make the schema switch explicit (`build_graph(su
 optional argument stops meaning four things at once.
 
 **Wins.** Dependencies accepted rather than created. Two adapters justify the seam — environment in
-production, a fake `Session` in tests — where today there is one. Four of the six strict-xfail stubs in
-`tests/api/test_http_contract.py` become writable, including both ADR 0007 acceptance criteria. The
-backwards import in `browse_routes` disappears with the cycle it exists to dodge.
+production, a fake `Session` in tests — where today there is one. Four of the **seven** strict-xfail
+stubs in `tests/api/test_http_contract.py` become writable, including both ADR 0007 acceptance
+criteria. (Seven is the count of `@UNWRITTEN`-marked tests in that file at `506ad9b`; this said six
+and the Built note below said seven.) The backwards import in `browse_routes` disappears with the
+cycle it exists to dodge.
 
 **What the seam costs today.** `tests/serve/test_chat_transport.py:15-18` states it plainly: the routes
 call `session_from_environment`, which builds a Postgres connector and seeds a corpus, so `POST /chat`
@@ -544,7 +546,7 @@ Noticed, not yet candidates. All **R**.
 **C5 — give the served topology a constructor.**
 
 It is the enabling move. C6, C7 and C8 all describe friction that survives because the surface it lives
-on cannot be constructed in a test: six strict-xfail stubs, a graph verified by splitting its own source
+on cannot be constructed in a test: seven strict-xfail stubs, a graph verified by splitting its own source
 string, and two ADR 0007 acceptance criteria with no executing assertion. The deepening itself is small
 — move `_accept_node` into `serve/` with its session as a parameter, and turn three module-scope
 globals into arguments to `make_app`. Two adapters then justify the seam, and the interface becomes the

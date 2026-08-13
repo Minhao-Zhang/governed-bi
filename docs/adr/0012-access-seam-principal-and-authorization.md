@@ -1,8 +1,9 @@
 # 0012: The access seam — principal, authorization, and the Layer 6 split
 
 - **Status:** Accepted and wired (2026-08-12), **corrected the same day after review**. The ports,
-  the two adapters, the two new COLUMNS/TABLES rules, the tool bounds and the adversarial cases
-  landed first; §8's four wires landed next; an independent review then found that three surfaces
+  the two adapters, the three new TABLES/COLUMNS rules (`r_table_not_authorized`,
+  `r_row_predicate_unenforced`, `r_column_not_authorized`), the tool bounds and the adversarial
+  cases landed first; §8's four wires landed next; an independent review then found that three surfaces
   disclosed what the layer stack refused — `inspect_schema`'s column roster, a bare-spelled join's
   ON clause, and the whole browse HTTP surface — while §8 claimed "enforced end to end" and the
   Consequences simultaneously claimed the seam covered nothing in `serve/` or `api/`. All three are
@@ -376,9 +377,14 @@ day, after review. What each one is, and what it cost:
 `withheld_by_grant`'s endpoint matching was **spelling-dependent**, which is not a trade anyone
 stated. It collected `{asset_id, table_qualifier(asset)}` for each withheld table and matched a
 join's `left_table` / `right_table` and a metric's `base_table` against that set. Those fields may
-also hold the **bare** physical name — `retrieve/structure.py::bind_endpoint` binds all three and
-its docstring says it deliberately declines to settle which, so all three occur in one real
-corpus. With `sales.audit_log` withheld, the qualified join was dropped and
+also hold the **bare** physical name: `retrieve/structure.py::table_lookup` builds a key per table
+for the asset id, `table_id(schema, physical_name)`, the bare `physical_name` and the engine
+spelling `{schema}.{physical_name}`, and `bind_endpoint` resolves an endpoint against any of them
+without recording which it matched. (In `../BIRD-corpus` as it stands, all 1 412 join endpoints and
+all 478 metric `base_table`s are asset ids, so the bare path is a tolerance of the binder rather
+than a shape that corpus exhibits; the world under test in `adversarial.toml` carries both
+spellings deliberately — acceptance criterion 13.) With `sales.audit_log` withheld, the qualified
+join was dropped and
 
 ```
 join customers >< audit_log on customers.id = audit_log.customer_id
@@ -582,7 +588,7 @@ defect; one that says it is not enforced is a seam.
 
 **What this buys.** A fork has one interface to implement and a worked example of implementing it.
 The layer stack can say "you may not" in a reason code that the ledger records per attempt and
-`tools/run_datalake_eval.py::_refusal_layers` counts by layer and rule, so §4.2's abstention
+`tools/datalake_report.py::_refusal_layers` counts by layer and rule, so §4.2's abstention
 accounting can separate "retrieval missed" from "you may not" without a second implementation. PII
 gets a per-principal control that is not a corpus edit, and — as of §8.4a/§8.5 — one that withholds
 the column rather than only refusing statements that name it. RLS gets a declaration that cannot be

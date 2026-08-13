@@ -10,16 +10,16 @@
 > current execution governance — 0006 exists because an audit of this design found
 > ten distinct bypasses, one of them in its own first draft.
 
-> **Status note, 2026-08-09 (engine `ba8cef2`).** *Nothing below is edited; this
-> records what the enforcement mechanism actually became, because the banner above
-> retires "tools, ledger shape, and stage names" and a reader can fairly conclude
-> that the **interception point** survived. It did not.*
+> **Status note, 2026-08-09 (engine `ba8cef2`).** *The decision text below is not
+> rewritten; this records what the enforcement mechanism actually became, because the
+> banner above retires "tools, ledger shape, and stage names" and a reader can fairly
+> conclude that the **interception point** survived. It did not.*
 >
 > **`wrap_tool_call` does not exist in this tree.** `grep -rn "wrap_tool_call" src/`
-> returns nothing. Every sentence below that places the guardrail or the audit "in
-> `wrap_tool_call`" — Q1, the architecture diagram, the `run_query` row of the tool
-> table, and safety-spine invariants 2, 3 and 10 — describes an intent that took a
-> different form.
+> returns nothing. Every sentence below that places the guardrail, the audit or the
+> attempt cap "in `wrap_tool_call`" — Q1, Q6, the architecture diagram, the `run_query`
+> row of the tool table, and safety-spine invariants 2, 3 and 10 — describes an intent
+> that took a different form.
 >
 > **What shipped instead: the tool body calls governance, rather than an interceptor
 > wrapping it.** `serve/tools.py::build_tools` closes each tool over a frozen
@@ -50,22 +50,26 @@
 > SQL some tool body chose to send — a prompt still cannot talk its way to the
 > database, which is this ADR's central thesis and is intact. And `check()` fails
 > closed on unwired security arguments: `licensed=None` or a non-`AnalystCorpus`
-> corpus raise `GovernanceUsageError` rather than defaulting to permissive
-> (`govern/check.py:74-86`).
+> corpus raise `GovernanceUsageError` rather than defaulting to permissive — the two
+> argument guards at the top of `govern/check.py::check`, before any layer runs.
 >
 > **The Context section's own exception list is also out of date — in the safe
 > direction.** Both named exceptions are gone rather than lurking. The semantic cache
 > was deleted 2026-07-28 (Amendment 3 records it inline), so there is no cache-hit
 > path. Graded delivery has no live path at all: `graded_delivery_eligible()` has
 > **zero callers in `src/`** (only `tests/govern/test_graded_delivery.py`),
-> `serve/graph.py` wires no `graded_delivery` node, and nothing writes the `"graded"`
-> executor path that `govern/ledger.py:43` declares — `register/stages.py:79` still
-> declares the stage name. Of the four declared `EXECUTOR_PATHS`, only `agent` and
-> `sample` are written by `src/`. The remaining honest exception in that sentence is
-> the best-effort durable run-log write.
+> `serve/graph.py::build_graph` wires no `graded_delivery` node, and nothing writes the
+> `"graded"` executor path that `govern/ledger.py::ExecutorPath` declares —
+> `register/stages.py::Stage.graded_delivery` still declares the stage name. Of the four
+> declared `EXECUTOR_PATHS`, only `agent` and `sample` are written by `src/` — `sample` by
+> `sample_rows`, `agent` by `run_query` and by the cap and pipeline-error rows beside it
+> (`serve/fetch.py`, `serve/ledger.py`, `serve/tools.py`). The remaining honest exception
+> in that sentence is the best-effort durable run-log write.
 
-- **Status:** Accepted / Implemented. Grilled & refined in design review
-  2026-07-13; cutover landed on `main` 2026-07-14 (commit `d2fdd6a`).
+- **Status:** Accepted, and implemented on v1 — grilled & refined in design review
+  2026-07-13, cutover landed on `main` 2026-07-14 (commit `d2fdd6a`), implementation
+  deleted 2026-08-03 (commit `2347ae3`). See the two banners above for what of it
+  survives in the current tree.
 - **Deciders:** project owner + design session
 - **Related:** [0001](0001-langgraph-server-chat-runtime.md),
   pipeline-design.md (§8 invariants; removed — see git history),
@@ -73,9 +77,12 @@
 - **Supersedes:** the pipeline-design §8 invariant *"Serve stays a deterministic
   DAG; LLM appears only as bounded node operations, never as an autonomous loop"*
   and the §5 framing *"LLM = node classifier, never ReAct."*
-- **Verified stack:** `langchain 1.3.12`, `langgraph 1.2.8`, `deepagents 0.6.12`
-  — `create_agent` + `AgentMiddleware` (`wrap_tool_call`/`wrap_model_call`) and
-  `FakeListChatModel` all import in the pinned environment.
+- **Verified stack, as pinned on 2026-07-13:** `langchain 1.3.12`, `langgraph 1.2.8`,
+  `deepagents 0.6.12` — `create_agent` + `AgentMiddleware`
+  (`wrap_tool_call`/`wrap_model_call`) and `FakeListChatModel` all imported in that
+  environment. None of those three pins is the current one and `deepagents` is no
+  longer a dependency at all (retired, not deferred — `pyproject.toml` carries the
+  reasoning).
 - **Mechanism verified by spike (2026-07-13).** An end-to-end spike proved the
   load-bearing mechanism on the installed stack: `wrap_tool_call` reads
   `request.state` and writes custom state channels via `Command(update=...)`; a
@@ -151,7 +158,7 @@ with
 | Q3 | How durable must the audit be? | **(a) on-`Answer` provenance now**; design a durable-sink **(c)** seam fed from the same choke point; migrate to durable **(b)/(c)** later. |
 | Q4 | Keep two generation paths? | **No — one agentic architecture. A key is required.** `TemplateSqlGenerator` is removed as a serve path; CI/offline determinism moves to a `FakeListChatModel` agent harness. |
 | Q5 | What data may reach the LLM? | **Public data — send everything, no egress bound now.** Data-privacy/egress governance is a separate future branch; keep the tool boundary shaped so an egress knob can slot in. |
-| Q6 | Agent bounds? | `recursion_limit = 40` super-steps (`AGENT_RECURSION_LIMIT`, `analyst/middleware.py`); **`run_query` attempt cap = 3** enforced in `wrap_tool_call`; exhaustion → §6 graded-delivery / refuse; one model tier (`settings.models.llm_model`). The review's first guess here was ~15; sequential tool calls (G1) cost ~2 super-steps per tool call, so 40 is what a search → inspect×4 → query → repair×2 chain needs, and `tests/test_agent_governance_fixes.py::test_recursion_limit_leaves_room_for_a_realistic_tool_chain` pins that property rather than the digits. |
+| Q6 | Agent bounds? | `recursion_limit = 40` super-steps (then `AGENT_RECURSION_LIMIT` in `analyst/middleware.py`; today the `agent_recursion_limit` knob in `register/knobs.py`, read by `serve/nodes/agent_core.py::_recursion_limit`, still defaulting to 40); **`run_query` attempt cap = 3** enforced in `wrap_tool_call`; exhaustion → §6 graded-delivery / refuse; one model tier (`settings.models.llm_model`). The review's first guess here was ~15; sequential tool calls (G1) cost ~2 super-steps per tool call, so 40 is what a search → inspect×4 → query → repair×2 chain needs. The test that pinned that property rather than the digits went with v1 and has no successor: `tests/serve/test_audit_runtime_fixes.py::test_agent_recursion_limit_defaults_and_env` pins the default and its env override, not the chain length. |
 
 ### Architecture: agent on rails
 
@@ -219,9 +226,10 @@ reliability stamp. It reasons; the middleware and the rails govern.
    (§6 deliver-and-grade unchanged).
 7. **Bounded** — `recursion_limit = 40` + `run_query` attempt cap = 3; exhaustion
    → graded delivery or refuse. 40, not the ~15 first guessed, because sequential
-   tool calls cost ~2 super-steps each and 15 was hit by ordinary live questions;
-   `tests/test_agent_governance_fixes.py::test_recursion_limit_leaves_room_for_a_realistic_tool_chain`
-   asserts the budget still covers the tool chain it is sized for.
+   tool calls cost ~2 super-steps each and 15 was hit by ordinary live questions.
+   (The v1 test asserting that the budget still covered the tool chain it is sized
+   for was deleted with v1 and nothing replaced it; the current tree pins only the
+   knob's default and env override.)
 8. **Leakage boundary unchanged** — gold SQL/answers never reach serve.
 9. **Production serves a pinned, reviewed corpus revision** — unchanged (§1).
 10. **Enforcement and audit share the interception point** — the `wrap_tool_call`
@@ -246,7 +254,7 @@ exists to kill the two-implementations drift (`flow.py` monolith vs. stale
   `_finalize_success`) called by the middleware and any node — not two paths that
   promise to agree.
 - **CI/offline determinism** comes from a **`FakeListChatModel` agent harness**
-  (already the pattern at `test_curator_deep_agent.py:111`) — more representative
+  (already the pattern in v1's curator tests, deleted with v1) — more representative
   than the deleted template engine, since it exercises the real agent path.
 - **Equivalence tests change contract**: from *"same `Answer`"* (impossible
   against a nondeterministic agent) to **"same governance invariants"** — both
@@ -356,8 +364,10 @@ node runs before `agent_core`**, reusing the flow's exact front half
 
 > As decided. `route_intent` was deleted 2026-07-28 — it classified every question
 > into one of four routes and nothing downstream read the result — so the front half
-> `assemble` reuses today starts at `retrieve`/`route_schemas`. The decision this ADR
-> records is unaffected; see `docs/analyst.md` for the current rails.
+> `assemble` reused from then on started at `retrieve`/`route_schemas`. The decision
+> this ADR records is unaffected. The whole v1 front half is gone now; the current
+> rails are [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §3's, built in
+> `serve/graph.py::build_graph`.
 
 1. **Seed the prompt.** Inject `PromptContext.render()` (tables, joins, terms,
    metrics, few-shots, caveats, skills — identical to what the flow feeds its
@@ -405,7 +415,11 @@ retrieval shares the flow's retriever or gets its own top-k.
 
 ## Amendment 2 (2026-07-14): the governance ledger streams live
 
-**Status:** Implemented (P1) — landed with the agent path behind `agent_serve`.
+**Status:** Implemented on v1 (P1) — landed with the agent path behind `agent_serve`,
+and deleted with v1 in `2347ae3`. The live stage-event stream is re-decided and rebuilt
+by [ADR 0010](0010-live-stage-events.md). The envelope below survived intact —
+`serve/events.py::emit` writes exactly `{seq, id, kind, step, status, detail?,
+serve_path?}` — and the step vocabulary did not.
 
 **What.** The append-only governance ledger (Inv #10) is now emitted as a **live
 event stream**, not only attached to the finished `Answer`. Per turn, the agent
@@ -413,9 +427,12 @@ path pushes three event kinds through the existing `on_event` callback (consumed
 by the frontend on `stream_mode="custom"`):
 
 - `rail` — each deterministic outer step (`route`, `refuse_gate`, `cache`, `assemble`);
-  *(Reader note, 2026-08: live rails are `route` / `schema_route` / `refuse_gate` /
-  `assemble` — the `cache` rail was deleted 2026-07-28. See `v1/analyst.md` (deleted with v1).
-  Historical Amendment text left unchanged.)*
+  *(Reader note: two of those four names are still rails — `route` and `assemble` —
+  and `refuse_gate` and `cache` are not. `register/stages.py::Stage` is the authority for
+  the live vocabulary and `serve/graph.py::build_graph` wires it: `accept` / `guard` /
+  `rewrite` / `negative_gate` / the five `facet_*` / `route` / `resolve` / `connect` /
+  `assemble` / `abstain` / `agent_core` / `reflect` / `narrate` / `stamp`, plus the
+  `refuse` and `decline` terminals. Historical Amendment text left unchanged.)*
 - `tool` — each governed action inside the agent loop (`search_corpus` /
   `inspect_schema` / `sample_rows` / `run_query`), as a `start` then an
   `ok` / `blocked` / `error` / `cap` / `miss` resolve, paired by tool-call id;
@@ -441,13 +458,21 @@ worker thread. The shared finalize helpers run with `on_event=None` on this path
 so only the rich contract is emitted. The deterministic flow path is unchanged —
 it keeps emitting the legacy `{stage}` events.
 
-Full event contract: `v1/analyst.md` (deleted with v1).
-The frontend that renders it is built, in [`ui/`](../../ui/).
-Tests: `tests/test_agent_step_events.py`.
+Full event contract: `v1/analyst.md` (deleted with v1); the current one is
+[ADR 0010](0010-live-stage-events.md), emitted by `serve/events.py::emit` and rendered by
+[`ui/`](../../ui/). The v1 tests (`tests/test_agent_step_events.py`) went with v1;
+`tests/serve/test_stream_events.py` and `tests/serve/test_stream_events_end_to_end.py`
+cover the rebuilt stream.
 
 ## Implementation note (2026-07-14): P2 cutover landed on `main`
 
-**Status:** Implemented, commit `d2fdd6a` on `main`.
+**Status:** Implemented in commit `d2fdd6a`, and deleted with v1 in `2347ae3`. What the
+paragraph below describes is v1's post-cutover state, not the current tree. One clause in
+particular did *not* carry over: `api/graph_app.py::session_from_environment` builds a
+session with `agent_model=None` when no model is configured, so the server starts, and
+`/capabilities` reports `has_live_model: false` rather than the process refusing to boot.
+It fails closed on a *misconfigured* model — a model id set with no credential for the
+resolved provider raises rather than silently serving without one.
 
 The Phase 2 cutover described above shipped: the agentic core is now the
 **only** serve path. `analyst/flow.py` (`answer_question`) and the stale unused
@@ -463,7 +488,12 @@ the agent path; `run_experiment` is agent-only.
 
 ## Amendment 3: narration as a node + single-handler tracing
 
-**Status:** Implemented.
+**Status:** Implemented on v1, and both halves outlived it in shape rather than in code.
+Narration is still a dedicated node — `serve/nodes/narrate.py::narrate_node`, wired after
+`reflect` in `serve/graph.py::build_graph`, re-argued from the client side in
+[ADR 0007](0007-http-surface-and-the-ui-contract.md) §4 Amendment 2. The single-handler
+tracing rule still holds and is now trivially satisfied: nothing in `src/` attaches a
+tracing callback at all.
 
 **What.** Two fixes to the agent-path rails, orthogonal to governance:
 
@@ -498,30 +528,37 @@ the agent path; `run_experiment` is agent-only.
    aggregation is no longer double-counted. LangSmith is unaffected; it
    self-instruments from the environment.
 
-   > **Superseded in part, 2026-08-02.** Langfuse was removed; LangSmith is the
-   > only tracer. The *shape* this amendment established survives unchanged — one
-   > root run per turn, everything nested, no second handler — and it is now also
-   > the billing unit, since LangSmith charges per root invocation. What is gone
-   > is the Langfuse handler itself: `obs.tracing_callbacks()` was renamed
-   > `obs.usage_callbacks()` and returns only the `UsageMetadataCallbackHandler`
-   > that curator/SME token accounting reads back. `LangChainChatClient.complete()`
-   > still inherits the ambient run context for the same reason (nesting), it just
-   > no longer has a handler of its own to attach when standalone.
+   > **Superseded in part, 2026-08-02, and again by the v1 deletion.** Langfuse was
+   > removed; LangSmith is still the only tracer, and it self-instruments from the
+   > environment (`LANGSMITH_TRACING` — see `.env.example`) rather than from a handler
+   > this repository attaches. The *shape* this amendment established survives unchanged
+   > — one root run per turn, everything nested, no second handler — and it is also the
+   > billing unit, since LangSmith charges per root invocation. What is gone is every
+   > handler: `obs.py` and `LangChainChatClient` went with v1, and token accounting is
+   > now read off `AIMessage.usage_metadata` by `serve/usage.py::reported_tokens`, with
+   > no callback in the path.
 
 ## Amendment 4 (2026-07-14): HITL clarification shipped server-side
 
-**Status:** Implemented (server side); durable persistence still deferred.
+**Status:** Implemented on v1 (server side), and the mechanism was rebuilt in v2;
+durable persistence is still deferred.
 
 The Q6 row (the "no clarification (the model guesses)" line above) and Phase 3
 listed HITL (`interrupt()` + checkpointer) as deferred. The **interrupt mechanism
-has since landed server-side**: `analyst/tools.py::ask_user` calls `interrupt()`,
-`analyst/clarify.py` carries the clarification request/response shapes,
-`api/graph_app.py` handles the `ClarificationPending` resume loop, and `stack.py`
-wires `can_clarify` + a `clarify_checkpointer` (covered by
-`tests/test_serve_clarify.py`). What remains deferred is only the **durable**
-checkpointer (Postgres) — today's checkpointer is in-memory, so a clarification
-does not survive a process restart. The wire contract is in
-`v1/analyst.md` (deleted with v1); the frontend
-that consumes it is built, in [`ui/`](../../ui/), which holds no
-persistence of its own either. So
-"Open questions → HITL" now scopes to *durable persistence*, not the mechanism.
+landed server-side** in v1: `analyst/tools.py::ask_user` called `interrupt()`,
+`analyst/clarify.py` carried the clarification request/response shapes,
+`api/graph_app.py` handled the `ClarificationPending` resume loop, and `stack.py`
+wired `can_clarify` + a `clarify_checkpointer`. Those modules went with v1; the same
+mechanism is now `serve/tools.py::ask_user`, resumed by
+`serve/resume.py::resume_clarification` behind `govern/bounds.py::resume_authorised`,
+with `POST /chat/resume` in `api/routes.py` as the REST half and the payload shape
+re-decided by [ADR 0007](0007-http-surface-and-the-ui-contract.md) §6
+(`tests/serve/test_agent_tools_hitl.py`, `tests/serve/test_chat_transport.py`).
+
+What remains deferred is only the **durable** checkpointer (Postgres). Both surfaces
+still save in memory — `serve/graph.py::compile_graph` defaults to `InMemorySaver` and
+so does `api/routes.py` — so a clarification does not survive a process restart, which
+is what `/capabilities` reports as `checkpoint_durable: false` and
+`hitl_survives_process_restart: false`. The frontend that consumes it is built, in
+[`ui/`](../../ui/), which holds no persistence of its own either. So
+"Open questions → HITL" scopes to *durable persistence*, not the mechanism.

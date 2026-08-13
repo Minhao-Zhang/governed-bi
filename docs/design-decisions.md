@@ -24,7 +24,8 @@ Non-ADR judgements that still matter in code:
 - **Knobs vs env.** Comparability and serve knobs are declared in
   `register/knobs.py`. Deployment-facing knobs that operators can set today are
   primarily `GOVERNED_BI_*` environment variables (models, paths, timeouts,
-  retries, embedder).
+  retries, embedder, and the access policy). The full table is
+  [usage](usage.md#environment).
 - **No trust score, and no two-axis stamp either.** A single collapsed reliability
   number is refused (ADR 0002 / 0006), and no per-axis stamp replaces it. What a turn
   carries is `outcome`, `guardrail_errors`, `terminal_reason` and the per-attempt
