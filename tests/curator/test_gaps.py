@@ -476,6 +476,30 @@ def test_nothing_is_dropped_for_a_quota() -> None:
     assert len([r for r in scan.records if r.severity == "T4"]) >= 18
 
 
+def test_one_scope_and_one_id_per_finding_across_a_whole_scan() -> None:
+    """**Found live**, on real ``beer_factory`` through ``POST /elicitation/generate``: six T3
+    join-key records reached the ledger *twice*, same scope and same id, and the wizard rendered
+    duplicate React keys for them.
+
+    The cause was the join detector's emission unit. Its docstring says the unit is the candidate
+    *column* ("pairs are combinatorial noise, columns are the actual decision"), but it emitted
+    once per ``(target column, source column)`` match — and ``standort`` has two columns that
+    both read as its key (``standort_id``, ``standort_nummer``), so ``kunden.ort`` matched both
+    and was asked about twice. One source column joining to one table is one decision.
+
+    Asserted over the whole scan rather than inside the join detector, because ``_record_id`` is
+    a hash of ``scope``: any two records sharing a scope are one record proposed twice, whichever
+    detector made them, and the ledger's idempotency is keyed on exactly that.
+    """
+    scan = _scan(beer_factory_assets())
+    scopes = [r.scope for r in scan.records]
+    ids = [r.id for r in scan.records]
+    assert len(scopes) == len(set(scopes)), sorted(
+        s for s in scopes if scopes.count(s) > 1
+    )
+    assert len(ids) == len(set(ids))
+
+
 # ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
 

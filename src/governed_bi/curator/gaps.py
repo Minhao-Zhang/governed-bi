@@ -389,12 +389,20 @@ def _join_records(
     choices for it is what the grounded-choices discipline forbids. Those pairs are **counted in
     the coverage note** instead, so the distinction stays visible rather than being dropped
     silently.
+
+    That unit is enforced by keying on the record's own ``scope``, and the reason is a defect
+    found live rather than a precaution: ``candidate_keys`` is keyed by *target* column, and a
+    target table with two columns that both read as its key (``standort.standort_id`` and
+    ``standort_nummer``) matched ``kunden.ort`` twice — so six T3 records reached the ledger with
+    the same scope and the same id, and the wizard rendered duplicate React keys. One source
+    column joining to one table is one decision no matter how many of the target's columns it
+    resembles.
     """
     records: list[ClarificationRecord] = []
     without_candidates = 0
     ambiguous_pairs = 0
     for left_table, right_table in unjoined_pairs(live, join_edges):
-        pair_records: list[ClarificationRecord] = []
+        pair_records: dict[str, ClarificationRecord] = {}
         ambiguous: list[tuple[Any, Any, list[Any], Any]] = []
         for source_table in (left_table, right_table):
             other = right_table if source_table is left_table else left_table
@@ -406,9 +414,9 @@ def _join_records(
                 if conflict is not None:
                     ambiguous.append((source_table, other, sources, conflict))
                     continue
-                pair_records.extend(
-                    _single_key_record(source_table, other, source) for source in sources
-                )
+                for source in sources:
+                    record = _single_key_record(source_table, other, source)
+                    pair_records.setdefault(record.scope, record)
         if ambiguous:
             ambiguous_pairs += 1
             records.append(_ambiguous_key_record(left_table, right_table, ambiguous))
@@ -416,7 +424,7 @@ def _join_records(
         if not pair_records:
             without_candidates += 1
             continue
-        records.extend(pair_records)
+        records.extend(pair_records.values())
     note = (
         f"{len(unjoined_pairs(live, join_edges))} table pairs have no declared join: "
         f"{ambiguous_pairs} carry two or more candidate keys whose values disagree (T1, a wrong "
