@@ -127,7 +127,7 @@ def _structural_records() -> list[Any]:
 
 def _presented() -> list[Any]:
     """Every candidate an admin is shown, as ``POST /elicitation/generate`` assembles them."""
-    from governed_bi.curator.elicitation import enforce_audience_language
+    from governed_bi.curator.candidate_rules import enforce_audience_language
 
     return enforce_audience_language([*_structural_records(), *_keyword_records()])
 
@@ -188,7 +188,7 @@ def test_the_guard_moves_a_leaking_business_question_to_the_data_tab() -> None:
     the state this is meant to keep: the guard exists so that the *next* edit to a business
     template cannot ship a question its audience cannot read."""
     from governed_bi.curator.clarifications import ClarificationRecord
-    from governed_bi.curator.elicitation import enforce_audience_language
+    from governed_bi.curator.candidate_rules import enforce_audience_language
 
     leaking = ClarificationRecord(
         id="q1",
@@ -207,7 +207,7 @@ def test_the_guard_leaves_a_data_audience_question_alone() -> None:
     """The asymmetry, pinned: the same text that disqualifies a business question is what makes
     a data question answerable."""
     from governed_bi.curator.clarifications import ClarificationRecord
-    from governed_bi.curator.elicitation import enforce_audience_language
+    from governed_bi.curator.candidate_rules import enforce_audience_language
 
     engineering = ClarificationRecord(
         id="q2",
@@ -227,7 +227,7 @@ def test_a_verbatim_database_value_never_trips_the_guard() -> None:
     whole contract is that a domain owner picks from the stored values rather than typing one,
     so the value has to be shown byte-exact — and a proper noun can only honestly reach a
     business question as a value, never as prose we wrote."""
-    from governed_bi.curator.elicitation import enforce_audience_language
+    from governed_bi.curator.candidate_rules import enforce_audience_language
     from governed_bi.serve.schema_term_guard import find_schema_leak
 
     assert find_schema_leak("NaN") == "NaN", "the guard really would flag this token"

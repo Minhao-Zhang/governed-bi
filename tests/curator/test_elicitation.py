@@ -790,14 +790,14 @@ def _wizard_records() -> tuple[list[Any], dict[str, Any]]:
 def test_a_bare_corpus_settles_nothing() -> None:
     """The direction that matters most: a check that suppresses when it should not is worse
     than no check, because the gap it hides is one nobody will be told about again."""
-    from governed_bi.curator.elicitation import drop_already_answered
+    from governed_bi.curator.candidate_rules import drop_already_answered
 
     records, assets_by_id = _wizard_records()
     assert drop_already_answered(records, assets_by_id, schema="shop") == records
 
 
 def test_a_term_the_corpus_already_defines_is_not_asked_about_again() -> None:
-    from governed_bi.curator.elicitation import drop_already_answered
+    from governed_bi.curator.candidate_rules import drop_already_answered
 
     records, assets_by_id = _wizard_records()
     assert any(r.scope == "elicitation:term:total" for r in records)
@@ -811,7 +811,7 @@ def test_a_term_the_corpus_already_defines_is_not_asked_about_again() -> None:
 def test_a_proposed_definition_does_not_settle_a_term() -> None:
     """``proposed`` is a draft nobody has approved -- ``corpus/analyst.py`` does not serve it, so
     the engine still does not know what the term means and the question is still open."""
-    from governed_bi.curator.elicitation import drop_already_answered
+    from governed_bi.curator.candidate_rules import drop_already_answered
 
     records, assets_by_id = _wizard_records()
     assets_by_id["term.total"] = _term_asset("total", certified=False)
@@ -826,7 +826,7 @@ def test_a_question_already_answered_and_folded_is_not_asked_again() -> None:
     the question into the asset id, so the check is exact and costs one dict lookup.
     """
     from governed_bi.curator.clarification import draft_from_clarification
-    from governed_bi.curator.elicitation import drop_already_answered
+    from governed_bi.curator.candidate_rules import drop_already_answered
 
     records, assets_by_id = _wizard_records()
     answered = next(r for r in records if r.category == "B")
@@ -854,7 +854,7 @@ def test_dropping_a_settled_prerequisite_unblocks_what_was_waiting_on_it() -> No
 
     from governed_bi.curator.clarification import draft_from_clarification
     from governed_bi.curator.clarifications import unmet_prerequisites
-    from governed_bi.curator.elicitation import drop_already_answered
+    from governed_bi.curator.candidate_rules import drop_already_answered
 
     records, assets_by_id = _wizard_records()
     blocker = next(r for r in records if r.category == "B")
@@ -872,7 +872,7 @@ def test_dropping_a_settled_prerequisite_unblocks_what_was_waiting_on_it() -> No
 
 def test_a_folded_answer_from_another_schema_settles_nothing_here() -> None:
     from governed_bi.curator.clarification import draft_from_clarification
-    from governed_bi.curator.elicitation import drop_already_answered
+    from governed_bi.curator.candidate_rules import drop_already_answered
 
     records, assets_by_id = _wizard_records()
     answered = next(r for r in records if r.category == "B")

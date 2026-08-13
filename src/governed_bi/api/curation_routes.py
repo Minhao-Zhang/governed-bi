@@ -599,10 +599,12 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     from fastapi import HTTPException
 
     from governed_bi.curator.clarifications import load_clarifications, write_clarifications
-    from governed_bi.curator.elicitation import (
-        ELICITATION_SOURCE,
+    from governed_bi.curator.candidate_rules import (
         drop_already_answered,
         enforce_audience_language,
+    )
+    from governed_bi.curator.elicitation import (
+        ELICITATION_SOURCE,
         generate_candidate_questions,
         read_observed_values,
     )
