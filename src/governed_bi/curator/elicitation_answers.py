@@ -94,10 +94,53 @@ def _scope_rest(scope: str) -> str:
 
 
 def _compose_term(rec: ClarificationRecord, label: str, _picks: list[str], freeform: str) -> str:
-    """A: which table/column an ambiguous business term maps to."""
+    """A-biz: what an ambiguous business term means, in the business's own words.
+
+    **Not a column binding, and the frame says so.** This half's choices are descriptions of
+    where a value is recorded and how it varies (``curator/elicitation_terms.py``), never
+    identifiers, so ``'revenue' maps to …`` would claim a mapping the answerer was never shown
+    and could not have made — A-eng is what makes it. What lands is a definition of a term, which
+    is exactly the shape ``candidate_rules.drop_already_answered`` treats a certified
+    ``TermAsset`` as already supplying.
+
+    Both halves are kept when both arrive: the label is the meaning the admin picked and the
+    freeform is what they added to it, and "the price on the order line, but only after the
+    kitchen confirms" is two facts.
+    """
     term = _scope_rest(rec.scope)
-    target = freeform or label
-    return f"'{term}' maps to {target}" if target else ""
+    parts = [p for p in (label, freeform) if p]
+    return f"In business terms, {term!r} means {'; '.join(parts)}" if parts else ""
+
+
+def _compose_term_column(
+    rec: ClarificationRecord, label: str, _picks: list[str], freeform: str
+) -> str:
+    """A-eng: which physical column holds an ambiguous business term.
+
+    The picked **id**, not its label — the label carries the evidence the DBA was shown (type,
+    counts, sample values), which has no business in a corpus fact, the same reason S1's column
+    checklist folds its ids rather than its ``"bezeichnung (text)"`` labels. Freeform is kept
+    alongside the pick rather than instead of it, because "that one, but multiply it by quantity"
+    is the answer and dropping half of it is the defect ``d17d6e0`` fixed.
+    """
+    term = _scope_rest(rec.scope)
+    target = _picked_id(rec, label)
+    parts = [p for p in (target, freeform) if p]
+    return f"{term!r} maps to {'; '.join(parts)}" if parts else ""
+
+
+def _picked_id(rec: ClarificationRecord, label: str) -> str:
+    """The id of the choice whose label is ``label``, or ``""``.
+
+    ``compose_elicitation_answer_text`` resolves the picked id to its label before dispatching,
+    because every other shape wants the prose; this is the one that wants the identifier back.
+    Recovered from the record rather than by widening the composer signature: eleven other
+    composers would have gained a parameter none of them reads.
+    """
+    for choice in rec.choices or ():
+        if str(choice.get("label") or "") == label:
+            return str(choice.get("id") or "")
+    return ""
 
 
 def _compose_rule(rec: ClarificationRecord, label: str, _picks: list[str], freeform: str) -> str:
@@ -243,6 +286,7 @@ def _compose_join_path(
 #: it stays exhaustive, so a new question shape cannot reach the fallback unnoticed.
 _COMPOSERS: dict[str, Callable[[ClarificationRecord, str, list[str], str], str]] = {
     "term": _compose_term,
+    "termcolumn": _compose_term_column,
     "rule": _compose_rule,
     "exclusion": _compose_exclusion,
     "sentinel": _compose_exclusion,

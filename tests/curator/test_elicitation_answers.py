@@ -72,6 +72,11 @@ def _english_records() -> list[Any]:
             ("order_id", "bigint", None),
             ("order_date", "date", LogicalType.date),
             ("total_amount", "numeric", None),
+            # A second ``amount`` column, so the term has **two** candidates and the business
+            # half of the A pair is minted at all: with one candidate it is a forced choice and
+            # ``curator/elicitation_terms.py`` suppresses it (the gap model's ``A″``). ``total``
+            # still matches only ``total_amount``, so this fixture carries both shapes.
+            ("amount_paid", "numeric", None),
             ("country_code", "text", None),
             ("review_status", "text", None),
         )
@@ -129,7 +134,9 @@ def _every_record() -> list[Any]:
     followup = maybe_generate_join_followup(
         ClarificationRecord(
             id="q",
-            scope="elicitation:term:amount",
+            # The **engineering** half's scope: A-biz picks a meaning, A-eng binds a column, and
+            # only the second is a reason to ask how two tables join.
+            scope="elicitation:termcolumn:amount",
             question="?",
             category="A",
             target_table="orders",
@@ -157,9 +164,11 @@ def _well_formed(text: str, record: Any) -> None:
     assert text.endswith(_TERMINAL), f"{record.scope}: not a sentence — {text!r}"
     assert ".." not in text, f"{record.scope}: doubled terminator — {text!r}"
     subject = record.target_table or ""
-    if record.scope.startswith("elicitation:term:"):
-        # A's ``target_table`` is the *expected* table for the join heuristic, not the subject:
-        # the admin may pick a column on any table, and what the fact is about is the term.
+    if record.scope.startswith(("elicitation:term:", "elicitation:termcolumn:")):
+        # Both halves of the A pair are about a **term**. A-biz has no ``target_table`` at all
+        # (its candidates span tables and each choice names its own); A-eng's is the *expected*
+        # table for the join heuristic, not the subject, since the admin may pick a column on
+        # any of them.
         subject = record.scope.rsplit(":", 1)[-1]
     if subject:
         assert subject in text, f"{record.scope}: names no object — {text!r}"
@@ -180,6 +189,7 @@ def test_the_generators_between_them_cover_every_question_shape() -> None:
         "joinkeys",
         "rule",
         "term",
+        "termcolumn",
         "valuemap",
         "exclusion",
     }
@@ -357,7 +367,11 @@ def _valuemap_record() -> Any:
     )
 
 
-def test_a_term_mapping_names_the_term_and_the_column() -> None:
+def test_the_business_half_of_a_composes_a_definition_and_not_a_column_binding() -> None:
+    """A-biz's choices are descriptions of where a value is recorded, never identifiers, so the
+    admin who picks one has made no claim about a column and the fact must not make one for
+    them. What lands is a definition of a term — which is exactly what
+    ``candidate_rules.drop_already_answered`` treats a certified ``TermAsset`` as supplying."""
     from governed_bi.curator.clarifications import ClarificationRecord
     from governed_bi.curator.elicitation_answers import compose_elicitation_answer_text
 
@@ -366,7 +380,48 @@ def test_a_term_mapping_names_the_term_and_the_column() -> None:
         scope="elicitation:term:revenue",
         question="?",
         category="A",
-        choices=({"id": "payments.revenue_amount", "label": "payments.revenue_amount"},),
+        choices=(
+            {
+                "id": "payments.revenue_amount",
+                "label": "the 'revenue amount' recorded in your payments data",
+            },
+        ),
+        source="elicitation_wizard",
+    )
+    assert compose_elicitation_answer_text(rec, choice_id="payments.revenue_amount") == (
+        "In business terms, 'revenue' means the 'revenue amount' recorded in your payments data."
+    )
+    assert compose_elicitation_answer_text(rec, freeform="everything the kitchen billed") == (
+        "In business terms, 'revenue' means everything the kitchen billed."
+    )
+    assert compose_elicitation_answer_text(
+        rec, choice_id="payments.revenue_amount", freeform="before tips"
+    ) == (
+        "In business terms, 'revenue' means the 'revenue amount' recorded in your payments "
+        "data; before tips."
+    )
+
+
+def test_the_engineering_half_of_a_folds_the_identifier_and_not_its_evidence() -> None:
+    """A-eng's labels carry the type, the counts and sample values so a DBA can check the pick.
+    None of that belongs in a corpus fact, so the composed sentence takes the choice **id** —
+    the same reason S1's column checklist folds ``stadt`` and not ``stadt (text)``."""
+    from governed_bi.curator.clarifications import ClarificationRecord
+    from governed_bi.curator.elicitation_answers import compose_elicitation_answer_text
+
+    rec = ClarificationRecord(
+        id="q",
+        scope="elicitation:termcolumn:revenue",
+        question="?",
+        category="A",
+        ui_modality="column_picker",
+        choices=(
+            {
+                "id": "payments.revenue_amount",
+                "label": "payments.revenue_amount — numeric; 6312 rows, 554 distinct; e.g. 0, 1",
+            },
+        ),
+        target_table="payments",
         source="elicitation_wizard",
     )
     assert compose_elicitation_answer_text(rec, choice_id="payments.revenue_amount") == (
@@ -375,6 +430,9 @@ def test_a_term_mapping_names_the_term_and_the_column() -> None:
     assert compose_elicitation_answer_text(rec, freeform="orders.grand_total") == (
         "'revenue' maps to orders.grand_total."
     )
+    assert compose_elicitation_answer_text(
+        rec, choice_id="payments.revenue_amount", freeform="times quantity"
+    ) == ("'revenue' maps to payments.revenue_amount; times quantity.")
 
 
 def test_a_business_rule_constant_reads_the_same_from_either_input() -> None:

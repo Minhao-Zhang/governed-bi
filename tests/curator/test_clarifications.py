@@ -250,7 +250,9 @@ def test_resolve_answer_text_returns_a_category_tagged_records_answer_verbatim()
     # dispatched on the scope's kind, so a record with no wizard scope exercises the fallback
     # rather than the branch this test is about.
     wizard = dict(
-        scope="elicitation:term:revenue",
+        # The A pair's **engineering** half, whose choice labels really are identifiers — which
+        # is the shape the doubling defect below is about.
+        scope="elicitation:termcolumn:revenue",
         category="A",
         choices=({"id": "payments.revenue_amount", "label": "payments.revenue_amount"},),
     )

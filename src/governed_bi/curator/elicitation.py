@@ -85,10 +85,8 @@ __all__ = [
 ELICITATION_SOURCE = "elicitation_wizard"
 
 # Conservative, fixed keyword lists — the whole heuristic surface (v1, unchanged). Extending
-# coverage later means growing these lists, not changing the fold/ledger contract.
-_AMBIGUOUS_TERMS: tuple[str, ...] = (
-    "revenue", "cost", "profit", "total", "amount", "price", "balance", "value",
-)
+# coverage later means growing these lists, not changing the fold/ledger contract. A's own list
+# moved to ``curator/elicitation_terms.py`` with the category that reads it.
 _CATEGORICAL_HINTS: tuple[str, ...] = (
     "country", "region", "category", "channel", "segment", "type", "code",
 )
@@ -109,12 +107,15 @@ CATEGORY_PRIORITY: list[str] = ["A", "C", "E", "B", "D"]
 #: would move an instance off it:
 #:
 #: - **A → T2 / data.** The doc's A row is a hybrid (``BIZ+ENG``) that resolves into *two*
-#:   records, and the question as shipped is the engineering one: its choices are bare
-#:   ``table.column`` identifiers, which is exactly what the business half must not contain. Its
-#:   refinements are invisible here — ``A′`` (same gap on an identity/join key) is T1 and ``A″``
-#:   (only one candidate column) should not be generated at all, and telling either apart needs
-#:   the key/disagreement detection a later phase builds. T2 is the floor, not a claim that no
-#:   A instance is worse.
+#:   records, and it now does (``curator/elicitation_terms.py``): A-biz on the business tab,
+#:   A-eng on the data tab, the second blocked on the first. **Both tiers come from this entry
+#:   and only A-eng's audience does** — a pair of questions about one gap is one severity, and
+#:   the two audiences are the pair's own definition rather than a per-category fact, so they are
+#:   stated at the two templates instead of here. ``A′`` (same gap on an identity/join key) is
+#:   T1 and is still invisible: telling it apart needs key detection this generator does not do,
+#:   so T2 is the floor, not a claim that no A instance is worse. ``A″`` (only one candidate
+#:   column) now suppresses the *business* half, which is the half a forced single choice makes
+#:   meaningless.
 #: - **B → T2 / business.** ``business`` because the payload is a machine-prepared list of the
 #:   real distinct values, which is the whole point: a domain owner must never type a value that
 #:   can drift from the stored format. ``B′`` (self-evident values like ``Bottle``/``Can``) is
@@ -352,6 +353,7 @@ def generate_candidate_questions(
     *,
     existing: Sequence[ClarificationRecord] = (),
     observed_values: Mapping[str, tuple[str, ...]] | None = None,
+    cardinalities: Mapping[str, Any] | None = None,
 ) -> list[ClarificationRecord]:
     """Propose every category-tagged candidate question the keyword gates find.
 
@@ -376,13 +378,24 @@ def generate_candidate_questions(
     no connector to read through rather than a reason to fall back to
     ``ColumnAsset.sample_values`` (empty on every live-seeded corpus, so a fallback there would
     be a second, silently-worse source for the same fact).
+
+    ``cardinalities`` is ``curator/elicitation_terms.read_term_cardinalities``' mapping, and only
+    A reads it. Omitting it costs A its grain sentence and its row counts — the questions are
+    still asked and still name their candidates, they just say less, which is the honest result
+    for a caller with nothing to count through. Imported inside the function because
+    ``elicitation_terms`` imports this module's own helpers; the cycle is broken here rather than
+    there, where the shared helpers are.
     """
+    from governed_bi.curator.elicitation_terms import propose_term_questions
+
     live_tables = _live_tables(tables)
     existing_scopes = {r.scope for r in existing if r.source == ELICITATION_SOURCE}
     observed = observed_values or {}
 
     candidates: list[ClarificationRecord] = []
-    candidates += _propose_a(live_tables, assets_by_id)
+    candidates += propose_term_questions(
+        live_tables, assets_by_id, observed_values=observed, cardinalities=cardinalities
+    )
     candidates += _propose_c(live_tables, assets_by_id)
     candidates += _propose_e(live_tables, assets_by_id, observed)
     # S6 after E, and it reads E's output: the two ask one question, and the only difference is
@@ -390,41 +403,6 @@ def generate_candidate_questions(
     candidates += _propose_s6(live_tables, assets_by_id, observed, covered=candidates)
     candidates += _propose_b(live_tables, assets_by_id, observed)
     return [c for c in candidates if c.scope not in existing_scopes]
-
-
-def _propose_a(tables: Sequence[Any], assets_by_id: dict[str, Any]) -> list[ClarificationRecord]:
-    """A: for each ambiguous term found in >=1 column name, a column-picker question over every
-    matching ``table.column`` candidate."""
-    severity, audience = CATEGORY_CLASSIFICATION["A"]
-    out: list[ClarificationRecord] = []
-    for term in _AMBIGUOUS_TERMS:
-        matches: list[tuple[str, str]] = []
-        for table in tables:
-            for column in _columns_of(table, assets_by_id):
-                if term in column.physical_name.lower():
-                    matches.append((table.physical_name, column.physical_name))
-        if not matches:
-            continue
-        matches.sort()
-        choices = tuple({"id": f"{tbl}.{col}", "label": f"{tbl}.{col}"} for tbl, col in matches)
-        scope = f"elicitation:term:{term}"
-        out.append(
-            ClarificationRecord(
-                id=_record_id(scope),
-                scope=scope,
-                question=f"When you say '{term}', which table/column does that map to?",
-                category="A",
-                ui_modality="column_picker",
-                severity=severity,
-                audience=audience,
-                choices=choices,
-                allow_freeform=True,
-                target_table=matches[0][0],  # "expected" table for the D heuristic
-                raised_by=("elicitation_wizard",),
-                source=ELICITATION_SOURCE,
-            )
-        )
-    return out
 
 
 #: C's fixed choice list: month number -> "N - Name". Built once; identical for every schema.
@@ -738,8 +716,18 @@ def maybe_generate_join_followup(rec: ClarificationRecord, picked_choice_id: str
     gets its own standalone question set (:func:`generate_candidate_questions` never proposes
     one) — this is the only path that creates one, and it is always tied to the specific A
     answer that triggered it.
+
+    **Keyed on the A-eng scope, not on ``category == "A"``.** Since the A pair landed, category A
+    carries four question shapes with a ``table.column`` choice id between them, and only one of
+    them binds a term to a column: A-biz's pick is a *meaning* whose id happens to name the
+    column its description was derived from, and minting a join question off it would be
+    proposing a join before the DBA has confirmed there is one to propose. ``gaps.py``'s own
+    category-A records (describe-this-table, describe-these-columns, this-column-is-flagged)
+    are excluded by the same test rather than by the absence of a dotted choice id.
     """
-    if rec.category != "A" or not rec.target_table:
+    from governed_bi.curator.elicitation_terms import A_ENG_SCOPE_PREFIX
+
+    if not rec.scope.startswith(A_ENG_SCOPE_PREFIX) or not rec.target_table:
         return None
     if "." not in picked_choice_id:
         return None

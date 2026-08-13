@@ -59,6 +59,11 @@ def _english_schema() -> tuple[list[Any], dict[str, Any]]:
         column("listing_id", physical="bigint"),
         column("listed_on", logical=LogicalType.date, physical="date"),
         column("total_amount", physical="numeric"),
+        # A second ``amount`` column, so the term has two candidates and category A's **business**
+        # half is minted at all — with one candidate it is a forced choice and is suppressed.
+        # This file is where the business tab's language is a property, so the tab has to have
+        # the one question this phase added to it.
+        column("amount_paid", physical="numeric"),
         column("distribution_type"),
         column("review_status"),
         column("region"),
@@ -152,6 +157,58 @@ def test_no_business_audience_question_contains_a_raw_schema_identifier() -> Non
     for rec in business:
         leak = find_schema_leak(rec.question)
         assert leak is None, f"{rec.scope}: {leak!r} in {rec.question!r}"
+
+
+# ── the A pair: the same gap, said twice, in two languages ──────────────────────────────────
+
+
+def test_the_business_half_of_a_reaches_the_business_tab_and_names_no_identifier() -> None:
+    """The measured problem this phase exists for: on German ``beer_factory`` the business tab
+    held 9 cards against the data tab's 37, and category A — the highest-value class Experiment
+    003 measured — was entirely on the wrong one, because its choices were bare ``table.column``.
+
+    Both halves of the assertion matter and the second is the one that can rot. A-biz survives
+    ``enforce_audience_language`` **on its own merits**, not because the guard was loosened: if
+    this ever fails it means the business half has started leaking and needs fixing, not that the
+    guard does. The choice *labels* are checked too, because they are authored prose (their ids
+    are qualified names, which is what the guard's ``id != label`` rule exempts) and the labels
+    are the entire payload of this question.
+    """
+    from governed_bi.serve.schema_term_guard import find_schema_leak
+
+    (biz,) = [r for r in _presented() if r.scope == "elicitation:term:amount"]
+    assert biz.audience == "business", "the guard demoted A-biz — it is leaking, not over-strict"
+    assert find_schema_leak(biz.question) is None, biz.question
+    assert biz.choices, "a question about which meaning needs meanings to choose between"
+    for choice in biz.choices:
+        leak = find_schema_leak(str(choice["label"]))
+        assert leak is None, f"{leak!r} in {choice['label']!r}"
+        assert "_" not in str(choice["label"]), choice["label"]
+
+
+def test_the_engineering_half_of_a_carries_the_identifiers_the_business_half_may_not() -> None:
+    """The mirror image, and not the same test negated. Power Kiosk's DBA has to be able to go
+    and look at the column, so A-eng names it exactly — in the choice, where the pick is made."""
+    (eng,) = [r for r in _presented() if r.scope == "elicitation:termcolumn:amount"]
+    assert eng.audience == "data"
+    ids = {str(c["id"]) for c in eng.choices or ()}
+    assert ids == {"app_listings.total_amount", "app_listings.amount_paid"}
+    for choice in eng.choices or ():
+        assert str(choice["id"]) in str(choice["label"]), choice
+
+
+def test_the_two_halves_of_a_offer_the_same_candidates_and_describe_them_differently() -> None:
+    """One gap, two records: the candidate set has to be identical or the DBA is choosing from a
+    different list than the business owner was — and the *text* has to differ or the split bought
+    nothing."""
+    presented = {r.scope: r for r in _presented()}
+    biz = presented["elicitation:term:amount"]
+    eng = presented["elicitation:termcolumn:amount"]
+
+    assert {c["id"] for c in biz.choices or ()} == {c["id"] for c in eng.choices or ()}
+    assert {c["label"] for c in biz.choices or ()}.isdisjoint(
+        {c["label"] for c in eng.choices or ()}
+    )
 
 
 def test_every_business_audience_question_still_says_which_table_it_is_about() -> None:

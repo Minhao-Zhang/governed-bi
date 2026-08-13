@@ -467,9 +467,11 @@ def answer_clarification_route(clarification_id: str, body: dict[str, Any] | Non
         answer_clarification,
         append_if_new_scope,
         load_clarifications,
+        restate_question,
     )
     from governed_bi.curator.elicitation import maybe_generate_join_followup
     from governed_bi.curator.elicitation_answers import compose_elicitation_answer_text
+    from governed_bi.curator.elicitation_terms import restate_with_business_definition
 
     session = _curation_session()
     if session.corpus_root is None:
@@ -508,6 +510,21 @@ def answer_clarification_route(clarification_id: str, body: dict[str, Any] | Non
         followup = maybe_generate_join_followup(record, choice_id)
         if followup is not None:
             append_if_new_scope(session.corpus_root, followup)
+
+    # A-biz just landed a business definition, so the A-eng question waiting on it stops asking
+    # in the abstract and starts quoting what it is meant to map. The engineering half already
+    # exists (it is written at scan time, which is what lets a DBA with no business counterpart
+    # answer it standalone) -- what arrives now is the quote, so the question is restated rather
+    # than minted, and its id, and every ``blocked_by`` edge naming it, are untouched.
+    # ``body["answer"]``, not ``record.answer``: this route has already replaced the latter with
+    # the composed corpus sentence, and quoting *that* nests one frame inside the other (found
+    # live on real ``app_store`` -- "Business defines 'price' as \"In business terms, 'price'
+    # means …\"").
+    restatement = restate_with_business_definition(
+        record, load_clarifications(session.corpus_root), freeform=str(body.get("answer") or "")
+    )
+    if restatement is not None:
+        restate_question(session.corpus_root, *restatement)
 
     record = fold_ledger_answer_into_corpus(
         record,
@@ -608,6 +625,7 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
         generate_candidate_questions,
         read_observed_values,
     )
+    from governed_bi.curator.elicitation_terms import read_term_cardinalities
     from governed_bi.curator.gaps import apply_cluster_dependencies, detect_structural_gaps
 
     session = _curation_session()
@@ -627,6 +645,18 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
         corpus=session.corpus,
         policy=session.policy,
     )
+    # One governed ``count(*) / count(distinct c)`` per column whose *name* carries an ambiguous
+    # business term -- 2 on ``app_store``, 0 on German ``beer_factory``. It is a second statement
+    # per column rather than a wider value read because the capped distinct-value list can never
+    # say how many rows a column has, and "one value per record" vs "42 values across 6 312
+    # records" is the grain distinction the business half of A is built on.
+    cardinalities, cardinality_ledger = read_term_cardinalities(
+        tables,
+        session.assets_by_id,
+        connector=session.connector,
+        corpus=session.corpus,
+        policy=session.policy,
+    )
     scan = detect_structural_gaps(
         tables,
         session.assets_by_id,
@@ -640,7 +670,11 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
         observed_values=observed,
     )
     keyword_records = generate_candidate_questions(
-        tables, session.assets_by_id, existing=existing, observed_values=observed
+        tables,
+        session.assets_by_id,
+        existing=existing,
+        observed_values=observed,
+        cardinalities=cardinalities,
     )
     # Idempotency for the structural half, by the same rule ``generate_candidate_questions``
     # applies to its own output: a scope already in the ledger is not proposed again. The
@@ -673,7 +707,7 @@ def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "generated": [_clarification_row(r) for r in new_records],
         "n_generated": len(new_records),
-        "ledger": [dict(row) for row in (*scan.ledger, *value_ledger)],
+        "ledger": [dict(row) for row in (*scan.ledger, *value_ledger, *cardinality_ledger)],
         "coverage": [
             {
                 "detector": c.detector,

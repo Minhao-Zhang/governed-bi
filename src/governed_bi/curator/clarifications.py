@@ -39,6 +39,7 @@ __all__ = [
     "resolve_answer_text",
     "unmet_prerequisites",
     "answer_clarification",
+    "restate_question",
     "mark_converted_to_corpus",
     "append_if_new_scope",
 ]
@@ -367,9 +368,11 @@ def answer_clarification(
     refused, deliberately — ``utku-ai-setup-wizard-gap-model.md`` requires a DBA with no business
     counterpart to be able to answer the engineering half of a hybrid gap standalone (Power Kiosk
     has no business-domain expert; Kindling has no DBA, and neither pilot can fill both tabs). It
-    is the *warrant* that differs, not the availability: a later phase reads a non-empty stamp and
-    lands the corpus write ``draft`` + ``reliability: suspect`` instead of ``certified``. Nothing
-    reads it in this phase — the fold path is unchanged and still certifies either way.
+    is the *warrant* that differs, not the availability, and the stamp is what now makes that
+    difference real: ``curator/clarification.py::fold_ledger_answer_into_corpus`` reads a
+    non-empty stamp and lands the corpus write ``draft`` — a status
+    ``corpus/drafts.py::approve_draft`` refuses to certify — with the caveat in the fact itself,
+    instead of the ordinary ``proposed`` an admin can approve.
 
     Computed here rather than by each caller, from a read of the ledger this function then reads
     again through :func:`_replace_record`. Two full-file reads of a JSONL ledger on an
@@ -395,6 +398,29 @@ def answer_clarification(
         answered_by=answered_by,
         unmet_prerequisites_at_answer=unmet,
     )
+
+
+def restate_question(
+    corpus_root: Path | str, clarification_id: str, question: str
+) -> ClarificationRecord:
+    """Rewrite one **open** record's question text in place and persist.
+
+    The one thing on this ledger that legitimately changes after a record is written, and it has
+    exactly one writer: ``curator/elicitation_terms.restate_with_business_definition``, which
+    carries an answered A-biz definition across to the A-eng question that was waiting for it.
+    A-eng exists from scan time (that is what lets a DBA with no business counterpart answer it
+    standalone), so the definition arrives later than the question and the question has to be
+    able to receive it.
+
+    The record's ``id`` is derived from its ``scope`` and is untouched, so every ``blocked_by``
+    edge pointing at it survives. Restating an **answered** record is refused by the caller
+    rather than here — its answer is already folded into the corpus under an asset id hashed from
+    the old text, and rewriting the question would strand that fact where
+    ``candidate_rules.drop_already_answered`` can no longer see it.
+
+    Raises :class:`ClarificationNotFound` on an unknown id.
+    """
+    return _replace_record(corpus_root, clarification_id, question=question)
 
 
 def mark_converted_to_corpus(corpus_root: Path | str, clarification_id: str) -> ClarificationRecord:

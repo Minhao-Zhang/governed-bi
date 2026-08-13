@@ -185,23 +185,6 @@ def test_d_is_never_generated_as_a_standalone_candidate() -> None:
     assert all(rec.category != "D" for rec in records)
 
 
-def test_a_question_offers_column_picker_choices_across_tables() -> None:
-    from governed_bi.curator.elicitation import generate_candidate_questions
-
-    tables, assets_by_id = _schema()
-    records = generate_candidate_questions(tables, assets_by_id)
-    revenue_like = [r for r in records if r.category == "A" and "amount" in r.scope]
-    assert revenue_like, "expected an A question for the 'amount' term"
-    rec = revenue_like[0]
-    assert rec.ui_modality == "column_picker"
-    assert rec.allow_freeform is True
-    labels = {c["id"] for c in (rec.choices or [])}
-    assert "orders.total_amount" in labels
-    assert "payments.revenue_amount" in labels
-    # target_table is the alphabetically-first matching table ("orders").
-    assert rec.target_table == "orders"
-
-
 def test_generate_is_idempotent_against_existing_ledger() -> None:
     from governed_bi.curator.elicitation import generate_candidate_questions
 
@@ -260,7 +243,8 @@ def test_no_category_is_capped_because_a_quota_drops_findings_silently() -> None
     """
     import pytest
 
-    from governed_bi.curator.elicitation import _AMBIGUOUS_TERMS, generate_candidate_questions
+    from governed_bi.curator.elicitation import generate_candidate_questions
+    from governed_bi.curator.elicitation_terms import AMBIGUOUS_TERMS
 
     tables, assets_by_id = _schema()
     with pytest.raises(TypeError):
@@ -277,7 +261,10 @@ def test_no_category_is_capped_because_a_quota_drops_findings_silently() -> None
         by_category.setdefault(rec.category or "", set()).add(rec.scope.rsplit(":", 1)[-1])
 
     names = [c.physical_name for c in assets_by_id.values() if hasattr(c, "parent_table")]
-    assert by_category["A"] == {t for t in _AMBIGUOUS_TERMS if any(t in n for n in names)}
+    # Every ambiguous term matching a column is asked about. Each matches exactly one column on
+    # this fixture, so the pair collapses to its engineering half (the gap model's ``A″``) and
+    # the scope tails are the terms either way.
+    assert by_category["A"] == {t for t in AMBIGUOUS_TERMS if any(t in n for n in names)}
     assert len(by_category["A"]) == 6, by_category["A"]
     assert len(by_category["B"]) == 4, by_category["B"]
     assert len(by_category["E"]) == 4, by_category["E"]
@@ -502,8 +489,8 @@ def test_join_followup_none_when_picked_table_matches_expected() -> None:
 
     rec = ClarificationRecord(
         id="q001",
-        scope="elicitation:term:amount",
-        question="When you say 'amount', which table/column does that map to?",
+        scope="elicitation:termcolumn:amount",
+        question="Which column holds 'amount'?",
         category="A",
         ui_modality="column_picker",
         choices=({"id": "orders.total_amount", "label": "orders.total_amount"},),
@@ -520,8 +507,8 @@ def test_join_followup_generated_when_picked_table_differs() -> None:
 
     rec = ClarificationRecord(
         id="q001",
-        scope="elicitation:term:amount",
-        question="When you say 'amount', which table/column does that map to?",
+        scope="elicitation:termcolumn:amount",
+        question="Which column holds 'amount'?",
         category="A",
         ui_modality="column_picker",
         choices=(
@@ -577,9 +564,10 @@ def test_every_generated_candidate_carries_a_severity_and_an_audience() -> None:
 
 
 def test_the_four_standalone_categories_carry_the_designed_classification() -> None:
-    """A is ``data`` because the question as shipped *is* the engineering half of the doc's
-    hybrid pair — its choices are bare ``table.column`` identifiers. B, C and E are ``business``:
-    each carries a machine-prepared payload precisely so a domain owner never types a value."""
+    """A is the doc's one hybrid and now resolves into **both** audiences at one severity — a
+    pair of questions about one gap costs the same if either goes unanswered. B, C and E are
+    ``business``: each carries a machine-prepared payload precisely so a domain owner never
+    types a value."""
     from governed_bi.curator.elicitation import generate_candidate_questions
 
     tables, assets_by_id = _schema()
@@ -588,8 +576,12 @@ def test_the_four_standalone_categories_carry_the_designed_classification() -> N
     )
     records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
     by_category = {rec.category: rec for rec in records}
+    by_scope = {rec.scope: rec for rec in records}
 
-    assert (by_category["A"].severity, by_category["A"].audience) == ("T2", "data")
+    a_biz = by_scope["elicitation:term:amount"]
+    a_eng = by_scope["elicitation:termcolumn:amount"]
+    assert (a_biz.severity, a_biz.audience) == ("T2", "business")
+    assert (a_eng.severity, a_eng.audience) == ("T2", "data")
     assert (by_category["B"].severity, by_category["B"].audience) == ("T2", "business")
     assert (by_category["C"].severity, by_category["C"].audience) == ("T2", "business")
     assert (by_category["E"].severity, by_category["E"].audience) == ("T2", "business")
@@ -604,7 +596,7 @@ def test_the_d_join_followup_is_a_safe_failure_for_the_data_audience() -> None:
 
     rec = ClarificationRecord(
         id="q001",
-        scope="elicitation:term:amount",
+        scope="elicitation:termcolumn:amount",
         question="?",
         category="A",
         target_table="orders",
@@ -625,11 +617,12 @@ def test_the_keyword_generator_emits_unblocked_records_and_the_gate_is_applied_a
     """The division of labour ``POST /elicitation/generate`` composes, pinned on both halves.
 
     This generator computes nothing about near-duplicate columns — it cannot, it reads a word
-    list — so every record it returns is unblocked, and that is correct rather than a gap. The
-    prerequisite is stamped by ``curator/gaps.py::apply_cluster_dependencies`` from the structural
-    scan's contested-column map, which the route runs over this output before writing it. Where
-    that map *comes from* is ``tests/curator/test_gaps.py``'s subject; that it lands on the right
-    records here is this one's.
+    list — so the only ``blocked_by`` it writes is the one edge it *owns*: A-eng waiting on its
+    own A-biz half, which is a fact about the pair it just minted and not about the data. Every
+    cluster edge is stamped by ``curator/gaps.py::apply_cluster_dependencies`` from the
+    structural scan's contested-column map, which the route runs over this output before writing
+    it. Where that map *comes from* is ``tests/curator/test_gaps.py``'s subject; that it lands on
+    the right records here is this one's.
 
     Previously this test asserted only the first half, and was true because nothing called the
     second half at all.
@@ -642,16 +635,19 @@ def test_the_keyword_generator_emits_unblocked_records_and_the_gate_is_applied_a
         tables, assets_by_id, connector=_ScriptedConnector(_REAL_VALUES)
     )
     records = generate_candidate_questions(tables, assets_by_id, observed_values=observed)
-    assert all(rec.blocked_by == () for rec in records)
+    by_scope = {r.scope: r for r in records}
+    owned = {"elicitation:termcolumn:amount"}
+    assert all(rec.blocked_by == () for rec in records if rec.scope not in owned)
+    assert by_scope["elicitation:termcolumn:amount"].blocked_by == (
+        by_scope["elicitation:term:amount"].id,
+    )
 
     gated = apply_cluster_dependencies(records, {"orders.country_code": "elicit.cluster"})
-    by_category = {rec.category: rec for rec in gated}
-    assert by_category["B"].target_column == "country_code"
-    assert by_category["B"].blocked_by == ("elicit.cluster",)
-    # A ranges over columns via its choices, so it waits on a cluster it merely offers as an
-    # option; C names no column at all and can never be gated.
-    assert by_category["C"].blocked_by == ()
-    assert by_category["E"].blocked_by == ()
+    by_scope = {rec.scope: rec for rec in gated}
+    assert by_scope["elicitation:valuemap:orders.country_code"].blocked_by == ("elicit.cluster",)
+    # C names no column at all and can never be gated.
+    assert by_scope["elicitation:rule:fiscal_year_start"].blocked_by == ()
+    assert by_scope["elicitation:exclusion:orders.review_status"].blocked_by == ()
 
 
 # ── S6: sentinel detection with no name gate (utku-ai-setup-wizard-gap-model.md § S6) ────────
@@ -797,15 +793,20 @@ def test_a_bare_corpus_settles_nothing() -> None:
 
 
 def test_a_term_the_corpus_already_defines_is_not_asked_about_again() -> None:
+    """And it settles the **business** half only. A certified ``TermAsset`` is a definition of
+    what the term means, arrived at without the wizard — which is precisely A-biz's question and
+    says nothing about which column holds it. That is why the two halves carry different scope
+    prefixes rather than a shared one with a suffix."""
     from governed_bi.curator.candidate_rules import drop_already_answered
 
     records, assets_by_id = _wizard_records()
-    assert any(r.scope == "elicitation:term:total" for r in records)
+    assert any(r.scope == "elicitation:term:amount" for r in records)
 
-    assets_by_id["term.total"] = _term_asset("total", certified=True)
-    kept = drop_already_answered(records, assets_by_id, schema="shop")
-    assert not any(r.scope == "elicitation:term:total" for r in kept)
-    assert any(r.scope == "elicitation:term:amount" for r in kept), "only the settled one goes"
+    assets_by_id["term.amount"] = _term_asset("amount", certified=True)
+    kept = {r.scope for r in drop_already_answered(records, assets_by_id, schema="shop")}
+    assert "elicitation:term:amount" not in kept
+    assert "elicitation:termcolumn:amount" in kept, "a definition is not a column binding"
+    assert "elicitation:termcolumn:total" in kept, "only the settled one goes"
 
 
 def test_a_proposed_definition_does_not_settle_a_term() -> None:
@@ -814,9 +815,9 @@ def test_a_proposed_definition_does_not_settle_a_term() -> None:
     from governed_bi.curator.candidate_rules import drop_already_answered
 
     records, assets_by_id = _wizard_records()
-    assets_by_id["term.total"] = _term_asset("total", certified=False)
+    assets_by_id["term.amount"] = _term_asset("amount", certified=False)
     kept = drop_already_answered(records, assets_by_id, schema="shop")
-    assert any(r.scope == "elicitation:term:total" for r in kept)
+    assert any(r.scope == "elicitation:term:amount" for r in kept)
 
 
 def test_a_question_already_answered_and_folded_is_not_asked_again() -> None:

@@ -677,6 +677,13 @@ def apply_cluster_dependencies(
     column matching a term, so it can wait on several clusters at once — which is why
     ``blocked_by`` is a tuple. An unblocked record is returned **as-is**, not rebuilt, so
     identity survives for callers that compare records.
+
+    **Edges are added, never replaced.** A candidate can arrive already blocked by something this
+    function knows nothing about: A-eng waits on its own A-biz half
+    (``curator/elicitation_terms.py``), stamped by the generator that mints the pair, and that
+    edge is the whole warrant mechanism. Overwriting ``blocked_by`` here — which is what this did
+    until the pair landed — would silently delete it for exactly the A questions that also name a
+    contested column, i.e. the ones with the most reason to wait.
     """
     out: list[ClarificationRecord] = []
     for candidate in candidates:
@@ -688,8 +695,11 @@ def apply_cluster_dependencies(
             for key in _column_keys(candidate)
             if key in gated_columns and gated_columns[key] != candidate.id
         }
+        added = blockers - set(candidate.blocked_by)
         out.append(
-            replace(candidate, blocked_by=tuple(sorted(blockers))) if blockers else candidate
+            replace(candidate, blocked_by=tuple(sorted(set(candidate.blocked_by) | blockers)))
+            if added
+            else candidate
         )
     return out
 

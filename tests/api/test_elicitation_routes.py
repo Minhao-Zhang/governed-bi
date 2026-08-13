@@ -114,6 +114,11 @@ class _ScriptedConnector:
                 if counts is not None
                 else ([], [], False)
             )
+        if "COUNT(*)" in sql:
+            for name, counts in _CARDINALITIES.items():
+                if f'"{name}"' in sql:
+                    return (["n_rows", "n_distinct"], [counts], False)
+            return ([], [], False)
         for name, values in _DB_VALUES.items():
             if f'"{name}"' in sql:
                 return ([name], [(v,) for v in values], False)
@@ -123,6 +128,15 @@ class _ScriptedConnector:
 #: Columns that appear in a comparison statement but never in a value read, so
 #: :class:`_ScriptedConnector` can name the pair it is being asked about.
 _KEY_LIKE: frozenset[str] = frozenset({"order_id", "order_date"})
+
+#: ``(n_rows, n_distinct)`` for the columns category A asks a cardinality count about — the two
+#: whose names carry an ambiguous business term. The two shapes are deliberately opposite:
+#: ``total_amount`` repeats (48 values over 200 order lines) and ``revenue_amount`` is unique per
+#: row, which is the grain distinction A-biz's choices are worded from.
+_CARDINALITIES: dict[str, tuple[int, int]] = {
+    "total_amount": (200, 48),
+    "revenue_amount": (200, 200),
+}
 
 
 #: "the caller did not say", distinct from ``connector=None`` ("this session has no connector"),
@@ -171,6 +185,17 @@ def _session_without_corpus_root() -> Any:
         prompt_set_hash="p", knobs_resolved={}, db_id="shop", run_id="r",
         corpus_root=None,
     )
+
+
+def _by_scope(rows: list[dict[str, Any]], scope: str) -> dict[str, Any]:
+    """One generated row by exact scope.
+
+    Selecting category A by letter stopped identifying a question once A became a *pair*
+    (``curator/elicitation_terms.py``) on top of the three shapes ``curator/gaps.py`` already
+    borrows the letter for. ``elicitation:termcolumn:amount`` is the engineering half — the one
+    that binds a term to a column, and therefore the one every test below is about.
+    """
+    return next(r for r in rows if r["scope"] == scope)
 
 
 def _client(monkeypatch, session: Any) -> Any:
@@ -223,10 +248,15 @@ def test_generate_reports_both_generators_and_their_coverage(monkeypatch, tmp_pa
     rows = body["generated"]
 
     # Keyword: three ambiguous terms (revenue/total/amount), one fiscal-year rule, one sentinel
-    # exclusion, and one value map per categorical column including the decoy.
+    # exclusion, and one value map per categorical column including the decoy. Each term gets an
+    # engineering question; only ``amount`` matches two columns, so only it also gets the
+    # business one (the gap model's ``A″``: a single-choice picker is a forced answer).
     keyword_scopes = {r["scope"] for r in rows if r["scope"].split(":")[1] in
-                      {"term", "rule", "exclusion", "valuemap"}}
-    assert len([s for s in keyword_scopes if ":term:" in s]) == 3, keyword_scopes
+                      {"term", "termcolumn", "rule", "exclusion", "valuemap"}}
+    assert len([s for s in keyword_scopes if ":termcolumn:" in s]) == 3, keyword_scopes
+    assert [s for s in keyword_scopes if s.startswith("elicitation:term:")] == [
+        "elicitation:term:amount"
+    ], keyword_scopes
     assert "elicitation:rule:fiscal_year_start" in keyword_scopes
     assert "elicitation:exclusion:orders.review_status" in keyword_scopes
     assert len([s for s in keyword_scopes if ":valuemap:" in s]) == 2, keyword_scopes
@@ -260,12 +290,19 @@ def test_generate_reports_a_ledger_row_for_every_governed_read(monkeypatch, tmp_
     body = client.post("/elicitation/generate").json()
 
     # Every column of the fixture gets a value read now that a value-driven detector exists,
-    # plus two name-alike column pairs.
+    # plus two name-alike column pairs, plus one row/distinct count for each of the two columns
+    # whose *name* carries an ambiguous business term — the grain evidence category A's two
+    # halves are built on. A capped distinct-value list can never say how many rows a column
+    # has, so it is a second statement rather than a wider first one.
     comparisons = [s for s in connector.statements if "IS DISTINCT FROM" in s]
     value_reads = [s for s in connector.statements if "SELECT DISTINCT" in s]
+    cardinalities = [
+        s for s in connector.statements if "COUNT(*)" in s and "IS DISTINCT FROM" not in s
+    ]
     assert len(comparisons) == 2, connector.statements
     assert len(value_reads) == 8, connector.statements
-    assert len(body["ledger"]) == 10, body["ledger"]
+    assert len(cardinalities) == 2, connector.statements
+    assert len(body["ledger"]) == 12, body["ledger"]
     assert all(row["path"] == "sample" and row["passed"] for row in body["ledger"])
     assert all(row["executed_sql"] for row in body["ledger"])
     assert any('"country_code"' in row["executed_sql"] for row in body["ledger"])
@@ -304,8 +341,8 @@ def test_b_and_e_are_not_proposed_when_there_is_no_connector_to_read_through(
     assert not [r for r in body["generated"] if ":duplicate:" in r["scope"]]
     assert [r for r in body["generated"] if ":describetable:" in r["scope"]]
     # Every refusal is still a governance decision with a row, not a silent skip: one value
-    # read per column plus two pair comparisons.
-    assert len(body["ledger"]) == 10
+    # read per column, two pair comparisons, and two cardinality counts for A.
+    assert len(body["ledger"]) == 12
     assert all(row["passed"] is False for row in body["ledger"])
 
 
@@ -376,9 +413,7 @@ def test_candidates_includes_both_open_and_answered(monkeypatch, tmp_path: Path)
 def test_answering_an_a_candidate_by_choice_composes_a_real_sentence(monkeypatch, tmp_path: Path) -> None:
     client = _client(monkeypatch, _session_with_schema(tmp_path))
     generated = client.post("/elicitation/generate").json()["generated"]
-    a_amount = next(
-        r for r in generated if r["category"] == "A" and "amount" in r["scope"]
-    )
+    a_amount = _by_scope(generated, "elicitation:termcolumn:amount")
     picked = next(c["id"] for c in a_amount["choices"] if c["id"] == "orders.total_amount")
 
     response = client.post(f"/clarifications/{a_amount['id']}/answer", json={"choice_id": picked})
@@ -392,7 +427,7 @@ def test_answering_an_a_candidate_by_choice_composes_a_real_sentence(monkeypatch
 def test_answering_an_a_candidate_with_freeform_composes_a_real_sentence(monkeypatch, tmp_path: Path) -> None:
     client = _client(monkeypatch, _session_with_schema(tmp_path))
     generated = client.post("/elicitation/generate").json()["generated"]
-    a_amount = next(r for r in generated if r["category"] == "A" and "amount" in r["scope"])
+    a_amount = _by_scope(generated, "elicitation:termcolumn:amount")
 
     response = client.post(f"/clarifications/{a_amount['id']}/answer", json={"answer": "orders.grand_total"})
     assert response.status_code == 200, response.text
@@ -451,7 +486,7 @@ def test_d_followup_appears_when_the_picked_table_differs_from_target_table(
 ) -> None:
     client = _client(monkeypatch, _session_with_schema(tmp_path))
     generated = client.post("/elicitation/generate").json()["generated"]
-    a_amount = next(r for r in generated if r["category"] == "A" and "amount" in r["scope"])
+    a_amount = _by_scope(generated, "elicitation:termcolumn:amount")
     assert a_amount["target_table"] == "orders"
 
     # Pick the column on the *other* table -- payments, not the expected orders.
@@ -472,7 +507,7 @@ def test_d_followup_appears_when_the_picked_table_differs_from_target_table(
 def test_no_d_followup_when_the_picked_table_matches_target_table(monkeypatch, tmp_path: Path) -> None:
     client = _client(monkeypatch, _session_with_schema(tmp_path))
     generated = client.post("/elicitation/generate").json()["generated"]
-    a_amount = next(r for r in generated if r["category"] == "A" and "amount" in r["scope"])
+    a_amount = _by_scope(generated, "elicitation:termcolumn:amount")
     same_table_choice = next(c["id"] for c in a_amount["choices"] if c["id"].startswith("orders."))
 
     client.post(f"/clarifications/{a_amount['id']}/answer", json={"choice_id": same_table_choice})
@@ -484,7 +519,7 @@ def test_no_d_followup_when_the_picked_table_matches_target_table(monkeypatch, t
 def test_answering_the_d_followup_with_freeform_is_accepted(monkeypatch, tmp_path: Path) -> None:
     client = _client(monkeypatch, _session_with_schema(tmp_path))
     generated = client.post("/elicitation/generate").json()["generated"]
-    a_amount = next(r for r in generated if r["category"] == "A" and "amount" in r["scope"])
+    a_amount = _by_scope(generated, "elicitation:termcolumn:amount")
     other_table_choice = next(c["id"] for c in a_amount["choices"] if c["id"].startswith("payments."))
     client.post(f"/clarifications/{a_amount['id']}/answer", json={"choice_id": other_table_choice})
 
@@ -506,7 +541,7 @@ def test_a_answer_folds_the_composed_sentence_into_the_corpus(monkeypatch, tmp_p
 
     client = _client(monkeypatch, _session_with_schema(tmp_path))
     generated = client.post("/elicitation/generate").json()["generated"]
-    a_amount = next(r for r in generated if r["category"] == "A" and "amount" in r["scope"])
+    a_amount = _by_scope(generated, "elicitation:termcolumn:amount")
     picked = next(c["id"] for c in a_amount["choices"] if c["id"] == "orders.total_amount")
 
     body = client.post(f"/clarifications/{a_amount['id']}/answer", json={"choice_id": picked}).json()
@@ -555,7 +590,7 @@ def test_generate_a_second_time_after_answering_does_not_duplicate(monkeypatch, 
     must still see its scope as covered and propose nothing new for it."""
     client = _client(monkeypatch, _session_with_schema(tmp_path))
     generated = client.post("/elicitation/generate").json()["generated"]
-    a_amount = next(r for r in generated if r["category"] == "A" and "amount" in r["scope"])
+    a_amount = _by_scope(generated, "elicitation:termcolumn:amount")
     picked = next(c["id"] for c in a_amount["choices"] if c["id"] == "orders.total_amount")
     client.post(f"/clarifications/{a_amount['id']}/answer", json={"choice_id": picked})
 
@@ -752,3 +787,125 @@ def test_answering_an_unblocked_candidate_stamps_an_empty_warrant(monkeypatch, t
 
     body = client.post(f"/clarifications/{c_rec['id']}/answer", json={"answer": "4"}).json()
     assert body["unmet_prerequisites_at_answer"] == []
+
+
+# ── the A pair, end to end over HTTP ─────────────────────────────────────────────────────────
+
+
+def test_the_business_half_unblocks_the_engineering_half_and_is_quoted_into_it(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The whole chain the split exists for, driven the way an admin drives it.
+
+    A-eng is written at scan time and shown as waiting; answering A-biz clears the edge and
+    restates A-eng's question with the definition it was waiting for. The record's id never
+    changes — it is derived from its scope — so the ``blocked_by`` edge pointing at A-biz stays
+    valid through the rewrite.
+    """
+    client = _client(monkeypatch, _session_with_schema(tmp_path))
+    generated = client.post("/elicitation/generate").json()["generated"]
+    biz = _by_scope(generated, "elicitation:term:amount")
+    eng = _by_scope(generated, "elicitation:termcolumn:amount")
+    assert eng["blocked_by"] == [biz["id"]]
+
+    before = {r["id"]: r for r in client.get("/elicitation/candidates").json()}
+    assert before[eng["id"]]["blocked"] is True
+    assert before[biz["id"]]["blocked"] is False
+
+    picked = next(c["id"] for c in biz["choices"] if c["id"] == "orders.total_amount")
+    label = next(c["label"] for c in biz["choices"] if c["id"] == picked)
+    answered = client.post(f"/clarifications/{biz['id']}/answer", json={"choice_id": picked})
+    assert answered.status_code == 200, answered.text
+    assert answered.json()["answer"] == f"In business terms, 'amount' means {label}."
+
+    after = {r["id"]: r for r in client.get("/elicitation/candidates").json()}
+    assert after[eng["id"]]["blocked"] is False
+    assert after[eng["id"]]["question"].startswith("Business defines 'amount' as ")
+    assert label in after[eng["id"]]["question"]
+    assert after[eng["id"]]["blocked_by"] == [biz["id"]], "the edge survives the rewrite"
+
+    # Answering A-biz binds no column, so it mints no join follow-up: only the engineering half
+    # picks a column, and only a picked column can land on an unexpected table.
+    assert not _join_followups(client.get("/elicitation/candidates").json())
+
+
+def test_the_engineering_half_answered_with_its_prerequisite_lands_an_approvable_draft(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from governed_bi.corpus.store import load
+
+    client = _client(monkeypatch, _session_with_schema(tmp_path))
+    generated = client.post("/elicitation/generate").json()["generated"]
+    biz = _by_scope(generated, "elicitation:term:amount")
+    eng = _by_scope(generated, "elicitation:termcolumn:amount")
+
+    client.post(f"/clarifications/{biz['id']}/answer", json={"choice_id": "orders.total_amount"})
+    body = client.post(
+        f"/clarifications/{eng['id']}/answer", json={"choice_id": "orders.total_amount"}
+    ).json()
+    assert body["unmet_prerequisites_at_answer"] == []
+
+    assets, _ = load(tmp_path, schemas=["shop"])
+    eng_draft = next(a for a in assets if "maps to orders.total_amount" in a.summary)
+    assert eng_draft.audit.provenance.status.value == "proposed"
+    assert "Unverified" not in eng_draft.summary
+
+
+def test_the_engineering_half_answered_alone_lands_a_draft_nobody_can_certify(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Power Kiosk's ordinary case: a DBA, no named business-domain expert. The answer is
+    accepted — the API deliberately does not refuse a blocked record, because refusing it would
+    make one of the two pilots unable to use the wizard at all — and it is recorded as weaker
+    evidence than the same answer given with a business definition behind it."""
+    import pytest
+
+    from governed_bi.corpus.drafts import DraftNotPending, approve_draft
+    from governed_bi.corpus.store import load
+
+    client = _client(monkeypatch, _session_with_schema(tmp_path))
+    generated = client.post("/elicitation/generate").json()["generated"]
+    eng = _by_scope(generated, "elicitation:termcolumn:amount")
+
+    body = client.post(
+        f"/clarifications/{eng['id']}/answer", json={"choice_id": "orders.total_amount"}
+    ).json()
+    assert body["status"] == "answered", "the answer is taken, not refused"
+    assert body["unmet_prerequisites_at_answer"] == [
+        _by_scope(generated, "elicitation:term:amount")["id"]
+    ]
+
+    (draft,) = load(tmp_path, schemas=["shop"])[0]
+    assert draft.audit.provenance.status.value == "draft"
+    assert "Unverified" in draft.summary
+    with pytest.raises(DraftNotPending):
+        approve_draft(tmp_path, draft.id)
+
+
+def test_the_two_halves_say_only_what_this_scan_measured(monkeypatch, tmp_path: Path) -> None:
+    """The grounding rule, pinned as text an admin actually sees.
+
+    ``utku-ai-setup-wizard-gap-model.md``'s A-biz example offers "after discounts" and "after
+    refunds and card fees". Neither is derivable from a column name, a type, a value sample or a
+    row count — they are facts about a company's commercial arrangements — so neither is
+    generated. What is left is where the value is recorded and how it varies, both read off this
+    database in this scan.
+    """
+    client = _client(monkeypatch, _session_with_schema(tmp_path))
+    generated = client.post("/elicitation/generate").json()["generated"]
+    biz = _by_scope(generated, "elicitation:term:amount")
+    eng = _by_scope(generated, "elicitation:termcolumn:amount")
+    labels = {c["id"]: c["label"] for c in biz["choices"]}
+
+    # ``total_amount`` repeats across the fixture's 200 rows; ``revenue_amount`` does not. Both
+    # numbers come from the governed ``count(*)/count(distinct)`` this route now issues.
+    assert labels["orders.total_amount"] == (
+        "the 'total amount' recorded in your orders data — 48 different values across 200 records"
+    )
+    assert labels["payments.revenue_amount"] == (
+        "the 'revenue amount' recorded in your payments data — a separate value on every one of "
+        "its 200 records"
+    )
+    # The engineering half carries the same counts against the identifier, plus the type.
+    eng_labels = {c["id"]: c["label"] for c in eng["choices"]}
+    assert eng_labels["orders.total_amount"] == "orders.total_amount — decimal; 200 rows, 48 distinct"
