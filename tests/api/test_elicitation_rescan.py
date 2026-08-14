@@ -19,13 +19,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
-
 from test_elicitation_routes import (  # noqa: E402 - sibling fixture, as tests/curator/ does
     _by_scope,
     _client,
     _session_with_schema,
 )
+
+from contracts import needs  # noqa: E402
 
 pytestmark = needs("D")
 

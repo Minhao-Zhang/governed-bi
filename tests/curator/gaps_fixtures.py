@@ -146,6 +146,10 @@ BEER_FACTORY_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 #: What the live database really answers for every pair the name gate admits.
+#:
+#: One pair per line is the point: the eye scans this as a table, and a reader checking a
+#: detector against it reads down a column. Two of forty rows wrapping to satisfy a column
+#: limit costs more than the two long lines do, so those two carry ``noqa: E501``.
 BEER_FACTORY_PAIR_COUNTS: dict[tuple[str, str, str], tuple[int, int, int, int]] = {
     ("geoposition", "breitengrad", "breitenkoordinate"): (3, 3, 3, 3),  # decoy pair (trap manifest)
     ("geoposition", "breitengrad", "l_ngengrad"): (3, 2, 3, 3),
@@ -166,13 +170,13 @@ BEER_FACTORY_PAIR_COUNTS: dict[tuple[str, str, str], tuple[int, int, int, int]] 
     ("transaktion", "transaktions_id", "transaktions_wurzelbier_id"): (6312, 6312, 6312, 6312),
     ("transaktion", "transaktions_kunde_id", "transaktions_standort_id"): (6312, 6312, 554, 2),
     ("transaktion", "transaktions_kunde_id", "transaktions_wurzelbier_id"): (6312, 6312, 554, 6312),
-    ("transaktion", "wurzelbier_id", "transaktions_wurzelbier_id"): (6312, 6312, 6312, 6312),  # decoy pair (trap manifest)
+    ("transaktion", "wurzelbier_id", "transaktions_wurzelbier_id"): (6312, 6312, 6312, 6312),  # decoy pair (trap manifest)  # noqa: E501
     ("wurzelbier", "marke_id", "marken_nummer"): (6430, 6043, 23, 23),  # decoy pair (trap manifest)
     ("wurzelbier", "standort_id", "zugehoeriger_standort_id"): (6430, 3234, 2, 2),  # decoy pair (trap manifest)
     ("wurzelbier", "wurzelbier_id", "wurzelbier_nummer"): (6430, 6430, 6430, 6430),  # decoy pair (trap manifest)
     ("wurzelbier_bewertung", "kunde_id", "bewertender_kunde_id"): (713, 712, 362, 362),  # decoy pair (trap manifest)
     ("wurzelbier_bewertung", "marke_id", "bewertete_marke_id"): (713, 666, 22, 22),  # decoy pair (trap manifest)
-    ("wurzelbiermarke", "aktueller_einzelhandelspreis", "einzelhandel_preis_aktuell"): (24, 2, 3, 5),  # decoy pair (trap manifest)
+    ("wurzelbiermarke", "aktueller_einzelhandelspreis", "einzelhandel_preis_aktuell"): (24, 2, 3, 5),  # decoy pair (trap manifest)  # noqa: E501
     ("wurzelbiermarke", "aktueller_einzelhandelspreis", "grosshandelspreis"): (24, 24, 3, 17),
     ("wurzelbiermarke", "bundesland", "land"): (24, 24, 14, 2),
     ("wurzelbiermarke", "gro_handelspreis", "aktueller_einzelhandelspreis"): (24, 24, 17, 3),

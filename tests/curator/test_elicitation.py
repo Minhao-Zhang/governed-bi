@@ -834,8 +834,8 @@ def test_a_question_already_answered_and_folded_is_not_asked_again() -> None:
     ledger loses the record while the corpus keeps the fact. ``draft_from_clarification`` hashes
     the question into the asset id, so the check is exact and costs one dict lookup.
     """
-    from governed_bi.curator.clarification import draft_from_clarification
     from governed_bi.curator.candidate_rules import drop_already_answered
+    from governed_bi.curator.clarification import draft_from_clarification
 
     records, assets_by_id = _wizard_records()
     answered = next(r for r in records if r.category == "B")
@@ -862,9 +862,9 @@ def test_dropping_a_settled_prerequisite_unblocks_what_was_waiting_on_it() -> No
     """
     from dataclasses import replace
 
+    from governed_bi.curator.candidate_rules import drop_already_answered
     from governed_bi.curator.clarification import draft_from_clarification
     from governed_bi.curator.clarifications import unmet_prerequisites
-    from governed_bi.curator.candidate_rules import drop_already_answered
 
     records, assets_by_id = _wizard_records()
     blocker = next(r for r in records if r.category == "B")
@@ -881,8 +881,8 @@ def test_dropping_a_settled_prerequisite_unblocks_what_was_waiting_on_it() -> No
 
 
 def test_a_folded_answer_from_another_schema_settles_nothing_here() -> None:
-    from governed_bi.curator.clarification import draft_from_clarification
     from governed_bi.curator.candidate_rules import drop_already_answered
+    from governed_bi.curator.clarification import draft_from_clarification
 
     records, assets_by_id = _wizard_records()
     answered = next(r for r in records if r.category == "B")

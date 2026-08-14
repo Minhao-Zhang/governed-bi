@@ -24,13 +24,13 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
-
 from gaps_fixtures import (  # noqa: E402
     BEER_FACTORY_OBSERVED,
     MeasuredConnector,
     beer_factory_assets,
 )
+
+from contracts import needs  # noqa: E402
 
 pytestmark = needs("D")
 

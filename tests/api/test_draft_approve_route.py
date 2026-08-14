@@ -6,8 +6,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from contracts import needs  # noqa: E402
 

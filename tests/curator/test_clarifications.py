@@ -161,9 +161,9 @@ def test_answer_clarification_with_a_choice_id(tmp_path: Path) -> None:
 
 
 def test_answer_clarification_unknown_id_raises(tmp_path: Path) -> None:
-    from governed_bi.curator.clarifications import ClarificationNotFound, answer_clarification
-
     import pytest
+
+    from governed_bi.curator.clarifications import ClarificationNotFound, answer_clarification
 
     with pytest.raises(ClarificationNotFound):
         answer_clarification(tmp_path, "nope", answer="x")
@@ -215,9 +215,9 @@ def test_mark_converted_to_corpus_sets_the_flag_and_persists(tmp_path: Path) -> 
 
 
 def test_mark_converted_to_corpus_unknown_id_raises(tmp_path: Path) -> None:
-    from governed_bi.curator.clarifications import ClarificationNotFound, mark_converted_to_corpus
-
     import pytest
+
+    from governed_bi.curator.clarifications import ClarificationNotFound, mark_converted_to_corpus
 
     with pytest.raises(ClarificationNotFound):
         mark_converted_to_corpus(tmp_path, "nope")

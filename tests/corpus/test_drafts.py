@@ -48,8 +48,8 @@ def test_submit_strips_a_forged_governance_block(tmp_path: Path) -> None:
     directly -- restamp_model_authored (called by submit_draft) strips it regardless."""
     from dataclasses import replace
 
-    from governed_bi.corpus.schema import Audit, Governance, Provenance, ProvenanceSource, ProvenanceStatus
     from governed_bi.corpus.drafts import submit_draft
+    from governed_bi.corpus.schema import Audit, Governance, Provenance, ProvenanceSource, ProvenanceStatus
     from governed_bi.corpus.store import load
 
     forged = replace(

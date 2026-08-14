@@ -266,8 +266,9 @@ def test_resolve_a_second_time_is_409(monkeypatch, tmp_path: Path) -> None:
     )
     client = _client(monkeypatch, tmp_path)
 
-    assert client.post(f"/corpus/conflicts/{candidate.id}/resolve", json={"resolution": "keep_existing"}).status_code == 200
-    assert client.post(f"/corpus/conflicts/{candidate.id}/resolve", json={"resolution": "keep_existing"}).status_code == 409
+    body = {"resolution": "keep_existing"}
+    assert client.post(f"/corpus/conflicts/{candidate.id}/resolve", json=body).status_code == 200
+    assert client.post(f"/corpus/conflicts/{candidate.id}/resolve", json=body).status_code == 409
 
 
 def test_resolve_unknown_id_is_404(monkeypatch, tmp_path: Path) -> None:

@@ -269,9 +269,9 @@ def _record(**overrides: Any) -> Any:
 
 
 def test_fold_ledger_answer_skips_ranking_ambiguity(tmp_path: Path) -> None:
-    from governed_bi.curator.clarifications import write_clarifications
-    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
     from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
+    from governed_bi.curator.clarifications import write_clarifications
 
     record = _record(basis="ranking_ambiguity")
     write_clarifications(tmp_path, [record])
@@ -285,9 +285,9 @@ def test_fold_ledger_answer_skips_ranking_ambiguity(tmp_path: Path) -> None:
 
 
 def test_fold_ledger_answer_treats_missing_basis_as_data_definition_eligible(tmp_path: Path) -> None:
-    from governed_bi.curator.clarifications import write_clarifications
-    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
     from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
+    from governed_bi.curator.clarifications import write_clarifications
 
     record = _record(basis=None)
     write_clarifications(tmp_path, [record])
@@ -302,9 +302,9 @@ def test_fold_ledger_answer_treats_missing_basis_as_data_definition_eligible(tmp
 
 
 def test_fold_ledger_answer_folds_data_definition_and_marks_converted(tmp_path: Path) -> None:
-    from governed_bi.curator.clarifications import write_clarifications
-    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
     from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
+    from governed_bi.curator.clarifications import write_clarifications
 
     record = _record(basis="data_definition")
     write_clarifications(tmp_path, [record])
@@ -322,9 +322,9 @@ def test_fold_ledger_answer_twice_does_not_double_write(tmp_path: Path) -> None:
     reachable in production only if this ever gets called twice for one record (there is no
     re-answer flow today), exercised here directly since that is the only way to reach it.
     """
-    from governed_bi.curator.clarifications import load_clarifications, write_clarifications
-    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
     from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
+    from governed_bi.curator.clarifications import load_clarifications, write_clarifications
 
     record = _record(basis="data_definition")
     write_clarifications(tmp_path, [record])
@@ -350,9 +350,9 @@ def test_fold_ledger_answer_twice_does_not_double_write(tmp_path: Path) -> None:
 
 
 def test_fold_ledger_answer_with_no_answer_text_is_a_no_op(tmp_path: Path) -> None:
-    from governed_bi.curator.clarifications import write_clarifications
-    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
     from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
+    from governed_bi.curator.clarifications import write_clarifications
 
     record = _record(answer=None, basis="data_definition")
     write_clarifications(tmp_path, [record])

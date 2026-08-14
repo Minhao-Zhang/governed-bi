@@ -25,7 +25,6 @@ pytestmark = needs("D")
 
 def _rec(scope: str, **changes: Any) -> Any:
     from governed_bi.curator.clarifications import ClarificationRecord
-
     from governed_bi.curator.elicitation import ELICITATION_SOURCE, _record_id
 
     fields: dict[str, Any] = {

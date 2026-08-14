@@ -23,9 +23,9 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
-
 from gaps_fixtures import MeasuredConnector, beer_factory_assets  # noqa: E402
+
+from contracts import needs  # noqa: E402
 
 pytestmark = needs("D")
 
@@ -244,8 +244,8 @@ def test_the_guard_moves_a_leaking_business_question_to_the_data_tab() -> None:
     """A control, not a convention. Every template below currently passes on its own, which is
     the state this is meant to keep: the guard exists so that the *next* edit to a business
     template cannot ship a question its audience cannot read."""
-    from governed_bi.curator.clarifications import ClarificationRecord
     from governed_bi.curator.candidate_rules import enforce_audience_language
+    from governed_bi.curator.clarifications import ClarificationRecord
 
     leaking = ClarificationRecord(
         id="q1",
@@ -263,8 +263,8 @@ def test_the_guard_moves_a_leaking_business_question_to_the_data_tab() -> None:
 def test_the_guard_leaves_a_data_audience_question_alone() -> None:
     """The asymmetry, pinned: the same text that disqualifies a business question is what makes
     a data question answerable."""
-    from governed_bi.curator.clarifications import ClarificationRecord
     from governed_bi.curator.candidate_rules import enforce_audience_language
+    from governed_bi.curator.clarifications import ClarificationRecord
 
     engineering = ClarificationRecord(
         id="q2",

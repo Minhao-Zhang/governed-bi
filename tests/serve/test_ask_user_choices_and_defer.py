@@ -22,12 +22,12 @@ Three things this initiative changed on ``ask_user``, covered here:
 from __future__ import annotations
 
 from langchain_core.messages import AIMessage
+from test_agent_tools_hitl import _call, _tools
 
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.graph import compile_graph
 from governed_bi.serve.resume import resume_clarification
 from governed_bi.serve.scripted_model import ScriptedChatModel
-from test_agent_tools_hitl import _call, _tools
 
 
 def test_ask_user_choices_and_allow_freeform_are_optional_in_the_schema() -> None:

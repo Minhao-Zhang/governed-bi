@@ -28,8 +28,6 @@ fold_ledger_answer_into_corpus``) rather than duplicated for it.
 
 from __future__ import annotations
 
-from typing import Any
-
 from langchain_core.runnables import RunnableConfig
 
 from governed_bi.serve.runtime import bool_knob, configurable
