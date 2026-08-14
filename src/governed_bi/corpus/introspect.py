@@ -1,9 +1,7 @@
 """Introspection shapes consumed by the seed (ADR 0005 §1.7).
 
-Live in ``corpus/`` rather than ``datasource/`` so the seed can import them
-without an upward layer violation (corpus sits below datasource).
-
-Named ``Introspected*`` rather than ``ColumnInfo`` / ``TableInfo`` — those names
+Here rather than in ``datasource/`` so the seed can import them without an upward
+layer violation. Named ``Introspected*`` because ``ColumnInfo`` / ``TableInfo``
 already belong to the ``ports`` Protocols for ``Connector.describe_table``.
 """
 

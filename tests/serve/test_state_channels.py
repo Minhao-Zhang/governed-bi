@@ -25,6 +25,7 @@ from governed_bi.serve.state import (
     TEST_HOOKS,
     TURN_IDENTITY,
     ServeState,
+    merge_delta,
     merge_facets,
     settle_failure,
     settle_path_kind,
@@ -209,12 +210,29 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
     ``turn()`` mentions the key would not show that the value clears anything. This applies
     each reducer by hand.
     """
-    reducers = {"facets": merge_facets, "path_kind": settle_path_kind, "failure": settle_failure}
+    reducers = {
+        "facets": merge_facets,
+        "path_kind": settle_path_kind,
+        "failure": settle_failure,
+        # Reduced since 2026-08-11. Both matter here more than the three above: a merge rule
+        # that did not clear would carry turn one's `evicted` and `budget_dropped` into turn
+        # two and report drops that never happened.
+        "retrieved": merge_delta,
+        "delivery": merge_delta,
+    }
     stale: dict[str, Any] = {
         "path_kind": "crashed",
         "failure": {"stage": "facet_term", "error_type": "ValueError"},
         "facets": {"schema": {"facet": "schema", "queries": [], "hits": [1], "channels": {}}},
         "negative": {"outcome": "hit", "tau": 0.5, "top_score": 0.9, "matched_id": "neg-1"},
+        # A carried-over abstention verdict is the previous turn's decision, with the previous
+        # turn's evidence, filed against this turn's question — and because the policy writes
+        # its reason into `terminal_reason`, a stale `withhold` explains a decline this turn
+        # never took.
+        "abstention": {
+            "policy": "context_sufficiency_v1", "outcome": "withhold",
+            "reason": "nothing_licensed", "rules_evaluated": [], "evidence": {},
+        },
         "guard": {"outcome": "blocked"}, "rewrite": {"outcome": "rewritten"},
         "retrieved": {"by_type": {"table": ["sales_a.customers"]}},
         "delivery": {"context_hash": "stale"}, "execution": {"attempts": [1], "terminal": "refused"},
@@ -226,6 +244,10 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # A carried-over assumption would attach turn one's caveat to turn two's answer, which
         # never stated it (Gap 1, utku-ai-deployment-targets.md).
         "assumptions": ["Excluded cancelled orders from the total."],
+        # A carried-over verdict is the previous turn's opinion filed against this turn's SQL,
+        # and the record would publish it as this turn's — an observer's judgement about a
+        # statement it never saw.
+        "reflect_verdict": {"verdict": "wrong", "reason": "counted the wrong table"},
         # A carried-over query vector would score the *previous* question's semantics against
         # this turn's candidates — a wrong ranking with nothing anywhere disagreeing.
         "query_vector": [0.1, 0.2, 0.3],
@@ -233,6 +255,11 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # user did in between — the field would report a real number and mean nothing.
         "turn_started_at": 1_700_000_000.0,
         "terminal_reason": "missing_join_path", "schemas": ["ops_b"], "crossings": [{}],
+        # A carried-over pin routes turn two to turn one's schemas and *succeeds*, so the run
+        # produces a plausible answer against the wrong database with nothing recording that
+        # routing never ran. Eval-only, which is why it has to be reset here rather than
+        # noticed in production.
+        "pinned_schemas": ["ops_b"],
         "licensed": ["ops_b.sensors"], "clarification_requested": True,
     }
     assert set(stale) == set(PER_TURN_RESET), (
@@ -248,6 +275,186 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
             "reads it and stamps it into its own record."
         )
         assert settled != RESET, f"{name!r} leaked the reset sentinel into state"
+
+
+# ── a key one node adds must survive a node that never heard of it ────────────
+
+
+def test_the_budget_witness_reaches_stamp(
+    monkeypatch, two_schema_index, two_schema_assets, guard_off_policy
+):
+    """``pass_two`` writes what the per-type cap discarded; ``resolve`` used to delete it.
+
+    ``_copy_retrieved`` rebuilt ``retrieved`` from the six keys ``RetrievalResult`` declared, so
+    the two ``pass_two`` had added beside them — ``budget_dropped`` and
+    ``budget_best_dropped_score`` — died one super-step later, on **every** turn that hit a cap.
+    Verified 2026-08-11: neither key had a reader anywhere in ``src/``, and the reason is that
+    neither key ever reached one. ``register/citations.py`` states what they are for: a cap can
+    discard a gold table, and without a witness the miss reads as retrieval never having found
+    it — the difference between a retrieval defect and a budget that is set too tight.
+
+    Asserted at ``stamp`` and not at ``route``, through a spy on the real node, because
+    ``tests/retrieve/test_budget_witness.py`` already proves ``apply_budgets`` produces the
+    counts and that is exactly as far as the evidence went. What was missing is the two
+    super-steps in between.
+
+    **The falsifying mutation is removing the reducer, not restoring the rebuild** — corrected
+    2026-08-12, and the correction is worth more than the sentence it replaces. This docstring
+    used to claim that putting ``resolve_node``'s six-key rebuild back made this test fail. It
+    does not: restore it and the file is green. That is not a gap in the test, it is the
+    property ``merge_delta`` buys — right wins *per top-level key*, so a write naming six keys
+    cannot destroy a seventh, whatever it thinks it is rebuilding. The rebuild was only ever
+    destructive because the channel was unreduced.
+
+    So the mutation that turns this red is ``retrieved: Annotated[RetrievalResult, merge_delta]``
+    → ``right`` (or dropping the annotation, which is the same thing): ``stamp`` then sees
+    ``resolve``'s write and nothing else, and the witness is gone. Verified both ways.
+    :func:`test_the_two_delta_channels_are_reduced` pins that annotation directly, because a
+    mutation this test can only see through four super-steps of graph is one a reader cannot
+    check by eye.
+    """
+    seen: list[dict[str, Any]] = []
+    real_stamp = graph_mod.stamp
+
+    def spy(state):
+        seen.append(dict(state))
+        return real_stamp(state)
+
+    monkeypatch.setattr(graph_mod, "stamp", spy)
+    out = graph_mod.compile_graph().invoke(
+        # `route_top_n=1` keeps the shortlist on `sales_a`, which holds 15 tables against a
+        # register cap of 8 — so the cap has to bite, rather than happening to.
+        _turn(question="customer account for registered buyers"),
+        _config(two_schema_index, two_schema_assets, guard_off_policy, "t-budget"),
+    )
+
+    routed = out.get("retrieved") or {}
+    assert routed.get("budget_dropped", {}).get("table"), (
+        "precondition: the table cap did not discard anything on this fixture, so this test "
+        f"would pass with the witness deleted. by_type={sorted(routed.get('by_type') or {})}"
+    )
+
+    assert len(seen) == 1, "the spy must see exactly one stamp"
+    witness = (seen[0].get("retrieved") or {}).get("budget_dropped")
+    assert witness == routed["budget_dropped"], (
+        "the cap's witness did not survive to stamp: resolve/connect rebuilt `retrieved` from "
+        f"their own key list and dropped it. stamp saw {witness!r}"
+    )
+    assert (seen[0].get("retrieved") or {}).get("budget_best_dropped_score", {}).get("table"), (
+        "the count survived and the best surviving-nothing score did not; a drop at 0.97 and a "
+        "drop at 0.01 want opposite decisions and the count alone cannot tell them apart"
+    )
+
+    # The keys `resolve` and `connect` do decide are still theirs, so the merge rule did not
+    # turn a narrowing write into an additive one.
+    assert "pulled_in" in (seen[0].get("retrieved") or {})
+
+    # **And it reaches the record, which is the only artifact anything downstream opens.**
+    # Surviving to `stamp` was one super-step, not a destination: `stamp` projects a named list
+    # of keys off `retrieved`, and until 2026-08-12 neither budget key was on it or in
+    # `register/record.py`, so the witness was live in state and absent from every turn record,
+    # every trace page and every gate. Asserted through the register rather than by name, so a
+    # field declared and never projected fails here.
+    record = out["answer"]["record"]
+    assert record["budget_dropped"] == routed["budget_dropped"], (
+        "the cap's witness reached `stamp` and not the record. `register/citations.py` states "
+        "the requirement it exists for: a cap can discard a gold table, and without this in an "
+        f"artifact the miss reads as retrieval never having found it. record={record!r}"
+    )
+    assert record["budget_best_dropped_score"], (
+        "the count is in the record and the score is not; a drop at 0.97 and a drop at 0.01 "
+        "want opposite decisions and the count alone cannot tell them apart"
+    )
+
+
+def test_the_budget_witness_is_null_rather_than_absent_when_no_cap_bit(
+    two_schema_index, two_schema_assets, guard_off_policy
+):
+    """The other half, and the one that keeps the field honest.
+
+    ``pass_two`` emits the two keys **only when a cap bit**, so a turn under budget is
+    byte-identical and ``context_hash`` holds. The record must still carry them — as ``null``,
+    the value :class:`~governed_bi.register.record.Absence` ``not_applicable`` declares — rather
+    than omitting them, because a key that appears only on turns where something was dropped
+    cannot afterwards be told from a projection that was never wired up. That is the same
+    argument the register makes for ``guard`` ("a gate that leaves a trace only when it fires").
+    """
+    from governed_bi.register.record import record_keys
+
+    out = graph_mod.compile_graph().invoke(
+        # `route_top_n=1` and a question that reaches few tables: the caps must *not* bite.
+        _turn(question="sensors"),
+        _config(two_schema_index, two_schema_assets, guard_off_policy, "t-no-budget"),
+    )
+    routed = out.get("retrieved") or {}
+    assert "budget_dropped" not in routed, (
+        "precondition: a cap bit on this fixture, so this test is not measuring the under-budget "
+        f"path. by_type={ {k: len(v) for k, v in (routed.get('by_type') or {}).items()} }"
+    )
+
+    record = out["answer"]["record"]
+    assert {"budget_dropped", "budget_best_dropped_score"} <= record_keys(), (
+        "the budget witness is not declared in the record register, so `project()` cannot emit "
+        "it and no artifact can carry it"
+    )
+    assert record["budget_dropped"] is None and record["budget_best_dropped_score"] is None
+    assert set(record) == record_keys(), sorted(set(record) ^ record_keys())
+
+
+def test_the_two_delta_channels_are_reduced() -> None:
+    """``retrieved`` and ``delivery`` carry :func:`merge_delta`, read off the annotation.
+
+    The mutation that breaks every claim in this section is one character wide — drop the
+    ``Annotated[...]`` and LangGraph's default channel takes the last write whole — and until
+    this test existed nothing pinned it. ``test_the_budget_witness_reaches_stamp`` sees it, but
+    only through four super-steps of a compiled graph, and
+    ``test_turn_clears_every_per_turn_channel_through_the_real_reducers`` applies a
+    hand-maintained ``{name: reducer}`` map that would go on testing ``merge_delta`` after the
+    channel had stopped using it. Both of those are about what the reducer *does*; this is about
+    which channels have one.
+
+    Asserted from ``get_type_hints(include_extras=True)`` rather than from a list of names, so a
+    third channel adopting the rule needs no edit here and a channel losing it fails.
+    """
+    from typing import Annotated, get_args, get_origin, get_type_hints
+
+    hints = get_type_hints(ServeState, include_extras=True)
+    for name in ("retrieved", "delivery"):
+        annotation = hints[name]
+        assert get_origin(annotation) is Annotated, (
+            f"`{name}` is no longer a reduced channel. LangGraph's default takes the last write "
+            "whole, so a node writing what it changed silently deletes every key it did not "
+            "name — which is how `budget_dropped` died one super-step after it was written, on "
+            "every turn that hit a cap."
+        )
+        assert merge_delta in get_args(annotation)[1:], (
+            f"`{name}` is reduced by something other than merge_delta: "
+            f"{get_args(annotation)[1:]}. The rule is right-wins-per-top-level-key; a deeper "
+            "merge would make `connect`'s narrowing write additive and put back the assets of a "
+            "component it could not join."
+        )
+
+
+def test_a_narrowing_write_still_narrows(
+    two_schema_index, two_schema_assets, guard_off_policy
+):
+    """The risk a merge rule carries, stated as a test.
+
+    ``connect`` drops the assets of a component it could not join, and the prompt must not show
+    a table the turn may not query. A merge rule that recursed into the sub-collections would
+    make that write additive and put them straight back. ``merge_delta`` replaces per top-level
+    key for exactly this reason.
+    """
+    before = {
+        "by_type": {"table": ["a.x", "b.y"]},
+        "selected": {"a.x": {}, "b.y": {}},
+        "schema_ranking": [("a", 1.0)],
+    }
+    narrowed = merge_delta(before, {"by_type": {"table": ["a.x"]}, "selected": {"a.x": {}}})
+
+    assert narrowed["by_type"] == {"table": ["a.x"]}, narrowed
+    assert set(narrowed["selected"]) == {"a.x"}, narrowed
+    assert narrowed["schema_ranking"] == [("a", 1.0)], "an untouched key must be carried"
 
 
 # ── the classification that keeps the reset honest ────────────────────────────
@@ -313,7 +520,7 @@ def test_a_turn_built_by_the_session_seam_actually_answers(
     ``python -m governed_bi.serve``, ``POST /chat`` and the LangGraph Server node — was never
     the thing under test. When ``turn()`` started writing the ``RESET`` sentinel, that sentinel
     became the **first** write to each reduced channel, and
-    :func:`~governed_bi.serve.state._cleared` records what LangGraph does with a first write.
+    :func:`~governed_bi.serve.state.cleared` records what LangGraph does with a first write.
     Result: ``outcome: "crashed"`` on every turn, and 387 green tests.
 
     Asserted at the level a user sees, deliberately: not "the reducer normalises the sentinel"
@@ -393,57 +600,103 @@ def test_a_failure_in_stamp_is_not_swallowed(
 def test_a_node_timeout_is_attached_only_where_it_can_fire() -> None:
     """The bound exists, and it is not claimed where it would be a false promise.
 
-    LangGraph refuses ``TimeoutPolicy`` on a sync node outright — "sync Python execution cannot
-    be safely cancelled in-process" — which is why every node became ``async def``. But a node
-    whose *body* still runs through ``asyncio.to_thread`` only has its ``await`` cancelled; the
-    thread keeps going. Attaching a policy there would report a ceiling that does not hold, so
-    the ones that are natively async carry it and the rest do not.
+    A node whose *body* still runs through ``asyncio.to_thread`` only has its ``await``
+    cancelled; the thread keeps going. Claiming a ceiling there reports a stop that did not
+    happen, so ``wrap_node`` refuses the wiring outright and only natively-async nodes carry a
+    bound.
 
     ``agent_core`` is the node this is for: ``llm_timeout_s`` bounds one of its provider calls,
-    the loop makes several, and the real recursion limit under the server is 10007 — so nothing
-    bounded the node.
+    the loop makes several, and nothing else bounds the node.
+
+    **The bound is no longer LangGraph's.** ``add_node(timeout=...)`` enforced it outside the
+    node function, which needed an ``error_handler`` to catch — and that handler was measured
+    not to save the run under the stream modes the served path uses. ``wrap_node`` owns the
+    clock now, so the assertion reads the wrapper's configuration rather than the node's.
     """
-    from governed_bi.serve.graph import _CANCELLABLE, build_graph
+    from governed_bi.serve.graph import _CANCELLABLE, _node_timeout, build_graph
 
     nodes = build_graph().nodes
-    timed = {name for name, node in nodes.items() if getattr(node, "timeout", None) is not None}
+    # Nothing carries a LangGraph node timeout any more; if one reappears, the error_handler
+    # question comes back with it.
+    assert not [n for n, node in nodes.items() if getattr(node, "timeout", None) is not None], (
+        "a node carries a LangGraph-enforced timeout again — it cannot be caught by wrap_node "
+        "and its handler does not save the run under custom/messages/subgraph streaming"
+    )
 
-    assert "agent_core" in timed, "the unbounded node is still unbounded"
+    timed = {name for name in nodes if _node_timeout(name) is not None}
+    assert "agent_core" not in timed, (
+        "agent_core's hang-stop must live inside the node so a timeout keeps the ledger; "
+        "wrap_node would discard streamed attempts"
+    )
     assert _CANCELLABLE <= timed, f"a cancellable rail carries no bound: {_CANCELLABLE - timed}"
-    # The fan-out is deliberately excluded: with concurrent siblings a NodeTimeoutError surfaces
-    # at executor teardown and never reaches the handler, so the turn would end with no record.
+    assert "narrate" not in timed, (
+        "narrate carries a node timeout again — that marks an answered turn crashed"
+    )
+    assert "reflect" not in timed, "reflect must stay an observer that cannot fail the turn"
+    # The fan-out stays out by decision, not by constraint: moving the clock inside wrap_node
+    # removed the concurrent-sibling problem, but five simultaneous bounds against a shared
+    # provider quota is an unmeasured comparability change.
     assert not (timed & {name for name, _ in graph_mod._FACET_NODES}), (
-        "a facet carries a timeout; a hang there escapes the handler and loses the record"
+        "a facet carries a timeout; that is now possible but is an unmeasured arm change"
     )
     assert "stamp" not in timed, "stamp is unwrapped and must stay so"
     for name in timed:
-        assert name == "agent_core" or name in _CANCELLABLE, (
-            f"{name!r} claims a timeout but its body is not natively async, so the await would "
-            "be cancelled and the work would carry on in its thread"
+        assert name in _CANCELLABLE, (
+            f"{name!r} claims a wrap_node timeout but its body is not natively async, so the "
+            "await would be cancelled and the work would carry on in its thread"
         )
 
 
 def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
     """A knob reachable only from source is the defect the register exists to abolish.
 
-    Both are read from the environment before falling back to the declared default, the same way
-    the two model timeouts already are.
+    Rail bounds are read from the environment before falling back to the declared default.
+    ``agent_core``'s bound is settable the same way but lives on the node, not ``wrap_node``.
+
+    ``agent_node_timeout_s`` must also be reachable from ``knobs_resolved``, because it is
+    ``Role.comparability``: it took no state at all, so two arms declaring different values
+    recorded two configurations that had behaved identically. And ``0`` must mean *no wall*
+    rather than a zero-second deadline that fails every turn on its first frame.
     """
     import os
 
     from governed_bi.register.knobs import knob_default
     from governed_bi.serve.graph import _node_timeout
+    from governed_bi.serve.nodes.agent_core import _agent_node_timeout, _hang_grace
 
-    assert _node_timeout("agent_core").run_timeout == float(knob_default("agent_node_timeout_s"))
-    assert _node_timeout("guard").run_timeout == float(knob_default("rail_node_timeout_s"))
+    assert _node_timeout("agent_core") is None, (
+        "agent_core owns agent_node_timeout_s internally; wrap must not double-bound it"
+    )
+    assert _node_timeout("guard") == float(knob_default("rail_node_timeout_s"))
     assert _node_timeout("route") is None, "a to_thread node must not claim a bound"
     assert _node_timeout("facet_term") is None, (
-        "a facet carries a timeout again: concurrent siblings make NodeTimeoutError escape the "
-        "handler, so the turn would end with no record"
+        "a facet carries a timeout again: possible now, but an unmeasured comparability change"
     )
+    assert _agent_node_timeout({}) == float(knob_default("agent_node_timeout_s"))
+
+    # The arm-settable path, which is the whole reason the knob is Role.comparability.
+    assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 55.0}}) == 55.0
+
+    # `0` disables rather than kills. Both surfaces, because both used to parse it as a deadline.
+    assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 0}}) is None
+
+    # The grace is what lets the soft wall stay between-frames without losing the hang-stop.
+    assert _hang_grace({}) == float(knob_default("llm_timeout_s"))
+    assert _hang_grace({"knobs_resolved": {"llm_timeout_s": 42.0}}) == 42.0
 
     os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "12.5"
+    os.environ["GOVERNED_BI_RAIL_NODE_TIMEOUT_S"] = "7"
     try:
-        assert _node_timeout("agent_core").run_timeout == 12.5
+        assert _agent_node_timeout({}) == 12.5
+        # Env still wins over a resolved knob, as it does for every other node bound.
+        assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 55.0}}) == 12.5
+        assert _node_timeout("guard") == 7.0
+        os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "0"
+        assert _agent_node_timeout({}) is None, "'0' from a deployment must mean off, not 0s"
+        os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = ""
+        assert _agent_node_timeout({}) == float(knob_default("agent_node_timeout_s")), (
+            "an empty env var is unset, not zero"
+        )
     finally:
         del os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"]
+        del os.environ["GOVERNED_BI_RAIL_NODE_TIMEOUT_S"]

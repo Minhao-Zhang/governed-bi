@@ -1,21 +1,18 @@
 """Filtering, sorting and bounded relationship walks over the loaded corpus. ADR 0009.
 
-**The filterable columns are derived, never listed.** They come from each asset
-dataclass's own fields plus :data:`~governed_bi.register.assets.ASSET_REGISTER`, so a field
-added to ``corpus/schema.py`` becomes filterable with no change here and no change to the
-UI — which renders its filter row from :func:`columns_for`. A hand-written column list in a
-route would be the drift ``register/`` exists to end, and it would drift *silently*, because
-a missing column is indistinguishable from a column somebody chose not to expose.
+**The filterable columns are derived, never listed** — from each asset dataclass's fields
+plus :data:`~governed_bi.register.assets.ASSET_REGISTER`, so a new field in
+``corpus/schema.py`` becomes filterable with no change here and none in the UI, which renders
+its filter row from :func:`columns_for`. A hand-written list would drift silently: a missing
+column is indistinguishable from one somebody chose not to expose.
 
 **A filter that cannot be applied is reported, not dropped.** :func:`apply_where` returns the
-predicates it could not understand, and the route returns them to the client. Ignoring an
-unknown field would show a filtered-looking list that is not filtered — the same class of
-defect as a gate that never fires.
+predicates it could not understand; ignoring one shows a filtered-looking list that is not
+filtered.
 
-Filtering happens over the **in-memory corpus**, which is what retrieval runs on (ADR 0009
-D5). Pushing it into SQL would make the browser query the lake instead of the semantic layer,
-so an asset that failed to load would still appear — the corpus would look complete because
-the database is.
+Filtering runs over the **in-memory corpus**, which is what retrieval runs on (ADR 0009 D5).
+In SQL it would query the lake instead of the semantic layer, so an asset that failed to load
+would still appear and the corpus would look complete because the database is.
 """
 
 from __future__ import annotations
@@ -72,13 +69,13 @@ OPS_BY_KIND: Mapping[FieldKind, tuple[str, ...]] = {
     FieldKind.block: ("present",),
 }
 
-#: Nodes returned when a caller names no budget. Chosen so a dagre layout in the browser
-#: stays readable; the full lake is 656 tables, which is not a diagram a person can read.
+#: Nodes returned when a caller names no budget. Keeps a dagre layout readable; the full lake
+#: is 656 tables, which is not a diagram a person can read.
 DEFAULT_NODE_BUDGET = 120
 
 #: Fields whose *value* is a reference to another asset. Declared because the annotation
-#: cannot tell a reference from any other string, and treating one as free text would offer
-#: ``contains`` on an id where ``eq`` is what a caller wants.
+#: cannot tell a reference from any other string, and free text offers ``contains`` on an id
+#: where ``eq`` is what a caller wants.
 _REF_FIELDS = frozenset(
     {
         "parent_table",
@@ -132,8 +129,8 @@ def columns_for(asset_type: AssetType, cls: type) -> list[dict[str, Any]]:
                 "name": field.name,
                 "kind": kind.value,
                 "ops": list(OPS_BY_KIND[kind]),
-                # A block is a nested object: sorting rows by it would order them by a
-                # repr, which is a stable-looking arbitrary order.
+                # A block is a nested object: sorting by it orders rows by a repr, which is a
+                # stable-looking arbitrary order.
                 "sortable": kind not in (FieldKind.block, FieldKind.list),
                 "identifier": field.name in policy.identifier_fields,
             }
@@ -231,9 +228,8 @@ def apply_where(
 def sort_rows(rows: list[Any], sort: str | None, order: str) -> list[Any]:
     """Sort by one column, ``id`` as the tiebreak so a page is stable across requests.
 
-    Without the tiebreak two rows equal on the sort key can swap between requests, and a
-    paginated reader then sees one row twice and another never — which looks like missing
-    data rather than an unstable sort.
+    Without it, rows equal on the sort key swap between requests and a paginated reader sees
+    one row twice and another never — which looks like missing data.
     """
     reverse = str(order).lower() == "desc"
     if not sort:
@@ -273,15 +269,13 @@ def row_for(asset: Any, columns: Sequence[str] | None = None) -> dict[str, Any]:
 def predicate_columns(on: str) -> set[tuple[str, str]]:
     """``(qualifier, column)`` pairs an ON clause names, casefolded. ``("", col)`` if bare.
 
-    Parsed, not scanned. A substring test for the column's name would match ``id`` inside
-    ``customer_id`` and match a table alias that happens to spell a column — and this decides
-    which joins a column's detail panel claims to be part of, so a false positive is an
-    assertion that a relationship exists.
+    Parsed, not scanned: a substring test matches ``id`` inside ``customer_id``, and this
+    decides which joins a column's detail panel claims, so a false positive asserts a
+    relationship exists.
 
-    Returns an empty set for an unparseable clause rather than raising: the corpus is already
-    loaded and one malformed predicate must not take a detail panel down. Mirrors
-    :func:`~governed_bi.corpus.identity.on_digest`'s wrapping trick, which is the one place
-    that knows how to get sqlglot to parse a bare ON clause.
+    An unparseable clause returns the empty set rather than raising — one malformed predicate
+    must not take a detail panel down. The ``SELECT 1 FROM ... JOIN ... ON`` wrapper mirrors
+    :func:`~governed_bi.corpus.identity.on_digest`; it is how sqlglot parses a bare ON clause.
     """
     if not isinstance(on, str) or not on.strip():
         return set()
@@ -333,14 +327,14 @@ def _boundary(
             if str(edge.get("relation") or "") != "join":
                 continue
             # The semantic graph puts the ON clause in the join asset's label, so a join-kind
-            # endpoint is where the predicate is when the edge itself has no `on`.
+            # endpoint holds the predicate when the edge itself has no `on`.
             for candidate in (outside, inside):
                 if candidate is not None and str(candidate.get("kind") or "") == "join":
                     predicate = label_of(candidate)
                     break
         confidence = edge.get("confidence")
-        # One stub per (in-scope table, far table): several joins between the same pair is the
-        # normal case, and it is one destination.
+        # One stub per (in-scope table, far table): several joins between one pair is normal
+        # and is one destination.
         out.setdefault(
             (inside_id, outside_id),
             {
@@ -375,9 +369,8 @@ def subgraph(
     last, breadth-first from the focus, so what survives truncation is what is nearest rather
     than whatever sorted first.
 
-    ``truncated`` and ``dropped`` are load-bearing. A view that silently renders 120 of 656
-    nodes reads as complete coverage, and this repository has published a number on top of
-    that shape. If the budget bites, the caller is told.
+    ``truncated`` and ``dropped`` are load-bearing: a view that silently renders 120 of 656
+    nodes reads as complete coverage.
     """
     wanted_kinds = {str(k) for k in kinds} if kinds else None
     keep = [
@@ -422,17 +415,16 @@ def subgraph(
             frontier = nxt
         ordered.sort(key=lambda n: (distance.get(str(n["id"]), 10**6), str(n["id"])))
     else:
-        # No focus means no natural centre — but ordering by id spends the entire budget on an
-        # alphabetical prefix, and an alphabetical prefix rarely contains *both* ends of any
-        # edge. Measured on the pooled lake: 150 of 7,977 nodes and **zero** edges, which the
-        # client drew as a single 18,000px column of unrelated cards. A relationship view that
-        # shows no relationships is worse than a truncated one, and it reads as "this corpus
-        # has none".
+        # No focus means no natural centre. Ordering by id spends the budget on an alphabetical
+        # prefix, which rarely holds *both* ends of any edge. On the shipped corpus
+        # (`../BIRD-corpus` @ 30872d3, 57 schemas, 7,300 semantic nodes over 12,131 edges;
+        # measured 2026-08-12) the id-ordered prefix at `DEFAULT_NODE_BUDGET` returns 120 nodes
+        # and **zero** edges, reading as "this corpus has no relationships". The ordering below
+        # returns 119 edges over the same budget.
         #
-        # So grow neighbourhoods instead: seed at the best-connected node, take its component
-        # breadth-first, then move to the next unvisited seed, until the budget runs out. The
-        # budget then buys a connected picture. Isolated nodes have degree 0 and so sort last,
-        # which makes an edgeless corpus degrade to the old id order rather than to nothing.
+        # So grow neighbourhoods: seed at the best-connected node, take its component
+        # breadth-first, move to the next unvisited seed, until the budget runs out. Isolated
+        # nodes have degree 0 and sort last, so an edgeless corpus degrades to id order.
         by_id = {str(n["id"]): n for n in keep}
         degree = {node_id: len(adjacency.get(node_id, ())) for node_id in by_id}
         rank = sorted(by_id, key=lambda i: (-degree[i], i))
@@ -469,14 +461,12 @@ def subgraph(
             "truncated": dropped > 0,
             "dropped": dropped,
             "node_budget": budget,
-            # The scope **as applied**, and it must be complete, because the client compares it
-            # field-for-field against what it asked for and re-scopes the payload itself when
-            # they differ. `node_budget` was missing from here while sitting one level up in
-            # `meta`, so that comparison could never succeed: the client re-truncated every
-            # response and then rebuilt `meta` from its own pass, overwriting
-            # `truncated: True, dropped: 7827` with `false`/`0`. The budget's own honesty
-            # depends on this key — ADR 0009 D2 exists to stop a bounded view reading as a
-            # complete one, and a `dropped` the client discards is exactly that.
+            # The scope **as applied**, and it must be complete: the client compares it
+            # field-for-field against what it asked for and re-scopes the payload when they
+            # differ. Omitting a key here (`node_budget` was omitted once) makes that
+            # comparison always fail, so the client re-truncates and rebuilds `meta` from its
+            # own pass, overwriting `truncated`/`dropped` — the bounded view then reads as a
+            # complete one, which ADR 0009 D2 exists to prevent.
             "scope": {
                 "schema": schema,
                 "focus": focus,

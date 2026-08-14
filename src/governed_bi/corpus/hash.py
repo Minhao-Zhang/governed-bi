@@ -22,18 +22,15 @@ _UNREADABLE = b"<unreadable>"
 def corpus_content_hash(root: Path | str, *, schemas: Sequence[str] | None = None) -> str:
     """A hex digest over the corpus stored under ``root``.
 
-    ``schemas`` restricts the digest to those subtrees, so an arm's treatment
-    identity covers exactly the schemas that arm served -- a leftover subtree from
-    another attempt neither enters the load nor the digest.
+    ``schemas`` restricts the digest to those subtrees, so an arm's treatment identity
+    covers exactly the schemas it served and a leftover subtree enters neither.
 
-    Raises ``FileNotFoundError`` when ``root`` does not exist. That is the whole
-    argument of this module: the absence of a corpus is reported out of band, never
-    as a digest value, because a value can be compared and two absences would
-    compare equal.
+    Raises ``FileNotFoundError`` on a missing ``root`` rather than returning a sentinel:
+    two absences would compare equal and pass a comparability gate.
 
-    Hashes **every** file in the selected subtrees, not just ``.yaml``. The markdown
-    D9 keeps beside the assets is corpus content too, and a digest that ignored it
-    would report two different corpora as the same treatment.
+    Hashes **every** file in the selected subtrees, not just ``.yaml`` — the markdown D9
+    keeps beside the assets is corpus content, and ignoring it reports two different
+    corpora as the same treatment.
     """
     base = Path(root)
     if not base.is_dir():

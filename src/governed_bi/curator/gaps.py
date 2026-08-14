@@ -301,6 +301,12 @@ def _measure_pairs(
     """One governed ``compare_column_pair`` per candidate. Refusals skip the pair, never route
     around it — and still hand back their ledger row, because a refused attempt is a governance
     decision the audit trail is owed."""
+    if connector is None:
+        # See ``gap_joins.measure_keys``: ``compare_column_pair`` raises on a missing connector
+        # rather than manufacturing a verdict, so the caller that has no database gets no
+        # row-level findings instead of a crash or a fabricated zero.
+        return {}, [], 0
+
     from governed_bi.govern.bounds import ToolBounds
     from governed_bi.serve.fetch import compare_column_pair
 

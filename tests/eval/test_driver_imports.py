@@ -20,7 +20,6 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import pathlib
-import sys
 
 import pytest
 
@@ -56,11 +55,6 @@ def test_the_eval_drivers_import(script: str) -> None:
     """
     path = TOOLS / script
     assert path.exists(), f"{script} is named here but not in tools/"
-
-    # `tools/` on the path because the drivers `import credentials`, which is a sibling rather
-    # than a package member — the same insertion each driver does for itself at runtime.
-    if str(TOOLS) not in sys.path:
-        sys.path.insert(0, str(TOOLS))
 
     spec = importlib.util.spec_from_file_location(f"_driver_{path.stem}", path)
     assert spec and spec.loader

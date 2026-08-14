@@ -173,7 +173,16 @@ def test_one_unexecutable_gold_statement_does_not_end_the_oracle_arm(tmp_path: P
     assert bad["error_type"]
 
 
-def test_context_hash_distinctness_pass_and_fail() -> None:
+def test_context_hash_is_an_existence_check_not_a_treatment_test() -> None:
+    """Rewritten 2026-08-11 for audit D9. It used to assert the opposite of the second case.
+
+    Identical hashes on every shared question no longer fail: distinctness measured retrieval
+    nondeterminism, not treatment change, and passed at 0.9993 on a seed-only null pair. The
+    treatment judgement moved to ``report.knobs_comparable``, which reads declared knobs.
+
+    What this gate still owes a caller is coverage — a shared question where either arm
+    assembled no context cannot be compared on that question.
+    """
     a = arm_population(
         [_clean_row(f"q{i}", context_hash=f"a-{i}") for i in range(20)],
         label="arm_a",
@@ -186,10 +195,14 @@ def test_context_hash_distinctness_pass_and_fail() -> None:
         [_clean_row(f"q{i}", context_hash=f"a-{i}") for i in range(20)],
         label="arm_same",
     )
-    ok = context_hashes_distinct(a, b)
-    assert ok.verdict is Verdict.passed
-    bad = context_hashes_distinct(a, same)
-    assert bad.verdict is Verdict.failed
+    assert context_hashes_distinct(a, b).verdict is Verdict.passed
+    assert context_hashes_distinct(a, same).verdict is Verdict.passed
+
+    thin = arm_population(
+        [_clean_row(f"q{i}", context_hash=None) for i in range(20)],
+        label="arm_thin",
+    )
+    assert context_hashes_distinct(a, thin).verdict is Verdict.cannot_evaluate
 
 
 def test_mcnemar_uses_same_population_as_headline() -> None:
@@ -222,7 +235,7 @@ def test_quotable_false_when_crash_rate_positive() -> None:
         ],
         label="crashy",
     )
-    ok, _results_a, results_b, _ctx = comparison_quotable(a, b)
+    ok, _results_a, results_b, _ctx, _knobs = comparison_quotable(a, b)
     assert not ok
     assert any(r.field == "outcome" and r.verdict is Verdict.failed for r in results_b)
 
@@ -241,6 +254,154 @@ def test_stub_arm_invokes_serve(tmp_path: Path) -> None:
     assert rows[0]["outcome"] in {"answered", "refused", "crashed"}
     assert rows[0]["crashed"] == (rows[0]["outcome"] == "crashed")
     assert "question_id" in rows[0]
+
+
+# ── what a refused row says, and what an abstention would have answered ───────
+
+
+def _governed_arm(connector: SqliteConnector, sql_by_qid: dict[str, str]):
+    """A scripted arm with a real corpus, so ``check()`` runs instead of raising.
+
+    ``licensed`` is empty on this path — there is no index, so routing licenses nothing — which
+    makes every statement naming a table refuse at ``Layer.TABLES``. That is the population the
+    two tests below need: a turn that abstained while holding a statement.
+    """
+    from governed_bi.corpus.analyst import for_analyst
+    from governed_bi.corpus.schema import ColumnAsset, TableAsset
+    from governed_bi.eval.arms import scripted_arm
+
+    assets = [
+        TableAsset(
+            id="main.customers", schema="main", physical_name="customers",
+            summary="customers", columns=("main.customers.id",),
+        ),
+        ColumnAsset(
+            id="main.customers.id", schema="main", parent_table="customers",
+            physical_name="id", summary="id", physical_type="INTEGER",
+        ),
+    ]
+    return scripted_arm(
+        gold_sql_by_qid=sql_by_qid,
+        connector=connector,
+        assets_by_id={a.id: a for a in assets},
+        corpus=for_analyst(assets),
+    )
+
+
+def test_a_measured_row_says_which_layer_refused_each_attempt(tmp_path: Path) -> None:
+    """``refused`` names *that* governance declined; ``attempts`` names which layer.
+
+    ``CheckVerdict`` has carried ``failed_layer`` and ``reason_code`` all along and they stopped
+    at the turn record. Reading the 2026-08-09 run therefore meant replaying every refused
+    statement through ``check()`` offline to learn that 18 of 21 were ``r_table_not_licensed`` —
+    a *retrieval* failure the analysis had until then attributed to a guardrail false-positive.
+    Those two findings ask for opposite work.
+
+    Three questions producing three different verdicts, asserted as the whole list. A trace that
+    is empty, or constant, cannot separate them — and "empty" is what the field silently
+    degrades to, because every reader of it treats no attempts as a turn that attempted nothing.
+    """
+    _, connector = _fixture_db(tmp_path)
+    questions = [
+        {"question_id": "unlicensed", "question": "how many customers", "db_id": "main"},
+        {"question_id": "no_table", "question": "the answer", "db_id": "main"},
+        {"question_id": "not_a_read", "question": "delete them", "db_id": "main"},
+    ]
+    rows = run_arm(
+        questions,
+        _governed_arm(
+            connector,
+            {
+                "unlicensed": "SELECT COUNT(*) AS n FROM customers",
+                # Names no table, so the licensing layer has nothing to refuse: this one passes.
+                "no_table": "SELECT 999 AS n",
+                "not_a_read": "DROP TABLE customers",
+            },
+        ),
+    )
+    trace = {str(r["question_id"]): r["attempts"] for r in rows}
+
+    assert trace["unlicensed"] == [
+        {"layer": "TABLES", "reason_code": "r_table_not_licensed", "passed": False,
+         "path": "agent"}
+    ], trace["unlicensed"]
+    assert trace["not_a_read"] == [
+        {"layer": "NO_WRITE", "reason_code": "r_not_a_read", "passed": False, "path": "agent"}
+    ], trace["not_a_read"]
+    # The passing attempt, so the field is not just a list of refusals: a turn that answered
+    # still says how it got there, and `layer` is null because no layer objected.
+    assert trace["no_table"] == [
+        {"layer": None, "reason_code": "passed", "passed": True, "path": "agent"}
+    ], trace["no_table"]
+
+
+def test_an_abstained_turn_is_priced_without_being_scored(tmp_path: Path) -> None:
+    """``computed_correct`` — what the last statement *would* have answered, never counted.
+
+    A capped or refused turn keeps ``correct=False``: an engine that would not commit to a
+    statement gets no credit for it, and that rule stays. But the rule has a price, and until
+    this field existed nobody knew what it was — of the 2026-08-09 full run's 133 capped turns,
+    23 held the correct answer. Keeping the policy and pricing it are only separable if the number
+    is on the row.
+
+    Four rows covering every branch of ``_abstained_fingerprint``, because the field's whole
+    content is *when* it is set: a constant ``None`` is indistinguishable from an engine that
+    never abstains with a statement in hand, and that is precisely the reading the field exists
+    to refuse.
+    """
+    _, connector = _fixture_db(tmp_path)
+    gold = "SELECT COUNT(*) AS n FROM customers"
+    columns, gold_rows, _ = connector.execute(gold)
+    gold_fingerprint = result_fingerprint(list(columns), [list(r) for r in gold_rows])
+
+    questions = [
+        {"question_id": qid, "question": qid, "db_id": "main",
+         "gold_sql": gold, "gold_fingerprint": gold_fingerprint}
+        for qid in ("refused_right", "refused_wrong", "refused_unrunnable", "answered")
+    ]
+    rows = run_arm(
+        questions,
+        _governed_arm(
+            connector,
+            {
+                # Refused for naming an unlicensed table -- and right anyway.
+                "refused_right": gold,
+                # Same refusal, wrong answer.
+                "refused_wrong": "SELECT 999 AS n FROM customers",
+                # Refused and would not have run, so there is nothing to price.
+                "refused_unrunnable": "DROP TABLE customers",
+                # Names no table, so it passes: `grade` already holds this one's verdict.
+                "answered": "SELECT 999 AS n",
+            },
+        ),
+    )
+    by_qid = {str(r["question_id"]): r for r in rows}
+
+    right = by_qid["refused_right"]
+    assert right["outcome"] == "refused", right["outcome"]
+    assert right["computed_correct"] is True, (
+        "a refused turn holding the right answer is priced at nothing, so the cost of the "
+        f"abstention policy cannot be read off the artifact: {right['computed_correct']!r}"
+    )
+    assert right["correct"] is False, (
+        "the price was folded into the score; an engine that refuses now gets credit for it"
+    )
+
+    wrong = by_qid["refused_wrong"]
+    assert wrong["outcome"] == "refused"
+    assert wrong["computed_correct"] is False, (
+        "every abstention prices as unknown, which reads the same as none of them being "
+        f"pricable: {wrong['computed_correct']!r}"
+    )
+
+    # The two genuine absences, so the field is not merely `correct` under another name.
+    assert by_qid["refused_unrunnable"]["computed_fingerprint"] is None
+    assert by_qid["refused_unrunnable"]["computed_correct"] is None
+    assert by_qid["answered"]["outcome"] == "answered"
+    assert by_qid["answered"]["computed_correct"] is None, (
+        "an answered turn is graded by `grade_turn`; a second verdict beside it invites the "
+        "merge the field exists to prevent"
+    )
 
 
 def test_result_fingerprint_order_insensitive() -> None:
@@ -270,7 +431,7 @@ def test_a_different_column_alias_is_not_a_wrong_answer() -> None:
     The fingerprint included column names, so ``SELECT COUNT(*) AS paper_count`` graded wrong
     against a gold of ``SELECT COUNT(*)`` with both returning 100 — and the penalty tracked
     how verbose the model was about aliasing rather than whether it was right. Measured on the
-    xhigh arm: 5% of answerable-but-wrong turns were exactly this.
+    xhigh arm: 5% of answerable-but-wrong turns were exactly this.  [retired]
     """
     from governed_bi.eval.grade import grade_results, result_fingerprint
 
@@ -429,7 +590,7 @@ def test_table_coverage_refuses_rows_that_do_not_carry_licensed() -> None:
     ``routing_recall`` published ``licensed_schemas`` and not ``licensed``, and
     ``table_coverage`` reads exactly ``licensed`` — so the free harness fed to the function
     this module documents as *"the EX ceiling"* reported ``all_gold_tables_licensed: 0.0`` for
-    two arms whose schema recall was 0.851 and 0.877, with ``reached_gold`` in the very same
+    two arms whose schema recall was 0.851 and 0.877, with ``reached_gold`` in the very same  [retired]
     rows proving the tables had been licensed. A zero is a publishable number; a ``KeyError``
     is not, and that asymmetry is the whole point.
 
@@ -727,3 +888,67 @@ def test_table_less_gold_leaves_the_funnel_denominator() -> None:
     out = retrieval_funnel(rows, {"1": 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")'})
     assert out["counts"]["gold_reads_no_table"] == 1
     assert out["counts"]["scorable"] == 0
+
+
+def test_the_table_less_population_is_published_with_its_own_ex() -> None:
+    """Leaving the denominator must not mean leaving the report.
+
+    127 of 1 351 questions have a constant-folded gold. They are gradeable — an engine that
+    queries the database and returns the right value still matches the digest — but the gold
+    carries no table and no join, so every arm scores far below its headline there and
+    excluding them lifts all arms by roughly the same 3 points. That is a choice about what
+    a headline means, not a correction, so the funnel reports the set as its own line and
+    leaves the choice to the reader.
+    """
+    from governed_bi.eval.datalake import retrieval_funnel
+
+    folded = 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")'
+    rows = [
+        {"question_id": "a", "db_id": "sales", "licensed": [], "outcome": "answered",
+         "correct": True},
+        {"question_id": "b", "db_id": "sales", "licensed": [], "outcome": "answered",
+         "correct": False},
+        {"question_id": "c", "db_id": "sales", "licensed": [], "outcome": "answered",
+         "correct": False},
+        # Answered but ungradeable: it must not count as a wrong answer here either.
+        {"question_id": "d", "db_id": "sales", "licensed": [], "outcome": "answered",
+         "correct": None},
+    ]
+    out = retrieval_funnel(rows, dict.fromkeys("abcd", folded))
+
+    assert out["counts"]["gold_reads_no_table"] == 4
+    assert out["counts"]["gold_reads_no_table_graded"] == 3, "the ungradeable row is not wrong"
+    assert out["gold_reads_no_table"] == {
+        "rate": pytest.approx(1 / 3, abs=1e-4), "n": 1, "of": 3, "why": None
+    }
+    # And with nothing in the set, an absence rather than an EX of zero.
+    empty = retrieval_funnel(
+        [{"question_id": "1", "db_id": "sales", "licensed": ["sales.customers"],
+          "outcome": "answered", "correct": True}],
+        {"1": "SELECT 1 FROM sales.customers"},
+    )
+    assert empty["gold_reads_no_table"]["rate"] is None
+    assert empty["gold_reads_no_table"]["why"]
+
+
+def test_an_unparseable_gold_is_not_a_gold_that_reads_no_table() -> None:
+    """One counter carried both, so the funnel disagreed with ``table_coverage``.
+
+    "the metric cannot read this statement" and "this statement genuinely reads nothing" want
+    different follow-ups — a parser fix versus a dataset fact — and pooling them makes the
+    tableless count the funnel publishes unusable as the size of that population.
+    """
+    from governed_bi.eval.datalake import retrieval_funnel
+
+    out = retrieval_funnel(
+        [
+            {"question_id": "junk", "db_id": "sales", "licensed": [], "outcome": "answered"},
+            {"question_id": "folded", "db_id": "sales", "licensed": [], "outcome": "answered"},
+        ],
+        {
+            "junk": "NOT SQL AT ALL ((( ;",
+            "folded": 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")',
+        },
+    )
+    assert out["counts"]["gold_sql_unparsed"] == 1
+    assert out["counts"]["gold_reads_no_table"] == 1

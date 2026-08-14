@@ -107,10 +107,11 @@ def _offline_session(tmp_path: Path, db_id: str) -> Any:
 def _offline_client(monkeypatch, session: Any) -> Any:
     from fastapi.testclient import TestClient
 
-    from governed_bi.api import routes
+    from governed_bi.api import routes, trace_store
 
-    monkeypatch.setattr(routes, "_session", lambda: session)
-    return TestClient(routes.app)
+    # `routes.app` reached a process-global session that no longer exists: upstream
+    # removed `_session` at the 2026-08-11 restructure in favour of this constructor.
+    return TestClient(routes.make_app(session, None, trace_store))
 
 
 def test_a_live_deferred_clarification_survives_open_then_folds_through_the_offline_route(

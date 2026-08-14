@@ -29,7 +29,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from governed_bi.corpus.drafts import submit_draft
 from governed_bi.corpus.schema import Asset, ProvenanceStatus
 
-__all__ = ["EnhancerDecision", "EnhancerError", "decide", "apply"]
+__all__ = ["EnhancerDecision", "EnhancerError", "decide_fold", "apply"]
 
 A = TypeVar("A", bound=Asset)
 
@@ -80,7 +80,7 @@ def _parse_json(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def decide(model: BaseChatModel, candidate_summary: str, existing: Sequence[Any]) -> EnhancerDecision:
+def decide_fold(model: BaseChatModel, candidate_summary: str, existing: Sequence[Any]) -> EnhancerDecision:
     """Ask ``model`` to compare ``candidate_summary`` against ``existing`` (any assets with an
     ``id``/``summary``, already scoped by the caller to the same type and schema).
 
@@ -142,7 +142,7 @@ def apply(
     conflict decision is the same question either way, and an unwarranted answer that duplicates
     an existing fact should still not mint a second copy of it.
     """
-    decision = decide(model, candidate.summary, existing)
+    decision = decide_fold(model, candidate.summary, existing)
     if decision.duplicate_of:
         return None, decision
     extra = {"conflict_with": decision.conflict_with} if decision.conflict_with else None

@@ -27,9 +27,8 @@ _NONE = type(None)
 def _coerce(value: Any, annotation: Any, *, where: str) -> Any:
     """One value into its declared type, or ``ValueError``.
 
-    Generic over the annotation rather than a per-class conversion table, because a
-    per-class table is a second declaration of the field list and would have to
-    agree with the dataclass.
+    Generic over the annotation, not a per-class conversion table: such a table is a second
+    declaration of the field list that has to be kept agreeing with the dataclass.
     """
     origin = get_origin(annotation)
     if origin in (Union, UnionType):
@@ -79,10 +78,8 @@ def _coerce(value: Any, annotation: Any, *, where: str) -> Any:
 def _build(cls: type, raw: Mapping[str, Any], *, where: str = "") -> Any:
     """Construct ``cls`` from ``raw``. Unknown keys are an error.
 
-    Rejecting unknown keys is v1's ``extra="forbid"`` and it stays: a mistyped
-    field name that parses is a field nobody writes and nothing reads. The one
-    exception is a class declaring a field literally named ``extra`` -- see
-    :class:`Audit`.
+    A mistyped field name that parses is a field nobody writes and nothing reads. The one
+    exception is a class declaring a field literally named ``extra`` — see :class:`Audit`.
     """
     hints = get_type_hints(cls)
     declared = {f.name: f for f in fields(cls)}
@@ -116,9 +113,8 @@ def _build(cls: type, raw: Mapping[str, Any], *, where: str = "") -> Any:
 def from_mapping(raw: Mapping[str, Any]) -> Asset:
     """A raw mapping into the typed asset its ``asset_type`` names.
 
-    Raises ``ValueError`` for anything it cannot build. It **does not validate**:
-    the rules live in :mod:`.validate`, so that a constructed-but-wrong asset is
-    representable and ``problems_with`` has something to find.
+    Raises ``ValueError`` for anything it cannot build. **Does not validate**: a
+    constructed-but-wrong asset must be representable for ``problems_with`` to find it.
     """
     if not isinstance(raw, Mapping):
         raise ValueError(f"expected a mapping, got {type(raw).__name__}")
@@ -130,9 +126,8 @@ def from_mapping(raw: Mapping[str, Any]) -> Asset:
 def to_mapping(asset: Asset) -> dict[str, Any]:
     """An asset back to a YAML-ready mapping, with defaults omitted.
 
-    Defaults are omitted so a written file shows what was decided rather than the
-    whole schema, and so a round trip through :func:`from_mapping` returns an equal
-    asset.
+    Omitting defaults keeps a written file showing what was decided, and keeps a round trip
+    through :func:`from_mapping` equal.
     """
     out: dict[str, Any] = {"asset_type": asset.asset_type.value}
     out.update(_unbuild(asset))

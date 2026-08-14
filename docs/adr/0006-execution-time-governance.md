@@ -1,15 +1,25 @@
 # 0006: Execution-time governance
 
-- **Status:** Accepted in part (2026-08-03). `govern/` is on the `v2` branch;
-  executors, red-team corpus and enabled `guard` rules are not. A hard dependency
-  of [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md).
+- **Status:** Accepted in part (2026-08-03; state of the tree re-checked 2026-08-12).
+  `govern/` is on `main` — the `v2` branch was merged and no longer exists. Two of §7's
+  four executors are wired: `agent`
+  (`serve/fetch.py::run_query`) and `sample` (`serve/fetch.py::sample_rows`). `graded`
+  and `profile` have no writer, and graded delivery itself is declared but unwired —
+  `govern/check.py::graded_delivery_eligible` has no caller in `src/` (§5). The red-team
+  corpus does not exist, so `guard`'s
+  deterministic injection rules ship disabled (`guard_rules_enabled` is `UNSET` until
+  OQ3's two numbers exist); the one rule enabled in the served app is `g_bi_scope`
+  (`api/graph_app.py`). §11's retention table is withdrawn, not deferred — see the note
+  there. Amended by [ADR 0012](0012-access-seam-principal-and-authorization.md) at §8
+  and in Consequences. A hard dependency of
+  [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md).
 - **Deciders:** project owner + design session (2026-08-02)
 - **Scope:** everything between "the agent produced a string" and "the database
   saw a statement" — the layer stack, the function allowlist, identifier
   handling, scope resolution, graded delivery, the input guard, tool bounds, the
   connection contract, path validation, and the audit ledger. **The memory
   layer, retrieval and the serve graph are 0005.**
-- **Related:** [lessons-from-v1.md](../lessons-from-v1.md) §4 is the evidence
+- **Related:** `lessons-from-v1.md` (deleted with v1) §4 is the evidence
   base for nearly every decision here; cited as **L§4**.
   [0002](0002-governed-agentic-serve-runtime.md) established the shape.
 - **Supersedes:** ADR 0002's safety spine. It **amends invariant 1** ("the
@@ -78,8 +88,12 @@ Two more that are not bypasses but are the same class:
 > **G2. Every executor is enumerated, passes `check()`, and writes a ledger
 > entry.**
 > Not "one choke point" — that was aspirational and the first draft contradicted
-> it in its own tool table. There are four executors (§7); each is named, each
-> is checked, each stamps its `path`.
+> it in its own tool table. The vocabulary is closed at four
+> (`govern/ledger.py::EXECUTOR_PATHS`); each is named, and each that exists is
+> checked and stamps its `path`. Two are built — `agent` and `sample` — and §7
+> marks the other two as vocabulary without a writer, which is the honest reading
+> of "enumerated": the enum is the shipping requirement, not evidence that four
+> code paths exist.
 >
 > **G3. Permission is proven, never inferred.**
 > `failed_layer=None` never means safe. Graded delivery keys on a positively
@@ -115,13 +129,13 @@ comparison.
 
 ```python
 def check(sql: str, *, corpus: AnalystCorpus, licensed: frozenset[str],
-          default_schema: str, dialect: str, policy: GovernancePolicy) -> Verdict
+          default_schema: str, dialect: str, policy: GovernancePolicy) -> CheckVerdict
 
-class Verdict(TypedDict):
+class CheckVerdict(TypedDict):
     passed: bool
     failed_layer: Layer | None          # None ⟺ passed
     layers_evaluated: list[Layer]       # a layer with no entry did not run
-    reason_code: str                    # closed vocabulary — see §9
+    reason_code: str                    # closed vocabulary — `govern/layers.py::RULES`
     detail: str                         # free text, ledger-dropped
     bound: dict[str, str]               # each reference → the source it bound to
 ```
@@ -144,7 +158,7 @@ test asserts `failed_layer` is the last element of it.
 
 **Any exception inside `check()` is `passed=False`** — `RecursionError` from
 pathological nesting and tokenizer errors from unterminated literals both
-escaped v1's parse layer. But see §9: a swallowed exception must also be
+escaped v1's parse layer. But see §12: a swallowed exception must also be
 *counted*, or a systematically broken `check()` presents as an arm that refuses
 everything and passes every quotability gate.
 
@@ -245,7 +259,7 @@ position, which produce no `exp.Table` and are invisible to the table layer).
 > Every `Column` node, every `USING`/`NATURAL` join key, and every `FROM` source
 > must bind to **exactly one** base source in its own scope, or in a named
 > ancestor scope for correlated references. Binding to zero sources refuses.
-> Binding to more than one refuses. The binding is recorded in `Verdict.bound`.
+> Binding to more than one refuses. The binding is recorded in `CheckVerdict.bound`.
 
 Everything downstream reads `bound`, so the column layer and the table layer
 each have exactly one input and cannot disagree about what a reference means.
@@ -305,7 +319,8 @@ Reaching `COST` is a proof minted by `check()` that PARSE, NO_WRITE, FUNCTIONS,
 BINDING, COLUMNS and TABLES all passed. **Everything else hard-refuses** —
 including any entry that never earned a verdict: cap, error, exhausted,
 no-coverage and missing-pass-result all carry `failed_layer=None`, and treating
-that as forgivable was B3.
+that as forgivable was B3. (In v2 the cap does not even reach this rule: it
+produces no `CheckVerdict` at all — see the withdrawn third requirement below.)
 
 Three structural requirements:
 
@@ -313,9 +328,52 @@ Three structural requirements:
   `if allowlist is not None`.
 - **The cap terminates the turn**, it does not decline a call. v1's cap returned
   a "capped" tool message and the agent kept going, burning unbounded round-trips
-  against a cap it could never clear.
-- **The cap's ledger entry is written after `check()`**, so it carries a layer.
-  Writing it before produced the `failed_layer=None` that B3 walked through.
+  against a cap it could never clear. *(So did v2's, until 2026-08-07. §13 records
+  the enforcer that finally makes this requirement true and the 25 wasted model
+  calls that were the cost of leaving it aspirational.)*
+- ~~**The cap's ledger entry is written after `check()`**, so it carries a layer.
+  Writing it before produced the `failed_layer=None` that B3 walked through.~~
+  **Withdrawn 2026-08-07: this requirement is wrong, and the code that contradicts
+  it is right.** `cap_attempt()` (`serve/ledger.py::cap_attempt`) deliberately sets
+  `verdict_layer=None` and says why — the cap is not a layer verdict, §5 keeps
+  `capped` distinct from `refused`, and a rule id would attribute the stop to a
+  governance layer that never ran. Manufacturing a layer for it would put a false
+  entry in the one table B3 taught us to read literally.
+
+  The requirement is wrong because it describes v1's architecture, where the ledger
+  entry *was* the object graded delivery read. In v2 they are two types and the
+  conversion runs one way only:
+
+  - `graded_delivery_eligible` (`govern/check.py::graded_delivery_eligible`) takes a
+    **`CheckVerdict`** and reads `verdict["failed_layer"]`. Every `CheckVerdict` in the
+    tree is built by `govern/layers.py`'s `refuse` / `allow` / `internal_error`, and
+    every call to those three is inside `govern/check.py` — so `check()` is the only
+    producer.
+  - The cap row is an **`AttemptRecord`** with a different field, `verdict_layer`, a
+    layer *name* rather than a `Layer` (`govern/ledger.py::AttemptRecord`). `attempt_record()`
+    projects a verdict into a row (`govern/ledger.py::attempt_record`); nothing projects a row
+    back into a verdict.
+  - `cap_attempt()` builds its `AttemptRecord` directly, without calling `check()` at
+    all. There is no verdict to carry a layer.
+
+  So **the graded-delivery path cannot see a cap row**, structurally, and B3's chain
+  is cut in three independent places rather than one. First, the predicate is
+  positive — `return verdict["failed_layer"] is Layer.COST` — so `None` is ineligible
+  by construction, which is G3 (`govern/__init__.py`'s module docstring, *"`failed_layer=None`
+  never means safe"*) and is what
+  `tests/govern/test_graded_delivery.py::test_graded_delivery_forgives_the_cost_layer_and_nothing_else`
+  pins. Second,
+  the type gap above means a cap row is not a candidate input in the first place.
+  Third, the cap now jumps the loop to `end`, so there is no post-cap turn left for
+  anything to re-execute in.
+
+  Two things this correction does not let us claim. `graded_delivery_eligible` has
+  **no caller in `src/`** — only tests — and neither `terminal="graded"` nor
+  `path="graded"` is ever written, so graded delivery is declared and unwired in v2,
+  the same shape ADR 0010 §4 flags elsewhere. And the `knobs.py` default is
+  `graded_delivery_enabled=True`, which reads as "on" for a path that does not run.
+  OQ4's question — whether this earns its complexity — is now cheaper to answer than
+  when it was asked.
 
 **A cap-terminated turn gets its own `Outcome` member**, distinct from `crashed`
 and from a model refusal — 0005's node wrapper would otherwise stamp
@@ -336,26 +394,42 @@ class GuardVerdict(TypedDict):     # 0006 owns this type; 0005 imports it
     detail: str | None             # ledger only — never surfaced
 ```
 
-| rule | blocks |
-|---|---|
-| `g_encoding` | control characters, bidi overrides, zero-width sequences — **before** NFKC normalisation, or normalisation hides them |
-| `g_instruction_override` | imperative patterns aimed at the model |
-| `g_role_injection` | role/turn markers that would forge a message boundary |
-| `g_tool_forgery` | text shaped like a tool call or tool result |
-| `g_length` | input above a hard character bound |
+| rule | blocks | where |
+|---|---|---|
+| `g_encoding` | control characters, bidi overrides, zero-width sequences — **before** NFKC normalisation, or normalisation hides them | `govern/guard.py::GUARD_RULES` |
+| `g_instruction_override` | imperative patterns aimed at the model | `govern/guard.py::GUARD_RULES` |
+| `g_role_injection` | role/turn markers that would forge a message boundary | `govern/guard.py::GUARD_RULES` |
+| `g_tool_forgery` | text shaped like a tool call or tool result | `govern/guard.py::GUARD_RULES` |
+| `g_length` | input above a hard character bound | `govern/guard.py::GUARD_RULES` |
+| `g_bi_scope` | a question that is not a BI task at all | `serve/nodes/guard.py::_bi_scope` |
 
-**`guard` runs twice: on `question`, and again on `rewrite.after`.** 0005's
-`rewrite` is a model call with unguarded history in scope, and every downstream
-node reads its output — so without the second pass **the guarded artifact is
-never the delivered artifact**. The rules are deterministic and cheap; running
-them twice costs nothing.
+**`g_bi_scope` is a `guard` rule, and it is the only one enabled in the served
+app** (`api/graph_app.py` builds the policy with `guard_rules_enabled={BI_SCOPE_RULE_ID:
+True}`). It is the one rule that is *not* in `GUARD_RULES`, because it asks a model and
+`govern/` must stay importable with no model, no settings and no I/O; only the id lives
+there (`govern/guard.py::BI_SCOPE_RULE_ID`), which is what `guard_rules_enabled`,
+`GuardVerdict.rule_id` and the record read. Enabled with no model configured is
+`error_failed_open`, never `clear` — a rule switched on that could not run must not be
+indistinguishable from one never wired up. So 0005's "guard calls no model" holds for the
+deterministic five and not for this one; the model call is a scope classification, not a
+safety check, which is why it fails open.
+
+**`guard` runs once, on `question`, and that is a known gap.** 0005's `rewrite` is a model
+call with unguarded history in scope, and every downstream node reads its output — so the
+guarded artifact is not the delivered artifact. A second pass over `rewrite.after` is the
+fix, the rules are deterministic and cheap, and running them twice would cost nothing;
+there is one call site today (`serve/nodes/guard.py::guard_node`) and no second pass.
+Recorded here as open rather than closed, because a reader who takes the second pass for
+granted stops looking for the hole.
 
 **Refusals return a fixed public string.** The `rule_id` is recorded in the
 ledger only. Returning rule-derived text is a rule-probing oracle.
 
-**Out-of-scope detection is deliberately not a `guard` rule.** v1's
+**Keyword out-of-scope detection is deliberately not a `guard` rule.** v1's
 keyword-and-Jaccard refuse gate tried exactly that and fired zero times in 5,404
-rows. Semantic out-of-scope is 0005's `negative_gate`.
+rows. What replaces it is split in two: `g_bi_scope` above asks a model whether the
+question is a BI task, and semantic out-of-scope against a negative corpus is 0005's
+`negative_gate`.
 
 **A red-team corpus is a shipping requirement, not a follow-up.** A gate
 measured only against benign traffic is v1's refuse gate with a new name. The
@@ -370,15 +444,22 @@ bypasses both guard passes. Closing it needs a defence at the data boundary.
 
 ### 7. The four executors
 
-G2 enumerates them. Each passes `check()`, each writes a ledger entry stamped
-with its `path`.
+G2 enumerates them. Each that exists passes `check()` and writes a ledger entry stamped
+with its `path`. The vocabulary is closed at four in `govern/ledger.py::EXECUTOR_PATHS`;
+two of the four have a writer, and the table says which, because a `path` value nothing
+emits reads as a code path a reader will go looking for.
 
-| executor | statement source | `path` |
-|---|---|---|
-| `run_query` | the model | `agent` |
-| graded delivery re-execution | the model, post-recheck | `graded` |
-| `sample_rows` | **constructed from corpus ids** | `sample` |
-| the profiler / seed | constructed from the catalog | `profile` |
+| executor | statement source | `path` | writer |
+|---|---|---|---|
+| `run_query` | the model | `agent` | `serve/fetch.py::run_query`, plus `serve/ledger.py::cap_attempt` for the row the attempt cap writes |
+| graded delivery re-execution | the model, post-recheck | `graded` | none — declared vocabulary, no producer |
+| `sample_rows` | **constructed from corpus ids** | `sample` | `serve/fetch.py::sample_rows` |
+| the profiler / seed | constructed from the catalog | `profile` | none — declared vocabulary, no producer |
+
+The two without a writer are not dead letters: `serve/ledger.py::INTROSPECTION_PATHS`
+classes `profile` with `sample` so a future profiler cannot be mistaken for an answering
+attempt, and `guardrail_errors` counts every path deliberately. But nothing today emits
+either value, and G2 is satisfied by the two that exist rather than by four.
 
 The first draft named `run_query` "the single choke point" while listing
 `sample_rows` in the same table — which 0005 §3.5 calls *"the only path to real
@@ -414,10 +495,13 @@ remembered to, which the Postgres one did not — and `serve/fetch.sample_rows`
 runs it through `prepare()` and ledgers the verdict as `path="sample"`.
 `sample_values` is gone from the port and from both adapters.
 
-The profiler runs at seed time, on the same connector base class, with the same
-session settings as §8 — including `synchronize_seqscans = off`, which 0005 §1.7
-requires for reproducibility and which is therefore a property of the connector,
-not of one code path.
+The profiler was to run at seed time on the same connector, with the same session
+settings as §10 — including `synchronize_seqscans = off`, which 0005 §1.7 requires for
+reproducibility. **The setting shipped and the profiler did not.** `PostgresConnector`
+applies `synchronize_seqscans = off` on open, so it is a property of the connector rather
+than of one code path — but nothing profiles: `corpus/introspect.py::Introspection`
+carries names and types only, `corpus/seed.py::seed` authors no `sample_values`, and the
+`profile` row of the table above is the vocabulary reserved for the writer that would.
 
 ### 8. Tool bounds and the licensed set
 
@@ -451,6 +535,13 @@ lake — the same shape as B7.
 | `inspect_schema` | table ids in `licensed` |
 | `sample_rows` | column ids whose table is in `licensed`, **and then the layer stack** |
 | `run_query` | the table layer, against `licensed` |
+
+> **Amended 2026-08-12 by [ADR 0012](0012-access-seam-principal-and-authorization.md) §6.**
+> `inspect_schema` and `sample_rows` now also ask this principal's grant, because neither builds a
+> statement the layer stack can read and they would otherwise be the way around it. `read_body`
+> deliberately does not: its payload is prose the turn already rendered into the prompt, and gating
+> the tool without narrowing the renderer would be a bound that looks enforced. Both defaults are
+> the open grant, so the table above is exactly what happens on this tree.
 
 **No tool writes to `licensed`.** A clarification resume continues from the
 interrupt point (0005 §3.1) and therefore cannot widen it either.
@@ -493,15 +584,26 @@ SQLite   :  PRAGMA query_only = ON
 read-only database role** — an application bug should never be the last line,
 and §2 exists precisely because read-only does not stop read-side exfiltration.
 
-**The forced row limit lives in the connector base class**, not per connector —
-v1 documented a gateway-wide cap and SQLite was the one path without it.
+**The forced row limit is on every connector**, because v1 documented a gateway-wide cap
+and SQLite was the one path without it. It was decided as a base class and shipped as a
+protocol clause instead: `ports.Connector` states *"There is no shared base class: each
+adapter applies its own `max_rows` by fetching `max_rows + 1`"*, and both
+`PostgresConnector` and `SqliteConnector` take `max_rows` in `__init__` and apply it in
+`execute`. The property holds on both adapters; the mechanism that would make a third
+adapter inherit it does not exist, so a new adapter has to be told.
 
 **Connectors are context-managed.** v1 left 131 unclosed SQLite handles across
 the suite.
 
 **`identity` is provenance, not enforcement**, named as such at the seam. v1
-asserted RLS-as-user on four surfaces and had none. A toggle claiming to enable
-it **raises at construction**.
+asserted RLS-as-user on four surfaces and had none, so nothing here may claim to enable
+it. What ships is [ADR 0012](0012-access-seam-principal-and-authorization.md)'s
+`ports.RowPredicate`: a declared row restriction whose default `PredicateEnforcement.refuse`
+makes the TABLES layer refuse any statement binding the table (`r_row_predicate_unenforced`),
+and whose only other member, `database_role`, records that the *operator* asserts the
+database enforces it. Neither injects a predicate. The rule this section wanted — no
+switch that turns on an enforcement this engine does not perform — holds by the
+vocabulary having no such member, not by a constructor raising.
 
 **`thread_id` alone is not a capability** (B9). A clarification resume is bound
 to `identity` and rejects a mismatch.
@@ -531,8 +633,14 @@ to `identity` and rejects a mismatch.
 >
 > If redaction is wanted, it needs a threat model first, and the threat model
 > decides the vocabulary rather than the other way round. `statement_sha256` and
-> `structural_fingerprint` survive in `govern/ledger.py`: they have real callers
-> and are true facts about a statement, just not a retention policy.
+> `structural_fingerprint` survive in `govern/ledger.py` because they are true facts
+> about a statement, not because they are a retention policy. Only the first has a
+> production caller — `serve/tools.py` stamps `sql_sha256` onto the attempt event.
+> `structural_fingerprint` is reached by one test
+> (`tests/govern/test_guard_pipeline_ledger.py::test_the_structural_fingerprint_still_elides_literals`)
+> and by nothing in `src/`, which is the same "green tests against dead code" shape this
+> note deleted `ledger_entry()` for. It is kept, not wired, and this sentence is the
+> record of that.
 >
 > **Still in force from this section:** every executor writes an entry stamped with
 > its `path` (G2), and the verdict's `detail` is not carried into the row — it is
@@ -573,18 +681,31 @@ present, run declared quotable.
 ```python
 class ExecutionRecord(TypedDict):     # total; written every turn, including "no SQL"
     attempts: list[AttemptRecord]
-    terminal: Literal["answered", "graded", "refused", "capped", "no_sql"]
+    # "crashed" is written only by ``stamp``, when the turn failed after attempts
+    # existed — so outcome=crashed never sits beside terminal=answered.
+    terminal: Literal["answered", "graded", "refused", "capped", "no_sql", "crashed"]
     guardrail_errors: int             # exceptions swallowed by check()
 
 class AttemptRecord(TypedDict):
-    verdict_layer: Layer | None
+    verdict_layer: str | None         # the layer's NAME, not a Layer
     passed: bool
     reason_code: str
     path: Literal["agent", "graded", "sample", "profile"]
+    executed_sql: str | None          # what was sent, post-canonicalisation and row limit
 ```
 
 `ExecutionRecord` goes in `ServeState` and in 0005 §4.1's record register.
 **`guardrail_errors == 0` joins the quotability preconditions.**
+
+Two fields are easy to get wrong from this shape alone. `verdict_layer` is a **string**,
+the layer's `.name`, because `ExecutionRecord` is checkpointed and a `Layer` is not
+round-trip-safe through a JSON serialiser — and it is a different field from
+`CheckVerdict.failed_layer`, which is what §5's withdrawn third requirement turns on.
+`executed_sql` carries `prepare()`'s output, so the row says what the engine sent rather
+than what the model asked for; `None` means a refused attempt sent nothing, which is a
+value and not a gap. `"crashed"` is a terminal like the others: a turn that died after its
+first attempt still owes the ledger a row, and the alternative is the vacuous clean record
+this section exists to prevent.
 
 ### 13. Knobs
 
@@ -600,11 +721,70 @@ to prevent.
 | `sqlglot_version` | pinned; canonical names are release-dependent |
 | `hard_block_suspect` | `True` in dev/BIRD, `False` in production |
 | `graded_delivery_enabled` | `True` (OQ4 may retire it) |
-| `run_query_attempt_cap` | 3 |
+| `run_query_attempt_cap` | 5 (was 3 until 2026-08-07; a blocked attempt charges a slot, so 3 bought as few as one real correction). **Enforced by `_CapEndsTheTurn` in `serve/nodes/agent_core.py`, not by the tool** — see below |
 | `max_rows` | as today |
 | `guard_rules_enabled` | per `rule_id` |
 | `g_length_max_chars` | **8,000** — measured, see below |
 | `cost_budget` | **unset**; ships disabled rather than guessed |
+
+A tenth joined the nine above on 2026-08-12: `access_grant`, the digest of the `Grant` this run's
+`AccessPolicy` returned ([ADR 0012](0012-access-seam-principal-and-authorization.md) §7). It
+is here for this section's own reason — authorization is security configuration, and two runs
+under different grants must not hash identically. Harmless while the only shipped grant is
+open, which is why it defaults to `None` in `register/knobs.py` rather than to a digest.
+
+**`run_query_attempt_cap` now has an enforcer, and until 2026-08-07 it did not.** This table
+gave a number and §5's second structural requirement gave the semantics — *"the cap terminates
+the turn, it does not decline a call"* — and between them nothing named the mechanism, so the
+requirement went unbuilt for as long as the ADR read as if it were built. v2's cap did exactly
+what §5 accuses v1's of: `run_query` returned a "capped" tool message and control went straight
+back to the model with one more sentence and the same instructions. A tool return value cannot
+end an agent loop. Measured on this tree at `cap=5, recursion_limit=60`: five statements
+executed, then **25** further model calls, then `GraphRecursionError` — worse than unbounded
+round-trips, because the crashed super-step is discarded and the same paid turn that answered
+nothing also loses its ledger. The quieter symptom was an agent that stopped because it *chose*
+to, writing "the query tool reached its execution-attempt limit … so I can't reliably state the
+result"; a bound that depends on the model agreeing is not a bound.
+
+What ships now is `_CapEndsTheTurn`, a `ToolCallLimitMiddleware` subclass
+(`serve/nodes/agent_core.py::_CapEndsTheTurn`) installed in the nested agent's middleware list
+(`agent_core.py::agent_core_node`, the `middleware=[...]` argument). Four properties of it are load-bearing and none is obvious from the
+knob:
+
+- **It ends the loop from `after_model`, not from the tool.** The hook is decorated
+  `@hook_config(can_jump_to=["end"])` and returns `jump_to: "end"`, which is the thing a return
+  value cannot do. It costs exactly one model call, because the cap fires on the *proposal*
+  that would exceed it: the model must ask for a sixth statement before the sixth is refused.
+  Six model calls instead of thirty, and the turn ends `capped` rather than `crashed`.
+- **`thread_limit`, not `run_limit`.** `run_tool_call_count` is an `UntrackedValue`
+  (`langchain/agents/middleware/tool_call_limit.py:49`) and resets on every invocation —
+  including the re-invocation an `ask_user` resume performs, which would hand a paused turn a
+  second full budget. `thread_tool_call_count` is a `PrivateStateAttr` on the nested agent's
+  checkpointed state, where `attempts_by_call` already lives, so the two reset together. Here
+  "thread" means the turn.
+- **Native counting, local ending.** Constructed `exit_behavior="continue"` and the subclass
+  jumps, rather than constructed `"end"`. At the time of the decision native's `"end"` raised
+  `NotImplementedError` when the same AI message also called a different tool — which the node
+  would have recorded as `path_kind="crashed"`, and a model that pairs `run_query` with
+  `inspect_schema` reaches that branch routinely. Ending anyway requires answering the stranded
+  sibling calls with an error `ToolMessage`, since a tool call with no `ToolMessage` is a
+  history most providers reject on the *next* turn.
+
+  **That hole is closed upstream now, and the subclass is still what runs.** On the pinned
+  langchain (1.3.15) `ToolCallLimitMiddleware.after_model` no longer raises: its `"end"` branch
+  emits a `ToolMessage` for each blocked call *and* for every pending sibling before jumping.
+  So the argument above no longer forbids native `"end"` — what still does is the last bullet:
+  native `"end"` writes no cap ledger row, and `_CapEndsTheTurn` does. Adopting native `"end"`
+  is a live option and a measurable one, not a blocked one.
+- **It writes the cap ledger row itself.** Blocking happens a node earlier than the tool, so
+  `AttemptBook` never sees the refused call and `execution_from_attempts` would report
+  `answered` for a turn the cap ended. `serve/tools.py::build_tools`'s `run_query` keeps the book's own cap branch
+  as a backstop for callers that assemble tools without an agent; both writes key on
+  `CAP_LEDGER_KEY`, so a turn that trips both enforcers still carries exactly one row.
+
+The default moved 3 → 5 the same day, and it is `Role.comparability`: it enters
+`prompt_set_hash` / `knobs_resolved`, so every number measured at 3 is a different arm and does
+not compare to one measured at 5.
 
 **`g_length_max_chars` is now measured, not TBD.** Across all 10,962 BIRD dev +
 train questions:
@@ -648,12 +828,32 @@ id-based, which is a small API change for the agent prompt.
 fork). Indirect injection through data returned by the database (§6). Anything
 above the statement — 0005 owns retrieval and the graph.
 
+> **Amended 2026-08-12 by [ADR 0012](0012-access-seam-principal-and-authorization.md).** The first
+> sentence is now half wrong and the half matters. A `Principal`, an `AccessPolicy` port and two
+> adapters exist; §1's `check()` reads the resulting grant off `GovernancePolicy`; the TABLES layer
+> asks three questions instead of one (`r_table_not_licensed`, then `r_table_not_authorized`, then
+> `r_row_predicate_unenforced`) and COLUMNS gains `r_column_not_authorized`; §8's "the licensed set"
+> is now two sets with two meanings, and no grant may widen `licensed`. **Row-level security is
+> still not enforced here** — a predicate is declared and refused, never injected, for the reason
+> §3's fixed pipeline and G4 give. Per-*user* identity is still absent: one API key is one
+> principal. The default grant is open and 0012 §8 lists the `serve/` and `api/` wires that are
+> still owed, so on this tree the seam is a `govern/` property and not a served one.
+
 ---
 
 ## Open questions
 
-1. **What is the false-refusal rate of `PERMITTED_FUNCTIONS` on BIRD gold?**
-   Free, no model. Run before enabling.
+1. ~~**What is the false-refusal rate of `PERMITTED_FUNCTIONS` on BIRD gold?**~~
+   **Answered, and it is a standing CI gate rather than a one-off number.**
+   `tests/govern/gold_functions.json` is the committed inventory over 6,743 gold statements
+   (`sql_base`, `BIRD-Data-Obfuscation`, read 2026-08-03, sqlglot 30.12.0): 0 unparsed, 32
+   distinct canonical function names. `tests/govern/test_function_allowlist.py` asserts every
+   one of the 32 is permitted or carries a written reason in
+   `govern.functions.INTENTIONALLY_ABSENT`, and drives the real `check()` over a covering
+   sample to assert no statement is refused at or below `FUNCTIONS` for an unrecorded reason.
+   The rate is therefore not a figure that can drift — it is 0-by-assertion, with the chosen
+   refusals enumerated. The inventory is committed rather than read at test time because the
+   corpus is a sibling repository and a gate that skips when a checkout is absent is not a gate.
 2. **Does `COST` earn its place?** v1's cost layer has no recorded instance of
    blocking something the other layers would have missed. A layer that never
    fires is indistinguishable from a layer that is not wired up. If it goes,
@@ -682,7 +882,7 @@ leave the repository with no `check()` between the deletion at step 4 and step
 11 — so step 9's cost gate would run either with `run_query` disabled (not
 measuring what it argues about) or with an unguarded agent against Postgres.
 
-1. `Layer`, `Verdict`, `check()` with all-required keywords, the
+1. `Layer`, `CheckVerdict`, `check()` with all-required keywords, the
    exception-to-block wrapper, and `ExecutionRecord`.
 2. PARSE / NO_WRITE / FUNCTIONS, with both CI assertions and a measured
    false-refusal rate on gold.
@@ -704,3 +904,22 @@ measuring what it argues about) or with an unguarded agent against Postgres.
 demonstrating the v1 chain and its refusal. That suite is 0005's step-11 gate,
 and it is the same list — the first draft had the two ADRs citing different
 sets.
+
+**Where the order stands (2026-08-12).** Steps 1–6 have landed: `govern/layers.py`,
+`govern/check.py`, `govern/functions.py`, `govern/binding.py`, `govern/pipeline.py`,
+`govern/identifiers.py`, `govern/bounds.py`, `datasource/postgres.py` and
+`datasource/sqlite.py`. Three have not, and each for a different reason.
+
+- **Step 7 is half done.** The five deterministic rules are `govern/guard.py::GUARD_RULES`
+  and the sixth is `serve/nodes/guard.py::_bi_scope`, but the red-team corpus does not
+  exist, so `guard_rules_enabled` is `UNSET` and the served app enables `g_bi_scope` only.
+  OQ3 is the blocker, and it is a corpus, not code.
+- **Step 8 is declared and unwired.** `graded_delivery_eligible` has no caller in `src/`,
+  and neither `terminal="graded"` nor `path="graded"` is ever written (§5, §7).
+- **Step 9's redactor is withdrawn, not pending** — §11's superseding note.
+
+The acceptance suite exists and covers all ten: B1, B2, B4, B5, B6 and B8 in
+`tests/govern/test_bypass_contract.py`; B3 in the same file as the "`failed_layer=None`
+must mean passed" pair; B7 and B9 in `tests/govern/test_guard_pipeline_ledger.py`; B10 in
+`tests/govern/test_check_internals.py`. `govern/adversarial.toml` carries the
+statement-shaped half as data and records which bypasses have no SQL surface.

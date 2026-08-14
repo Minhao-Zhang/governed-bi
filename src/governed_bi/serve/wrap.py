@@ -1,22 +1,14 @@
 """Node exception wrapper — every failure routes through ``stamp`` (ADR 0005 §3.1), and
 every rail reports itself to the live stream (ADR 0010 §1).
 
-**Why the stream emitter is here and not in the nodes.** Every node is already wrapped, so one
-emitter covers every rail, derives its ``step`` from the name the graph registered, and cannot
-drift per node. Twenty hand-placed ``writer(...)`` calls is twenty places to forget one, and the
-missing-call failure mode is a step that silently never appears in the timeline.
+One emitter here rather than a ``writer(...)`` call per node: it covers every rail and derives
+its ``step`` from the name the graph registered, so no node can be forgotten. The two things it
+cannot see emit for themselves — the tools, which run inside the nested ``create_agent`` graph
+(``serve/tools.py``), and ``stamp``, which is never wrapped (``graph.py``).
 
-**The two things this wrapper cannot see**, and which therefore emit for themselves: the tools,
-which run inside the nested ``create_agent`` graph (``serve/tools.py``), and ``stamp``, which is
-deliberately never wrapped (``graph.py``).
-
-**This is also where the turn's clock starts** (audit §10). ``latency_sec`` was a declared
-record field with zero writers, and no clock was read anywhere in ``src/governed_bi`` at all —
-no ``perf_counter``, no ``monotonic``, no ``time.time()``. Latency was not merely unrecorded;
-it had never been measured. The wrapper is the right home because every rail passes through it,
-so "when did this turn begin" has one answer rather than one per entry point: the graph starts
-at ``accept`` on the served path and at ``guard`` on the CLI and eval paths, and a stamp in
-each would be two clocks that drift.
+Also where the turn's clock starts, so ``turn_started_at`` has one answer rather than one per
+entry point (the graph starts at ``accept`` on the served path, ``guard`` on the CLI and eval
+paths, and a stamp in each would be two clocks that drift).
 """
 
 import asyncio
@@ -39,19 +31,49 @@ from governed_bi.serve.events import (
 __all__ = ["wrap_node"]
 
 
-def wrap_node(stage: str, fn: Callable[..., dict[str, Any]], *, stream: bool = True):
+def _without_cleared_clock(update: Mapping[str, Any]) -> dict[str, Any]:
+    """``update`` with a null ``turn_started_at`` dropped, so the wrapper's stamp survives it.
+
+    This wrapper is the declared single owner of the turn clock — "so ``turn_started_at`` has one
+    answer rather than one per node". It was not: ``Session.turn`` spreads ``PER_TURN_RESET``,
+    which carries ``turn_started_at: None``, and ``accept`` returns that dict, so the merge
+    ``{**began, **update}`` let the reset win over the stamp taken microseconds earlier. The clock
+    then restarted at whichever node ran next, and ``latency_sec`` measured a served turn from
+    after ``accept`` — a turn taking 0.266 s of wall clock recorded 0.010 s.
+
+    Dropping the key rather than reordering the merge, because a node writing ``None`` here is
+    always ``PER_TURN_RESET`` boilerplate and never a deliberate act, while a node writing a real
+    timestamp should still win. Only served turns were affected: ``eval/harness.py`` has no
+    ``accept`` node, so no measured arm moves.
+    """
+    if "turn_started_at" in update and update["turn_started_at"] is None:
+        return {k: v for k, v in update.items() if k != "turn_started_at"}
+    return dict(update)
+
+
+def wrap_node(
+    stage: str,
+    fn: Callable[..., dict[str, Any]],
+    *,
+    stream: bool = True,
+    timeout: float | None = None,
+):
     """Wrap a node: on exception return ``failure`` + ``path_kind='crashed'``.
 
-    Does not re-raise ordinary exceptions. ``GraphInterrupt`` (HITL ``interrupt()``)
-    is re-raised so the checkpointer can pause and resume.
+    Does not re-raise ordinary exceptions. ``GraphInterrupt`` (HITL ``interrupt()``) is
+    re-raised so the checkpointer can pause and resume. Forwards ``config`` only when the
+    wrapped function declares a ``config`` parameter (LangGraph injects ``RunnableConfig``).
 
-    Forwards ``config`` only when the wrapped function declares a ``config``
-    parameter (LangGraph injects ``RunnableConfig``).
+    ``stream=False`` suppresses the two stream events. The ``fanout`` passthrough needs it: it
+    is registered under the name ``facet_schema``, so leaving it on emits a phantom row
+    immediately before the real one, which reads as the facet having run twice.
 
-    ``stream=False`` suppresses the two stream events. One caller needs it: the ``fanout``
-    passthrough is registered under the name ``facet_schema``, so leaving it on emitted a
-    phantom ``facet_schema`` row immediately before the real one — two rows for one stage,
-    which is worse than a missing one because it looks like the facet ran twice.
+    ``timeout`` is enforced here rather than via ``add_node(..., timeout=...)``: measured on
+    langgraph 1.2.10, that bound fires outside the node function and its ``error_handler`` runs
+    *without saving the run* under ``stream_eager`` / ``subgraphs=True`` / ``"messages"`` /
+    ``"custom"`` (``pregel/_executor.py`` re-raises at teardown), three of which the served
+    surface uses at once; it also left the rail ``running`` forever. Inside, a timeout is an
+    ordinary ``TimeoutError``: caught, stamped ``crashed``, resolved on the stream.
     """
 
     accepts_config = "config" in inspect.signature(fn).parameters
@@ -89,14 +111,13 @@ def wrap_node(stage: str, fn: Callable[..., dict[str, Any]], *, stream: bool = T
     def _started(state: Mapping[str, Any]) -> dict[str, Any]:
         """``{"turn_started_at": <epoch>}`` from the first node of the turn to run, else ``{}``.
 
-        Wall clock rather than ``perf_counter``, and that is the point rather than laziness: a
-        clarification suspends the turn on a ``GraphInterrupt`` and it can resume in a different
-        process, where a ``perf_counter`` reading from the first one means nothing. An epoch
-        float survives the checkpoint.
+        See :func:`_without_cleared_clock` for why the stamp must be defended from the update it
+        is merged with.
 
-        Written only when absent, so it is the *turn's* start and not the last node's. It is in
-        ``PER_TURN_RESET``, so turn two does not inherit turn one's clock and report a latency
-        that includes everything the user did in between.
+        Wall clock rather than ``perf_counter``: a clarification suspends the turn on a
+        ``GraphInterrupt`` and, with a durable checkpointer, can resume later. Written only
+        when absent, so it is the *turn's* start; and in ``PER_TURN_RESET``, so turn two does
+        not inherit turn one's clock. (`/chat`'s ``InMemorySaver`` does not survive restart.)
         """
         if state.get("turn_started_at") is not None:
             return {}
@@ -104,32 +125,58 @@ def wrap_node(stage: str, fn: Callable[..., dict[str, Any]], *, stream: bool = T
 
     is_async = inspect.iscoroutinefunction(fn)
 
+    if timeout is not None and not is_async:
+        # Cancelling the ``await`` around ``to_thread`` does not stop the thread, so the bound
+        # would report a stop it did not perform. Refused loudly at build time.
+        raise ValueError(
+            f"node {stage!r} is sync and cannot carry a timeout: cancelling the await around "
+            "asyncio.to_thread leaves the thread running, so the bound would be a claim rather "
+            "than a fact. Make the node `async def` first."
+        )
+
     async def _body(state: Mapping[str, Any], config: RunnableConfig | None) -> dict[str, Any]:
         """Run the node, off the event loop if it is still synchronous.
 
-        **Why ``to_thread`` and not a direct call.** LangGraph runs a sync node in a threadpool,
-        so two turns on the server interleave. An ``async def`` wrapper around a still-blocking
-        body would hold the loop for the whole of an 8-call turn and serialise them — a
-        concurrency regression bought with a refactor that was supposed to be neutral. Nodes
-        move to native ``async`` one at a time; until one does, this keeps its old scheduling.
+        ``to_thread`` rather than a direct call: LangGraph runs a sync node in a threadpool, so
+        an ``async def`` wrapper around a still-blocking body would hold the loop for a whole
+        turn and serialise concurrent turns. Nodes move to native ``async`` one at a time.
         """
         if is_async:
-            return await (fn(state, config) if accepts_config else fn(state))
-        update = await (
-            asyncio.to_thread(fn, state, config)
-            if accepts_config
-            else asyncio.to_thread(fn, state)
-        )
-        # Named here rather than awaited. A sync node returning a coroutine is always a
-        # mistake — usually a test double or a decorator that wrapped an async node without
-        # becoming one — and awaiting it would hide that. Left alone it surfaces four frames
-        # away as ``'coroutine' object has no attribute 'get'`` inside ``rail_observation``,
-        # which says nothing about the node that caused it.
-        if inspect.isawaitable(update):
-            update.close()
+            call = fn(state, config) if accepts_config else fn(state)
+            if timeout is not None:
+                # `wait_for` cancels the inner coroutine — the reason the sync case is refused
+                # above — and raises an ordinary `TimeoutError`, which the `except` below stamps
+                # `crashed` like any other.
+                update = await asyncio.wait_for(call, timeout)
+            else:
+                update = await call
+        else:
+            update = await (
+                asyncio.to_thread(fn, state, config)
+                if accepts_config
+                else asyncio.to_thread(fn, state)
+            )
+            # A sync node returning a coroutine is always a mistake, and awaiting it would hide
+            # that. Left alone it surfaces four frames away as ``'coroutine' object has no
+            # attribute 'get'`` inside ``rail_observation``, naming nothing.
+            if inspect.isawaitable(update):
+                update.close()
+                raise TypeError(
+                    f"node {stage!r} is a sync function that returned an awaitable. It is "
+                    "probably wrapping an async node without awaiting it; make the wrapper "
+                    "`async def`."
+                )
+        # Shape-checked **here**, inside the try, for the same reason the awaitable case is
+        # (audit C7). ``_end`` and ``_without_cleared_clock`` run *after* the ``except`` below and
+        # both subscript the update, so a node returning ``None`` — or anything that is not a
+        # mapping — raised from the wrapper itself: no ``crashed`` marker, no ``answer``, no
+        # ``final`` event, and the exception left the graph. That is the one failure this wrapper
+        # exists to make impossible, reached through the wrapper rather than through the node.
+        # Raising here routes it to ``_crashed`` like any other node fault.
+        if not isinstance(update, Mapping):
             raise TypeError(
-                f"node {stage!r} is a sync function that returned an awaitable. It is probably "
-                "wrapping an async node without awaiting it; make the wrapper `async def`."
+                f"node {stage!r} returned {type(update).__name__}, not a mapping. A LangGraph "
+                "node returns a partial state dict; returning None is not 'no update'."
             )
         return update
 
@@ -143,18 +190,16 @@ def wrap_node(stage: str, fn: Callable[..., dict[str, Any]], *, stream: bool = T
             try:
                 update = await _body(state, config)
             except GraphInterrupt:
-                # No resolve event. The node has not ended — it is suspended, and the row
-                # stays `running`, which is what the interface should show while a human is
-                # being asked something. `ask_user` emits its own pair around the pause.
+                # No resolve event: the node is suspended, not ended, so the row stays
+                # `running`. `ask_user` emits its own pair around the pause.
                 raise
             except Exception as e:
                 update = _crashed(e)
             if live:
                 _end(state, update)
-            # The clock goes on the update even when the node crashed: a turn that died still
-            # took time, and `latency_sec` on a crashed turn is the number that says how long
-            # the user waited to be told nothing.
-            return {**began, **update}
+            # The clock rides the update even on a crash: `latency_sec` on a crashed turn is
+            # how long the user waited to be told nothing.
+            return {**began, **_without_cleared_clock(update)}
 
         return inner
 
@@ -169,6 +214,6 @@ def wrap_node(stage: str, fn: Callable[..., dict[str, Any]], *, stream: bool = T
             update = _crashed(e)
         if live:
             _end(state, update)
-        return {**began, **update}
+        return {**began, **_without_cleared_clock(update)}
 
     return inner_state_only

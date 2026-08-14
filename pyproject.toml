@@ -6,17 +6,19 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
 authors = [{ name = "Minhao Zhang" }]
-# Core + agent deps live here (no extra): a plain `uv sync` installs everything the
-# default OpenAI-backed stack needs, so dev never hits a "feature silently off
-# because its extra wasn't installed" bug. There are **no extras**: the `bedrock`
-# one was removed on 2026-08-04 because it fronted `model/bedrock_embedder.py`, a
-# module `model/__init__.py` says in its own docstring is deliberately absent. An
-# extra that installs a provider tree for an adapter that does not exist is a
-# capability the packaging claims and the code does not have.
+# Core + agent deps live here: a plain `uv sync` installs everything the default
+# OpenAI-backed stack needs, so dev never hits a "feature silently off because its
+# extra wasn't installed" bug. There is exactly **one** extra, `bedrock`, and it is
+# the only thing a base install leaves out; see [project.optional-dependencies].
 #
-# Every entry below is imported by something under `src/` or `tests/`, checked by
-# grep on the same date. Four were not and are gone; see the git log for the reasoning
-# on `deepagents` in particular, which is retired rather than deferred.
+# `bedrock` fronts `model/bedrock_embedder.py` and the proxy gateway's `boto3` use.
+# CI installs it (`uv sync --frozen --extra bedrock`), so a setup document that omits
+# it makes the provider translation tests skip locally and run on CI — say it
+# everywhere the install is described.
+#
+# Every entry below is imported by something under `src/` or `tests/`. See the git log
+# for the reasoning on `deepagents` in particular, which is retired rather than
+# deferred.
 dependencies = [
     # --- Core engine (deterministic) ---
     # Corpus asset schemas (Facts / Inference / Audit tiers) and validation; also
@@ -48,17 +50,23 @@ dependencies = [
     "openai>=1.40",
     # --- Agent harness: LangGraph server + LangChain clients ---
     # Upper bounds pin the wire-protocol generation this repo was built against
-    # (see docs/architecture.md §9). Transitive langgraph-api / langgraph-sdk are
-    # constrained under [tool.uv] rather than declared as direct deps.
+    # (see docs/adr/0007-http-surface-and-the-ui-contract.md). Transitive
+    # langgraph-api / langgraph-sdk are constrained under [tool.uv] rather than
+    # declared as direct deps.
     "langgraph>=1.0,<2",
     "langgraph-cli[inmem]>=0.4,<0.5",
     "langchain>=1.0",
     "langchain-openai>=1.0",
+    # No `langchain-aws` here: it pulls a boto3/botocore tree that the OpenAI and proxy arms
+    # never touch, and the base install is what every model-free test runs against. It is an
+    # extra — `uv sync --extra bedrock` — and every import of it is inside the function that
+    # needs it, so selecting a non-Bedrock provider never pays for it. See
+    # [project.optional-dependencies].
     # No `langgraph-checkpoint-sqlite` / `-postgres`: zero importers. `InMemorySaver` is
-    # the only saver in the tree and LangGraph Server brings its own persistence. ADR
-    # 0004 proposes durable run logging and will need one of these — it is Proposed with
-    # no code, and declaring a dependency for a design is how a package ends up
-    # advertising a capability nobody built.
+    # the only saver compiled in-tree (`/chat`); LangGraph Server injects its own for the
+    # stream path. ADR 0004's durable checkpointer half did not ship — `/capabilities`
+    # reports `checkpoint_durable: false`. Declaring a dependency for an unbuilt saver
+    # would advertise a capability nobody built.
     #
     # No `deepagents`: zero importers, and **retired rather than deferred.**
     # `FilesystemMiddleware` contributes `write_file` / `edit_file` and they are not
@@ -85,6 +93,16 @@ dependencies = [
     "pyarrow>=25.0",
     # No `numpy`. It arrives under `lancedb` and nothing in `src/` or `tests/` imports it;
     # the dev group's note on why it was removed is about declared dependencies and holds.
+]
+
+[project.optional-dependencies]
+# AWS Bedrock, for both the chat surfaces and the embedder. `uv sync --extra bedrock`.
+# `langchain-aws` brings boto3/botocore transitively; both are named so the floor is visible
+# to a reader — `botocore.config.Config` is what carries the timeout and retry knobs onto a
+# Bedrock client, and `model/provider.py` imports it directly.
+bedrock = [
+    "langchain-aws>=1.0",
+    "boto3>=1.34",
 ]
 
 [dependency-groups]
@@ -129,7 +147,8 @@ packages = ["src/governed_bi"]
 # `stream_subgraphs` carrying custom events *and* tokens (ADR 0010 M2 — without it the
 # timeline is empty and the server still answers 200), the checkpointer reaching the
 # nested `create_agent` through config (which is what makes `ask_user` resumable and
-# `/threads` persist), and `http.app` mounting the custom routes.
+# `/threads` persist), and `http.app` mounting the custom routes. See
+# docs/adr/0007-http-surface-and-the-ui-contract.md.
 [tool.uv]
 constraint-dependencies = [
     "langgraph-api>=0.12,<0.13",

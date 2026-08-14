@@ -10,32 +10,79 @@ Wired in [`serve/graph.py`](../src/governed_bi/serve/graph.py). Nodes live under
 [`serve/nodes/`](../src/governed_bi/serve/nodes/).
 
 ```
-accept → guard → rewrite → negative_gate
+[accept] → guard → rewrite → negative_gate
   → fanout ─┬─ facet_schema
             ├─ facet_term
             ├─ facet_metric
             ├─ facet_entity
             └─ facet_example
-  → route → resolve → connect → assemble
-  → agent_core → narrate → stamp → record
+  → route → resolve → connect → assemble → abstain
+  → agent_core → reflect → narrate → stamp → [record] → END
+
+guard blocked ───────────────────────────────→ refuse  ─┐
+negative hit / route / connect / abstain ────→ decline ─┼─→ stamp
+any node raising (wrap_node) ───────────────────────────┘
 ```
+
+`accept` and `record` are bracketed because both are optional arguments to
+`build_graph`: `accept` (the client-facing path) also switches the graph to the
+`ServeInput` / `ServeOutput` schemas, and without `record` the graph runs
+`stamp → END`. Every terminal path funnels through `stamp`, including crashes —
+`wrap_node` turns a node exception into `failure` + `path_kind: crashed` and
+routes there rather than letting it escape the graph.
 
 | Stage | Role |
 |---|---|
-| `guard` | LLM / structured scope gate |
-| `rewrite` | Utility-model rewrite for most facets |
-| `negative_gate` | Negative-example refuse path |
-| `facet_*` | Parallel retrieval channels |
+| `guard` | Five deterministic rules (`govern/guard.py::GUARD_RULES`), then a model-backed BI-scope gate on the utility model. **Enabled per rule id, and `guard_rules_enabled` ships `UNSET`** — the served app (`api/graph_app.py`) turns on `g_bi_scope` and nothing else; the eval driver, the one-turn CLI and `tools/` all pass `{}`, so no guard rule fires on any measured arm |
+| `rewrite` | Stub rail today; facet query rewriting lives inside `facet_*` |
+| `negative_gate` | Negative-example decline path. A stub today: `negative_tau` ships `UNSET` and the served corpus holds no `negative_example` asset, so the node writes `outcome: disabled` on every turn and the `decline` branch is unreachable |
+| `facet_*` | Parallel retrieval channels (each may rewrite its query) |
 | `route` / `resolve` / `connect` | Schema pick, budgets, Steiner join |
 | `assemble` | Render retrieval context block |
+| `abstain` | The declared abstention policy — deterministic predicates over recorded state, no score. `abstention_policy_enabled` ships `False`, so it writes a `disabled` verdict and routes on ([ADR 0013](adr/0013-the-declared-abstention-policy.md)) |
 | `agent_core` | Nested `create_agent` loop (read-only tools) |
-| `narrate` | Short answer over the result table |
+| `reflect` | Post-hoc observer; never routes the turn |
+| `narrate` | Short answer over the result table (must not crash an answered turn) |
 | `stamp` | The turn record: `outcome`, `guardrail_errors`, the ledger, `latency_sec` |
 
 `agent_core` tools: `read_body`, `inspect_schema`, `sample_rows`, `run_query`,
-`ask_user`. Governance wraps `run_query` / `sample_rows` ([ADR 0006](adr/0006-execution-time-governance.md)).
-The retrieval context block is injected per model call via middleware; it is not
-appended as an ordinary user message.
+`ask_user`.
+
+**Where governance actually runs.** The two executing tools call it themselves —
+there is no tool-call interceptor, and `wrap_tool_call` appears nowhere in `src/`:
+
+```
+serve/tools.py  →  serve/fetch.py  →  govern/pipeline.py::prepare
+                →  govern/check.py::check()  →  read-only connector
+```
+
+The ledger row comes back on the tool's own `Command(update=...)`, beside the
+payload. What keeps this from being merely a convention is that the model holds no
+connector handle — the connector is closed over inside `build_tools` — and that
+`check()` raises `GovernanceUsageError` rather than defaulting permissive when a
+security argument is unwired. Adding a new executor that skips `check()` is caught
+by `govern/`'s G2 invariant and its tests, not by the topology. Layers, rules and
+executor paths: [ADR 0006](adr/0006-execution-time-governance.md).
+
+**Authorization is a wired seam that ships open.** `govern/access.py` holds an `AccessPolicy`
+port with two adapters, and the TABLES and COLUMNS layers ask the resulting grant
+(`r_table_not_authorized`, `r_column_not_authorized`, `r_row_predicate_unenforced`).
+`api/graph_app.py::access_policy_from_environment` is the composition root and the only place in
+`src/` that chooses one: `OpenAccessPolicy` unless `GOVERNED_BI_ACCESS_POLICY` names a
+`StaticRoleAccessPolicy` TOML file, and a `RuntimeError` rather than a fallback if that file is
+missing. `resolve_access_grant` asks it once for the principal
+`api/auth.py::authenticated_principal` resolves — one principal, asserted rather than
+authenticated, since no route asks a caller for anything ([usage](usage.md#serve-langgraph-server))
+— and the grant rides on `GovernancePolicy`. The
+default grant authorizes everything, so on a stock install those three rules never fire — what the
+grant *does* narrow when one is configured, and what it deliberately does not, is
+[ADR 0012 §8](adr/0012-access-seam-principal-and-authorization.md). What a fork implements, in
+what order: [enterprise fork](enterprise-fork.md).
+
+`AgentMiddleware` *is* used in `agent_core`, for two things that are **not**
+governance: injecting the retrieval context block on every model call (via
+`wrap_model_call`, so it never enters `messages`), and ending the turn at the
+`run_query` attempt cap.
 
 Server entry: [`api/graph_app.py:make_graph`](../src/governed_bi/api/graph_app.py)
 (`uv run langgraph dev`). HTTP app: [`api/routes.py:app`](../src/governed_bi/api/routes.py)
@@ -50,7 +97,7 @@ Server entry: [`api/graph_app.py:make_graph`](../src/governed_bi/api/graph_app.p
 | `corpus` | Typed assets, load, validate |
 | `datasource` | Connectors |
 | `eval` | Measurement harness |
-| `govern` | Seven-layer check, ledger, tool bounds |
+| `govern` | The layer stack (six that run, `COST` declared and off), ledger, tool bounds |
 | `measure` | Population / stats helpers |
 | `model` | Chat and embedder adapters |
 | `register` | Knobs, prompts, turn records, citations |
@@ -78,15 +125,8 @@ for first:
 - **`execution`** — every attempt, with its verdict layer, reason code and executor
   path.
 
-> **This section used to describe "two stamps, not one trust score":
-> `safety_clearance` (bool) and `semantic_assurance` (`unflagged` / `heuristic` /
-> `unverified`).** Neither existed. The two names were in eight documents, the README
-> and one test, and in **zero source files** — there is no two-verdict stamp on any
-> path and there never was, so the careful distinction this section drew was between
-> two things that did not exist.
->
-> The underlying argument is still right and is why nothing was invented to fill the
-> gap: a single collapsed trust score is worse than none, and a verdict needs a
-> definition of what measures it before it needs a field. The fields above are the
-> ones something observes. `tests/api/test_http_contract.py` fails if either retired
-> name reappears in `src/`.
+> **There is no reliability stamp on any path.** A turn carries the fields above and
+> nothing that summarises them. A single collapsed trust score is worse than none, and
+> a verdict needs a definition of what measures it before it needs a field — so the
+> record carries only what something observes. `tests/api/test_http_contract.py` fails
+> if `safety_clearance` or `semantic_assurance` appears in `src/`.

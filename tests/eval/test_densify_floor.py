@@ -11,7 +11,8 @@ It had two defects, both found by comparing its output against a hand-edited cor
   ones with the most columns to disambiguate. The printed count excluded them, so nothing said so.
 * It carried gold's inherited truncation markers straight through, leaving 26 indexed summaries
   ending in ``…`` preceded by a partial identifier, in the one field the index reads, while
-  ``corpus/validate.py`` calls truncation "the treatment" and forbids it.
+  ``corpus/validate.py`` says to rewrite rather than truncate, "the indexed text is the
+  treatment".
 """
 
 from __future__ import annotations

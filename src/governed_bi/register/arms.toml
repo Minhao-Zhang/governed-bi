@@ -1,0 +1,52 @@
+# Arm profiles: what each measured arm changed, declared where a reader can diff it.
+#
+# An arm's identity used to live in a gitignored `.env` on one machine, which is the
+# "versioned is not rebuildable" problem wearing a different hat: `runs/eval/` names an arm,
+# and nothing committed said what that name meant. This file is the committed half.
+#
+# `treatment` is the load-bearing field. `eval/report.py::knobs_comparable` refuses a pair that
+# cannot name what changed, because "nobody said what changed" is not "nothing changed" — that
+# is audit D9's resolution, and this is where the caller says it. Every name must be a
+# `Role.comparability` knob in `register/knobs.py`; `register/arm_profiles.py` refuses the file
+# otherwise rather than silently ignoring a typo.
+#
+# This file does NOT set knobs. It declares what an arm's treatment *was*, so a recorded run can
+# be checked against it. Adding a second place that decides a knob's value is the defect
+# AGENTS.md names; the knob register stays the one home.
+#
+# `corpus` and `corpus_content_hash` are two different identifiers and both are here on purpose.
+# `corpus` is the ref a human checks out in `../BIRD-corpus`; `corpus_content_hash` is the digest
+# every measurement row carries, and is the only one `reconcile` can compare. Comparing the git
+# ref against the recorded digest with `startswith` is what `reconcile` used to do, and it could
+# never match — so the check returned agreement on every artifact ever produced.
+#
+# `corpus_content_hash` is **mandatory** on every arm. `register/arm_profiles.py` refuses this
+# file without it, because the alternative is the failure that outlived the first fix: v3_fold —
+# the baseline v4 is measured against — declared no digest, so `reconcile` skipped its only
+# comparison and the driver printed "every row agrees with the profile in arms.toml" from a check
+# that examined nothing. An arm that cannot be reconciled must say so, not report agreement.
+
+[arm.v3_fold]
+description = "ANALYST v3 with the fold prompt, routing pinned."
+treatment = []
+corpus = "30872d3"
+# Derived from the artifact, not from the corpus checkout: 1 345 of the 1 351 rows of
+# `runs/eval/proxy_v3_fold_opus_high_corpus30872d3.jsonl` carry this digest and the other 6 carry
+# `None` — the zero-licensed clarifications of open-work §3.6a, which never reach the stamp. It is
+# the same digest v4 and v5 record, which is what a shared corpus is supposed to look like.
+corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
+notes = "The baseline v4 is measured against. Its own treatment is relative to v3, not recorded here."
+
+[arm.v4]
+description = "ANALYST v4 prompt. The arm every quoted figure in README.md comes from."
+treatment = ["prompt_set"]
+compare_to = "v3_fold"
+corpus = "30872d3"
+corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
+
+[arm.v5]
+description = "v4 plus the projection ablation, which priced ~4 points of EX as shape-matching."
+treatment = ["prompt_set"]
+compare_to = "v4"
+corpus = "30872d3"
+corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"

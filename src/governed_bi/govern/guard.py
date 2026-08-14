@@ -44,16 +44,12 @@ GUARD_PUBLIC_MESSAGE = (
     "want to see."
 )
 
-#: Characters that must not reach the model or the normaliser.
+#: Characters that must not reach the model or the normaliser: C0/C1 controls except
+#: tab, newline and return; bidi overrides and isolates; zero-width space/joiner/
+#: non-joiner; word joiner; BOM; soft hyphen.
 #:
-#: C0/C1 controls except tab, newline and carriage return; the bidi override and
-#: isolate families; zero-width space/joiner/non-joiner; the word joiner; the
-#: byte-order mark; and the soft hyphen. Every one of them survives a copy-paste and
-#: none of them is part of a question about data.
-#:
-#: Written as escapes rather than as the characters themselves: a literal zero-width
-#: joiner inside a character class is invisible in review and in a diff, which is the
-#: property the rule exists to reject.
+#: Written as escapes, not literals: a literal zero-width joiner in a character class
+#: is invisible in review and in a diff, which is the property the rule rejects.
 _CONTROL = re.compile(
     "["
     "\x00-\x08\x0b\x0c\x0e-\x1f"  # C0 controls, keeping tab, newline, return
@@ -66,11 +62,9 @@ _CONTROL = re.compile(
     "]"
 )
 
-#: Imperatives aimed at the model rather than at the data.
-#:
-#: English only, and that is the recorded weakness above. Each pattern is written to
-#: need a *verb plus an object*, because "ignore" and "system" on their own are
-#: ordinary words in questions about data ("ignore returns", "system uptime").
+#: Imperatives aimed at the model rather than at the data. English only (recorded
+#: weakness). Each pattern needs a *verb plus an object*: "ignore" and "system" alone
+#: are ordinary words in questions about data ("ignore returns", "system uptime").
 _INSTRUCTION_OVERRIDE = re.compile(
     r"(?ix)"
     r"(ignore|disregard|forget|override)\s+(all\s+|any\s+|the\s+)?"
@@ -92,10 +86,8 @@ _ROLE_INJECTION = re.compile(
     r"|^\s*###\s*(system|assistant)\b"
 )
 
-#: Text shaped like a tool call or a tool result.
-#:
-#: A forged tool *result* is the more dangerous half and the easier one to miss: the
-#: model has no way to tell a result it asked for from one pasted into a question.
+#: Text shaped like a tool call or a tool result. The forged *result* is the dangerous
+#: half: the model cannot tell one it asked for from one pasted into a question.
 _TOOL_FORGERY = re.compile(
     r"(?ix)"
     r'"(tool_calls|tool_call_id|function_call)"'
@@ -108,9 +100,9 @@ _TOOL_FORGERY = re.compile(
 def has_control_characters(text: str) -> bool:
     """Whether ``text`` holds a character :data:`_CONTROL` rejects.
 
-    Exported because the statement pipeline needs the *same* test before it
-    normalises (§3 step 1), and a second copy of the character class is a second
-    answer to "which characters are invisible" — the shape B10 was.
+    Exported because the statement pipeline needs the *same* test before it normalises
+    (§3 step 1); a second copy of the character class is a second answer to "which
+    characters are invisible", which is B10's shape.
     """
     return _CONTROL.search(text) is not None
 
@@ -146,9 +138,9 @@ def _rule_length(text: str, knobs: GovernancePolicy) -> str | None:
 
 #: rule id → predicate. Returns the ledger detail when the rule fires, else ``None``.
 #:
-#: ``g_encoding`` is first because it is the only rule whose *position* is part of its
-#: specification. The rest are order-independent and the first to fire wins, so a
-#: question can only ever cite one rule — which is also all the caller is told.
+#: ``g_encoding`` is first because it is the only rule whose position is part of its
+#: specification (it must precede NFKC). The rest are order-independent; first to fire
+#: wins, so a question cites at most one rule.
 GUARD_RULES: Mapping[str, Callable[[str, GovernancePolicy], str | None]] = {
     "g_encoding": _rule_encoding,
     "g_length": _rule_length,
@@ -157,40 +149,31 @@ GUARD_RULES: Mapping[str, Callable[[str, GovernancePolicy], str | None]] = {
     "g_tool_forgery": _rule_tool_forgery,
 }
 
-#: The one guard rule that is **not** in :data:`GUARD_RULES`, and the reason is a layer boundary.
+#: The one guard rule that is **not** in :data:`GUARD_RULES`: it asks a model whether the
+#: question is a BI task at all, and ``govern/`` must stay importable with no model, no
+#: settings and no I/O. The check therefore runs in ``serve/nodes/guard.py``; only the id
+#: lives here, because it is closed vocabulary that ``guard_rules_enabled``,
+#: ``GuardVerdict.rule_id`` and the record all read.
 #:
-#: It asks a model whether the question is a business-intelligence task at all, and refuses the
-#: turn if not. Every rule above is a pure ``(str, GovernancePolicy) -> str | None`` predicate,
-#: because ``govern/`` must stay importable with no model, no settings and no I/O — the same
-#: constraint ``register/stages.py`` states. So the *check* runs in ``serve/nodes/guard.py``,
-#: which already reads ``agent_model`` off the runnable config, and only the **id** lives here.
-#:
-#: The id lives here anyway, rather than being a bare string at the call site, because it is part
-#: of a closed vocabulary three other things read: ``guard_rules_enabled`` gates it exactly like
-#: the other five, ``GuardVerdict.rule_id`` publishes it, and the record retains it. A rule id
-#: invented at its call site is a sixth vocabulary of the kind ``register/stages.py`` exists to
-#: prevent.
-#:
-#: **Enabled with no model configured is ``error_failed_open``, not ``clear``.** The rule was
-#: switched on and could not run; reporting that as a pass would be a gate that "leaves a trace
-#: only when it fires", which ``register/record.py`` says cannot afterwards be told from a gate
-#: that was never wired up.
+#: **Enabled with no model configured is ``error_failed_open``, not ``clear``** — a rule
+#: switched on that could not run must not be indistinguishable from one never wired up.
 BI_SCOPE_RULE_ID = "g_bi_scope"
 
 _WARNED: set[str] = set()
 
 
 def guard(question: str, knobs: GovernancePolicy) -> GuardVerdict:
-    """Screen one input. Called on ``question``, and again on ``rewrite.after``.
+    """Screen one input. **One call site today: ``guard_node``, on ``question``.**
 
-    The second pass is not belt-and-braces: ADR 0005's ``rewrite`` is a model call
-    with unguarded history in scope and every downstream node reads its output, so
-    without it **the guarded artifact is never the delivered artifact**. These rules
-    are deterministic and cheap, so running them twice costs nothing.
+    ADR 0006 §6 requires a second pass over ``rewrite.after`` and it is not built. That
+    pass is load-bearing, which is why the gap is worth naming here rather than only in
+    the ADR: ADR 0005's ``rewrite`` is a model call with unguarded history in scope and
+    every downstream node reads its output, so until it exists the guarded artifact is
+    not the delivered artifact. This docstring used to describe the second pass in the
+    present tense, which is how a reader stops looking for it.
 
-    ``knobs`` is required and its ``guard_rules_enabled`` mapping must be explicit —
-    a default would be a decision about what is enabled, made where nobody would look
-    for it.
+    ``knobs.guard_rules_enabled`` must be explicit — a default would be a decision
+    about what is enabled, made where nobody would look for it.
     """
     if isinstance(knobs.guard_rules_enabled, Unset):
         raise GovernanceUsageError(

@@ -201,10 +201,11 @@ def _by_scope(rows: list[dict[str, Any]], scope: str) -> dict[str, Any]:
 def _client(monkeypatch, session: Any) -> Any:
     from fastapi.testclient import TestClient
 
-    from governed_bi.api import routes
+    from governed_bi.api import routes, trace_store
 
-    monkeypatch.setattr(routes, "_session", lambda: session)
-    return TestClient(routes.app)
+    # `routes.app` reached a process-global session that no longer exists: upstream
+    # removed `_session` at the 2026-08-11 restructure in favour of this constructor.
+    return TestClient(routes.make_app(session, None, trace_store))
 
 
 # ── POST /elicitation/generate ──────────────────────────────────────────────────────────────
@@ -333,6 +334,16 @@ def test_b_and_e_are_not_proposed_when_there_is_no_connector_to_read_through(
     The near-duplicate detector goes silent for the same reason and the corpus-shape detectors do
     not: with no database there is no row-level evidence, and a near-duplicate *name* alone is
     ``created_at``/``updated_at``. What must not happen is the pair being reported anyway.
+
+    **The ledger assertion inverted at the 2026-08-14 upstream merge, and this fork was wrong.**
+    It read ``len(body["ledger"]) == 12`` with every row ``passed is False``, on the reasoning
+    that "every refusal is still a governance decision the audit trail is owed". Upstream's
+    ``test_a_wiring_failure_is_not_a_verdict`` refutes the premise: a missing connector is not a
+    refusal at all, it is this deployment being unconfigured, and a ``r_not_a_read`` row files
+    that against the *statement*. Concretely those twelve rows made an unconfigured scan
+    indistinguishable in the ledger from a scan of a clean schema — twelve governed reads that
+    were never sent. Zero rows is the honest count, and the empty ``duplicate`` scope below is
+    what says the detector went silent rather than passing.
     """
     client = _client(monkeypatch, _session_with_schema(tmp_path, connector=None))
     body = client.post("/elicitation/generate").json()
@@ -340,10 +351,10 @@ def test_b_and_e_are_not_proposed_when_there_is_no_connector_to_read_through(
     assert {row["category"] for row in body["generated"]} == {"A", "C"}
     assert not [r for r in body["generated"] if ":duplicate:" in r["scope"]]
     assert [r for r in body["generated"] if ":describetable:" in r["scope"]]
-    # Every refusal is still a governance decision with a row, not a silent skip: one value
-    # read per column, two pair comparisons, and two cardinality counts for A.
-    assert len(body["ledger"]) == 12
-    assert all(row["passed"] is False for row in body["ledger"])
+    assert body["ledger"] == [], (
+        "a scan with no database issued no governed statement, so a ledger row here would "
+        "record a read that never happened"
+    )
 
 
 def test_generate_is_idempotent_on_a_second_call(monkeypatch, tmp_path: Path) -> None:

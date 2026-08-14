@@ -1,19 +1,14 @@
 """Take one corpus's summaries and another's authored fields. Named fields only, never a blanket copy.
 
-**Why this is a tool and not a script.** A partial delivery is the normal case: the first
-outsourced rewrite of the semantic layer produced 27 useful ``term.binding`` values and 453 useful
-``table.grain`` values inside a corpus whose 713 rewritten summaries measured null, so the whole
-delivery was neither acceptable nor discardable. Salvaging it by hand is how the delivery itself
-went wrong -- ``_nuclear_dense_plus_prefix.py`` copied "everything except grain" and silently
-reverted every authored summary in the process, because a copy defined by what it *excludes*
-cannot be read for what it *includes*.
+A partial delivery is the normal case: the first outsourced rewrite produced 27 useful
+``term.binding`` and 453 useful ``table.grain`` values inside a corpus whose 713 rewritten
+summaries measured null. Salvaging that by hand is how the delivery itself went wrong --
+``_nuclear_dense_plus_prefix.py`` copied "everything except grain" and silently reverted every
+authored summary, because a copy defined by what it *excludes* cannot be read for what it
+*includes*. So: an explicit allowlist of field paths, a count per field, and no ``--all``.
 
-So this copies an explicit allowlist of field paths and reports a count per field. Anything not
-named stays as the base corpus has it. There is no ``--all``.
-
-``summary`` is refused outright. It is the only indexed text, so grafting it is not a field copy
-but a corpus swap wearing one -- and that is exactly the operation that needs a measurement rather
-than a flag.
+``summary`` is refused outright. It is the only indexed text, so grafting it is a corpus swap
+wearing a field copy, and that needs a measurement rather than a flag.
 """
 
 from __future__ import annotations
@@ -33,10 +28,8 @@ from governed_bi.corpus.store import _LOADER, load  # noqa: E402
 
 #: Field paths this tool will graft, as ``asset_type.field``. Adding one is a deliberate act.
 #:
-#: Both entries here are *structured* fields rather than prose: a binding is a mapping to an asset
-#: id that either resolves or does not, and a grain is a one-line statement of what a row is.
-#: Neither can be evaluated by a retrieval metric, and neither is indexed -- which is why they were
-#: worth keeping from a delivery whose indexed text was not.
+#: Both entries are *structured* rather than prose, and neither is indexed — which is why they
+#: were worth keeping from a delivery whose indexed text was not.
 GRAFTABLE: frozenset[str] = frozenset({"term.binding", "table.grain"})
 
 #: Never graftable, with the reason attached so the refusal is readable at the call site.

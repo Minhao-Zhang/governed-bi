@@ -1,17 +1,11 @@
 """Injectable scripted chat model for F3 CI (supports ``bind_tools``).
 
-**It records what it was given, and that is the whole point of the rewrite.** The previous
-version dropped both of its inputs: ``bind_tools`` returned ``self`` without looking at the
-tools, and ``_generate`` used ``messages`` only to count ``AIMessage``s. Nothing in the
-repository could then observe *what reached the model*, and the consequence is measurable —
-emptying ``SYSTEM_PROMPT`` to ``""`` left the suite at 358 passed / 27 xfailed, byte-identical
-to baseline. So did removing tools from the bound set.
-
-Decision #1 recorded this exact failure in v1 ("both the system prompt and the tool set could
-have been emptied with a green suite") and named ``prompts_seen`` / ``tools_seen`` as the
-remedy. They were never built. A fake that discards its inputs makes every test that runs
-through it evidence about the graph's plumbing and none about the model's instructions, which
-is a broad class of green results proving less than it appears to.
+**It records what it was given.** The previous version dropped both of its inputs —
+``bind_tools`` returned ``self`` without looking at the tools, and ``_generate`` used
+``messages`` only to count ``AIMessage``s — so nothing could observe what reached the model:
+emptying ``SYSTEM_PROMPT`` to ``""`` left the suite byte-identical at 358 passed / 27 xfailed,
+and so did removing tools from the bound set. Decision #1 named ``prompts_seen`` /
+``tools_seen`` as the remedy in v1 and they were never built.
 """
 
 from __future__ import annotations
@@ -80,12 +74,10 @@ class ScriptedChatModel(BaseChatModel):
     def calls_with_system(self, text: str) -> list[int]:
         """Indices of the calls whose system prompt is exactly ``text``.
 
-        **One model now serves several callers**, and a test that meant "the analyst call" used
-        to be able to say ``0``. Since the guard's scope gate and the five facet query rewriters
-        also invoke a model — sharing this one whenever no separate utility model is configured —
-        call 0 is whichever of them happened to run first, and an assertion about the analyst
-        that reads it silently changed subject. Selecting by system prompt is the discriminator
-        that stays true as more callers appear.
+        **One model serves several callers** — the guard's scope gate and the five facet query
+        rewriters share it whenever no separate utility model is configured — so call 0 is
+        whichever ran first, and an assertion about the analyst that reads it silently changes
+        subject. Selecting by system prompt stays true as more callers appear.
         """
         return [i for i, seen in enumerate(self.system_prompts()) if seen == text]
 
@@ -104,8 +96,7 @@ class ScriptedChatModel(BaseChatModel):
         """Record the bound names and return ``self``.
 
         Returning ``self`` rather than a ``RunnableBinding`` is what makes the recording
-        reachable: the caller keeps the object the test holds, so ``tools_seen`` and
-        ``prompts_seen`` accumulate on the instance the assertion reads.
+        reachable: ``tools_seen`` and ``prompts_seen`` accumulate on the instance the test holds.
         """
         self.tools_seen.append([_tool_name(t) for t in (tools or ())])
         return self

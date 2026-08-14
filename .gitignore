@@ -7,20 +7,27 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+#
+# **Root-anchored on purpose.** These come from GitHub's Python template, where they are
+# sdist/wheel build output at the top level. Unanchored they match a directory of that name at
+# any depth, and the frontend under `ui/` has a real, tracked `ui/lib/` (19 files: the API
+# client, the zod contract, the stream mapper). An unanchored `lib/` silently excluded the whole
+# thing when the two repositories merged — `git status` clean, nothing to add, no error anywhere.
+# `ui/build` and `ui/dist` are covered by ui/.gitignore's own entries below.
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
+/share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -70,6 +77,10 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+
+# Staging for the one-shot corpus rebuild scripts (docs/corpus-rebuild-brief.md §3).
+# Extracts of BIRD's shipped documentation and evidence clauses -- regenerable, and large.
+tools/corpus_rebuild/_build/
 
 # PyBuilder
 .pybuilder/
@@ -228,17 +239,47 @@ data/logs/
 runs/
 tmp_agent_run/
 
-# Large curated corpora dropped in for local serving. Thousands of files each.
+# Local corpus variants dropped in for experiments. Thousands of files each.
 #
-# **This block used to carve an exception for "the vendored demo corpus in corpus/
-# [that] stays tracked", and there is no such corpus** — it was removed in a506436
-# and the exception outlived it. It also called these trees "reproducible from
-# BIRD-Data-Obfuscation", which is not supported by this tree: there is no curator
-# module in src/. So nothing here is in version control and nothing here can be
-# rebuilt from anything that is. See corpus/README.md; that is an open problem and
-# not a settled arrangement.
+# **The corpus the engine serves is no longer in here.** As of 2026-08-07 it is its own
+# repository (D13) — ../BIRD-corpus, pointed at by GOVERNED_BI_CORPUS_DIR — because a
+# served corpus that is untracked makes corpus_content_hash name bytes no reader can
+# obtain, and every number measured against it unreproducible. That was recorded here as
+# an open problem for the whole of v2 and is now closed for the served corpus.
+#
+# What is still ignored is what is still local: variant trees kept for comparison, and a
+# seeded corpus written by from_live_schema. None of them can be rebuilt from anything
+# committed — there is no curator module in src/ — so treat a variant as evidence only
+# for as long as the directory survives. Promote it to the corpus repo before quoting a
+# number from it. See docs/corpus-format.md.
 corpora/
+
+# Derived, rebuildable projections inside any corpus tree (ADR 0005 D9): search index,
+# embeddings, compiled graph. Never authored directly, so never committed.
+_generated/
 
 # Firecrawl CLI scrape cache. The CLI writes it into the repo root, and AGENTS.md
 # says the top level holds only README.md and configuration files.
 .firecrawl/
+
+# Vendored agent skills, fetched not authored. `skills-lock.json` pins each one by hash
+# and IS committed — the same split as a package lock: the manifest is the source of
+# truth, the tree beside it is the install. AGENTS.md names both.
+.claude/skills/
+.agents/
+
+# Pre-v2 state parked before the rewrite: 293 MB of zipped corpora, runs and quarantine.
+# Not history worth carrying in the repo, and large enough to make a clone painful.
+_archive/
+
+# One-off slices written while debugging the rebuild packets. The packets themselves are
+# already ignored under tools/corpus_rebuild/_build/; these are hand-cut copies of them.
+scratch_*.json
+
+# The frontend under `ui/` carries its own nested .gitignore, which is where node_modules,
+# .next and .env.local are excluded. Nested is deliberate rather than folded in here: those
+# patterns are relative to the app directory, and Next.js's own template is what generates
+# them, so keeping them beside package.json means the next `create-next-app` diff is readable.
+
+# Orchestration working file, not a repo document (AGENTS.md: nothing in the root).
+TODO.md

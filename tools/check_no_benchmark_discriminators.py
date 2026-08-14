@@ -1,62 +1,27 @@
-"""Refuse the hand-authored sibling discriminators (audit §6.1). No data needed.
+"""Refuse the hand-authored sibling discriminators
+(``git-history:docs/v2-postmortem-and-v3-brief.md`` §6.1). No data needed.
 
-A *sibling discriminator* is a phrase written into a corpus ``summary`` to tell the router
-which of two similarly-named schemas a benchmark question is really about — ``soccer_2016``
-prefixed with ``cricket IPL batsman bowling`` because that schema's questions are about
-cricket despite its name. Writing one requires having read the held-out questions, and
-``summary`` is the only text that enters either retrieval channel
-(``retrieve/index.py``), so the phrase is a direct answer key.
+A *sibling discriminator* is a phrase written into a corpus ``summary`` to steer the router
+between similarly-named schemas — ``soccer_2016`` prefixed with ``cricket IPL batsman
+bowling``. Writing one means having read the held-out questions, and ``summary`` is the only
+text that enters either retrieval channel (``retrieve/index.py``), so the phrase is an answer
+key. ``check_train_only.py`` cannot see it: the phrases carry no question wording, and the
+contaminated corpus passed there with statistics byte-identical to the control.
 
-**Why this gate exists and ``check_train_only.py`` was not enough.** These phrases contain no
-question wording, so the containment check finds nothing; they are short, so the n-gram rate
-barely moves. The contaminated corpus was measured and it passed, with statistics
-byte-identical to the control. A rate arm cannot see a leak that carries no question text.
+A source gate rather than a corpus gate, because the corpora are untracked and the durable
+artifact is the producing script. Both producers — ``tools/_nuclear_dense_plus_prefix.py``
+and ``tools/_revise_miss_summaries.py`` — are deleted, so their tables live on here as rule A.
+Rule B is the shape: a summary shouting what its schema is **NOT**.
 
-**Why it is a source gate rather than a corpus gate.** The corpus that held these is
-untracked and reproducible only by re-running the scripts that wrote them, so the durable
-artifact to defend against is the *script*. Two held these tables and both were deleted; this
-file keeps the tables so the phrases cannot come back anywhere in the tree — a script, a
-fixture, a YAML asset, a docstring quoting one as an example.
+Inside a corpus both rules read ``summary`` and nothing else, since ``body``, ``rules`` and
+column ``note`` are read only after the schema is chosen. Scanning every line instead gave
+31,599 hits on the corpus of the day (the in-repo ``corpora/`` tree, 2026-08-06), 31,560 of them
+rule B firing on that corpus's ``'DECOY column: … Do NOT use it'`` marker. Outside a corpus rule
+A still scans every line, the subject there being the script.
 
-**The audit named one producer; running this gate found a second.**
-``tools/_nuclear_dense_plus_prefix.py`` was §6.1's subject. ``tools/_revise_miss_summaries.py``
-was not mentioned anywhere in the audit, and it is the worse of the two: its 26 phrases carry
-*negative* discriminators — ``soccer_2016`` led with ``"cricket IPL … NEVER football soccer"``
-— and its ``MISS_SCHEMAS`` set names the schemas the router got **wrong**, so the phrases are
-a direct transcription of which held-out questions were missed and which sibling stole the
-slot. §6.1 was a lower bound.
-
-**Two rules, because a list of phrases only catches a repeat.** Rule A is the verbatim tables.
-Rule B is the *shape*: a summary that shouts what its schema is **NOT**. Ordinary domain prose
-does not need to; that spelling appears when someone is fixing a sibling collision they
-learned about from an evaluation.
-
-**Inside a corpus, both rules read ``summary`` and nothing else.** The first version scanned
-every line of every corpus file and was unusable: 31,599 hits, of which 31,560 were rule B
-firing on the obfuscation dataset's own decoy marker — ``'DECOY column: not a real business
-field. Do NOT use it to answer questions.'`` — which is the corpus telling the model to
-*ignore* a column, the opposite of a leak. Rule A over-fired for the same reason in a subtler
-way: ``PREFIX['simpson_episodes'] = 'Simpsons season-20'`` is also just what that schema is,
-so it matched the ``body`` prose of six uncontaminated corpora including the one ``.env``
-serves. Both were false positives of the same kind — a phrase found somewhere a phrase cannot
-do any harm.
-
-Scoping to ``summary`` is not a tolerance, it is the rule restated: ``summary`` is the only
-text that enters either retrieval channel, so a discriminator anywhere else cannot steer the
-router. ``body``, ``rules`` and column ``note`` are read by the model *after* the schema has
-already been chosen. Outside a corpus — ``.py``, ``.md``, fixtures — rule A still scans every
-line, because there the artifact being defended against is the producing script, not the text.
-
-**The limit this leaves.** A single-line JSON corpus document is not decomposed into fields,
-so its summaries are unscanned. No corpus in this tree is written that way; if one is, this
-gate is blind to it.
-
-**What neither rule does.** A future build inventing a positive-only discriminator in new
-words is invisible here, exactly as a reworded leak is invisible to ``check_train_only``. The
-general control is provenance — an asset recording which script and which model wrote its
-summary — and that is a different gate over a field nothing currently writes (§6.3).
-
-Exit 1 on a hit. Never passes vacuously: an empty scan is a failure.
+Blind spots: a single-line JSON corpus document is not decomposed into fields, so its
+summaries are unscanned, and a newly invented positive-only discriminator matches neither
+rule. Exit 1 on a hit. Never passes vacuously: an empty scan is a failure.
 """
 
 from __future__ import annotations
@@ -68,12 +33,8 @@ import sys
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
 #: Verbatim from ``tools/_nuclear_dense_plus_prefix.py``'s ``PREFIX`` table at the commit that
-#: deleted it, keyed by the schema each phrase was written to disambiguate. Verbatim so the
-#: list is checkable against history rather than reconstructed.
-#:
-#: Kept in full rather than hashed. A gate whose subject is unreadable cannot be reviewed, and
-#: these are not secrets — the benchmark is public. What was not allowed was putting them in a
-#: corpus.
+#: deleted it, keyed by the schema each phrase disambiguated. Verbatim and unhashed so the list
+#: stays checkable against history; the benchmark is public, so the phrases are not secrets.
 RETIRED_DISCRIMINATORS: dict[str, str] = {
     "ice_hockey_draft": "draft-prospects scouting ELITEID",
     "hockey": "NHL-career Stanley-Cup HOF",
@@ -105,14 +66,12 @@ RETIRED_DISCRIMINATORS: dict[str, str] = {
 }
 
 #: Verbatim from ``tools/_revise_miss_summaries.py``'s ``LEADS`` table at the commit that
-#: deleted it. The second producer, absent from the audit. Each phrase leads a schema summary
-#: and most end in a negative clause telling the router which sibling *not* to pick.
+#: deleted it. Each phrase leads a schema summary and most end in a negative clause naming the
+#: sibling *not* to pick.
 #:
-#: ``noqa: E501`` on the long ones, and the exemption is the point: these are needles, and a
-#: needle wrapped to fit a line limit is a needle that no longer matches. Ten of them exceed
-#: 120 characters in the source they came from, which is also why ``ruff check .`` — CI's third
-#: step, before every gate — failed for the whole life of the ``v2`` branch. The contamination
-#: script was what stopped CI from running the gates.
+#: ``noqa: E501`` because a needle wrapped to fit a line limit no longer matches. Ten exceed
+#: 120 characters, which is why ``ruff check .`` — CI's third step, before every gate — failed
+#: for the whole life of the ``v2`` branch.
 RETIRED_LEADS: dict[str, str] = {  # noqa: E501
     "ice_hockey_draft": "scouting draft prospects ELITEID height weight CSS junior leagues NOT career HOF Stanley",
     "hockey": "NHL WHA career scoring goalies Stanley Cup HOF standings NOT draft prospects",
@@ -142,11 +101,8 @@ RETIRED_LEADS: dict[str, str] = {  # noqa: E501
     "works_cycles": "AdventureWorks manufacturing sales cycles workorders BOM specialoffers NOT classicmodels scale-model",  # noqa: E501
 }
 
-#: Rule B: a summary shouting what its schema is *not*.
-#:
-#: Upper case is the whole signal. Ordinary domain prose writes "does not include returns"; the
-#: shouted form is what someone writes when they are steering a router away from a sibling they
-#: learned about from an evaluation. Both deleted producers used it.
+#: Rule B: a summary shouting what its schema is *not*. Upper case is the whole signal —
+#: ordinary domain prose writes "does not include returns". Both deleted producers shouted.
 NEGATIVE_DISCRIMINATOR = re.compile(r"\b(?:NOT|NEVER|EXCLUDES?)\s+[a-z]")
 
 #: Rule B scans data, not code: a comment reading "NOT a bypass" is normal in this tree.
@@ -161,25 +117,60 @@ SUMMARY_KEY = re.compile(r'^(\s*)"?summary"?\s*:\s*(.*)$')
 #: immediately after.
 LEAD_IN = re.compile(r"^[\w.\-]+:\s*")
 
-#: Rule B is for schema summaries. A *term* asset defines itself by negation as a matter of
-#: course — ``student_loan``'s "female student" is "a student whose name does NOT appear in the
-#: male (nan_xing) table", because that schema has no female table. Shouting is only evidence
-#: of router-steering where the producers wrote, and both wrote schema summaries.
-#:
-#: Phrased as "not a declared non-schema asset" rather than "declares schema" on purpose: a
-#: file that declares no type at all is still scanned. The other spelling would mean a corpus
-#: that omits ``asset_type`` — or spells it differently — escapes rule B silently, and a gate
-#: that can be switched off by a missing line is the vacuous pass this one refuses.
+#: A YAML block-scalar indicator, stripped before either rule reads the value. Without this,
+#: ``summary: >-`` makes the joined value open with the literal ``>-``, so ``leads_with`` never
+#: matches and rule A cannot see a prepended phrase — and **32 of the 57 live schema assets in
+#: ``../BIRD-corpus`` use ``>-`` or ``>``**, which is to say rule A was blind in the form the
+#: corpus actually uses. Found by the 2026-08-10 audit; the folding indicators and the explicit
+#: chomping suffixes are all here because a producer picks whichever its writer preferred.
+BLOCK_SCALAR = re.compile(r"^[|>][+-]?\d*\s*")
+
+#: Rule B is for schema summaries. A *term* asset negates as a matter of course —
+#: ``student_loan``'s "female student" is one whose name does NOT appear in the male table.
+#: Tested as "not a declared non-schema asset" rather than "declares schema" so that a corpus
+#: omitting or misspelling ``asset_type`` is still scanned instead of silently exempt.
 ASSET_TYPE = re.compile(r"^\s*\"?asset_type\"?\s*:\s*\"?([A-Za-z_]+)", re.MULTILINE)
+
+#: The asset types rule B exempts, which is every declared type **except** ``schema``. Spelled
+#: as an allowlist of exemptions rather than as ``== "schema"`` because the comment above
+#: promises a misspelling is still scanned and the equality test broke that promise: with
+#: ``== "schema"``, ``asset_type: schmea`` and ``asset_type: schema_v2`` both went silently
+#: exempt. Unrecognised now means scanned, which is the fail-closed direction. Kept as a literal
+#: rather than imported from ``register.assets`` because ``tools/`` may not import the package
+#: (``check_imports``), and because this gate must keep working against a corpus whose vocabulary
+#: has moved on from this tree's.
+EXEMPT_ASSET_TYPES: frozenset[str] = frozenset(
+    {"table", "column", "join", "metric", "term", "few_shot", "negative_example"}
+)
 
 #: Only under a corpus root — an arbitrary JSON fixture is not a semantic-layer summary.
 DATA_ROOTS: tuple[str, ...] = ("corpus", "corpora")
 
-#: Where a phrase could do damage: producing code, and any corpus tree.
-SCAN_ROOTS: tuple[str, ...] = ("src", "tools", "tests", "corpus", "corpora")
+#: Where a phrase could do damage: producing code, and any corpus tree. ``scripts`` was in the
+#: list until 2026-08-11 because ``scripts/corpus_rebuild`` writes assets; the kit now lives at
+#: ``tools/corpus_rebuild/`` and is covered by ``tools``. There is no top-level ``corpus``
+#: directory; the served corpus is the sibling checkout named below.
+SCAN_ROOTS: tuple[str, ...] = ("src", "tools", "tests", "corpora")
+
+#: Corpus trees **outside** the scanned repository, scanned when the checkout is present. The
+#: served corpus moved to its own repository on 2026-08-07 (D13), which took it out of every
+#: root above, and this gate went on passing while looking at no corpus at all. The counts
+#: printed on success are what makes that visible, so read them rather than the exit code.
+def sibling_data_roots(repo: pathlib.Path) -> tuple[pathlib.Path, ...]:
+    return (repo.parent / "BIRD-corpus",)
 
 SCAN_SUFFIXES: frozenset[str] = frozenset({".py", ".yaml", ".yml", ".json", ".jsonl", ".md"})
 
+#: Scanned by :func:`compiled_to_scan` under rule A only. Separate from ``SCAN_SUFFIXES``
+#: because these are read as bytes and have no lines.
+COMPILED_SUFFIXES: frozenset[str] = frozenset({".pyc", ".pyo"})
+
+#: An ASCII run long enough to be a phrase rather than an opcode operand. 8 is below the
+#: shortest retired phrase, so the floor never decides a verdict.
+PRINTABLE_RUN = re.compile(rb"[ -~]{8,}")
+
+#: ``__pycache__`` stays here for the **text** scan — a ``.pyc`` is not source and would report
+#: as a duplicate of its ``.py``. It is deliberately absent from :func:`compiled_to_scan`.
 SKIP_DIRS: frozenset[str] = frozenset({"__pycache__", ".venv", ".git", ".ruff_cache"})
 
 #: This file quotes every phrase by construction, and so does its test.
@@ -191,10 +182,10 @@ EXEMPT: frozenset[str] = frozenset(
 )
 
 
-def files_to_scan() -> list[pathlib.Path]:
+def files_to_scan(repo: pathlib.Path = REPO) -> list[pathlib.Path]:
     out: list[pathlib.Path] = []
-    for root in SCAN_ROOTS:
-        base = REPO / root
+    bases = [repo / root for root in SCAN_ROOTS] + list(sibling_data_roots(repo))
+    for base in bases:
         if not base.is_dir():
             continue
         for path in base.rglob("*"):
@@ -202,24 +193,111 @@ def files_to_scan() -> list[pathlib.Path]:
                 continue
             if SKIP_DIRS & set(path.parts):
                 continue
-            if path.relative_to(REPO).as_posix() in EXEMPT:
+            if _relative(path, repo) in EXEMPT:
                 continue
             out.append(path)
     return sorted(out)
 
 
-def _is_corpus_data(path: pathlib.Path) -> bool:
-    parts = path.relative_to(REPO).parts
-    return path.suffix.lower() in DATA_SUFFIXES and bool(parts) and parts[0] in DATA_ROOTS
+def compiled_to_scan(repo: pathlib.Path = REPO) -> list[pathlib.Path]:
+    """Compiled artifacts under the scan roots, ``__pycache__`` included on purpose.
+
+    A deleted producer leaves its tables behind in bytecode, and the 2026-08-10 audit found
+    exactly that: ``tools/__pycache__/_nuclear_dense_plus_prefix.cpython-311.pyc``, 7 115 bytes,
+    still importable, carrying the whole hand-written per-schema table (``cricket IPL batsman
+    bowling``, ``Mubi lists subscriber trialist``, ``NHL-career Stanley-Cup HOF``, …) three days
+    after its ``.py`` was deleted. It was invisible to this gate for **two independent** reasons —
+    ``__pycache__`` is in :data:`SKIP_DIRS` and ``.pyc`` is not in :data:`SCAN_SUFFIXES` — while
+    this module's own docstring claimed the deleted producers "live on here as rule A".
+
+    Rule A only. Position means nothing in a constant pool, and rule B needs a ``summary`` key.
+    """
+    out: list[pathlib.Path] = []
+    for root in SCAN_ROOTS:
+        base = repo / root
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in COMPILED_SUFFIXES:
+                continue
+            # EXEMPT names sources, so it has to follow the artifact: this module and its test
+            # quote all 53 phrases by construction, and their own bytecode carries every one.
+            # Matching on the ``.pyc`` path alone reported 108 hits in the two files whose ``.py``
+            # is already exempt, against 27 in the one artifact that mattered.
+            if _relative(path, repo) in EXEMPT or _source_of(path, repo) in EXEMPT:
+                continue
+            out.append(path)
+    return sorted(out)
+
+
+def _source_of(path: pathlib.Path, repo: pathlib.Path = REPO) -> str:
+    """The ``.py`` a compiled artifact came from, repo-relative.
+
+    ``tools/__pycache__/x.cpython-313.pyc`` and pytest's
+    ``x.cpython-313-pytest-9.1.1.pyc`` both map to ``tools/x.py``. The tag is everything after
+    the first dot in the stem, so splitting there is what survives both spellings.
+    """
+    stem = path.name.split(".", 1)[0]
+    parent = path.parent.parent if path.parent.name == "__pycache__" else path.parent
+    return _relative(parent / f"{stem}.py", repo)
+
+
+def compiled_hits(paths: list[pathlib.Path], repo: pathlib.Path = REPO) -> list[str]:
+    """Rule A over the printable strings in each compiled artifact.
+
+    No line numbers exist in a constant pool, so the report names the offending string instead —
+    which is what a reader needs to decide whether to delete the file or the phrase.
+    """
+    found: list[str] = []
+    retired = [
+        (schema, phrase, table)
+        for table, entries in (("PREFIX", RETIRED_DISCRIMINATORS), ("LEADS", RETIRED_LEADS))
+        for schema, phrase in entries.items()
+    ]
+    for path in paths:
+        rel = _relative(path, repo)
+        try:
+            blob = path.read_bytes()
+        except OSError:
+            found.append(f"{rel}: unreadable, so unchecked")
+            continue
+        pool = b"\n".join(PRINTABLE_RUN.findall(blob)).decode("ascii", "replace").lower()
+        for schema, phrase, table in retired:
+            if phrase.lower() in pool:
+                found.append(
+                    f"{rel}: rule A in compiled bytecode, {table}[{schema!r}] = {phrase!r} "
+                    "(delete the artifact; its source is already gone)"
+                )
+    return found
+
+
+def _relative(path: pathlib.Path, repo: pathlib.Path = REPO) -> str:
+    """Repo-relative posix path, or the absolute one for a sibling checkout."""
+    try:
+        return path.relative_to(repo).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _is_corpus_data(path: pathlib.Path, repo: pathlib.Path = REPO) -> bool:
+    if path.suffix.lower() not in DATA_SUFFIXES:
+        return False
+    if any(root == path or root in path.parents for root in sibling_data_roots(repo)):
+        return True
+    try:
+        parts = path.relative_to(repo).parts
+    except ValueError:
+        return False
+    return bool(parts) and parts[0] in DATA_ROOTS
 
 
 def summary_blocks(lines: list[str]) -> list[tuple[int, str]]:
     """``(first line number, joined value)`` for each ``summary`` in the file.
 
-    Indentation rather than a YAML parse: 59,661 corpus files is too many to load, and the
-    line number is what makes a hit checkable. Joined rather than per-line because both rules
-    read the value as a sentence — one asks what it *starts* with, the other would otherwise
-    miss a phrase that wrapped.
+    Indentation rather than a YAML parse: 7,357 corpus files (``../BIRD-corpus``, 2026-08-12) is
+    too many to load, and the line number is what makes a hit checkable. Joined because both
+    rules read the value as a sentence — one asks what it *starts* with, the other would miss a
+    phrase that wrapped.
     """
     blocks: list[tuple[int, str]] = []
     inside: int | None = None
@@ -229,7 +307,8 @@ def summary_blocks(lines: list[str]) -> list[tuple[int, str]]:
     def flush() -> None:
         nonlocal current
         if current:
-            blocks.append((start, " ".join(current).strip()))
+            joined = BLOCK_SCALAR.sub("", " ".join(current).strip(), count=1).strip()
+            blocks.append((start, joined))
             current = []
 
     for number, line in enumerate(lines, start=1):
@@ -252,16 +331,15 @@ def summary_blocks(lines: list[str]) -> list[tuple[int, str]]:
 def leads_with(value: str, phrase: str) -> bool:
     """Does ``value`` open with ``phrase``, past the ``<id>: `` both producers wrote first?
 
-    Position is the signal. ``_nuclear_dense_plus_prefix`` built ``f"{schema}: {prefix} …"``
-    and ``_revise_miss_summaries``' phrases "lead a schema summary" — so a table phrase found
-    *mid-sentence* is the schema describing itself, not a prepended steer.
+    Position is the signal: both producers prepended, so a table phrase found *mid-sentence* is
+    the schema describing itself, not a steer.
     """
     head = value.lstrip("'\"").strip()
     head = LEAD_IN.sub("", head, count=1)
     return head.casefold().startswith(phrase.casefold())
 
 
-def hits(paths: list[pathlib.Path]) -> list[str]:
+def hits(paths: list[pathlib.Path], repo: pathlib.Path = REPO) -> list[str]:
     """``path:line: what`` for every occurrence of either rule."""
     found: list[str] = []
     retired = [
@@ -270,7 +348,7 @@ def hits(paths: list[pathlib.Path]) -> list[str]:
         for schema, phrase in entries.items()
     ]
     for path in paths:
-        rel = path.relative_to(REPO).as_posix()
+        rel = _relative(path, repo)
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -279,7 +357,7 @@ def hits(paths: list[pathlib.Path]) -> list[str]:
             found.append(f"{rel}: unreadable, so unchecked")
             continue
         lines = text.splitlines()
-        if not _is_corpus_data(path):
+        if not _is_corpus_data(path, repo):
             # Outside a corpus the subject is a producing script, so the whole file is in
             # scope and position means nothing: a phrase in a docstring is still the table.
             for number, line in enumerate(lines, start=1):
@@ -298,7 +376,7 @@ def hits(paths: list[pathlib.Path]) -> list[str]:
                         f"{table}[{schema!r}] = {phrase!r}"
                     )
         declared = ASSET_TYPE.search(text)
-        if declared is None or declared.group(1).casefold() == "schema":
+        if declared is None or declared.group(1).casefold() not in EXEMPT_ASSET_TYPES:
             for number, value in blocks:
                 match = NEGATIVE_DISCRIMINATOR.search(value)
                 if match is not None:
@@ -310,7 +388,22 @@ def hits(paths: list[pathlib.Path]) -> list[str]:
 
 
 def main() -> int:
-    paths = files_to_scan()
+    # ``--root DIR`` scans a tree the caller owns instead of this repository, so the negative
+    # tests can plant a discriminator without writing one into ``corpora/`` — where a crashed
+    # run leaves it behind and every later invocation of this gate then fails on it. The
+    # tables above are declarations and stay this repository's either way.
+    argv = sys.argv[1:]
+    repo = REPO
+    if "--root" in argv:
+        repo = pathlib.Path(argv[argv.index("--root") + 1]).resolve()
+    # ``--require-corpus`` makes "rule B scanned nothing" fatal instead of a printed note. CI
+    # checks out this repository alone, so no corpus is on disk there and rule B genuinely
+    # cannot run — the flag exists so the caller who *can* satisfy the precondition says so and
+    # gets an exit code for it, rather than every caller sharing an exit code that means
+    # "rule A passed" and reads as "the corpus is clean". Use it before quoting a measurement.
+    require_corpus = "--require-corpus" in argv
+
+    paths = files_to_scan(repo)
     if not paths:
         print(
             f"no files matched {sorted(SCAN_SUFFIXES)} under {list(SCAN_ROOTS)} — refusing to "
@@ -319,7 +412,8 @@ def main() -> int:
         )
         return 1
 
-    problems = hits(paths)
+    compiled = compiled_to_scan(repo)
+    problems = hits(paths, repo) + compiled_hits(compiled, repo)
     if problems:
         print(
             f"{len(problems)} hand-authored benchmark discriminator(s) in the tree:\n",
@@ -337,17 +431,26 @@ def main() -> int:
         return 1
 
     n_phrases = len(RETIRED_DISCRIMINATORS) + len(RETIRED_LEADS)
-    data_files = sum(1 for p in paths if _is_corpus_data(p))
+    data_files = sum(1 for p in paths if _is_corpus_data(p, repo))
     print(
-        f"no hand-authored benchmark discriminators across {len(paths)} file(s); "
+        f"no hand-authored benchmark discriminators across {len(paths)} file(s) "
+        f"+ {len(compiled)} compiled artifact(s); "
         f"rule A: {n_phrases} retired phrase(s), {len(EXEMPT)} exempt path(s); "
         f"rule B: the summaries in {data_files} corpus data file(s)"
     )
     if data_files == 0:
-        print(
-            "note: no corpus data on disk, so rule B checked nothing. Rule A still covers the "
+        message = (
+            "no corpus data on disk, so rule B checked nothing. Rule A still covers the "
             "producers, which is the artifact that persists."
         )
+        if require_corpus:
+            print(
+                f"--require-corpus: {message} Point GOVERNED_BI_CORPUS_DIR's tree at "
+                f"{[str(p) for p in sibling_data_roots(repo)]} and re-run.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"note: {message}")
     print(
         "This is the absence of two known contaminations, not proof of a clean corpus — a "
         "newly invented positive-only discriminator is invisible here."

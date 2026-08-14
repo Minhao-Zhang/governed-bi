@@ -16,8 +16,9 @@
 
 ## Context
 
-The UI browses 13 981 assets over 57 schemas, and the read surface it had was three flat
-dumps. Measured against the live engine on 2026-08-04:
+On 2026-08-04 the UI browsed 13 981 assets over 57 schemas, and the read surface it had was
+three flat dumps. Measured against the live engine that day (the asset count is a property of
+the corpus, and the corpus has been rebuilt since):
 
 | route | bytes | note |
 | --- | --- | --- |
@@ -43,8 +44,9 @@ flat dumps for exactly this case, and the fallback is what we were measuring abo
 ```
 GET /corpus/fields?type=table
   → { "type": "table",
-      "columns": [ {"name": "schema", "kind": "string", "ops": ["eq","contains","present"],
-                    "sortable": true, "identifier": false, "why": "…"} , … ] }
+      "columns": [ {"name": "schema", "kind": "string",
+                    "ops": ["contains","eq","neq","present"],
+                    "sortable": true, "identifier": false} , … ] }
 ```
 
 The column list comes from the asset dataclass's own fields plus
@@ -100,8 +102,15 @@ GET /graph?schema=airline&focus=airline.Airlines&radius=1&node_budget=120&kinds=
 - With no scope at all, the response is still bounded — the default budget applies. There is
   no request that returns an unlayoutable graph.
 
-`/knowledge-graph` keeps returning the same payload for now, and saying so is better than two
-walks that drift ([0007](0007-http-surface-and-the-ui-contract.md) already records why).
+`/graph` and `/knowledge-graph` are two payloads over one scope contract. `_graph_payload()`
+is the ER view: table nodes only, one edge per declared join pair, carrying `on`, `cardinality`,
+`join_ids` and `n_relationships`. `_knowledge_payload()` is the semantic view: every asset kind
+in `_SEMANTIC_NODE_KINDS` as a node, columns re-pointed onto their owning table, and edges from
+the reference closure labelled `relation` (`join` / `measures` / `grounds` / `exemplifies` /
+`belongs_to` / `has_column`). Both go through the same `subgraph()` bound, so scope, budget and
+`truncated` / `dropped` behave identically; only the walk differs. Two walks that drift is the
+hazard [0007](0007-http-surface-and-the-ui-contract.md) records, and what keeps them from
+drifting is that both read `CorpusStructure` rather than each re-deriving the corpus.
 
 ### D3 — The catalog is lean; detail is fetched per table
 
@@ -125,7 +134,7 @@ flipped by building the thing, never to unlock a UI path.
 ### D5 — Filtering runs server-side over the loaded corpus, not in the database
 
 The corpus is already in memory in the session — it is what retrieval runs on. Filtering it
-is a scan over at most 13 981 objects, which is microseconds, and it means the browse surface
+is one pass over the loaded assets — order 10⁴ objects, microseconds — and it means the browse surface
 and the retrieval surface are looking at **the same assets**. Pushing these filters into SQL
 would make the corpus browser query the *lake* rather than the semantic layer, so an asset
 that failed to load would still appear in the browser — the corpus would look complete
@@ -154,7 +163,7 @@ because the database is.
 ## Amendment 1 — the sufficient set (2026-08-04)
 
 An audit of this surface against the frontend's actual needs
-([api-sufficiency-audit-2026-08-04.md](../plans/api-sufficiency-audit-2026-08-04.md))
+(`plans/api-sufficiency-audit-2026-08-04.md` (deleted))
 cross-referenced every client method in `lib/api-client.ts` against every route. It found
 **zero field-level breaks** -- no route omitted a field the client requires -- and three
 truncation defects, one absent route, and one capability flag that described the server rather
@@ -256,7 +265,7 @@ pages the same assets -- but repointing them is UI work, not an API gap.
 ### What checks this from now on
 
 The contract had been reconciled by hand three times and drifted three times, because nothing
-compared the two sides. `governed-bi-ui` now has `npm run check:api`: it fetches every route from
+compared the two sides. The frontend now has `npm run check:api`: it fetches every route from
 a live engine and validates each response against the client's **real** zod schemas, reporting
 both parse failures (a blank page) and silently stripped keys (a page that renders missing data
 and looks fine). It found a route four browser sessions had not -- `/corpus/assets` answering 200

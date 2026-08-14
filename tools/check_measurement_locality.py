@@ -24,9 +24,8 @@ EXEMPT: tuple[str, ...] = ("register/quantity.py",)
 #: introduces precision, so this does not need to know the type letters.
 NUMERIC_SPEC = re.compile(r"\.(?:\d+|\{\})[a-zA-Z%]")
 
-#: ``%``-style conversions that format a *float*. ``%d``/``%s`` are excluded: they
-#: are not a precision claim, and including them would flag ordinary message
-#: building for no measurement-integrity reason.
+#: ``%``-style conversions that format a *float*. ``%d``/``%s`` are excluded: they make no
+#: precision claim, so flagging them would only catch ordinary message building.
 PERCENT_FLOAT = re.compile(r"%[-+ 0#]*\d*(?:\.\d+)?[fFeEgG]")
 
 SKIP_DIRS: frozenset[str] = frozenset({"__pycache__"})
@@ -100,22 +99,28 @@ def check_file(path: Path, rel: str) -> list[str]:
             if template and PERCENT_FLOAT.search(template):
                 report(node.lineno, f"%-formats a float via {template!r}")
 
-    # ``ast.walk`` is breadth-first, so an f-string nested inside a call reports
-    # after a later top-level statement. Sorted numerically, because a reader fixes
-    # these top to bottom and a lexicographic sort puts line 10 before line 2.
+    # ``ast.walk`` is breadth-first, so a nested f-string reports after a later top-level
+    # statement. Sorted numerically, since a lexicographic sort puts line 10 before line 2.
     return [msg for _, msg in sorted(found)]
 
 
 def main() -> int:
-    if not PKG.exists():
-        print(f"no package at {PKG}", file=sys.stderr)
+    # ``--root DIR`` scans a tree the caller owns, so a negative test never writes a probe
+    # into ``src/`` (see ``check_one_implementation.py``).
+    argv = sys.argv[1:]
+    pkg = PKG
+    if "--root" in argv:
+        pkg = Path(argv[argv.index("--root") + 1]).resolve() / "src" / "governed_bi"
+
+    if not pkg.exists():
+        print(f"no package at {pkg}", file=sys.stderr)
         return 1
 
-    files = [p for p in sorted(PKG.rglob("*.py")) if not SKIP_DIRS & set(p.parts)]
+    files = [p for p in sorted(pkg.rglob("*.py")) if not SKIP_DIRS & set(p.parts)]
     problems: list[str] = []
     scanned = 0
     for path in files:
-        rel = path.relative_to(PKG).as_posix()
+        rel = path.relative_to(pkg).as_posix()
         if rel in EXEMPT:
             continue
         scanned += 1

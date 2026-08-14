@@ -21,10 +21,8 @@ __all__ = ["McNemarResult", "mcnemar", "mde", "rule_of_three"]
 class McNemarResult:
     """A paired comparison, with everything needed to judge whether it is decisive.
 
-    The four cell counts are here because the p-value alone cannot be audited: a
-    p-value with 6 discordant pairs and one with 600 look identical in a table and
-    mean entirely different things. ADR 0005 §4.1's rule that a rate must be
-    published with its count is the same principle.
+    The four cell counts are here because a p-value alone cannot be audited: one over 6
+    discordant pairs and one over 600 look identical in a table (ADR 0005 §4.1).
     """
 
     a_label: str
@@ -126,11 +124,9 @@ def _exact_two_sided(only_a: int, only_b: int) -> Measured[float]:
     """Two-sided exact binomial p over the discordant pairs.
 
     Under the null each discordant pair favours either arm with probability 1/2, so
-    ``P = 2 * P(X <= min(b, c))`` for ``X ~ Binomial(b + c, 1/2)``, capped at 1.
-
-    With zero discordant pairs the formula yields 1.0 without a special case, which
-    is the right answer and worth not special-casing: the informativeness of that 1.0
-    is carried by the MDE, not by pretending the p-value is absent.
+    ``P = 2 * P(X <= min(b, c))`` for ``X ~ Binomial(b + c, 1/2)``, capped at 1. Zero
+    discordant pairs yields 1.0 and is not special-cased: the MDE carries how
+    informative that 1.0 is.
     """
     n = only_a + only_b
     if n == 0:
@@ -192,8 +188,8 @@ def rule_of_three(n_trials: int) -> Measured[float]:
 def _assert_the_guards_fire() -> None:
     """Import-time checks on the three refusals most likely to be relaxed.
 
-    Each of these is a place where "just make it work" produces a plausible number
-    from an invalid comparison, and every one of them has a v1 instance.
+    Each is a place where relaxing the refusal produces a plausible number from an
+    invalid comparison.
     """
     a = Population.of("a", [{"question_id": "1", "ok": True}])
     b = Population.of("b", [{"question_id": "2", "ok": True}])

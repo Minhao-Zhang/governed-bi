@@ -21,7 +21,7 @@ paranoid:
   ``"beer_factory\\n"`` clears a ``^...$`` validator and then names a directory.
   ``\\A...\\Z`` is required.
 
-The interface under test is ADR 0006 §3:
+The interface under test is ADR 0006 §1 (``check``) and §6 (``guard``):
 
 .. code-block:: python
 
@@ -211,9 +211,10 @@ def test_b8_schema_identifiers_are_anchored_with_A_and_Z(raw) -> None:
     ``\\A...\\Z``, not ``^...$``: Python's ``$`` also matches before a trailing newline,
     so ``"beer_factory\\n"`` clears a ``^...$`` validator and then names a directory.
 
-    **v2 makes this worse rather than better** — ``SchemaAsset.name`` is a first-class
-    field, ``POST /corpus/edit`` is retained, and ADR 0005 §1.5 acknowledges the corpus
-    is partly model-authored. So this is reachable from model output.
+    ``SchemaAsset.name`` is a first-class field and ADR 0005 §1.5 acknowledges the corpus
+    is partly model-authored, so this is reachable from model output. It is **not** reachable
+    over HTTP: v2 ships no corpus-write route (ADR 0005 §1.6), whatever ``ui/lib/api-client.ts``
+    still calls; the writer is ``corpus/store.py::write``.
     """
     from governed_bi.govern.identifiers import is_valid_schema_id  # type: ignore[import-not-found]
 

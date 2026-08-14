@@ -1,41 +1,30 @@
 """Does the schema facet want a word-soup query once the schema summary IS a word soup?
 
-**The decision this re-opens, and why it deserves re-opening.** ``register/facets.py`` removed
-``facet_schema`` from ``FACET_EXTRACTS`` on a measurement: the raw question beat every rewrite of
-it, by 1.8 pp of recall@3 over 114 questions. That measurement is sound and it was taken against
-the **gold** schema summaries — sparse identifier lists like ``restaurant: 3 tables — generalinfo,
-geographic, location``. So the rewriter was judged against a document form that no longer exists
-in the corpus under test.
+``register/facets.py`` removed ``facet_schema`` from ``FACET_EXTRACTS`` on a measurement: the raw
+question beat every rewrite of it on a 114-question screen. That was taken against
+the **gold** schema summaries — sparse identifier lists — a document form the corpus under test no
+longer has, since ``tools/densify_summaries.py`` made those summaries dense term lists and
+``facet_schema_query`` variant ``v2`` emits terms rather than a sentence.
 
-``tools/densify_summaries.py`` turned those summaries into dense term lists with no function words.
-A rewriter whose whole job is to emit terms rather than a sentence — ``facet_schema_query`` variant
-``v2``: *"Emit terms, not a sentence... Do not join the terms into clauses"* — has a document form
-to align with now, and it did not before. The prompt was kept unsent for exactly this: *"a prompt
-deleted outright is a baseline a future attempt has nothing to beat."*
-
-**The 2x2.** Two factors, and the cell that matters has never been measured:
+Two factors, and the cell this tool was built to fill:
 
 .. code-block:: text
 
                             raw question      rewritten (term soup)
-    gold summaries          measured           measured  (the 1.8 pp loss)
-    dense summaries         measured (+6 pp)  NEVER MEASURED   <- the hypothesis
+    gold summaries          measured           measured  (the loss that removed it)
+    dense summaries         measured (+6 pp)  measured 2026-08-05 -- null
 
-The claim under test is an **interaction**, not a main effect: that the rewriter's sign flips with
-the document form. Both main effects are already known, so a design that only re-measured them
-would answer nothing.
+The claim under test is the **interaction** — the rewriter's sign flipping with the document form
+— not either main effect, both already known. It came back null: 342 questions, paired,
+interaction -1.17 pp on recall@3 and -0.64 pp on gold-table coverage, every p >= 0.45
+(``register/citations.py``, artifact ``runs/ablation/summary-form-1351-20260805.json``).
+The other four facets are held OFF in every cell so
+they contribute a constant to ``route``'s sum and only the schema facet's query form varies;
+re-testing in the production configuration is a different run.
 
-**Isolation over realism, deliberately.** The other four facets rewrite in production and here they
-are held OFF in every cell, so they contribute a constant to ``route``'s sum and only the schema
-facet's query form varies. That makes this cheap (one model call per question in two of four cells
-rather than five in all four) and it makes the interaction attributable. If the interaction is real,
-the follow-up is to re-test in the production configuration — that is a different run, not this one.
-
-**One confound, stated rather than hidden.** ``densify_summaries`` rewrites schema *and* table
-summaries, and table summaries are read by ``facet_entity``. So the summary-form factor is not
-purely the schema facet's document. It is constant across the query-form factor, which leaves the
-interaction clean; only the main effect of summary form carries the confound, and that main effect
-is already measured elsewhere.
+One confound: ``densify_summaries`` rewrites table summaries too and ``facet_entity`` reads those.
+It is constant across the query-form factor, so the interaction stays clean and only the main
+effect of summary form carries it.
 """
 
 from __future__ import annotations
@@ -45,30 +34,52 @@ import json
 import pathlib
 import sys
 import time
-from math import comb
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "tools"))
 
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset" / "test_final.jsonl"
 
 
-def mcnemar(reference: dict[str, bool], arm: dict[str, bool]) -> dict:
-    """Paired exact test. Both arms answer the identical question set, so the pairing is real."""
-    shared = sorted(set(reference) & set(arm))
-    gained = sum(1 for q in shared if arm[q] and not reference[q])
-    lost = sum(1 for q in shared if reference[q] and not arm[q])
-    n = gained + lost
-    if n == 0:
-        return {"n": len(shared), "gained": 0, "lost": 0, "p": 1.0}
-    tail = sum(comb(n, k) for k in range(min(gained, lost) + 1)) / 2**n
-    return {"n": len(shared), "gained": gained, "lost": lost, "p": round(min(1.0, 2 * tail), 5)}
+def paired(reference: dict[str, bool], arm: dict[str, bool], *, ref_label: str, arm_label: str):
+    """The paired test, through ``measure.stats.mcnemar``.
+
+    **This module used to carry its own McNemar** (audit D5), and
+    ``tools/check_one_implementation.py`` declares ``mcnemar`` a singleton whose stated reason is
+    that "v1 had two McNemars ... which one ran changes whether a ladder step is significant".
+    The gate did not see this one because it scanned ``src/governed_bi`` only; it scans the
+    singletons in ``tools/`` too now.
+
+    The copy was not merely duplicated, it was weaker in three ways that all point the same
+    direction — toward reporting a result as more informative than it is:
+
+    * it **silently intersected** the two unit sets (``set(reference) & set(arm)``) where
+      ``stats.mcnemar`` refuses, so a question missing from one arm quietly left the comparison
+      instead of stopping it;
+    * it returned **no minimum detectable effect**, and printed ``p=1.0`` on zero discordant
+      pairs with nothing carrying how uninformative that is — ``stats.mde`` exists for exactly
+      that case;
+    * it ``round()``ed, which is the thing ``check_measurement_locality`` is about.
+
+    Returns the ``McNemarResult`` so the caller reads named fields rather than a dict.
+    """
+    # Imported inside the function, as every other ``governed_bi`` import in this file is: the
+    # module has to be importable for ``--help`` without the package resolving.
+    from governed_bi.measure.population import Population  # noqa: PLC0415
+    from governed_bi.measure.stats import mcnemar  # noqa: PLC0415
+
+    return mcnemar(
+        Population.of(ref_label, [{"question_id": q, "hit": v} for q, v in reference.items()]),
+        Population.of(arm_label, [{"question_id": q, "hit": v} for q, v in arm.items()]),
+        "hit",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="query_summary_alignment", description=__doc__)
-    parser.add_argument("--gold-corpus", default="corpora/gold-semantic-layer-20260804")
-    parser.add_argument("--dense-corpus", default="corpora/_dense-v3")
+    # Required, not defaulted: the old defaults named directories under the gitignored
+    # `corpora/`, which exist on one machine and nowhere else.
+    parser.add_argument("--gold-corpus", required=True, help="baseline corpus to compare")
+    parser.add_argument("--dense-corpus", required=True, help="variant corpus to compare")
     parser.add_argument("--dataset", type=pathlib.Path, default=DEFAULT_DATASET)
     parser.add_argument(
         "--per-schema",
@@ -86,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=pathlib.Path, default=None)
     args = parser.parse_args(argv)
 
-    import credentials
+    from governed_bi import credentials
 
     credentials.load_into_environ()
     dsn = credentials.secret(*credentials.PG_DSN_NAMES)
@@ -95,8 +106,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     import os
-
-    from langchain.chat_models import init_chat_model
 
     from governed_bi.datasource.postgres import PostgresConnector
     from governed_bi.eval.datalake import (
@@ -107,19 +116,16 @@ def main(argv: list[str] | None = None) -> int:
         table_coverage,
     )
     from governed_bi.govern.policy import GovernancePolicy
-    from governed_bi.model import OpenAIEmbedder
+    from governed_bi.model import provider as provider_mod
     from governed_bi.register import prompts as prompts_mod
     from governed_bi.retrieve.vector_cache import vector_cache_from_environment
     from governed_bi.serve import session as session_mod
 
     model_id = os.environ.get("GOVERNED_BI_UTILITY_MODEL") or os.environ["GOVERNED_BI_MODEL"]
-    kwargs: dict = {"model_provider": "openai"}
     effort = os.environ.get("GOVERNED_BI_UTILITY_MODEL_EFFORT")
-    if effort:
-        kwargs["reasoning_effort"] = effort
-    utility = init_chat_model(model_id, **kwargs)
+    utility = provider_mod.chat_model(model_id, surface="utility", effort=effort or None)
 
-    embedder = OpenAIEmbedder()
+    embedder = provider_mod.embedder(provider_mod.default_embedding_model())
     cache = vector_cache_from_environment(model=embedder.requested_model)
 
     def build(corpus_dir: str):
@@ -208,9 +214,19 @@ def main(argv: list[str] | None = None) -> int:
         ("gold/raw", "dense/raw"),
         ("dense/raw", "gold/rewritten"),
     ):
-        stat = mcnemar(per_question[ref], per_question[arm])
-        print(f"  {arm:<18} vs {ref:<18} +{stat['gained']} -{stat['lost']}  p={stat['p']}")
-        results.setdefault("mcnemar", {})[f"{arm}_vs_{ref}"] = stat
+        stat = paired(per_question[ref], per_question[arm], ref_label=ref, arm_label=arm)
+        # `render()` carries the discordance and the minimum detectable effect with the p-value,
+        # so a null result cannot be read as "no difference" when it means "cannot tell".
+        print(f"  {arm:<18} vs {ref:<18} {stat.render()}")
+        results.setdefault("mcnemar", {})[f"{arm}_vs_{ref}"] = {
+            "n_pairs": stat.n_pairs,
+            "gained": stat.only_b,
+            "lost": stat.only_a,
+            "discordance": stat.discordance,
+            "p_value": stat.p_value,
+            "minimum_detectable": stat.minimum_detectable,
+            "is_decisive": stat.is_decisive,
+        }
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

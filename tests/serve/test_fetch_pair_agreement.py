@@ -155,7 +155,7 @@ def test_the_statement_clears_the_governance_layer_stack() -> None:
     assets = _assets()
     corpus = for_analyst(list(assets.values()))
     licensed = frozenset({"shop.customers"})
-    spellings, ambiguous = spellings_for(corpus, licensed)
+    spellings, ambiguous, _by_table = spellings_for(corpus, licensed)
     prepared = prepare(
         column_pair_agreement_statement(
             schema="shop", table="customers", left="email", right="email_address",
@@ -260,12 +260,23 @@ def test_a_driver_failure_keeps_the_row_because_the_statement_was_sent() -> None
     assert connector.statements, "the statement was built and sent"
 
 
-def test_no_connector_is_a_refusal_with_a_row_not_a_crash() -> None:
-    agreement, attempt = _compare(
-        "shop.customers.email", "shop.customers.email_address", connector=None
-    )
-    assert agreement is None
-    assert attempt is not None and attempt["passed"] is False
+def test_no_connector_raises_rather_than_recording_a_verdict() -> None:
+    """Was ``…_is_a_refusal_with_a_row_not_a_crash`` until the 2026-08-14 upstream merge, and
+    the contract it asserted was the wrong one.
+
+    This used to return ``(None, refuse("r_not_a_read", …))`` so the caller still got a ledger
+    row. ``test_a_wiring_failure_is_not_a_verdict`` says why that is wrong, and it says it about
+    this module by AST: a rule id constructed in ``serve/`` files *our* misconfiguration in the
+    ledger as the layer stack refusing the detector's statement. Concretely, a wizard scan run
+    against a session with no connector would have written a passed-is-false row per pair and
+    reported "no disagreeing pairs found" — a scan that never ran, indistinguishable from a
+    clean schema.
+    """
+    from governed_bi.govern.check import GovernanceUsageError
+
+    with pytest.raises(GovernanceUsageError) as caught:
+        _compare("shop.customers.email", "shop.customers.email_address", connector=None)
+    assert "connector" in str(caught.value)
 
 
 def test_a_missing_corpus_raises_rather_than_recording_a_verdict() -> None:
@@ -405,10 +416,13 @@ def test_a_suspect_column_is_refused_and_still_gets_its_row() -> None:
     assert not connector.statements
 
 
-def test_no_connector_is_a_refusal_with_a_row_not_a_crash_for_the_count() -> None:
-    cardinality, attempt = _count("shop.customers.customer_id", connector=None)
-    assert cardinality is None
-    assert attempt["reason_code"] == "r_not_a_read"
+def test_no_connector_raises_rather_than_recording_a_verdict_for_the_count() -> None:
+    """The pair function's reasoning, for the same reason — see it for why the row was wrong."""
+    from governed_bi.govern.check import GovernanceUsageError
+
+    with pytest.raises(GovernanceUsageError) as caught:
+        _count("shop.customers.customer_id", connector=None)
+    assert "connector" in str(caught.value)
 
 
 def test_a_missing_corpus_raises_rather_than_recording_a_verdict_for_the_count() -> None:

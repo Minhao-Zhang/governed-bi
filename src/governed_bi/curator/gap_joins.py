@@ -130,6 +130,15 @@ def measure_keys(
     and ``pg_rename_decoy`` declares no constraints. Refusals skip the column and still hand back
     their row.
     """
+    if connector is None:
+        # No database to read, so nothing measured -- and nothing pretended. Guarded here rather
+        # than downstream because ``serve/fetch``'s readers now *raise* on a missing connector
+        # (``test_a_wiring_failure_is_not_a_verdict``: a refusal row built in ``serve/`` files our
+        # own misconfiguration in the ledger as the layer stack refusing the statement). Before
+        # this guard the whole scan propagated that as a 500; a corpus-only session should still
+        # get the signals that need no rows, and honestly get none of the ones that do.
+        return set(), [], 0
+
     from governed_bi.govern.bounds import ToolBounds
     from governed_bi.serve.fetch import count_distinct_values
 

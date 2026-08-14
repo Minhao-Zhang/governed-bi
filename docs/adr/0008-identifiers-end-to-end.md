@@ -1,10 +1,18 @@
 # 0008: Identifiers, end to end
 
 - **Status:** Accepted in part (2026-08-04). **Phases 0 and 1 are built** —
-  canonicalisation wired and quoting on, transitive schema tags, the three
-  comparability knobs reachable, the key/name split (`slug`), reference
-  normalisation, and the `fatal` / `degradation` split. Phase 2 (build-time SQL
-  binding for `on` and `expression`, the emitted-statement round-trip check) is not.
+  canonicalisation wired and quoting on (`govern/pipeline.canonicalise` sets
+  `quoted=True`), transitive schema tags (`retrieve/structure._tag_through_bindings`), the
+  three comparability knobs reachable, the key/name split
+  (`corpus/identity.slug`), reference normalisation, and the `fatal` / `degradation`
+  split (`corpus/validate.Problem.fatal`, surfaced as `Session.fatal_problems` /
+  `Session.degradations`). Phase 2 (build-time SQL binding for `on` and `expression`,
+  the emitted-statement round-trip check) is not.
+  **One half of D4 did not ship and is not claimed above:** the reference *fields* are
+  normalised — in `../BIRD-corpus` all 5 947 `parent_table`s, all 1 412 join endpoints,
+  all 478 metric `base_table`s and 602 of 603 term bindings are asset ids — but
+  `retrieve/structure.py::table_lookup` still answers to four spellings per table rather
+  than the exact-lookup-only rule D4 states.
   Amends
   [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §1.2/§2.8.2 and
   [ADR 0006](0006-execution-time-governance.md) §3/§4.
@@ -79,9 +87,18 @@ Read from `corpus/schema.py`, with the count from the corpus and who resolves it
 
 Five reference fields are resolved by nothing at all. Three of them
 (`JoinAsset.on`, `MetricAsset.expression`, `MetricAsset.base_table`) are rendered
-into the model's context verbatim by `serve/context.py:298–308`. So the corpus can
-state a join key naming a column that does not exist, and the model receives it as
+into the model's context verbatim by `serve/context.py::_structural_line`. So the corpus
+can state a join key naming a column that does not exist, and the model receives it as
 fact.
+
+> **D4 closed part of this column, and the table is the 2026-08-04 reading.**
+> `retrieve/structure.py::_link_metric` now resolves `MetricAsset.dimensions` against
+> `by_id` and puts them in `references`; `_link_column`, `_link_join` and `_link_metric`
+> bind `parent_table`, both join endpoints and `base_table`. `JoinAsset.on` and
+> `MetricAsset.expression` are still resolved by nothing and still reach the prompt
+> verbatim — that is Phase 2 (D5), which is not built. The counts above are on
+> `corpora/gold-semantic-layer-20260804` and are not the shipped corpus's; see the Status
+> line for the current shapes.
 
 ---
 
@@ -104,19 +121,25 @@ matches `address.CBSA` and the table layer allows it. Nothing then rewrites the
 spelling, so Postgres receives the folded name and cannot find the relation.
 
 ADR 0006 §3 step 2 exists precisely to prevent this — *"rewrite each identifier to
-the corpus's declared spelling"* — and it is **not wired**:
+the corpus's declared spelling"* — and on 2026-08-04 it **was not wired**:
 
-- `prepare()` declares `spellings` and `ambiguous_folds` as *optional*
-  (`pipeline.py:169–170`);
-- the only production caller, `serve/tools.py:485`, passes neither, so
-  `canonicalise` runs with `spellings={}` and rewrites nothing;
-- `fold_map()`, which produces those two arguments, **has no caller in `src/`** —
-  only `tests/govern/test_guard_pipeline_ledger.py`, which hands it a hand-written
-  three-entry dict.
+- `govern/pipeline.prepare` declared `spellings` and `ambiguous_folds` as *optional*;
+- the one production caller passed neither, so `canonicalise` ran with `spellings={}`
+  and rewrote nothing;
+- `govern/identifiers.fold_map`, which produces those two arguments, had no caller in
+  `src/` — only `tests/govern/test_guard_pipeline_ledger.py`, which handed it a
+  hand-written three-entry dict.
 
-So the control has a producer with no caller, a consumer whose argument nobody
-passes, and two green tests that exercise it in isolation. This is L§7's vacuous
+So the control had a producer with no caller, a consumer whose argument nobody
+passed, and two green tests that exercised it in isolation. This is L§7's vacuous
 test in a governance layer.
+
+> **Wired in Phase 1** (see Status). `govern/pipeline.spellings_for` now derives the three
+> arguments from the corpus and the turn's licensed set, `serve/fetch.py` passes all three
+> at both its `prepare()` call sites (the `sample` path and the `agent` path), and
+> `fold_map` has two callers inside `spellings_for` itself. This paragraph is the 2026-08-04
+> diagnosis, kept because P1's blast-radius numbers are quoted below and they were measured
+> against the unwired state.
 
 And wiring it is **not sufficient**. `canonicalise` sets `this` without touching
 `quoted`, so sqlglot emits the declared spelling unquoted and Postgres folds it
@@ -141,7 +164,7 @@ asset at all. Three exist:
 | engine identifier | why rejected | what the corpus lost |
 | --- | --- | --- |
 | `airline."Air Carriers"` | space | **no table asset** — 4 columns; and 24 few-shots cite it |
-| `soccer_2016.saison."orange_trophée"` | non-ASCII | **no column asset** — the table is carried, this column is not |
+| `soccer_2016.saison."orange_trophäe"` | non-ASCII | **no column asset** — the table is carried, this column is not |
 | `app_store.playstore."Content Rating"` | space | nothing *here*: the whole `app_store` schema is uncurated |
 
 Reconciled against the live catalogue on 2026-08-04, and the loss inside the 57
@@ -149,6 +172,15 @@ schemas the corpus covers is exactly that: **1 table of 656 and 1 column of 5 94
 Small, and the size is not the point — the mechanism is, because it has no upper
 bound and no record. The only trace is a `skipped_identifiers.json` beside the
 generator that nothing reads.
+
+> **Closed by D1 in Phase 1.** `corpus/identity.slug` derives the id component and
+> `table_id()` composes it, so the charset no longer decides whether an asset exists.
+> `../BIRD-corpus` carries `airline.Air_Carriers_66c534` (file
+> `airline/tables/tbl_airline_Air_Carriers_66c534.yaml`, `physical_name: Air Carriers`)
+> and `soccer_2016.saison`'s `orange_trophäe` column. `skipped_identifiers.json` no
+> longer exists anywhere in either tree — this ADR is the only file that still names it.
+> The paragraphs above are the 2026-08-04 diagnosis, kept because the loss figures were
+> measured against the pre-`slug` corpus.
 
 *(Separately and much larger: the corpus covers 57 of the database's 70 schemas.
 That is a curation coverage gap, not an identifier one, and it is not this ADR's
@@ -172,9 +204,12 @@ permits a leading digit — and that column can never be queried successfully; s
   **one file** on this developer's machine, and the second write overwrites the
   first.
 
-`fold_map` was built to detect the third case and, as P1 records, is never called.
-`build_index` refuses exact duplicate ids and is blind to case-only duplicates.
-Zero occurrences in this corpus, and nothing prevents the next one.
+`fold_map` was built to detect the third case and, as P1's diagnosis records, was never
+called on 2026-08-04. It is called now, twice, both inside
+`govern/pipeline.spellings_for` — but for P1's purpose, deriving the turn's spelling map,
+not for this one: nothing walks the corpus looking for two ids that differ only by case.
+`retrieve/index.build_index` refuses exact duplicate ids and is blind to case-only
+duplicates. Zero occurrences in this corpus, and nothing prevents the next one.
 
 ### P4 — The dot is both the separator and a legal character inside a component
 
@@ -185,10 +220,10 @@ stated nowhere and enforced nowhere.
 
 Today it is unreachable, by accident: a *different* rule in a *different* module
 (`validate_path_component` on `physical_name`) forbids dots. If it were reachable,
-`normalise_table_key` raises `ValueError` on a three-part table key — at
-`check.py:115`, which is **above** the `try` at line 128. So the failure mode is an
-uncaught exception out of `run_query`, i.e. a crash, which this project has already
-once counted as a refusal.
+`normalise_table_key` raises `ValueError` on a three-part table key — and `check()`
+normalises its keys **above** its own `try`, deliberately, so a malformed caller key is
+not reported as an unsafe query. So the failure mode is an uncaught exception out of
+`run_query`, i.e. a crash, which this project has already once counted as a refusal.
 
 ### P5 — Bare references survive in three fields, and each fails differently
 
@@ -208,6 +243,13 @@ The 2026-08-04 migration (decision #47) qualified `left_table`, `right_table` an
    `shakespeare.parrafos` + 4 columns enter `licensed` on a `beer_factory` question,
    and `connect` cannot join Shakespeare to a brewery. **This is why the pooled lake
    still declines even at `route_top_n=1`.**
+
+> **5.2 and 5.3 are closed; 5.1 stands as described.** `_link_metric` resolves
+> `dimensions` into `references`, and `_tag_through_bindings` gives a bound-but-untagged
+> asset its target's tag, which is the transitive rule 5.3 asks for. The last sentence in
+> bold is superseded by Phase 0's measurement below — the pooled lake answers at
+> `route_top_n = 1`; what remains at the register default of 3 is a disconnected terminal
+> set, not this leak.
 
 ### P6 — SQL-bearing fields are never checked against the corpus
 
@@ -239,7 +281,7 @@ and B5 is the reason ADR 0006 exists.
 
 ### P8 — Nothing tells the model the naming rules, and the refusal misnames the cause
 
-`SYSTEM_PROMPT` is three sentences and mentions neither schema-qualification nor
+The analyst prompt is three sentences and mentions neither schema-qualification nor
 quoting. `tools.py` passes no `default_schema`, so `_classify_sources` keys an
 unqualified `FROM customers` as `customers` while `licensed` holds
 `beer_factory.customers`. The table layer refuses `r_table_not_licensed` — *"the
@@ -273,11 +315,11 @@ Three fields, three jobs, never conflated:
   ```
 
   Deterministic, order-independent, and readable in the common case
-  (`CBSA` → `CBSA`; `Air Carriers` → `Air_Carriers_9f2c1e`).
+  (`CBSA` → `CBSA`; `Air Carriers` → `Air_Carriers_66c534`).
 - **`id`** — `{schema_slug}.{table_slug}[.{column_slug}]`. Dots are structural
   **only**, so depth is recoverable from the string and P4 closes by construction.
 
-`airline."Air Carriers"` becomes a first-class asset: id `airline.Air_Carriers_9f2c1e`,
+`airline."Air Carriers"` becomes a first-class asset: id `airline.Air_Carriers_66c534`,
 `physical_name: "Air Carriers"`, and the 24 few-shots resolve. So do the two
 tables the curator dropped.
 
@@ -287,7 +329,7 @@ Not "quoted when necessary". *Necessary* is a predicate over Postgres's folding
 rules, and P1 is that predicate being wrong for 11% of the lake. Always-quote is:
 
 - correct for every observed shape — `"CBSA"`, `"Air Carriers"`,
-  `"1st_quarter_payroll"`, `"orange_trophée"`;
+  `"1st_quarter_payroll"`, `"orange_trophäe"`;
 - deterministic in the ledger: one spelling per table forever, so two runs'
   `generated_sql` hashes are comparable;
 - and it makes `r_ambiguous_fold` unreachable **by construction** rather than a
@@ -404,10 +446,17 @@ comparable to a run over a clean one.
 ### D10 — Tell the model the one rule it must follow, and derive it from the same table
 
 After D2 the model's *spelling* no longer matters — canonicalisation fixes it. Only
-qualification does. So `SYSTEM_PROMPT` states: **every table reference is
+qualification does. So the analyst prompt states: **every table reference is
 `schema.table`**; and `default_schema` is passed **iff every licensed table shares
 one schema**, otherwise `None`. That removes P8's misleading `r_table_not_licensed`
 without ever guessing a schema for a multi-schema turn.
+
+The prompt is a registry entry, not a module constant: `register/prompts.py::ANALYST`
+carries variants `v1`–`v5` with `v4` as the default, and `serve/tools.py::analyst_prompt`
+resolves the run's selected variant at call time. The qualification rule is therefore a
+property of a *variant*, and every variant that ships states it — a variant that dropped
+it would reopen P8 while `prompt_set_hash` recorded the change, which is the point of
+having the registry own the text.
 
 ---
 
@@ -437,8 +486,21 @@ the whole of P1, which is the only defect here that produces a wrong-looking
 change; `_table_lookup`'s bare-name spelling is deleted rather than adapted, and
 `_bind`'s `scope=` narrows to SQL fragments.
 Measurement: `airline.Air_Carriers_*` and `soccer_2016.saison.orange_troph_e_*`
-exist, the 24 few-shot problems go to 0, and `problems_with_corpus` reports
+exist, the 24 few-shot problems go to 0, and the corpus-level pass reports
 `fatal: 0`.
+
+What shipped is D1 and D9 whole and D4 in part. The corpus-level pass is not the
+`problems_with_corpus(assets)` function D9 names: `corpus/store.load` and
+`retrieve/structure.build_structure` return `Problem`s, `corpus/validate.Problem.fatal`
+carries the class, and `serve/session.py` exposes them as `fatal_problems` /
+`degradations` — that is the seam both entry points read. `../BIRD-corpus` loads with
+0 problems of either class. The two deletions in the paragraph above did not happen:
+`retrieve/structure.py::table_lookup` still answers to the asset id, `table_id(schema,
+physical_name)`, the bare `physical_name` and the engine spelling
+`{schema}.{physical_name}`, and `bind_endpoint` still takes a `scope=` for reference
+fields as well as for SQL. The bare tolerance is unexercised on the shipped corpus —
+every join endpoint and every metric `base_table` there is an asset id — but it is
+reachable, and ADR 0012 §8.4a is a disclosure defect that arrived through it.
 
 **Phase 2 — the two verification passes.** D5, D6, D8. Measurement: the count of
 join `on` clauses that do not bind (currently unknown — that is the point), and a

@@ -37,12 +37,19 @@ from contracts import needs  # noqa: E402
 #:
 #: These are NOT for an implementer to strip. Filling one in means writing the assertion
 #: the docstring specifies, then deleting that one marker.
-pytestmark = [needs("G"), pytest.mark.xfail(strict=True, reason="contract specified, body not yet written")]
+pytestmark = [needs("G")]
+
+#: A specification with no body. **Per test, not on ``pytestmark``** — held at module level it was
+#: one line whose deletion disarmed all nine tripwires at once, which is the argument
+#: ``test_turn_contract.py`` makes about its own markers. Filling one in means writing the
+#: assertion its docstring specifies and deleting that one marker.
+UNWRITTEN = pytest.mark.xfail(strict=True, reason="contract specified, body not yet written")
 
 
 # ── the grader is not a governance bypass ─────────────────────────────────────
 
 
+@UNWRITTEN
 def test_a_governance_refusal_is_never_scored_correct() -> None:
     """The finding that makes every EX this harness has reported meaningless.
 
@@ -67,19 +74,87 @@ def test_a_governance_refusal_is_never_scored_correct() -> None:
 
 
 def test_the_grader_has_no_execution_path_that_skips_govern() -> None:
-    """Stronger than the test above, and it is the one that survives a refactor.
+    """**Narrowed on 2026-08-10, because the property as specified cannot hold.**
 
-    Assert structurally that every database call reachable from `eval/` passes through
-    `govern.prepare`/`check`. The specific bug is easy to fix in a way that leaves the
-    next one reachable: the defect is not that one call site forgot, it is that the
-    grader **can** execute.
+    The spec asked that "every database call reachable from ``eval/`` passes through
+    ``govern.prepare``/``check``". Grading cannot satisfy that and never could: the grader must
+    execute **gold** SQL, which comes from the benchmark and which no corpus licenses, and the
+    abstention metric must execute a **refused proposal** to price what the refusal discarded.
+    Governing those would mean licensing the benchmark's tables into the corpus, which is the
+    contamination this repository spends `check_train_only` and `check_no_benchmark_discriminators`
+    preventing.
+
+    So the honest invariant is not "the grader cannot execute" but **"the grader executes at a
+    fixed, named set of sites, and that set cannot grow silently"** — which is what the spec's own
+    reasoning was reaching for: *"the defect is not that one call site forgot, it is that the
+    grader **can** execute."* An enumerated allowlist keeps the capability visible and makes every
+    addition a deliberate, reviewable line rather than an accident.
+
+    The original defect the spec was written against is separately covered:
+    ``test_a_governance_refusal_is_never_scored_correct`` holds the "refusal graded correct" half,
+    and ``eval/harness`` now grades ``generated_sql`` — which since audit C4 carries only what the
+    engine actually sent — rather than the model's proposal.
+
+    Anything on the **served** path is a different matter and stays absolutely forbidden:
+    ``tools/check_imports.py`` keeps ``serve/`` above ``govern/``, and the only executors are the
+    two governed tool bodies.
     """
-    pytest.fail("not implemented: see docstring")
+    import ast
+    import pathlib
+
+    #: ``module -> (how many ungoverned executes, why each is there)``.
+    #:
+    #: Counted rather than pinned to line numbers on purpose: line numbers shift on every edit to
+    #: these files, so pinning them would make this test fail for reasons that are not the
+    #: property — churn that gets a test disabled. A count still catches the thing that matters,
+    #: which is a **new** way for the grader to reach the database.
+    ALLOWED: dict[str, tuple[int, tuple[str, ...]]] = {
+        "harness.py": (
+            3,
+            (
+                "abstention pricing: runs the refused proposal to price what the refusal cost",
+                "the answered turn's own governed statement, re-run for the fingerprint",
+                "gold SQL, which the benchmark owns and no corpus licenses",
+            ),
+        ),
+        "oracle.py": (
+            1,
+            ("the oracle arm executes gold directly; it is the upper bound, not a served turn",),
+        ),
+    }
+
+    eval_dir = pathlib.Path(__file__).resolve().parents[2] / "src" / "governed_bi" / "eval"
+    found: dict[str, int] = {}
+    for source in sorted(eval_dir.glob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        calls = sum(
+            1
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "execute"
+        )
+        if calls:
+            found[source.name] = calls
+
+    declared = {name: count for name, (count, _) in ALLOWED.items()}
+    assert found == declared, (
+        "the set of ungoverned database calls in eval/ moved.\n"
+        f"  found   : {dict(sorted(found.items()))}\n"
+        f"  declared: {dict(sorted(declared.items()))}\n"
+        "A new site is a new way for the grader to reach the database without governance. If it "
+        "is necessary, add it to ALLOWED with the reason grading needs it. If one was removed, "
+        "drop it here in the same commit — a stale allowance is a capability nobody is watching."
+    )
+    # Anti-vacuity: the walk must actually be finding calls, or an empty `found` would match an
+    # empty `declared` and this test would pass on a tree with no eval/ at all.
+    assert sum(found.values()) == 4, f"expected 4 declared ungoverned executes, saw {found}"
 
 
 # ── absence must not become a value, in either direction ──────────────────────
 
 
+@UNWRITTEN
 def test_a_missing_outcome_is_not_counted_as_a_crash() -> None:
     """`harness.py` did `str(answer.get("outcome") or record.get("outcome") or "crashed")`.
 
@@ -93,6 +168,7 @@ def test_a_missing_outcome_is_not_counted_as_a_crash() -> None:
 
 
 @pytest.mark.parametrize("field", ["guardrail_error", "re_served", "facet_degraded"])
+@UNWRITTEN
 def test_an_unrecorded_health_field_is_not_recorded_as_clean(field: str) -> None:
     """Three instances of one line: `int(record.get(...) or 0)`, `bool(... or False)`.
 
@@ -108,6 +184,7 @@ def test_an_unrecorded_health_field_is_not_recorded_as_clean(field: str) -> None
 # ── the comparison must refuse itself when it cannot be trusted ───────────────
 
 
+@UNWRITTEN
 def test_an_arm_with_zero_successful_executions_is_not_quotable() -> None:
     """The property that would have caught all of the above at once.
 
@@ -119,6 +196,7 @@ def test_an_arm_with_zero_successful_executions_is_not_quotable() -> None:
     pytest.fail("not implemented: see docstring")
 
 
+@UNWRITTEN
 def test_the_report_never_renders_an_unmeasured_quantity_as_a_number() -> None:
     """`report.py` formatted a rate with an f-string `.4f` instead of
     `Measured.render(4)` — caught by `tools/check_measurement_locality.py`, which exists
@@ -130,6 +208,7 @@ def test_the_report_never_renders_an_unmeasured_quantity_as_a_number() -> None:
     pytest.fail("not implemented: see docstring")
 
 
+@UNWRITTEN
 def test_a_clean_run_is_quotable(capsys) -> None:
     """The control, and it is not optional.
 
@@ -140,3 +219,30 @@ def test_a_clean_run_is_quotable(capsys) -> None:
     unread.
     """
     pytest.fail("not implemented: see docstring")
+
+
+def test_an_unwritten_count_does_not_pass_the_gate_as_a_clean_zero() -> None:
+    """Audit M2. ``int(record.get(...) or 0)`` turned three gates from absent into pass.
+
+    ``0`` is both the clean measured value for a count and the shape an absent field takes, so
+    substituting it converts "nobody counted" into "nothing went wrong" — and the quotability gates
+    read that as a **pass**. Measured before the fix: a record with ``guardrail_errors`` never
+    written made all seven gates pass.
+
+    ``facet_degraded`` is the sharper one. ``serve/nodes/stamp.py`` returns a deliberate ``None``
+    there, with a comment saying ``False`` would be "the degradation gate reading absence as clean",
+    and ``project_turn``'s ``or False`` turned it straight back into ``False`` one function later —
+    the fix and its defeat in the same repository.
+    """
+    from governed_bi.eval.harness import project_turn
+
+    row = project_turn(
+        {"answer": {"record": {"outcome": "answered"}}},
+        question={"question_id": "q1", "db_id": "sales", "question": "how many"},
+        arm="test",
+    )
+    for field in ("guardrail_error", "re_served", "facet_degraded"):
+        assert row[field] is None, (
+            f"{field} reads {row[field]!r} for a turn that never recorded it, and the gate then "
+            "passes on a measurement nobody took"
+        )

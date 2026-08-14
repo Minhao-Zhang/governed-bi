@@ -194,6 +194,43 @@ def test_prepare_returns_no_string_when_the_verdict_blocks(prepare) -> None:
     assert allowed.sql is not None and allowed.verdict["passed"] is True
 
 
+@pytest.mark.parametrize(
+    ("sql", "reason_code"),
+    [
+        # A column the corpus does not authorise: refused at Layer.COLUMNS, which is the
+        # deepest layer an ordinary SELECT reaches, i.e. the case a real refusal looks like.
+        ("SELECT secret FROM customers", "r_column_not_allowed"),
+        # An unlicensed table with no column binding: Layer.TABLES.
+        ("SELECT 1 FROM orders", "r_table_not_licensed"),
+    ],
+)
+def test_a_refused_select_yields_no_executable_string(prepare, sql, reason_code) -> None:
+    """The verdict-to-statement wiring, which the DDL case above cannot reach.
+
+    ``test_prepare_returns_no_string_when_the_verdict_blocks`` used ``DROP TABLE`` and was
+    the package's only assertion on this property. DDL is refused a **second** time one step
+    later, by ``apply_row_limit``'s ``not isinstance(tree, exp.Query)`` branch, so its
+    ``sql is None`` holds even when the line under test is gone: deleting
+    ``if not verdict["passed"]`` from ``prepare`` left all 133 tests in this package passing
+    while ``prepare`` handed back ``'SELECT token FROM secrets LIMIT 200001'`` for a verdict
+    of ``passed=False``. The other refusal assertion in the package uses a bidi control
+    character, refused before ``check()`` runs, so it cannot reach the wiring either.
+
+    A refused **SELECT** is the only shape that does: it parses, it is a ``Query``, and it
+    survives to the row-limit step. ``reason_code`` is pinned because "refused for some
+    coherent reason" is satisfied by a rule firing for the wrong cause.
+    """
+    refused = prepare(sql, licensed=CUSTOMERS, allowed_columns=ALLOWED)
+
+    assert refused.verdict["passed"] is False
+    assert refused.verdict["reason_code"] == reason_code, refused.verdict
+    assert refused.sql is None, (
+        f"a refused statement produced an executable string: {refused.sql!r}. "
+        "Prepared.sql is the pipeline's only runnable output; a caller that trusts the "
+        "contract will execute it."
+    )
+
+
 def test_canonicalisation_precedes_the_check_so_the_verdict_is_about_what_runs(prepare) -> None:
     """The corpus declares ``CustomerID``; the model wrote ``customerid``. The executed
     string carries the declared spelling **and quotes it**.
@@ -297,7 +334,8 @@ def test_the_row_that_is_actually_written_carries_the_statement_verbatim(prepare
     tests, came away believing the durable record held a digest and a shape. What it holds is
     :func:`attempt_record`, and ``executed_sql`` is the statement, verbatim, literals and all.
 
-    ``ledger_entry`` is deleted (audit §8.1 / §10) and this test asserts what is true instead.
+    ``ledger_entry`` is deleted (ADR 0006 §11's superseding note, 2026-08-06) and this test
+    asserts what is true instead.
     It is deliberately the *unflattering* assertion: if the raw statement ever stops being
     written, this fails and someone has to decide that on purpose.
     """
@@ -369,11 +407,22 @@ def test_the_execution_record_derives_its_error_count_from_its_attempts() -> Non
 def test_the_licensed_set_has_no_widening_method() -> None:
     """B7: ``inspect_schema`` wrote straight into the licensed set, so inspecting
     anything authorised it. The fix is structural — there is no mutator to call, and
-    assignment raises."""
+    assignment raises.
+
+    **Callables only**, which is a narrowing of this scan and not a loosening of the claim. It
+    used to walk every name in ``dir()``, so ADR 0012's ``withheld`` field — a frozenset that
+    *removes* assets from what the tools may name — failed it on the four letters ``with``. The
+    claim was always about a method that widens; a frozen dataclass's fields cannot widen
+    anything, which the assignment below is what proves.
+    """
     from governed_bi.govern.bounds import ToolBounds
 
     bounds = ToolBounds(licensed=frozenset({"beer_factory.customers"}))
-    assert not [name for name in dir(bounds) if name.startswith(("add", "extend", "update", "with"))]
+    assert not [
+        name
+        for name in dir(bounds)
+        if name.startswith(("add", "extend", "update", "with")) and callable(getattr(bounds, name))
+    ]
     with pytest.raises(Exception):
         bounds.licensed = frozenset({"other.secrets"})  # type: ignore[misc]
 
@@ -481,3 +530,279 @@ def test_agent_core_prefers_the_executed_statement_over_the_tool_argument() -> N
     # The *last* one that ran, not the last row: a refused retry after a passing query
     # must not blank the statement that answered.
     assert _last_executed_sql([{"executed_sql": "A"}, {"executed_sql": None}]) == "A"
+
+
+def test_a_qualified_reference_is_not_ambiguous(prepare) -> None:
+    """The collision two tables away must not refuse a reference that names its own table.
+
+    ``r_ambiguous_fold`` compared every identifier against one flat namespace built from the
+    turn's whole licensed set — ~26 tables across ~8 schemas. Two of them declaring ``Name``
+    and ``name`` therefore refused *every* reference to either, qualified or not. Measured on
+    the 2026-08-09 v3 arm: 119 of 1 351 turns, 112 of them ending ``capped`` at EX 0.025, and
+    24% of the run's input tokens spent re-trying a statement nothing told the model how to fix.
+
+    ``T1."Name"`` names one table. Given that table's own spellings, there is nothing to guess.
+    """
+    refused = prepare(
+        "SELECT alias FROM customers",
+        licensed=CUSTOMERS,
+        allowed_columns=frozenset({"customers.Alias"}),
+        spellings={"alias": "Alias", "customers": "customers"},
+        ambiguous_folds=frozenset({"alias"}),
+    )
+    assert refused.verdict["reason_code"] == "r_ambiguous_fold", "precondition"
+
+    resolved = prepare(
+        "SELECT customers.alias FROM customers",
+        licensed=CUSTOMERS,
+        allowed_columns=frozenset({"customers.Alias"}),
+        spellings={"alias": "Alias", "customers": "customers"},
+        ambiguous_folds=frozenset({"alias"}),
+        spellings_by_table={"customers": {"alias": "Alias"}},
+    )
+    assert resolved.verdict["passed"] is True, resolved.verdict
+    assert '"Alias"' in (resolved.sql or ""), resolved.sql
+
+
+def test_an_unqualified_ambiguous_reference_still_refuses(prepare) -> None:
+    """The narrowing must not become a repeal. With no qualifier there is still nothing to
+    resolve against, and picking one is exactly the decoy hazard the rule exists for."""
+    refused = prepare(
+        "SELECT alias FROM customers",
+        licensed=CUSTOMERS,
+        allowed_columns=frozenset({"customers.Alias"}),
+        spellings={"alias": "Alias", "customers": "customers"},
+        ambiguous_folds=frozenset({"alias"}),
+        spellings_by_table={"customers": {"alias": "Alias"}},
+    )
+    assert refused.verdict["reason_code"] == "r_ambiguous_fold", refused.verdict
+
+
+def test_a_cte_name_does_not_resolve_against_a_licensed_table_that_shares_it() -> None:
+    """A CTE is a name the statement *defines*. Resolving a column against a licensed table of
+    the same name would canonicalise a reference to something the query never read."""
+    from governed_bi.govern.pipeline import canonicalise
+
+    out = canonicalise(
+        "WITH customers AS (SELECT c2.x AS other FROM t2 AS c2) "
+        "SELECT customers.alias FROM customers",
+        spellings={"alias": "Alias"},
+        ambiguous=frozenset({"alias"}),
+        dialect="postgres",
+        by_table={"customers": {"alias": "Alias"}},
+    )
+    assert isinstance(out, dict) and out["reason_code"] == "r_ambiguous_fold", (
+        f"a CTE alias resolved against the licensed table sharing its name: {out!r}"
+    )
+
+
+def test_a_table_whose_own_columns_collide_keeps_refusing() -> None:
+    """Within one table the collision is real, so the flat map's refusal is the right answer.
+    ``spellings_for`` therefore records no per-table entry for such a table."""
+    from governed_bi.govern.pipeline import canonicalise
+
+    out = canonicalise(
+        "SELECT t.name FROM t",
+        spellings={"name": "Name"},
+        ambiguous=frozenset({"name"}),
+        dialect="postgres",
+        by_table={},  # what spellings_for emits for a self-colliding table
+    )
+    assert isinstance(out, dict) and out["reason_code"] == "r_ambiguous_fold"
+
+
+class _StubCorpus:
+    """The three attributes ``spellings_for`` reads, and nothing else.
+
+    Duck-typed rather than built from real assets: the property under test is about name
+    collisions, and a real corpus that happens to have none cannot exercise it.
+    """
+
+    def __init__(self, tables):
+        self._by_id = {}
+        for schema, name, columns in tables:
+            cols = []
+            for col in columns:
+                cid = f"{schema}.{name}.{col}"
+                self._by_id[cid] = type("C", (), {"physical_name": col})()
+                cols.append(cid)
+            self._by_id[f"{schema}.{name}"] = type(
+                "T", (), {"physical_name": name, "schema": schema, "columns": cols}
+            )()
+
+    def get(self, asset_id):
+        return self._by_id.get(asset_id)
+
+
+def test_spellings_for_separates_the_flat_map_from_the_per_table_one() -> None:
+    """The producer half, so the two halves of the fix cannot drift apart.
+
+    Two tables declaring ``Name`` and ``name`` make the flat fold ambiguous — correctly, it is
+    ambiguous *there*. Each table's own map still resolves its own spelling, which is what lets
+    a qualified reference through.
+    """
+    from governed_bi.govern.pipeline import spellings_for
+
+    corpus = _StubCorpus([
+        ("s", "people", ["Name", "id"]),
+        ("s", "places", ["name", "id"]),
+    ])
+    _, ambiguous, by_table = spellings_for(corpus, frozenset({"s.people", "s.places"}))
+
+    assert "name" in ambiguous, "the flat namespace really is ambiguous across the two tables"
+    assert by_table["people"]["name"] == "Name"
+    assert by_table["places"]["name"] == "name"
+    assert by_table["s.people"]["name"] == "Name", "the schema-qualified handle resolves too"
+
+
+def test_spellings_for_omits_a_table_whose_own_columns_collide() -> None:
+    """Within one table the collision is real and unresolvable, so there must be no per-table
+    entry to resolve against — otherwise the narrowing would silently pick one."""
+    from governed_bi.govern.pipeline import spellings_for
+
+    corpus = _StubCorpus([("s", "t", ["Name", "name"])])
+    _, ambiguous, by_table = spellings_for(corpus, frozenset({"s.t"}))
+
+    assert "name" in ambiguous
+    assert "t" not in by_table and "s.t" not in by_table, by_table
+
+
+#: ``s.people`` declares ``Name`` and ``s.places`` declares ``name``, so the flat fold is
+#: genuinely ambiguous and every assertion below is about which *table* a handle resolved to.
+_COLLIDING_BY_TABLE = {
+    "people": {"name": "Name"}, "s.people": {"name": "Name"},
+    "places": {"name": "name"}, "s.places": {"name": "name"},
+}
+
+
+def _canonicalise_against_the_collision(sql: str):
+    from governed_bi.govern.pipeline import canonicalise
+
+    return canonicalise(
+        sql,
+        spellings={"name": "Name", "id": "id"},
+        ambiguous=frozenset({"name"}),
+        dialect="postgres",
+        by_table=_COLLIDING_BY_TABLE,
+    )
+
+
+def test_a_handle_reused_for_two_tables_is_spelled_from_each_scope_s_own() -> None:
+    """The defect the first draft shipped: resolve on a tree-wide alias map and you answer a
+    different question from ``binding.py``, which resolves per scope.
+
+    Each of these reached a **passing** verdict with the wrong spelling — the draft spelled the
+    inner ``T1`` from ``s.people``, which is a different column of a different table.
+
+    **The property asserted here is stronger than the refusal that stood in for it**, and this
+    test is the record of that change (the 2026-08-11 review, F3). The interim fix answered a
+    tree-wide question — *is this handle unambiguous over the whole statement?* — and dropped the
+    handle when it was not, so both statements below refused. Refusing is safe and it is not
+    right: ``bind()`` resolves ``T1`` in the scope the reference sits in and has no difficulty
+    with either, so the two resolvers disagreed in the direction that costs false refusals rather
+    than the one that leaks. ``_column_sources`` now walks the reference's own scope and then its
+    ancestors — ``binding.py::_lookup``'s walk, over the same ``scope.sources`` mapping — so the
+    answer here is the answer ``bind()`` gives, and the wrong spelling has nowhere left to come
+    from. Asserting the spelling rather than the refusal is what makes that falsifiable: a
+    resolver that went back to picking the first writer would emit ``T1."Name"`` twice and pass a
+    test that only asked whether the statement was refused.
+    """
+    subquery = _canonicalise_against_the_collision(
+        "SELECT T1.name FROM s.people AS T1 WHERE T1.id IN (SELECT T1.name FROM s.places AS T1)"
+    )
+    assert subquery == (
+        'SELECT T1."Name" FROM s.people AS T1 WHERE T1."id" IN '
+        '(SELECT T1."name" FROM s.places AS T1)'
+    ), subquery
+
+    union = _canonicalise_against_the_collision(
+        "SELECT T1.name FROM s.people AS T1 UNION SELECT T1.name FROM s.places AS T1"
+    )
+    assert union == (
+        'SELECT T1."Name" FROM s.people AS T1 UNION SELECT T1."name" FROM s.places AS T1'
+    ), union
+
+
+def test_a_derived_source_lends_no_spelling_to_the_scope_it_sits_in() -> None:
+    """The half that must **not** relax when the reused-alias half stops refusing.
+
+    ``p`` is a derived source in the scope ``p.name`` sits in, and a base-table alias one scope
+    down. The subquery exposes ``name`` and the corpus declares no spelling for what a statement
+    defines, so per-table resolution has no entitlement here and the flat map — where ``name`` is
+    ambiguous — is the right answer. This is open-work.md 3.2a's first defect, and the reason the
+    per-scope walk asks *which scope is this reference in* rather than *does this handle appear
+    as a base table anywhere*.
+    """
+    out = _canonicalise_against_the_collision(
+        "SELECT p.name FROM (SELECT o.name FROM s.places AS o) AS p "
+        "WHERE EXISTS (SELECT 1 FROM s.people AS p WHERE p.id = 1)"
+    )
+    assert isinstance(out, dict) and out["reason_code"] == "r_ambiguous_fold", out
+
+
+def test_a_derived_alias_elsewhere_does_not_shadow_a_base_handle() -> None:
+    """The cost side of the test above, which the tree-wide fix got wrong and nothing measured.
+
+    Here ``r`` is a base-table alias in the scope the reference sits in and a derived alias two
+    scopes away, so per-table resolution *is* entitled — and the tree-wide derived set dropped
+    ``r`` everywhere, refusing a reference that names exactly one table. Both spellings are also
+    benign cases in ``govern/adversarial.toml``, which is what puts this shape in the
+    false-refusal denominator rather than only in a unit test.
+    """
+    aliased = _canonicalise_against_the_collision(
+        'SELECT r.name FROM s.people AS r WHERE EXISTS (SELECT 1 FROM (SELECT 1 AS z) AS r)'
+    )
+    assert aliased == (
+        'SELECT r."Name" FROM s.people AS r WHERE EXISTS(SELECT 1 FROM (SELECT 1 AS z) AS r)'
+    ), aliased
+
+    # The unaliased half: the handle is the table's own name, which registers through a different
+    # branch of `binding.py::_classify_sources`, so a fix narrow to aliases would leave it refusing.
+    bare = _canonicalise_against_the_collision(
+        'SELECT people.name FROM s.people WHERE EXISTS (SELECT 1 FROM (SELECT 1 AS z) AS people)'
+    )
+    # The qualifier stays unquoted because this fixture's *flat* map declares only `name` and
+    # `id`, so `people` is a name canonicalisation cannot vouch for. What is under test is the
+    # column: `"Name"`, from `s.people`, rather than a refusal.
+    assert bare == (
+        'SELECT people."Name" FROM s.people WHERE EXISTS(SELECT 1 FROM (SELECT 1 AS z) AS people)'
+    ), bare
+
+
+def test_an_alias_hides_the_table_name_behind_it() -> None:
+    """``FROM s.orders AS customers`` means ``customers`` is ``s.orders``, not ``s.customers``.
+
+    ``binding.py::_classify_sources`` states the rule — Postgres hides the table name behind an
+    alias — and the first draft of this resolver registered both, so the *other* table's
+    spelling won. ``bind()`` accepts the statement, so nothing downstream would have caught it.
+    """
+    from governed_bi.govern.pipeline import canonicalise
+
+    out = canonicalise(
+        "SELECT customers.name FROM s.customers AS c JOIN s.orders AS customers ON c.id = customers.id",
+        spellings={"name": "Name", "id": "id"},
+        ambiguous=frozenset({"name"}),
+        dialect="postgres",
+        by_table={
+            "customers": {"name": "Name", "id": "id"}, "s.customers": {"name": "Name", "id": "id"},
+            "orders": {"name": "name", "id": "id"}, "s.orders": {"name": "name", "id": "id"},
+        },
+    )
+    assert not isinstance(out, dict), out
+    assert '"name"' in out and '"Name"' not in out, (
+        f"took s.customers' spelling (Name) for a handle that is s.orders' alias: {out}"
+    )
+
+
+def test_a_bare_table_name_shared_by_two_licensed_schemas_is_not_resolvable() -> None:
+    """``country`` in two schemas must not have one of them own the bare key by sort order —
+    the same collision this whole rule refuses, one scope up. The schema-qualified key stays."""
+    from governed_bi.govern.pipeline import spellings_for
+
+    corpus = _StubCorpus([("a", "country", ["Name"]), ("b", "country", ["name"])])
+    _, ambiguous, by_table = spellings_for(corpus, frozenset({"a.country", "b.country"}))
+
+    assert "name" in ambiguous
+    assert "country" not in by_table, by_table
+    assert by_table["a.country"]["name"] == "Name"
+    assert by_table["b.country"]["name"] == "name"

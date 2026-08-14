@@ -21,7 +21,13 @@ from governed_bi.retrieve.structure import build_structure
 from governed_bi.serve.graph import compile_graph
 from governed_bi.serve.scripted_model import ScriptedChatModel
 from governed_bi.serve.session import Session
-from governed_bi.serve.tools import SYSTEM_PROMPT
+from governed_bi.serve.tools import analyst_prompt
+
+#: The analyst prompt at its default variant. Was a module constant in ``serve/tools.py`` until
+#: prompt-variant selection was wired: binding it at import meant a run could select a variant,
+#: record its hash, and send this. The assertions below are unchanged — they are about the
+#: prompt reaching the model, not about where it is resolved.
+SYSTEM_PROMPT = analyst_prompt()
 
 #: The five tools ADR 0005 §3.5 declares. Named here rather than derived from ``build_tools``
 #: on purpose: deriving the expectation from the thing under test is how "the tool set could
@@ -39,7 +45,13 @@ ADR_TOOLS = {
 }
 
 
-def _session(index: Any, assets: dict[str, Any], policy: Any, model: Any) -> Session:
+def _session(
+    index: Any,
+    assets: dict[str, Any],
+    policy: Any,
+    model: Any,
+    variants: dict[str, str] | None = None,
+) -> Session:
     """A real ``Session``, so ``prompt_set_hash`` is the one the record publishes.
 
     The hash comes from ``register/prompts.py``, the same way ``session.from_assets`` computes
@@ -54,15 +66,18 @@ def _session(index: Any, assets: dict[str, Any], policy: Any, model: Any) -> Ses
     return Session(
         index=index, structure=structure, assets_by_id=assets, corpus=None, connector=None,
         policy=policy, corpus_content_hash="corpus-hash",
-        prompt_set_hash=prompt_set_hash(),
+        prompt_set_hash=prompt_set_hash(variants),
         knobs_resolved={}, db_id="ops_b", run_id="run-model-inputs", agent_model=model,
+        prompt_variants=dict(variants or {}),
     )
 
 
-def _served(index: Any, assets: dict[str, Any], policy: Any) -> tuple[ScriptedChatModel, dict]:
+def _served(
+    index: Any, assets: dict[str, Any], policy: Any, variants: dict[str, str] | None = None
+) -> tuple[ScriptedChatModel, dict]:
     """One turn served over the two-schema corpus, with a recording model."""
     model = ScriptedChatModel(responses=[AIMessage(content="one sensor")])
-    session = _session(index, assets, policy, model)
+    session = _session(index, assets, policy, model, variants)
     config = session.configurable()
     config["configurable"]["thread_id"] = "t-model-inputs"
     turn = {**session.turn("sensors voltage reading per device"), "route_top_n": 1}
@@ -353,3 +368,36 @@ def test_the_context_block_is_never_the_last_thing_the_model_sees() -> None:
 
     # Degenerate: nothing human to anchor to. Appending is the only option and must not crash.
     assert [m.content for m in _with_block([SystemMessage("sys")], block)] == ["sys", block]
+
+
+def test_a_selected_prompt_variant_reaches_the_model_end_to_end(
+    two_schema_index, two_schema_assets, guard_off_policy
+) -> None:
+    """The whole graph, not the accessor: session -> configurable -> agent_core -> create_agent.
+
+    ``tests/conformance/test_every_prompt_carries_its_variant.py`` refuses a call site that
+    drops the selection, and ``test_prompt_registry`` checks the accessor. Neither would catch
+    the selection being lost *between* them — ``Session.configurable`` omitting the key, or the
+    eval harness building a turn that never carries it. This drives the real graph and reads
+    what the model was handed.
+
+    The failure being refused is silent: the run records ``v1``'s ``prompt_set_hash`` and the
+    model receives ``v2``, so a paired A/B measures a prompt against itself and reports zero.
+    """
+    from governed_bi.register.prompts import prompt_text
+
+    v1, v2 = prompt_text("analyst", {"analyst": "v1"}), prompt_text("analyst")
+    assert v1 != v2, "the fixture variants are identical, so this test cannot fail"
+
+    model, out = _served(
+        two_schema_index, two_schema_assets, guard_off_policy, {"analyst": "v1"}
+    )
+    assert model.prompts_seen, f"the model was never called: path_kind={out.get('path_kind')!r}"
+
+    assert model.calls_with_system(v1), (
+        "no call carried the selected variant; the run would record v1's prompt_set_hash "
+        f"having sent something else. Seen: {[p[:60] for p in model.system_prompts()]}"
+    )
+    assert not model.calls_with_system(v2), (
+        "the default analyst prompt was sent on a turn that selected v1"
+    )

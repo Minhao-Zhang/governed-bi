@@ -1,28 +1,19 @@
-"""Model adapters (parcel I). Today: the two :class:`~governed_bi.ports.Embedder` ones.
+"""Model adapters (parcel I). Three :class:`~governed_bi.ports.Embedder` ones, plus the internal proxy
+proxy's chat-model builder — the only non-embedder here, because the 2026-08-07 BIRD run went
+through it and an engine that exists only on a server reproduces nothing.
 
-``ports.py:107`` names three — ``openai_embedder``, ``bedrock_embedder``,
-``deterministic_embedder``. Two are here. **``bedrock_embedder.py`` is deliberately
-absent**: ``langchain-aws`` is an optional extra that pulls a boto3 tree, nothing in the
-repository selects a Bedrock provider, and an adapter no caller reaches is an adapter
-whose contract nothing checks. ``ports.py`` naming it is a plan, not a debt — the port
-already has the two independent implementations its "every port here has at least two
-adapters" rule asks for, and the empty-string hazard that docstring cites Bedrock for is
-enforced here anyway, in ``embedder.refuse_blank``.
+``provider.py`` is where a surface's gateway is chosen and where one intent — reasoning
+effort, timeout, retry count — is spelled for whichever gateway that is. Call sites name a
+surface, not a provider.
 
-**Where this package sits.** ``tools/check_imports.py`` puts ``model`` between
-``datasource`` and ``serve``, so an adapter may import ``ports``, ``register``,
-``measure``, ``corpus``, ``retrieve``, ``govern`` and ``datasource``, and nothing here may
-be imported by any of them. That is the inversion ``ports.py:10`` describes: the ports sit
-at the bottom so pure computation can be typed against a capability without importing
-anything able to perform it, which is what keeps ``retrieve/`` free of a provider SDK.
-
-Importing this package does **not** import the OpenAI SDK. ``openai`` is imported inside
-``OpenAIEmbedder._openai_client``, so a bare interpreter and every model-free test can
-reach ``DeterministicEmbedder`` without the provider tree.
+Importing this package does **not** import the OpenAI SDK, ``boto3``, ``langchain-aws`` or
+``httpx`` — every provider tree is imported inside the function that needs it, so a bare
+interpreter and every model-free test can reach ``DeterministicEmbedder``.
 """
 
 from __future__ import annotations
 
+from .bedrock_embedder import BEDROCK_EMBEDDING_MODEL, BedrockEmbedder
 from .deterministic_embedder import DETERMINISTIC_DIMENSIONS, DeterministicEmbedder
 from .embedder import (
     DEFAULT_BATCH_SIZE,
@@ -35,15 +26,39 @@ from .openai_embedder import (
     OPENAI_EMBEDDING_MODEL,
     OpenAIEmbedder,
 )
+from .provider import (
+    PROVIDER_VAR,
+    SURFACE_PROVIDER_VARS,
+    chat_model,
+    provider_for,
+    supported_providers,
+)
+from .proxy_embedder import ProxyEmbedder
+from .proxy_gateway import (
+    PROXY_CA_BUNDLE_VAR,
+    PROXY_REGION_VAR,
+    PROXY_SECRET_NAME_VAR,
+)
 
 __all__ = [
+    "BEDROCK_EMBEDDING_MODEL",
     "DEFAULT_BATCH_SIZE",
     "DETERMINISTIC_DIMENSIONS",
+    "PROVIDER_VAR",
+    "PROXY_CA_BUNDLE_VAR",
+    "PROXY_REGION_VAR",
+    "PROXY_SECRET_NAME_VAR",
     "OPENAI_API_KEY_VAR",
     "OPENAI_EMBEDDING_MODEL",
+    "SURFACE_PROVIDER_VARS",
     "BaseEmbedder",
+    "BedrockEmbedder",
     "DeterministicEmbedder",
+    "ProxyEmbedder",
     "OpenAIEmbedder",
+    "chat_model",
     "embedding_knobs",
+    "provider_for",
     "refuse_blank",
+    "supported_providers",
 ]

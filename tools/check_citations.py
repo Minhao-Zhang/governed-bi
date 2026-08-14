@@ -16,7 +16,11 @@ ROOT = Path(__file__).resolve().parent.parent
 CITATIONS = ROOT / "src" / "governed_bi" / "register" / "citations.py"
 
 #: Roots where a hit is fatal: live code, tools, and live documentation.
-STRICT_ROOTS: tuple[str, ...] = ("src", "tools", "docs")
+#: ``tests`` joined this list on 2026-08-10; before that a retired figure quoted in a test
+#: docstring was invisible to the gate. Pointing it there found eight. Six were marked or rewritten;
+#: the two in sealed contract files are named in ``GREP_EXEMPT_PATHS``, which is where the reasoning
+#: lives rather than repeated here.
+STRICT_ROOTS: tuple[str, ...] = ("src", "tools", "docs", "tests")
 
 #: Archive roots (scanned, counted, never fatal). Empty: historical markdown
 #: was deleted from the working tree.
@@ -70,6 +74,14 @@ def load_declarations() -> tuple[list[tuple[str, str]], set[str]]:
 
 
 def main() -> int:
+    # ``--root DIR`` scans a tree the caller owns, so a negative test never writes a probe
+    # into ``src/`` or ``docs/`` (see ``check_one_implementation.py``). The retired-claims
+    # table is a declaration and is still read from this repository.
+    argv = sys.argv[1:]
+    base = ROOT
+    if "--root" in argv:
+        base = Path(argv[argv.index("--root") + 1]).resolve()
+
     if not CITATIONS.exists():
         print(f"no citations module at {CITATIONS}", file=sys.stderr)
         return 1
@@ -90,13 +102,13 @@ def main() -> int:
     def scan(root_name: str, skip_subtrees: tuple[str, ...] = ()) -> tuple[list[str], int]:
         found: list[str] = []
         n = 0
-        root = ROOT / root_name
+        root = base / root_name
         if not root.exists():
             return found, n
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.suffix not in SEARCH_SUFFIXES:
                 continue
-            rel = path.relative_to(ROOT).as_posix()
+            rel = path.relative_to(base).as_posix()
             if rel in exempt or any(rel.startswith(s + "/") for s in skip_subtrees):
                 continue
             n += 1

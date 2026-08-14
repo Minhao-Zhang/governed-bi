@@ -14,7 +14,9 @@ from langchain_core.messages import AIMessage
 from governed_bi.corpus.analyst import for_analyst
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
 from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE
+from governed_bi.govern.layers import GUARDRAIL_ERROR
 from governed_bi.govern.policy import GovernancePolicy
+from governed_bi.serve.agent_state import CAP_LEDGER_KEY
 from governed_bi.serve.delivery import delivery_hash_for, payload_digest
 from governed_bi.serve.graph import compile_graph
 from governed_bi.serve.resume import ResumeRejected, resume_clarification
@@ -254,11 +256,12 @@ def test_run_query_attempt_cap(tmp_path: Path) -> None:
 
     capped, update = _call(tools["run_query"], call_id="rq-2", sql="SELECT * FROM nope")
     assert "capped" in capped.lower()
-    assert list(update.get("attempts_by_call") or {}) == ["cap:rq-2"], (
+    assert list(update.get("attempts_by_call") or {}) == [CAP_LEDGER_KEY], (
         "the cap must write its own ledger row. `_run_query` used to return on the cap "
         "*before* appending, so a capped turn carried an empty ledger while `generated_sql` "
         "was still read out of the tool arguments -- ExecutionRecord declared 'capped' and "
-        "nothing ever wrote it."
+        "nothing ever wrote it. The key is a constant rather than `cap:<call_id>` so that "
+        "the tool and the middleware that now ends the turn cannot write two of them."
     )
 
 
@@ -292,42 +295,13 @@ def test_a_replayed_run_query_does_not_consume_a_second_attempt_slot() -> None:
     )
 
 
-def test_sample_rows_attempts_do_not_count_against_the_run_query_cap() -> None:
-    """The cap is about answering statements, not every governed call the turn made.
+class _Answering:
+    """A connector that answers, so a test can be about governance rather than about the driver."""
 
-    ``sample_rows`` writes a real ledger row per call (``path="sample"``) so the audit
-    surface shows it happened — but a model that spends three calls checking which of two
-    similarly-named columns (a decoy-column table, say) is the right join key before
-    writing SQL has answered nothing yet. Before this fix, those three ledger rows landed
-    in the same ``attempts_by_call`` mapping ``run_query``'s cap counts over, so the first
-    *actual* ``run_query`` call — the model's first real attempt to answer — was refused
-    with "attempt limit reached" without ever running. Live-observed on "Who are our best
-    customers?" against a table with both ``kunde_id`` and ``transaktions_kunde_id``.
-    """
-    from governed_bi.serve.agent_state import AttemptBook
+    dialect = "postgres"
 
-    committed = {
-        "sample-0": {"path": "sample", "passed": True, "reason_code": "passed"},
-        "sample-1": {"path": "sample", "passed": True, "reason_code": "passed"},
-        "sample-2": {"path": "sample", "passed": True, "reason_code": "passed"},
-    }
-    book = AttemptBook(3)
-    assert book.admit(committed, "rq-0") is True, (
-        "three introspection attempts must not exhaust a cap meant for answering statements"
-    )
-
-    # An actual answering attempt still counts, and the cap still bites once three of
-    # *those* have run — the cap is narrowed to the right population, not disabled.
-    committed_with_one_real_attempt = {
-        **committed,
-        "rq-0": {"path": "agent", "passed": False, "reason_code": "blocked"},
-    }
-    book2 = AttemptBook(1)
-    assert book2.admit(committed_with_one_real_attempt, "rq-1") is False, (
-        "a cap of 1 must still refuse a second answering attempt"
-    )
-
-
+    def execute(self, sql: str, **_: Any) -> tuple[list[str], list[tuple[Any, ...]], bool]:
+        return (["id"], [(1,)], False)
 def test_tool_exception_is_not_refuse() -> None:
     class Boom:
         dialect = "sqlite"
@@ -337,12 +311,70 @@ def test_tool_exception_is_not_refuse() -> None:
 
     tools = _tools(_state(), _config(connector=Boom()))
     out, update = _call(tools["run_query"], sql="SELECT 1")
-    assert out.startswith("run_query") or "refused" in out.lower() or "error" in out.lower()
+    # Discriminating, deliberately. This used to read
+    #     out.startswith("run_query") or "refused" in out.lower() or "error" in out.lower()
+    # which the real refusal string `run_query refused: id binds to customers.id, which is not
+    # allowed` also satisfies — so the test could not fail for the reason it exists (audit M4).
+    assert "RuntimeError" in out, f"the driver's failure is not named: {out!r}"
+    assert "refused" not in out.lower(), f"a driver failure is reported as a refusal: {out!r}"
     assert "refused_by" not in out
     # The statement passed governance and was sent to the driver, so the ledger owes it a row
     # even though the driver raised. Returning only the error string would make a driver
     # failure indistinguishable from a turn that attempted nothing.
     assert list(update.get("attempts_by_call") or {}) == ["call-1"], update
+    row = update["attempts_by_call"]["call-1"]
+    assert row["passed"] is True, "the statement did pass every layer; the driver is what failed"
+    assert row["reason_code"] != GUARDRAIL_ERROR, (
+        "a driver failure is not a guardrail error; counting it as one would block quotability "
+        "for an operational fault"
+    )
+
+
+def test_a_checker_that_raises_is_recorded_rather_than_returned_as_a_string() -> None:
+    """Audit C1 — the worst measurement defect found, and the one with no coverage at all.
+
+    An exception escaping ``prepare()`` was caught on the tool surface, refunded, and handed to
+    the model as a string with **no ledger row**. ``stamp`` reads an empty ledger as "answered
+    from the delivered context", so the turn recorded ``outcome: answered``,
+    ``guardrail_errors: 0``, every quotability gate green, and ``generated_sql`` holding a
+    statement that never reached ``prepare()``. A systematically broken ``check()`` presented as
+    a clean, quotable arm.
+
+    The escape is reached the way it happens in production: a malformed key in the corpus.
+    ``check()`` normalises its key arguments *outside* its own ``try`` on purpose
+    (``check.py:89-100``) — "a security parameter was not wired up" must not become a blocked
+    verdict — and ``normalise_column_key`` raises ``ValueError`` on a four-part key. The
+    governance side is right; the recording side had nowhere for the raise to land.
+
+    Paired with ``test_tool_exception_is_not_refuse`` above: a **driver** failure keeps its
+    passing row and is not a guardrail error, while a **checker** failure produces a
+    ``guardrail_error`` row and crashes the turn. The two must not collapse into each other.
+    """
+    from governed_bi.corpus.analyst import AnalystCorpus
+    from governed_bi.serve.ledger import execution_from_attempts
+
+    # Constructed directly rather than through `analyst_corpus_from_keys`, which validates and
+    # would raise here instead of inside `check()`. A corpus object that exists and holds a
+    # malformed key is exactly the state C1 needs: the failure has to happen *inside the tool
+    # body*, past the wiring checks, where the old code turned it into a string.
+    broken = AnalystCorpus({}, frozenset({"a.b.c.d"}), frozenset(), frozenset())
+    tools = _tools(_state(), _config(corpus=broken, connector=_Answering()))
+    out, update = _call(tools["run_query"], sql="SELECT id FROM customers")
+
+    rows = list((update.get("attempts_by_call") or {}).values())
+    assert rows, (
+        f"the checker raised and nothing was recorded: {out!r}. An empty ledger is what stamp "
+        "reads as 'answered from context', so this turn would be quotable and wrong."
+    )
+    assert rows[0]["reason_code"] == GUARDRAIL_ERROR
+    assert rows[0]["passed"] is False
+    assert rows[0]["executed_sql"] is None, "nothing was executed; no statement may be claimed"
+
+    execution = execution_from_attempts(rows)
+    assert execution["guardrail_errors"] == 1, (
+        "the failure is not countable, so the `guardrail_errors == 0` quotability gate cannot "
+        "see it"
+    )
 
 
 def test_ask_user_rejects_a_schema_term_leak_before_pausing() -> None:
@@ -579,6 +611,17 @@ def test_the_ledger_survives_the_interrupt() -> None:
     Order: ``run_query`` (a governed statement, recorded), then ``ask_user`` (the interrupt),
     then the answer. The assertion is on what the record says *after* the resume.
     """
+    # A connector, because the statement has to reach `check()` for the assertion below to be
+    # about the ledger. Until the 2026-08-10 audit (C2) this turn ran with none, and `fetch.py`
+    # manufactured `refuse("r_not_a_read", "no connector configured")` for that — so "a governed
+    # statement made before ask_user" was a fabricated refusal for a wiring failure. A missing
+    # connector now raises, which is what surfaced it.
+    class Answering:
+        dialect = "postgres"
+
+        def execute(self, sql: str, **_: Any) -> tuple[list[str], list[tuple[Any, ...]], bool]:
+            return (["id"], [(1,)], False)
+
     call = {"name": "run_query", "args": {"sql": "SELECT id FROM customers"}, "type": "tool_call"}
     model = ScriptedChatModel(
         responses=[
@@ -596,6 +639,7 @@ def test_the_ledger_survives_the_interrupt() -> None:
         "thread_id": "t-ledger", "policy": GovernancePolicy(guard_rules_enabled={}),
         "agent_model": model, "assets_by_id": _assets(),
         "corpus": for_analyst(list(_assets().values())),
+        "connector": Answering(),
     }}
     turn = {
         "question": "revenue?", "thread_id": "t-ledger", "turn_index": 1,
@@ -657,7 +701,8 @@ def test_tool_bounds_from_state_includes_pulled_in() -> None:
                 "pulled_in": {"s.t.extra": "resolve"},
                 "attributions": {},
             },
-        }
+        },
+        {},
     )
     assert bounds.may_read_body("s.t.extra")
     assert bounds.may_inspect_schema("s.t")
@@ -714,7 +759,7 @@ def test_sample_rows_asks_for_the_engines_spelling_in_the_right_schema() -> None
     payload, ok, attempt = sample_rows(
         "airline.Air_Carriers_66c534.Code",
         limit=5,
-        bounds=tool_bounds_from_state(state),
+        bounds=tool_bounds_from_state(state, {}),
         assets=assets,
         connector=Recorder(),
         corpus=for_analyst([table, column]),
@@ -790,7 +835,7 @@ def test_sample_rows_is_a_governed_executor_path() -> None:
     payload, ok, attempt = sample_rows(
         "sales.customers.ssn",
         limit=5,
-        bounds=tool_bounds_from_state(state),
+        bounds=tool_bounds_from_state(state, {}),
         assets=assets,
         connector=Recorder(),
         corpus=for_analyst([table, suspect]),
@@ -904,3 +949,49 @@ def test_sample_rows_cannot_escape_its_identifier() -> None:
     assert tables == {'"sales"."customers"'}, tables
     columns = {c.name for c in tree.find_all(sqlglot.exp.Column)}
     assert columns == {evil}, columns
+
+
+def test_only_one_clarification_may_be_outstanding_per_turn() -> None:
+    """A second ``ask_user`` in one assistant message is refused, not queued.
+
+    **The bug it closes.** LangGraph dispatches one ``Send`` per pending tool call, so two
+    ``ask_user`` calls in one message both interrupt. The surfacing order is a race,
+    ``_clarification`` returns the first interrupt, and ``Command(resume=...)`` always lands on
+    the first tool call — so the user is shown "which region?", answers it, and the answer is
+    recorded against, and handed to the model as, "which year?". The resume surface carries no
+    way to say *which* question is being answered, so the fix has to be that only one is ever
+    outstanding.
+
+    Both calls share one ``build_tools`` closure, which is what makes a latch work. The check
+    and the set have no ``await`` between them, so two concurrent ``Send``s cannot both pass.
+    """
+    import asyncio
+
+    ask = _tools()["ask_user"]
+
+    async def _both() -> tuple[Any, Any]:
+        # `basis` is required in this fork; it routes the answer, not the pause.
+        call = lambda q, c: ask.coroutine(  # noqa: E731
+            question=q, runtime=_runtime(c), basis="data_definition"
+        )
+        first = asyncio.create_task(call("which region?", "c1"))
+        second = asyncio.create_task(call("which year?", "c2"))
+        done, pending = await asyncio.wait({first, second}, timeout=5)
+        for task in pending:
+            task.cancel()
+        return done, {first: "first", second: "second"}
+
+    done, _ = asyncio.run(_both())
+
+    # Exactly one of the two returned. The other raised `GraphInterrupt` (it paused) or is still
+    # pending; either way it did not produce a second question for the user to answer.
+    replies = []
+    for task in done:
+        try:
+            replies.append(task.result())
+        except BaseException:  # noqa: BLE001 — GraphInterrupt is the paused call, not a failure
+            pass
+    assert len(replies) == 1, "exactly one ask_user should return a refusal without pausing"
+    text = replies[0].update["messages"][0].content
+    assert "one clarifying question" in text.lower()
+    assert "already has one" in text.lower()

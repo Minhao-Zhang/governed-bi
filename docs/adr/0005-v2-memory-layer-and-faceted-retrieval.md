@@ -10,7 +10,7 @@
   [ADR 0006](0006-execution-time-governance.md)** and is a hard dependency of
   this one.
 - **Related:**
-  - **[lessons-from-v1.md](../lessons-from-v1.md)** — what v1's failures cost.
+  - **`lessons-from-v1.md` (deleted with v1)** — what v1's failures cost.
     Cited below as **L§n** (thematic section) and **L-R#** (the five top-level
     rules). Read it before writing v2 code.
   - [0002](0002-governed-agentic-serve-runtime.md) — the agentic serve core.
@@ -22,6 +22,25 @@
 - **Supersedes:** ADR 0003 in full (`NoteAsset`, `NoteKind`, `NoteActivation`,
   `NormativeForce`, `Trigger`/PIN, the "tri-modal" framing); the `RVGD` name;
   the `description` field name.
+
+> **Status note, re-checked 2026-08-12.** *The Status line above is the
+> 2026-08-03 reading and is left as written; it now understates what shipped.*
+> `retrieve/`, `serve/` and `eval/` have all landed, and the `v2` branch has been merged
+> into `main` and deleted — `src/governed_bi/retrieve/` (index, lexical, semantic, fuse,
+> route, resolve, connect, structure, vectors), `src/governed_bi/serve/` (the §3.1 graph,
+> plus six nodes §3.1 does not list) and `src/governed_bi/eval/`.
+>
+> **Curator is still absent from `src/`, and "absent" no longer means "nothing rebuilds
+> the corpus".** `tools/corpus_rebuild/01_structure.py`, `02_joins.py` and `03_few_shots.py`
+> write the *mechanical* half — ids, structure, join edges — leaving every summary as a
+> `TODO <identifier>` marker; `04`–`06` stage evidence, BIRD docs and sampled values for a
+> writing agent and produce no assets. Nothing in the package imports them and the prose
+> half has no producer here at all, which is the precise sense in which the corpus is
+> versioned but not rebuildable.
+>
+> The §3.1 topology has drifted from `serve/graph.py`. See the topology note there —
+> it is the discrepancy most likely to mislead, because three shipped nodes run between
+> `assemble` and `stamp` that the diagram does not draw.
 
 ---
 
@@ -35,7 +54,7 @@ one actor: the curator agent, which on 6 of 57 schemas wrote nothing at all.
 
 ### The evidence, condensed
 
-Full detail and provenance in [lessons-from-v1.md](../lessons-from-v1.md).
+Full detail and provenance in `lessons-from-v1.md` (deleted with v1).
 Figures from `runs/datalake/20260731T233457Z-opus48-high-ladder/20260731T233545Z`
 (57 schemas, 1,351 questions/arm, 5,404 rows) unless another artifact is named.
 
@@ -313,11 +332,11 @@ filter clause, i.e. part of the definition). Content goes to `body`.
 
 #### 1.5 Tiers, governance, and the model-authored surface
 
-The tier model is **three tiers plus Governance**: Facts, Inference, Audit
-(`corpus/schemas.py:8-10`), with `Governance` "outside the three tiers" (`:227`).
-Note the overload — `Governance` and `Audit` are both tier names and class
-names. Tiers answer "who said this"; `summary`/`body` answers "which pipeline
-does this text enter". Orthogonal.
+The tier model is **three tiers plus Governance**: Facts, Inference, Audit — tabulated in
+[`docs/corpus-format.md`](../corpus-format.md), with `corpus/schema.py::Governance` still
+carrying the "outside the three tiers (D6)" clause in its docstring. Note the overload —
+`Governance` and `Audit` are both tier names and class names. Tiers answer "who said
+this"; `summary`/`body` answers "which pipeline does this text enter". Orthogonal.
 
 **`governance` moves into the common shape.** In v1 only `TableAsset` and
 `Column` carried it, so the five types now entering the index had **no D6
@@ -400,7 +419,7 @@ Three consequences, each replacing a piece of what the sanitizer was doing:
 | what the sanitizer was for | where it actually belongs |
 |---|---|
 | prose that reads like an instruction to the model | **nowhere.** Governance is topology (ADR 0002): a fully persuaded analyst still reaches the database only through `check()`, so the worst case is a wrong answer, not an exfiltration. A bounded phrase list cannot beat a paraphrase anyway |
-| PII or secrets in corpus text | a different layer already: `register/record.py`'s `Redaction` column for the durable sink, and the routing index's exclusion of governance-excluded columns (ADR 0006 B10) |
+| PII or secrets in corpus text | the routing index's exclusion of governance-excluded columns (ADR 0006 B10), and `check()`'s COLUMNS layer at execution time. **Not** the durable sink: the record schema has no redaction column, and ADR 0006 §11 says the log is verbatim by design — a local-first tool writing the user's own transcript to the user's own disk |
 | a newline escaping a field's indentation and opening a top-level prompt section | **render time**, in `serve/context.py`, as **lossless escaping** — done where the prompt format is known and reversible, not as a lossy edit in the store |
 
 **What is kept, with its reason corrected.** Identifier fields that become path
@@ -489,8 +508,17 @@ channels, G is a post-retrieval step, D is a facet).
 #### 2.2 The unified index
 
 **One index. One entry per asset. Each entry is that asset's `summary`, ≤250
-chars.** At 57 schemas: 57 schema + 656 table + 5,947 column + 875 join + 1,050
-metric + 523 term + 582 few_shot ≈ **9,690 entries**.
+chars.** Sized at decision time from the v1 corpus: 57 schema + 656 table + 5,947 column +
+875 join + 1,050 metric + 523 term + 582 few_shot ≈ **9,690 entries**.
+
+> **Measured on the shipped corpus** (`../BIRD-corpus` at `30872d3b`, 57 schemas):
+> **13,304 entries** — 57 schema, 656 table, 5,947 column, 706 join, 478 metric, 603 term,
+> 4,857 few_shot, 0 negative_example. The design estimate and this are not the same corpus
+> and do not compare; the rebuild of 2026-08-09 is the treatment identity every current
+> number is measured against. The two counts that moved most are `few_shot` (582 → 4,857)
+> and `metric` (1,050 → 478), so any argument below that turns on a *ratio* — §2.5's "the
+> `term` facet is 523 of 9,690 entries" is the one — should be re-derived before it is
+> leaned on.
 
 What this buys:
 
@@ -572,6 +600,15 @@ co-running one. Also required (all L§2):
 | `entity` | LLM extraction | `ColumnAsset`, `TableAsset`, `JoinAsset` | ✓ | ✓ | yes |
 | `example` | raw question | `FewShotAsset` | ✗ | ✓ | no |
 
+> **Amended by [ADR 0011](0011-two-model-split-and-facet-query-rewriting.md).** The `model`
+> column now reads **yes for four facets, no for `schema`** — not three and two.
+> `register/facets.py::FACET_EXTRACTS` holds `term`, `metric`, `entity` and `example`;
+> `facet_schema` is deliberately absent because rewriting bought nothing measurable there,
+> and its prompt stays in `PROMPT_REGISTRY` as an unsent baseline. So `example` no longer
+> queries from the raw question. The channel columns are unchanged
+> (`register/facets.py::FACET_CHANNELS` matches this table exactly), and so is the reason
+> below.
+
 `example` skips `lexical` because term-frequency matching between two
 natural-language questions rewards shared function words.
 
@@ -582,12 +619,17 @@ arrive together ("which customers have the highest order amount" is a customer
 table, an order table, an amount column and the join between them, as one
 thought). Splitting produces three highly overlapping extraction calls.
 
-**Each extracted phrase is its own query.** `["客户", "订单", "金额"]` runs three
+**A phrase list would be one query each.** `["customer", "order", "amount"]` would run three
 retrievals: concatenation looks for one asset containing all three words
 (usually nonexistent), separate queries find the customer table, the order table
-and the amount column. **`max_queries_per_facet = 8`** — extraction is
-model-controlled and an unbounded phrase list is an unbounded network fan-out
-(v1's analogue: the 40-pair slice that "was never a size bound either").
+and the amount column. What ships instead is one rewritten string per facet
+(ADR 0011 §7), so `queries` holds exactly one element and there is **no
+`max_queries_per_facet` bound** — a knob bounding a fan-out the code does not have
+is a comparability key describing nothing, and it was deleted rather than wired
+(`tests/serve/test_comparability_knobs.py`). If extraction ever returns a list,
+the bound comes back with it: extraction is model-controlled and an unbounded
+phrase list is an unbounded network fan-out (v1's analogue: the 40-pair slice that
+"was never a size bound either").
 
 **Extraction is a better query, not a replacement for retrieval.** Phrases go
 into the same hybrid index, never into a lookup — if the model extracts
@@ -669,8 +711,8 @@ hybrid   = Σ w_c · score_c  over active,  ÷  Σ w_c  over active
 **Renormalising by active weight is required, not cosmetic.** Without it the
 `example` facet — single-channel by design — would max out at 0.5 while every
 other facet maxes at 1.0, so few-shot evidence would vote at half strength by
-accident. Defaults `w_lex = w_sem = 0.5`, so a two-channel facet is unchanged
-and a single-channel facet is scaled to the same range.
+accident. Defaults `w_lexical = w_semantic = 0.5` (`register/knobs.py`), so a two-channel
+facet is unchanged and a single-channel facet is scaled to the same range.
 
 **RRF is not used.** It encodes rank only, discarding similarity, and `negative`
 needs an absolute threshold.
@@ -706,9 +748,10 @@ queries.
 ```
 
 **"top-50 per query" means within the facet's target types.** A global top-50
-then filtered would give the `term` facet (523 of 9,690 entries) an empty result
-on most queries. Type scoping is a filter applied to one index, not a second
-index: the postings are shared, **IDF stays global**.
+then filtered would give the `term` facet (523 of 9,690 entries at design time; 603 of
+13,304 on the shipped corpus — §2.2) an empty result on most queries. Type scoping is a
+filter applied to one index, not a second index: the postings are shared, **IDF stays
+global**.
 
 **Pass two uses global IDF.** Draft 2 proposed recomputing IDF over the selected
 schemas, on the reasoning that discriminating 73 sibling tables needs
@@ -912,13 +955,14 @@ exactly as above.
 *Added 2026-08-03, because none of the above was reachable.*
 
 `resolve` and `connect` are both total functions of data neither of them has.
-`serve/state.py` declares five inputs for them — `join_edges`, `references`,
+On 2026-08-03 `serve/state.py` declared five inputs for them — `join_edges`, `references`,
 `asset_types`, `table_schemas`, `schema_tags` — under the comment *"F1 test /
-wiring hooks (optional)"*, and **all five are read and none is ever written**, by
-`src/`, by `tests/`, or by the eval harness. So `connect` runs on an empty edge
-set on every turn that has ever executed, and declines `missing_join_path`
-whenever a turn licenses more than one table. Single-table turns answer, which is
-why a green suite and a live eval both missed it.
+wiring hooks (optional)"*, and **all five were read and none was ever written**, by
+`src/`, by `tests/`, or by the eval harness. So `connect` ran on an empty edge
+set on every turn that had ever executed, and declined `missing_join_path`
+whenever a turn licensed more than one table. Single-table turns answered, which is
+why a green suite and a live eval both missed it. **The five keys are gone from
+`serve/state.py`; what replaced them is below and in §2.8.2.2.**
 
 These five are not five hooks. They are **one projection of the asset set**, they
 are pure functions of it, and they hold no per-turn information. So:
@@ -929,8 +973,10 @@ are pure functions of it, and they hold no per-turn information. So:
   the same one: recomputing per turn is not merely waste, it is a place where two
   turns can disagree about the shape of the corpus.
 - **It is carried on `configurable` next to `index`**, and `connect_node` gains a
-  `config` parameter. It has none today (`wrap.py` forwards `RunnableConfig` only
-  to nodes that declare it), which is *why* the hook shape was reached for.
+  `config` parameter. It had none when this was written (`wrap.py` forwards
+  `RunnableConfig` only to nodes that declare it), which is *why* the hook shape was
+  reached for. Both shipped: `Session.configurable()` writes `structure`, and
+  `route_node` / `resolve_node` / `connect_node` all take `config`.
 - **It returns `(structure, problems)`**, per the loader's rule: a corpus that
   lost half its edges must not be indistinguishable from a corpus that is small.
 
@@ -956,10 +1002,13 @@ problem: an unresolvable endpoint is a curation defect, and it must surface wher
 the corpus is built rather than as a decline three layers away.
 
 **`table_id` must become a declared function.** `derive_column_id` and `join_id`
-are singletons in `corpus/identity.py`; the table id is a bare f-string at
+were singletons in `corpus/identity.py` while the table id was a bare f-string in
 `corpus/seed.py`. The reconciliation above depends on that convention, so a second
 hand-written copy of it is the two-`LOW_CONFIDENCE_JOIN`-constants defect in the
-one place that would silently mis-license a table.
+one place that would silently mis-license a table. **Done:**
+`corpus/identity.py::table_id` is now the single spelling, shared by the seed, join
+reconciliation and licensed lookups, and it folds the physical name through
+`corpus/identity.py::slug` (ADR 0008 D1) rather than interpolating it raw.
 
 ##### 2.8.2.1 Three rules the build had to settle, added after implementing it
 
@@ -1151,6 +1200,57 @@ START
  END
 ```
 
+> **Topology note, re-checked 2026-08-12.** *The diagram is left as decided.
+> [`serve/graph.py`](../../src/governed_bi/serve/graph.py) is the authority for what
+> runs; `docs/architecture.md` is the living version of this picture.* Six nodes are
+> missing from the drawing above, and the first three are the ones that matter:
+>
+> ```
+> [assemble] → [abstain] → [agent_core] ⇄ [tools] → [reflect] → [narrate] → [stamp]
+> ```
+>
+> - **`abstain`** — [ADR 0013](0013-the-declared-abstention-policy.md)'s declared
+>   abstention policy, added after this note's first version. It is the fourth node with
+>   an edge to `[decline]`, alongside `guard`→`[refuse]`, `negative_gate`, `route` and
+>   `connect`. It writes the decline through `path_kind` exactly as `route` and `connect`
+>   do, so there is one answer to "did this turn end here" rather than a second channel
+>   the edge would have to agree with. Off by default (`abstention_policy_enabled`
+>   defaults `False`), in which case it writes a `disabled` verdict, no `path_kind`, and
+>   the edge falls through to `agent_core` — which is exactly what the drawn
+>   `assemble → agent_core` edge did before it existed. Registered `stream=False` and
+>   with no timeout: it is a pure function of state with no model call.
+> - **`reflect`** — a post-hoc observer asking whether the SQL this turn produced
+>   answered the question. It **changes no control flow at all**: never `path_kind`,
+>   never `terminal_reason`, never `answer`. Its edge to `narrate` is plain rather
+>   than conditional precisely so that no edge can read its verdict. It ships
+>   **disabled** (`reflect_enabled` defaults `False`, and no production path wires a
+>   `reflect_model`), returning `{}` before reading anything but the knob; registered
+>   with `stream=False` so a disabled observer adds no timeline rows. It calls a model
+>   only when enabled.
+> - **`narrate`** — writes `answer_text`, which is what the answer card reads.
+>   **Usually calls no model:** the normal path adopts the agent's own prose, and the
+>   model runs only on the remainder, where the loop ended with no text to adopt. A
+>   no-op on `refuse` / `decline` / `crashed`, whose wording is system copy. It
+>   swallows its own failures, because a narrator timeout must not mark an
+>   already-answered turn `crashed`.
+> - **`accept`** (optional, before `guard`) — present only when `build_graph` is
+>   passed one, which is the client-facing path. That argument is also the trust
+>   boundary: with it the graph is compiled with `ServeInput`/`ServeOutput` schemas.
+> - **`fanout`** — the five facets hang off a real passthrough node, not the implicit
+>   edge drawn above. It reports stage `facet_schema`, not `fanout`.
+> - **`record`** (optional, after `stamp`) — the audit-log append, when `build_graph`
+>   is passed one. `stamp → END` otherwise.
+>
+> Two consequences for §3.3 below, which lists neither new node: its node-contract
+> table is missing `reflect` and `narrate` rows, and **its model-entry-point count is
+> understated** — `reflect` (when enabled) and `narrate` (on the no-prose remainder)
+> both call a model. Separately, §3.3's `guard` row reads "**no** — rules (ADR 0006)",
+> but `guard` has a sixth, model-backed gate: the five deterministic rules run first
+> and free, and a question that clears them is then asked *is this a BI question at
+> all?* on the **utility** model (`serve/nodes/guard.py::_bi_scope`, gated by
+> `policy.guard_rule_enabled(BI_SCOPE_RULE_ID)`; enabled-with-no-model records
+> `error_failed_open`, never `clear`).
+
 **Every terminal path funnels through `[stamp]`**, the only node that writes
 `answer`, because §4.1's contract is one question in, one `Answer` out. A
 refusal path that bypasses it hands eval `None` — the same class of defect as
@@ -1163,10 +1263,14 @@ the graph. So: **every node is wrapped, exceptions write
 `failure: NodeFailure` and route to `[stamp]`**, which stamps
 `Outcome.crashed` with the failing `Stage`. That is a §4.3 enum precondition.
 
-**Why the gates precede fan-out.** Neither calls a model — `guard` is
-deterministic rules, `negative_gate` one vector lookup (~10 ms). 10 ms to skip
-four model calls is net positive on a hit, nearly free on a miss. **If `guard`
-ever needs a model it becomes a sixth facet.**
+**Why the gates precede fan-out.** They are cheap relative to what they skip:
+`negative_gate` is one vector lookup (~10 ms), and `guard`'s five deterministic rules
+are free. 10 ms to skip four rewrite calls is net positive on a hit, nearly free on a
+miss. **`guard`'s sixth rule, `g_bi_scope`, does call a model** — one word on the
+utility model, run only after the free rules clear — so the gate row is not free in
+the way this paragraph's arithmetic assumes; it stays in front of fan-out because a
+question that is not a BI question at all should not pay for five facets, and because
+a refusal the model decides is still one call against four.
 
 **Why `guard` precedes `rewrite`.** This turn's input is the only new input;
 history was guarded in its own turn. **Known gap:** history contains the
@@ -1174,12 +1278,17 @@ system's own answers, which contain data read from the database, so indirect
 injection bypasses `guard` and can be pulled into the rewritten question. Larger
 than this layer; recorded, not solved. ADR 0006 owns the rule set.
 
-**Clarification needs no extra machinery.** `ask_user` → `interrupt` → resume
-continues **from the interrupt point**, so the front half does not re-run and
-the answer completes the current turn. **The resume must be bound to
-`identity`** and reject a mismatch — v1's process-global checkpointer let a
-guessable `thread_id` land on another caller's paused clarification, which
-embeds their question. Namespacing is a mitigation, not authentication.
+**Clarification needs no extra machinery.** `ask_user` → `interrupt` →
+`Command(resume=…)`. On resume LangGraph **restarts the interrupted node from the
+beginning** (and the outer `agent_core` body re-runs); side effects before
+`interrupt()` must be idempotent. Sibling tool `Send`s that already completed do
+not re-run (probed on langgraph 1.2.10). The pause itself is never stamped —
+`Outcome.clarification` is transport-level (`__interrupt__` / HTTP), not a
+register path. **The resume must be bound to `identity`** on the REST path and
+reject a mismatch — v1's process-global checkpointer let a guessable
+`thread_id` land on another caller's paused clarification, which embeds their
+question. The primary UI stream path bypasses that gate by design (ADR 0007 §6);
+namespacing is a mitigation, not authentication.
 
 **LangGraph mechanics:**
 
@@ -1215,7 +1324,7 @@ embeds their question. Namespacing is a mitigation, not authentication.
 class ServeState(TypedDict):
     question: str
     thread_id: str
-    identity: Identity              # gateway/gateway.py — provenance, NOT enforcement
+    identity: Identity              # provenance, NOT enforcement (ADR 0006 §10)
 
     guard: GuardVerdict             # total; written on every turn
     rewrite: RewriteResult | None   # None = node did not run (first turn)
@@ -1272,7 +1381,7 @@ class RewriteResult(TypedDict):
 
 class FacetResult(TypedDict):
     facet: Stage                    # one of FACET_STAGES
-    queries: list[str]              # ≤ max_queries_per_facet
+    queries: list[str]              # the text actually searched; one element
     hits: list[Hit]                 # deduped within the facet
     channels: dict[str, ChannelState]   # extraction / lexical / semantic
                                         # degradation = differs from
@@ -1335,7 +1444,7 @@ wired up — *"half this repo's defects have that shape."*
 | `guard` | `question` | `guard` | **no** — rules (ADR 0006) |
 | `rewrite` | `question`, `messages` | `rewrite` | yes (small), only with prior turns |
 | `negative_gate` | effective question | `negative` | no |
-| `facet:*` ×5 | effective question | `facets[name]` | 3 of 5, small model |
+| `facet:*` ×5 | effective question | `facets[name]` | 4 of 5, utility model — `facet_schema` searches the raw question and calls nothing (ADR 0011) |
 | `route` | `facets` | `schemas`, `retrieved` | no |
 | `resolve` | `retrieved` | `retrieved` | no |
 | `connect` | `retrieved` | `retrieved`, `crossings` | no |
@@ -1344,10 +1453,23 @@ wired up — *"half this repo's defects have that shape."*
 | `refuse` / `decline` | `guard` / `negative` / route / connect reason | `messages` | no |
 | `stamp` | all | `answer` | no |
 
+> **Status note, re-checked 2026-08-12.** Left as decided; four rows of this
+> section are stale, and §3.1's topology note carries the detail. In short: the table
+> is missing **`abstain`** (reads `retrieved`, `licensed`, `schemas`, `delivery` and the
+> knob; writes `abstention`, plus `path_kind` and `terminal_reason` when it withholds;
+> model **no**; ships disabled),
+> **`reflect`** (reads the ledger + result, writes `reflect_verdict`, model **yes**
+> when enabled — ships disabled, and routes nothing) and **`narrate`** (reads
+> `messages` + `result_table`, writes `answer_text`, model **only** when there is no
+> agent prose to adopt); and the `guard` row's "**no**" covers the five deterministic
+> rules but not the sixth BI-scope gate, which calls the utility model. The
+> "everything else is deterministic" claim below is unaffected: `abstain` is a pure
+> function of state, and it is the one *new* node that can end a turn.
+
 "Effective question" = `rewrite.after` when rewriting succeeded, else
 `question`.
 
-**Four model entry points:** three extracting facets, `rewrite` (conditional),
+**Six model entry points:** four extracting facets, `rewrite` (conditional),
 and the main loop. Everything else is deterministic and testable without a
 model — which is what makes steps 6–9 cheap.
 
@@ -1455,9 +1577,14 @@ to its own new tool: **"a tool that grants privilege must have a bound the model
 cannot widen."**
 
 `read_body` takes a list to avoid round-trips; **total return capped at ~20k
-tokens** — past ~80 KB the deep-agent middleware evicts a tool result to a file
-and returns a preview, so one read silently becomes several turns out of the
-step budget. `inspect_schema` and `sample_rows` carry their own caps.
+tokens** — the threshold was chosen against Deep Agents' filesystem middleware, which
+evicts a tool result past ~80 KB to a file and returns a preview, so one read silently
+becomes several turns out of the step budget. **That middleware is not in this tree** —
+`deepagents` is retired, not deferred, and `pyproject.toml` carries the reasoning — so the
+cap is now a bound on prompt cost and nothing else. It is enforced in characters:
+`serve/fetch.py::read_body_cap` reads `read_body_max_tokens` and multiplies by four,
+defaulting to 80,000 characters when the knob is absent. `inspect_schema` and `sample_rows`
+carry their own caps (`serve/fetch.py::SAMPLE_ROWS_MAX_VALUES` is 20).
 
 `search_corpus` is deleted. The bet is that five facets plus two-pass retrieval
 recall better than v1's single pass plus agent self-rescue. **Measure it:** in
@@ -1632,9 +1759,17 @@ facet_degradation_rate      == 0      over the arm, AND the count of turns
 negative error_failed_open  == 0
 guardrail_errors            == 0      ADR 0006 §12
 crash_rate                  == 0
-context_hash distinct across arms on ≥ 95% of shared questions
+context_hash recorded by both arms on every shared question
+knobs_resolved  declared treatment moved, no other comparability knob did
 every register key non-absent
 ```
+
+**Amended 2026-08-11 (audit D9).** The `context_hash` line read "distinct across arms on ≥ 95%
+of shared questions" and was the treatment test. It was not one: retrieval is nondeterministic,
+so the hashes differ whether or not the treatment did, and the gate passed at 0.9993 on a pair
+differing only by a random seed. It is now an existence check, and the treatment judgement is
+`eval/report.py::knobs_comparable`, which reads the treatment the caller declares in
+`arms.toml`.
 
 **The delivery gate is on `context_hash`, not `delivery_hash`.**
 `delivery_hash` includes tool-fetched bodies, so it depends on which
@@ -1677,27 +1812,36 @@ equality.
 
 #### 4.2 `api ↔ frontend`
 
-The sibling repo `../governed-bi-ui` is not rewritten, but four payload changes
-reach it and **three are breaking**:
+The frontend was not rewritten, but four payload changes reached it and **three were
+breaking**:
 
-1. **`Answer.provenance` carries `normative_force`** and the UI reads it
-   (`components/chat/step-row.tsx:415`). Deleting `NoteAsset` empties a rendered
-   chat section.
-2. **`/columns/{id}/related`'s `rules` array is sourced only from notes**
-   (`viz/presenter.py:751-761`) and becomes permanently empty.
-3. **`/knowledge-graph`'s `kind` is a strict client-side `z.enum`**
-   (`lib/schemas.ts:137-145`) and `parse()` throws — a new `schema` kind
-   **hard-fails the whole graph page** rather than degrading.
-4. **`/corpus/assets` already ships a field named `summary`** — a synthesized
-   display one-liner. After v2 the name means the ≤250-char indexed field.
+1. **`Answer.provenance` carried `normative_force`** and the v1 UI read it. Deleting
+   `NoteAsset` empties a rendered chat section.
+2. **`/columns/{id}/related`'s `rules` array was sourced only from notes** and becomes
+   permanently empty.
+3. **`/knowledge-graph`'s `kind` was a strict client-side `z.enum`** and `parse()` throws —
+   a new `schema` kind **hard-fails the whole graph page** rather than degrading.
+4. **`/corpus/assets` already shipped a field named `summary`** — a synthesized display
+   one-liner. After v2 the name means the ≤250-char indexed field.
 
-Also: only 2 of the 9 read routes carry `description` at all, and `body` is
-exposed by none — a schema browser that showed documentation would start showing
-a retrieval artifact.
+Also: only 2 of the 9 read routes carried `description` at all, and `body` was exposed by
+none — a schema browser that showed documentation would start showing a retrieval artifact.
 
-**These are deliverables, not observations.** UI edits are a numbered step in
-the implementation order: add `body` to the read routes, widen the graph-kind
-enum, replace the notes-sourced `rules` array, rename the display field.
+**These were deliverables. Three of the four were delivered.** `normative_force`
+appears nowhere in `ui/`; `browse_routes.py` sources `rules` from `table.rules` and serves
+`description` as `body` falling back to `summary`. The record stays because
+item 4 is the reason `summary` means two things in git history.
+
+**Item 3 was closed from the producer's end, not the consumer's, and the enum is still
+frozen.** `ui/lib/schemas.ts::graphNodeKindSchema` is a `z.enum` of seven literals, exactly
+as it was. What changed is that `api/routes.py::_SEMANTIC_NODE_KINDS` is the same seven
+literals on the server, and `_knowledge_payload` filters every node through it — so
+`/knowledge-graph` cannot emit a `schema` node and `parse()` cannot throw. Two consequences
+a reader should not have to rediscover. `SchemaAsset` is invisible on that page, which is a
+product decision nobody wrote down. And **both sets still carry `note`**, an asset type
+§1.4 deleted: it is unreachable from either side and is the kind of leftover that reads as
+a supported case. The fix item 3 actually asked for — one vocabulary, derived from
+`register.assets`, on both sides of the wire — is still owed.
 
 #### 4.3 `Stage` taxonomy
 
@@ -1745,11 +1889,21 @@ and **its §§1–5 land before the serve graph**, not after.
 ### 5. Defaults
 
 Starting values chosen to be measurable, not results. **This table plus ADR
-0006 §13 together are the knob register** — the manifest, the comparability keys
-and the serve config hash are derived from the union, so a new knob joins the
+0006 §13 are the knob register as designed** — the manifest, the comparability keys
+and the serve config hash are derived from it, so a new knob joins the
 gate by default and two runs with different *security* configuration cannot hash
 identically. No knob is settable only from an eval CLI (v1 benchmarked a routing
 configuration no deployment could run).
+
+> **The register in force is `register/knobs.py::KNOB_REGISTER`, and it is larger than
+> these two tables.** 57 knobs, of which 47 carry `Role.comparability` and therefore enter
+> `comparability_keys()` and the config hash; the rest are `Role.operational` (git sha,
+> worker counts) and `Role.scope` (arms, split, question subset). The two ADR tables name
+> the retrieval and security defaults *decided here*; everything the code has grown since —
+> the model, provider, timeout and retry knobs, `prompt_set`, `agent_recursion_limit`,
+> `semantic_scale_ceiling`, `reflect_enabled`, `abstention_policy_enabled`, `access_grant` —
+> is declared there and nowhere else. Read the module, not the tables, when the question is
+> "what is in the hash".
 
 > §4.1's *record* register and this *knob* register are different things: one
 > declares what every turn records, the other what the run was configured with.
@@ -1760,12 +1914,11 @@ configuration no deployment could run).
 |---|---|---|
 | `summary_max_chars` | 250 | Pydantic; over-length is an error, never truncation |
 | `summary_min_chars` | 1 | blank documents are a live provider hazard |
-| `max_queries_per_facet` | 8 | extraction is model-controlled |
 | `candidate_depth` | 50 per query, within target types | calibration: route recall@3 vs depth |
 | `route_top_n` | 3 | |
 | facet weights | all 1.0 | `schema` arguably deserves more; no data |
-| `w_lex` / `w_sem` | 0.5 / 0.5 | renormalised by active channels |
-| `lexical_saturation_k` | **unset** | fit once against the corpus BM25 distribution, then **frozen across arms** — a per-arm fit would make `lexical` incomparable |
+| `w_lexical` / `w_semantic` | 0.5 / 0.5 | renormalised by active channels |
+| `lexical_saturation_k` | 1.2 | declared at the value every run has used, and **frozen across arms** — a per-arm fit would make `lexical` incomparable. Still unfitted against the corpus BM25 distribution; `nodes/facets.py` scales each channel within its own facet, so `k` no longer decides which channel wins |
 | per-type budgets | declared in `register.assets` beside the types they belong to (schema all · table 8 · column 30 · join 5 · metric 5 · term 5 · few_shot 3 · negative n/a); referenced here as one content-hashed knob so a budget change moves the config hash | after pass two |
 | `max_steiner_points` | 5 | exceed ⇒ decline |
 | `max_crossings` | 2 | exceed ⇒ decline |
@@ -1774,7 +1927,7 @@ configuration no deployment could run).
 | `cache_cost_reduction_target` | 30% over N=200 | §3.4 acceptance; comes from **caching**, not from context reduction — context is only ~14% of input |
 | `context_budget_chars` | 80,000 | **chars, not tokens**; a backstop above v1's observed max of 76,354. Any binding value truncates only the treated arms (§3.6) |
 | facet / rewrite model | small (Haiku-class) | concurrent; latency counts once |
-| `read_body_max_tokens` | ~20k | below the middleware eviction threshold |
+| `read_body_max_tokens` | 20,000 | chosen below Deep Agents' eviction threshold; that middleware is retired here, so the cap is now a prompt-cost bound (§3.5) |
 
 ### 6. Code organisation constraints
 
@@ -1784,7 +1937,7 @@ files over 1,000 lines**.
 | constraint | value |
 |---|---|
 | file length | soft **400**, hard **1000**, CI-enforced. Hard tier raised from 800 on 2026-08-03: Python at this repository's prose density does not fit a coherent unit of work into 800 lines, and the file that forced the question was over by 55 lines of failure messages and preconditions. The cost is stated where the enforcement lives (`tools/check_file_length.py`): 800 caught a file *before* v1's worst shape, 1000 catches it *at* that shape, so the soft tier's printed overrun count is now the early warning rather than a courtesy. `tests/conformance/test_register_closure.py` asserts this row and the constant agree — a limit in a table no process reads is a preference. |
-| one implementation per concept | one import name. v1 had two McNemars (`eval/analysis.py:572` and `eval/power.py:338`, both present at deletion), two temp-then-replace helpers, and two `LOW_CONFIDENCE_JOIN` constants **with different comparison operators** (source: the constant's own comment at `analyst/answer.py:33-48` in `2347ae3^` — `governance.py` used `<`, `viz/presenter.py` declared its own copy and used `<=`). Enforced by `tools/check_one_implementation.py`. *An earlier draft of this row also claimed "two EX definitions"; that could not be sourced — v1 had one `execution_match` in `eval/ex.py`, imported everywhere — and it has been removed.* |
+| one implementation per concept | one import name. v1 had two McNemars (`eval/analysis.py:572` and `eval/power.py:338`, both present at deletion), **three** temp-then-replace helpers (`metrics.write_manifest`, `harness._write_jsonl` and `index.append_run` — commit `0eb23ae`, "three copies of the temp-then-replace dance had grown, and no copy had both halves"), and two `LOW_CONFIDENCE_JOIN` constants **with different comparison operators** (source: the constant's own comment at `analyst/answer.py:33-48` in `2347ae3^` — `governance.py` used `<`, `viz/presenter.py` declared its own copy and used `<=`). Enforced by `tools/check_one_implementation.py`. *An earlier draft of this row also claimed "two EX definitions"; that could not be sourced — v1 had one `execution_match` in `eval/ex.py`, imported everywhere — and it has been removed.* |
 | no hand-maintained field lists | derive from one declared register (§4.1, §5) |
 | no knob reachable only from an eval CLI | |
 | no world-describing literal without a source | artifact path and date, in code and docs |
@@ -1852,11 +2005,11 @@ design** (§4.1).
    within-schema table selection accuracy, global vs subset IDF. Withdrawn from
    the design (§2.5); this is the experiment that could bring it back.
 7. **Is `route` top-3 without an LLM pick better than v1's top-10 with one?**
-   v1 measured shortlist 0.952 / pick 0.873 at top-10 — **106 questions had gold
+   v1 measured shortlist 0.952 / pick 0.873 at top-10 <!-- [retired]: measured on the architecture this ADR replaces; register/citations.py --> — **106 questions had gold
    in the shortlist and the pick chose otherwise, only 3 survived.** The often-
    quoted "~0.85 at top-3" is an **inherited estimate measured on the
    mean-by-concatenation index v2 deletes**, so it is not a v2 property. If
-   measured v2 route recall@3 comes in below v1's pick accuracy of 0.873, revisit
+   measured v2 route recall@3 comes in below v1's pick accuracy of 0.873, revisit <!-- [retired]: that threshold is void, so step 7 is the experiment and not the bar -->
    the picker.
 8. **What is `_SEMANTIC_BOOST` worth?** v1's BM25F field weight expressed this
    project's central thesis — *curator-authored language is the trusted match
@@ -1923,7 +2076,7 @@ what it actually is: the first module of the new system.
 14. **Frontend deltas** (§4.2).
 15. **Eval rewrite**, against the golden from step 5. **Run the free grader
     ceiling first** (`--oracle-only`, no model, ~4 minutes) — it re-scales every
-    downstream conclusion, and v1 spent a long time reading 56.3% against an
+    downstream conclusion, and v1 spent a long time reading 56.3% against an <!-- [retired]: absolute EX through the pre-2026-08-06 grader; the point is the missing denominator -->
     unknown ceiling that turned out to be 99.70%.
 
     **Amended 2026-08-06.** The ceiling needs an *independent* gold to compare
@@ -1938,6 +2091,38 @@ what it actually is: the first module of the new system.
 17. `negative_gate` — blocked on a negative corpus existing.
 
 Steps 4–10 have no model in them.
+
+**Where the order stands (2026-08-12).** Steps 1–4, 8, 9, 10, 13 and 14 have landed as
+written (14 with the exception §4.2 now records). Seven have not, or have not fully, and
+the reasons differ enough that "in progress" would hide them:
+
+- **Step 5 never happened.** There is no row-scoring byte-golden in this tree — no golden
+  artifact, no allowed-diff file, no test that reads one. Step 15's amendment already
+  depends on it ("this step is not done until the golden from step 5 ships fingerprints"),
+  so the oracle ceiling reports *unmeasured* and will keep doing so until step 5 exists.
+- **Step 6 shipped minus one item, deliberately.** The phase-boundary provenance guard was
+  built, had zero callers, and was deleted — §1.5's 2026-08-06 amendment is the record, and
+  `tools/graft_corpus_fields.py`'s outright refusal of `governance` is the control that
+  replaced it. Everything else in the step is in `corpus/schema.py`,
+  `corpus/validate.py`, `corpus/identity.py` and `tools/check_file_length.py`.
+- **Step 7 shipped its summaries and not its samples.** `corpus/seed.py::seed` writes a
+  deterministic `summary` for every asset; it authors no `sample_values`, and there is no
+  profiler to author them — `corpus/introspect.py::Introspection` carries names and types
+  only. The shipped corpus bears this out: 0 of 5,947 `ColumnAsset`s carry a
+  `sample_values` tuple. §1.7's determinism argument is therefore about a producer that
+  does not exist yet; the session setting it requires (`synchronize_seqscans = off`) does
+  exist, on `PostgresConnector`.
+- **Step 11's gate has not been run.** `cache_cost_reduction_target` is declared and has no
+  reader; `tools/check_declared_is_consumed.py` waives it in as many words — *"an acceptance
+  criterion for a measurement that has not been run"* — and flags that its
+  `Role.comparability` is wrong for a knob nothing reads.
+- **Step 12 is the same split ADR 0006's own order records:** `guard` and tool bounds
+  shipped, the red-team corpus does not exist, graded delivery is declared and unwired, and
+  §11's redactor is withdrawn rather than pending. The B1–B10 gate itself is met.
+- **Steps 16 and 17 are untouched and blocked on the same kind of thing.** There is no
+  curator in `src/`; `tools/corpus_rebuild/` writes the mechanical half of the corpus and
+  leaves the prose half as `TODO`. `negative_gate` still ships disabled with
+  `negative_tau` `UNSET`, waiting on a negative corpus.
 
 **A standing rule from L-R5:** the paid ladder is confirmation, never screening.
 MDE is 2.64–3.23pp and the interventions move 1–2pp, so every intervention gets

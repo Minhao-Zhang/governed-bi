@@ -4,7 +4,7 @@
 
 ## Context
 
-The frontend (`../governed-bi-ui`, `main` @ `4ada0cc`) is architecturally complete: LangGraph
+The frontend (`ui/`, then its own repository at `main` @ `4ada0cc`) is architecturally complete: LangGraph
 `useStream` for chat, twelve custom REST routes, an interrupt/clarification flow, a
 provenance drawer and a step timeline. It was built against v1.
 
@@ -14,8 +14,10 @@ still declares `fastapi`, `uvicorn`, `langgraph-cli[inmem]` and pins `langgraph-
 `/threads` and `/runs/stream`; `tools/check_imports.py` still declares an `api` layer. So the
 dependency surface survived the deletion and the code did not.
 
-`docs/openapi.json` is still tracked and is v1's spec for all twelve routes. It is the
-spec-of-record for the rebuild, not a historical artifact.
+`docs/openapi.json` is still tracked and is, at the time of this decision, v1's spec for all
+twelve routes. It is the spec-of-record for the rebuild, not a historical artifact. (It has
+since been rewritten: it carries `"version": "2"` and the fifteen paths the app actually
+mounts, `AnswerResponse` included.)
 
 ## The decisions
 
@@ -25,10 +27,11 @@ spec-of-record for the rebuild, not a historical artifact.
 `ASSISTANT_ID = "serve"` comes from) and `http.app` for the custom routes.
 
 The graph **cannot** be loaded as a bare compiled object. Every node needs live objects on
-`config["configurable"]` — `policy` (a `GovernancePolicy` dataclass, subscripted unguarded at
-`guard.py:21`), `agent_model`, `corpus`, `index`, `structure`, `connector`, `assets_by_id` —
-and LangGraph Server can only put **JSON** in `configurable`. `state.py` already records the
-same constraint for `policy`: *"the checkpointer cannot msgpack the dataclass."*
+`config["configurable"]` — `policy` (a `GovernancePolicy` dataclass, subscripted unguarded in
+`serve/nodes/guard.py::guard_node`), `agent_model`, `corpus`, `index`, `structure`,
+`connector`, `assets_by_id` — and LangGraph Server can only put **JSON** in `configurable`.
+`serve/state.py` records the same constraint for `policy` at its `ServeState` declaration: the
+policy rides `configurable["policy"]` because it is not msgpack-safe.
 
 So `make_graph` builds a `Session` at server start and closes over it. This is the reason
 §2.8.2.2's session seam had to exist before the server could: the server is simply its
@@ -78,12 +81,28 @@ its own ADR.
 > *turn*, not the boundary — and also asserts neither name is in the record register. Bringing
 > the badge back is a deliberate edit to that test.
 >
+> **And it now asserts that it scanned (2026-08-12).** As written it walked `src/`, collected hits
+> and asserted there were none, with nothing checking the walk had reached anything: repointing
+> its root at a path that does not exist scanned zero files and passed green — audit finding D13
+> reintroduced in one of this ADR's two acceptance criteria. It now fails on an empty scan and on
+> a scan far below the engine's size.
+>
+> **`tier` is not banned by name, because it is also a real field property.** `RecordField.tier`
+> off `RECORD_REGISTER` says *why a field is recorded* (`identity` | `treatment` | `decision` |
+> `outcome` | `cost` | `health`) and `/audit/turns/{id}/trace` serialises it per register row;
+> `ui/lib/schemas.ts`'s `auditTraceFieldSchema` documents the distinction from the client side.
+> What §3 forbids is the *reliability* tier v1's `AnswerView` required on the answer card. The
+> test pins the register's single production site by file and text and fails on any second
+> producer of a `"tier"` key under `src/`, so bringing the badge back is still a deliberate edit.
+>
 > `openapi.json`'s `AnswerResponse` was v1's `AnswerView` verbatim, eight required fields the
 > engine produces none of, and is replaced with the shape this section specifies.
 
-Note this is a hard failure today, not a soft one, and it fails in the worst direction:
-`parseAnswer` `safeParse`s and **returns null on mismatch**, so a run completes, no answer
-card renders, and no error appears.
+Note this was a hard failure at the time, not a soft one, and it failed in the worst
+direction: `parseAnswer` `safeParse`s and **returns null on mismatch**, so a run completed, no
+answer card rendered, and no error appeared. The parse is still that shape — `parseAnswer` in
+`ui/lib/stream-messages.ts` — but `answerViewSchema` is now v2's record, so the two sides
+agree.
 
 ### 4. `answer.text` is system copy; the model's answer lives in `messages`
 
@@ -126,7 +145,8 @@ Duplicating the model's text into `answer.text` would create two fields that mus
 apart.** `messagesKey` names a key, not a graph level. LangGraph streams a nested graph's whole
 state under `values|<node>:<task_id>`, and the SDK applies the values of any namespace it does
 not recognise as a subagent — the test is a `tools:` segment, which `agent_core:<task_id>` does
-not have — straight onto *root* state (`@langchain/langgraph-sdk` `dist/ui/manager.js:413`). So
+not have — straight onto *root* state (`@langchain/langgraph-sdk`, the `isSubagentNamespace`
+branch of the `values` handler in `dist/ui/manager.js`). So
 mid-run, `stream.messages` **is the nested agent's message list**, rendered as the root
 transcript. `agent_core` put the delivered context block in that list as a `HumanMessage`, and
 8.6 KB of scaffolding appeared as the user's own chat bubble for the duration of every turn,
@@ -204,17 +224,25 @@ single-operator local tool, and it gets its own decision rather than an improvis
 
 ### 7. `/capabilities` reports what is true, and false is a legitimate answer
 
-It is the UI's **first** request; without it the chat panel pins at a skeleton forever. Nine
-fields, and each is an observation: `has_live_model` iff a model is actually configured,
-`can_stream` true, **`can_edit` false** (the curator is out of scope), `can_clarify` iff the
-`ask_user` tool is bound.
+It is the UI's **first** request; without it the chat panel pins at a skeleton forever. Twelve
+fields, and each is an observation: `environment`, `dialect`, `model`, `has_live_model` iff a
+model is actually configured, `can_stream` true, **`can_edit` false** with `edit_mode: "none"`
+(the curator is out of scope), `can_clarify` iff the `ask_user` tool is bound *and* a model is
+configured — re-decided the next day, and [ADR 0009](0009-browsing-and-filtering-api.md) D12 is
+what `capabilities_for` computes now: `can_stream and agent_model is not None`, because the flag
+is the switch that mounts the prompt and the REST transport has no prompt to mount —
+`can_scope` true, `can_search` false, and the two durability flags
+`checkpoint_durable` / `hitl_survives_process_restart`, both false because pause/resume does not
+survive a process restart on either transport.
 
-Reporting `can_scope` and `can_search` **false** is not a defeat — the UI degrades to the
-flat `/schema` dump and a client-side index, which is four routes we do not have to build to
-get end to end. That is the cheapest honest path.
+Reporting a capability **false** is not a defeat. `can_search` is false and the UI degrades to a
+client-side index over what it already has, which is a route we do not have to build to get end
+to end. Two flags reporting the *server* rather than the mounted client is the failure this
+field set is shaped against — hence `can_clarify` binding to both the tool and the model, and
+hence the durability flags saying what the checkpointer actually does.
 
 Required for the chat path: `/capabilities` plus the graph. Ungated and therefore required
-for the other pages not to error: `/health`, `/schema`, `/corpus/assets`, `/graph`,
+for the other pages not to error: `/health`, `/schema/summary`, `/corpus/assets`, `/graph`,
 `/knowledge-graph` — all cheap projections of the `Session`'s assets and, now that
 `CorpusStructure` exists, the two graph routes are edges plus assets rather than new work.
 
@@ -235,6 +263,46 @@ for the other pages not to error: `/health`, `/schema`, `/corpus/assets`, `/grap
 > liveness probe, and unlike `/health` it deliberately does not touch the session, so it is the
 > one that was always right for that job.
 
+### Amendment 3 (2026-08-13): the transport authenticates nobody
+
+**The original decision said nothing about authentication, and that was the state of the surface
+for nine days.** The 2026-08-10 audit named it — A1, "~82 routes with no authentication", and A7,
+"`/audit/turns` and `/audit/turns/{id}/trace` return every thread's SQL, full records, and an
+absolute log path, unauthenticated". Both were closed on 2026-08-12 by a shared key in
+`GOVERNED_BI_API_KEY`, compared in constant time, required on every route but `GET /livez`. That
+change was never written down here.
+
+**It is now removed, and A1 and A7 are open again as written.** Deleted: `API_KEY_VAR`,
+`API_KEY_HEADER` and `api_key_refusal` from `api/auth.py`; `_require_api_key`, `_OPEN_PATHS` and
+`_cors_headers` from `api/routes.py`. `GET /livez` is no longer a special case, because there is
+no longer a case to be special about. `@auth.authenticate` remains and allows unconditionally.
+
+**Why.** This is a single-operator engine on `127.0.0.1` under `langgraph dev`, and LangGraph
+Studio cannot present a credential on the calls it bootstraps with: measured 2026-08-13, `/info`,
+`/assistants/search` and `/assistants/{id}` arrive with no custom header — the server answered
+*no credential presented* while the key in Studio's connection dialog was correct. A key that
+makes the primary debugging client unusable, on a port that is already loopback-only, was judged
+to cost more than it bought. The maintainer chose reachability over transport auth.
+
+**What that costs, stated rather than dropped.** Anything that can open a socket to the port can
+drive the engine: post a turn, execute governed SQL against the configured database, and read
+`/audit/turns`, which returns every thread's SQL, the full turn records, and an absolute path to
+the log directory on disk. The CORS origin list in `langgraph.json` is the only remaining
+narrowing, and it narrows browsers only. **The port is the boundary.** A deployment that is not
+one operator on loopback needs authentication in front of this engine — see
+[`docs/enterprise-fork.md`](../enterprise-fork.md).
+
+**What survives, and why `langgraph.json` keeps `auth.path`.** `api/auth.py` still holds its
+`Auth()` instance and both `@auth.on` handlers. `threads.update` and `threads.create_run` refuse a
+client-supplied state-writing `command`, which is what keeps audit findings A2, A3 and A4 closed:
+thread state carries `licensed`, the bound the layer stack enforces against, and
+`corpus_content_hash`, the treatment identity every quotability gate reads. Those denials are
+about *what may be written*, not *who is writing*, so removing authentication does not touch them.
+`authenticated_principal()` also survives and still returns the one principal the access seam
+([ADR 0012](0012-access-seam-principal-and-authorization.md)) is asked about — unchanged in
+behaviour, weaker in justification: it was a function of nothing because one shared key could not
+distinguish two callers, and it is a function of nothing now because there is nothing to read.
+
 ## Consequences
 
 - The engine gains `src/governed_bi/api/`, and `tools/check_imports.py`'s already-declared
@@ -243,5 +311,8 @@ for the other pages not to error: `/health`, `/schema`, `/corpus/assets`, `/grap
   clarification flow, provenance drawer and schema pages do not.
 - `docs/openapi.json` must be regenerated from the implementation rather than kept by hand;
   a spec no process checks is the defect this repository keeps rediscovering.
-- Nothing here makes a run quotable. `facet_degraded` is `True` on every turn until the
-  embedder and an extraction model land, and that gate is doing its job.
+- Nothing here makes a run quotable on its own. `facet_degraded` is the gate: it is `True`
+  whenever some facet ran on fewer channels than `FACET_CHANNELS` declares
+  (`measure/degradation.py::facets_degraded`). The embedder and the extraction model are both
+  wired, so a fully configured turn can now clear it, and a `True` names a live failure rather
+  than a missing component.

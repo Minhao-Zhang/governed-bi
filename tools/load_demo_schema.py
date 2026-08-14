@@ -1,36 +1,30 @@
 """Create a small, realistic Postgres schema to serve a corpus over.
 
-**Why this exists.** The end-to-end path needs *a* corpus, and the two things that existed
-were both wrong for it: parcel F's `probe` fixture builds three toy tables and drops them
-again, and the 69 obfuscated BIRD schemas are an eval asset that has to be rebuilt through a
-whole-corpus pipeline with no per-database flag. Neither is "a schema you can ask a question
-about and look at the answer."
+Neither existing option is "a schema you can ask a question about and look at the answer":
+parcel F's `probe` fixture builds three toy tables and drops them again, and the 69 obfuscated
+BIRD schemas rebuild through a whole-corpus pipeline with no per-database flag.
 
-So: seven tables, real foreign keys, a self-join, two tables that share a column name, and a
-few hundred rows. Each of those is here for a reason rather than for realism's sake:
+Seven tables, and each feature earns its place:
 
-* **Foreign keys** are what `corpus/seed.py` turns into `JoinAsset`s, which is the only way
-  `join_edges` gets populated and therefore the only way a multi-table question can be
-  answered at all (ADR 0005 §2.8.2).
-* **A self-join** (`employees.manager_id`) exercises the case §2.8.2.1 settles: excluded from
-  the edge set, kept in the join index.
-* **Two tables sharing a physical column name** across schemas is what makes the endpoint
-  reconciliation's ambiguous branch reachable, and it is the branch where a guess would be a
-  licensing leak rather than a lost edge.
-* **Enough rows to aggregate** — a question whose answer is a single count over three rows
-  cannot distinguish a correct query from several wrong ones.
+* **Foreign keys** become `JoinAsset`s in `corpus/seed.py`, the only way `join_edges` is
+  populated and so the only way a multi-table question is answerable (ADR 0005 §2.8.2).
+* **A self-join** (`employees.manager_id`) exercises §2.8.2.1: out of the edge set, in the index.
+* **Two tables sharing a physical column name** reaches endpoint reconciliation's ambiguous
+  branch, where a guess is a licensing leak rather than a lost edge.
+* **Enough rows to aggregate**: a count over three rows cannot distinguish a correct query from
+  several wrong ones.
 
-Idempotent: drops and recreates its own schema, and nothing else. Never touches a schema it
-did not create.
+Idempotent: drops and recreates the schema named by ``--schema``, CASCADE. Nothing checks that
+this tool created it — the only guard is that the name is alphanumeric-plus-underscore — so the
+prefixed default is what keeps that safe.
 
 Usage::
 
     uv run --frozen python tools/load_demo_schema.py            # default schema name
     uv run --frozen python tools/load_demo_schema.py --schema my_demo
 
-The DSN comes from ``GOVERNED_BI_PG_DSN`` or ``PG_RENAME_DECOY_DSN``, in the environment or
-in the git-ignored ``.env``. It is never printed: it carries credentials, and a tool that
-echoes a DSN on failure is a tool that puts one in a terminal scrollback.
+The DSN comes from ``GOVERNED_BI_PG_DSN`` or ``PG_RENAME_DECOY_DSN``, in the environment or the
+git-ignored ``.env``. Never printed: an echoed DSN is a credential in a scrollback.
 """
 
 from __future__ import annotations
@@ -44,9 +38,8 @@ import sys
 #: The two variables that may carry the DSN, in precedence order.
 DSN_KEYS = ("GOVERNED_BI_PG_DSN", "PG_RENAME_DECOY_DSN")
 
-#: Default schema name. Prefixed so it is obvious this is not production data and obvious
-#: which tool owns it -- an unlabelled `demo` schema in a shared database is one someone
-#: eventually has to guess about.
+#: Default schema name. Prefixed so it is obvious this is not production data and obvious which
+#: tool owns it -- an unlabelled `demo` in a shared database is one someone has to guess about.
 DEFAULT_SCHEMA = "gbi_demo_sales"
 
 DDL = """
@@ -212,8 +205,7 @@ def main() -> int:
                     cur.executemany(f'INSERT INTO "{schema}".{table} VALUES ({placeholders})', data)
             con.commit()
     except Exception as err:  # noqa: BLE001 -- the type and message are the useful part
-        # Deliberately not printing the DSN, only the failure. A tool that echoes a
-        # connection string on error puts a credential in a scrollback.
+        # The failure, never the DSN: an echoed connection string is a credential in a scrollback.
         print(f"{type(err).__name__}: {err}", file=sys.stderr)
         return 1
 

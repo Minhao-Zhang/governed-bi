@@ -25,7 +25,8 @@ warning. Two runs were measured that way before the field name was found. The JS
 `streamSubgraphs`, which is the same name.
 
 **M2 — `stream_subgraphs` is load-bearing for both tokens and tools, and this is the finding
-that matters.** `agent_core` calls `agent.invoke(...)` on a nested `create_agent` graph, so
+that matters.** `agent_core` drives a nested `create_agent` graph with
+`agent.astream(..., stream_mode="values")` (not `invoke`), so
 every model token and every tool call of the turn happens *inside a subgraph*. Measured on one
 question, same graph, same model:
 
@@ -56,13 +57,33 @@ changes.
 
 **M4 — the `blockbuster` reason in `/capabilities` is retired, and the `.env` fix for it never
 worked.** `routes.py` recorded a second reason to keep streaming off: a synchronous engine
-would trip `blockbuster` inside the server's worker. Measured: `blockbuster` is armed only in
-the in-mem run queue (`langgraph_runtime_inmem/queue.py:110`), LangGraph runs sync nodes in an
-executor thread where it does not fire, and a full streamed run against live Postgres
-completed. Separately, `.env` sets `LANGGRAPH_ALLOW_BLOCKING=true` and **the CLI ignores it**:
-`langgraph_api/cli.py:283` patches the variable from the `--allow-blocking` flag and the loop
-below skips any `.env` key already patched ("Don't overwrite"). The variable has never had an
-effect. It is kept as documentation of the escape hatch, with a comment saying so.
+would trip `blockbuster` inside the server's worker. `blockbuster` is armed only in the in-mem
+run queue (`langgraph_runtime_inmem/queue.py:110`), and LangGraph runs a `def` node in an
+executor thread where it does not fire, so the sync nodes are safe and a full streamed run
+against live Postgres completes. `.env` set `LANGGRAPH_ALLOW_BLOCKING=true` and **the CLI
+ignored it**: `langgraph_api/cli.py:283` patches the variable from the `--allow-blocking` flag
+and the loop below skips any `.env` key already patched ("Don't overwrite"). The variable has
+never had an effect, so the assignment is gone; `.env` carries the explanation under its
+"Not set, and why" heading instead of a setting that does nothing.
+
+**Amendment 3 (2026-08-11): "sync nodes are safe" is not "the server is safe", and the gap cost
+the semantic channel.** The five facet nodes are `async def`, so their bodies run on the loop
+rather than in an executor thread, and `_query_vector` embedded the rewritten query with the
+*synchronous* OpenAI client. `blockbuster` raised `BlockingError` on `socket.connect`, the SDK
+retried, its `time.sleep` raised too, and `vector_for_query` swallowed both as
+`semantic: failed`. Four of the five facets were retrieving on BM25 alone on every turn of every
+run served this way. `facet_schema` was the exception, and only because it is the one facet that
+does not rewrite, so it reuses the call-level vector instead of embedding.
+
+Nothing surfaced it because every layer behaved as designed: a degraded channel is not a failed
+turn, so the turn answered; the stage stream reported `semantic channel not wired`, which reads
+like configuration rather than a defect. The measured claim above was true about the nodes it
+tested and false about the server as a whole.
+
+Fixed at the call site with `asyncio.to_thread`, which is the framework's own second
+recommendation and removes a TLS handshake from the event loop regardless of `blockbuster`.
+`--allow-blocking` would have silenced the error and kept the stall, so it is still not needed
+and still not the fix.
 
 **M5 — `updates` mode already exposes every rail, for free.** A streamed run emits one
 `updates` event per node keyed by node name: `accept, guard, rewrite, negative_gate, fanout,
@@ -71,6 +92,94 @@ anything inside `agent_core` beyond `model` / `tools` — and `tools` does not s
 whether governance passed, or what it cost. **That is where the whole latency and the whole
 governance story live**, so custom events are still required; they are required for the agent
 loop specifically, not for the rails.
+
+**M5 re-measured 2026-08-07 against `langgraph` 1.2.10. The conclusion holds; both halves of
+the argument for it were wrong, in opposite directions.**
+
+*"`tools` does not say which tool" is now false.* `stream_mode="tools"` is a real mode with a
+real handler (`pregel/_tools.py`, `StreamToolCallHandler`) attached whenever `"tools"` is in
+the stream modes (`pregel/main.py:3257-3266`). It emits `tool-started` / `tool-output-delta` /
+`tool-finished` / `tool-error`, each carrying `tool_call_id` and — on `tool-started` —
+`tool_name` and the tool's `input` (`_tools.py:155-163`, `164-181`). It fires on LangChain's
+`on_tool_*` callbacks, so it sees the tools inside the nested agent, which is exactly the
+region M5 said nothing could reach. Three separate reasons it is still unusable here, none of
+them the one written above:
+
+1. **It is not in the `StreamMode` Literal** (`langgraph/types.py::StreamMode` lists
+   `values, updates, checkpoints, tasks, debug, messages, custom` and nothing else), so it is
+   an undeclared mode reached only by string.
+2. **It is rejected with HTTP 422 on the non-v2 streaming routes.**
+   `langgraph_api/models/run.py:238-255` intersects the requested modes with
+   `{"tools", "lifecycle"}` and refuses unless the run carries the v2 event-streaming config
+   key, on the stated grounds that v2-shaped events would leak into v1 consumers. Our request
+   (§"The request the client must send") is a v1 request.
+3. **`tool-finished` ships the whole `ToolMessage`.** `StreamToolCallHandler._end`
+   (`pregel/_tools.py`) puts LangChain's `on_tool_end` output on the wire verbatim, and that
+   output is `_format_output(content, artifact, tool_call_id, name, status)` — a `ToolMessage`
+   with the tool's prose in it (`langchain_core/tools/base.py`, the `_format_output` call in
+   `BaseTool.run` and in `BaseTool.arun`). §4 keeps result
+   rows and driver text off the stream; this mode puts them on it. The governance and cost half
+   of M5 stands regardless: no framework mode reports a layer verdict or an attempt number.
+
+*"`updates` already exposes every rail, for free" is misleading, and in the direction that
+would delete the wrong thing.* `updates` is **suppressed for any task whose first write channel
+is `ERROR`** — `map_output_updates` filters those tasks out before it builds a chunk
+(`pregel/_io.py:124-130`, the predicate is line 128). Probed on a two-node graph where the
+second node raises: `tasks` 4 chunks, `debug` 4 chunks, `updates` **1** where a clean run gives
+2. A raising node is visible on every mode except the one M5 proposed to rely on. Three
+consequences for this repo:
+
+- It holds for our rails only because `wrap_node` catches and returns `path_kind="crashed"`
+  as an ordinary update, so the node never writes `ERROR`. `updates` is reporting our error
+  handling, not LangGraph's.
+- It does **not** hold for `stamp` or `record`, the two nodes deliberately left unwrapped
+  (`serve/graph.py`). A crash in the recorder is precisely the event that leaves no other
+  trace, and `updates` is the one channel that would not carry it.
+- `updates` keys on the **node** name, which is not the step vocabulary of §2. `fanout`
+  (added in `serve/graph.py::build_graph`, registered under the *stage* `facet_schema`) and
+  `record` (added in the same function) are node names with no `Stage` member at all, so a client reading
+  `updates` keys as steps gets two names §2 says do not exist.
+
+**M6 — `custom` is the one channel LangGraph strips node identity from, and that single fact
+is why `events.py` exists.** Recorded 2026-08-07, late: this ADR shipped without it, and
+without it the module reads as gratuitous re-derivation of things the framework already says.
+
+The writer installed for `stream_mode="custom"` builds its chunk's namespace as
+`get_config()[CONF][CONFIG_KEY_CHECKPOINT_NS].split(NS_SEP)[:-1]` —
+`pregel/main.py:3285-3296` async, `main.py:2841-2853` sync, the truncation itself at
+`main.py:3292` / `2849`. `CHECKPOINT_NS` ends in the *emitting node's* `node_name:task_id`
+segment, so `[:-1]` drops precisely the node that called the writer. What arrives is
+`(containing_namespace, "custom", payload)` where `payload` is our dict verbatim and **nothing
+is attached to it**.
+
+Every other mode keeps a handle on the producer, even the ones that truncate the same
+namespace the same way:
+
+| mode | where the producer survives |
+| --- | --- |
+| `updates` | the chunk is keyed by node name (`pregel/_io.py:134-171`, `updated.append((task.name, …))`) |
+| `tasks` | `TaskPayload.name` is the node, plus a task `id` (`langgraph/types.py::TaskPayload`) |
+| `messages` | namespace truncated identically (`pregel/_messages.py:141-149`), but the metadata dict travels beside the message and carries `langgraph_node` (`pregel/_algo.py:849`) |
+| `tools` | namespace truncated identically (`pregel/_tools.py:116`), but the payload carries `tool_name` and `tool_call_id` (`_tools.py:155-163`) |
+| `custom` | nothing |
+
+Measured on a nested graph with `subgraphs=True` and `stream_mode=["custom","updates","tasks"]`:
+the emitting node's chunks arrive in the same superstep as
+`ns=('outer_node:<task_id>',) custom {'hello': 'world'}`,
+`ns=('outer_node:<task_id>',) updates {'emitting': {'n': 1}}`, and
+`tasks name='emitting'`. Same node, same namespace; only `custom` cannot name it. The API layer
+inherits the asymmetry rather than repairing it —
+`langgraph_api/event_streaming/session.py:596-612` constructs the `updates` event with
+`node=node` and the `custom` event with no `node` argument at all, and `session.py:627-640`
+does pass one for `tools`.
+
+**So the `kind` / `step` / `id` vocabulary is not re-derivation, it is the only copy.** `step`
+carries the node identity the transport deleted. `kind` (`rail` / `tool` / `final`)
+distinguishes a rail from a tool call from the terminal, which on any other mode the namespace
+depth would have told you. `id` is the correlation handle — `turn_id` for rails,
+`tool_call_id` for tools — standing in for the task `id` that `tasks` supplies for free. Choose
+`custom` and you buy the freedom to say `check`/`blocked`/`r_table_not_licensed` at the price of
+saying *everything* yourself, including who spoke.
 
 ## The decisions
 
@@ -157,11 +266,47 @@ broken in the one direction that is easy to miss, because nothing about it looks
 ### 5. The emitter must never change a turn's outcome
 
 Emission is wrapped so a failure to send cannot fail a turn: a stream event that does not
-arrive is not a governance event that did not happen. `get_stream_writer()` raises
+arrive is not a governance event that did not happen. ~~`get_stream_writer()` raises
 `RuntimeError` outside a runnable context, which is the eval harness and the CLI, and those
-callers must keep working. The cost of swallowing is that a broken emitter is invisible, so
-`tests/test_stream_events.py` asserts the payload builder produces a valid event for every
-stage and status instead of relying on production to notice.
+callers must keep working.~~ The cost of swallowing is that a broken emitter is invisible, so
+`tests/serve/test_stream_events.py` asserts the payload builder produces a valid event for
+every stage and status instead of relying on production to notice.
+
+**The struck sentence is false, corrected 2026-08-07 against the installed `langgraph`
+1.2.10.** It is kept because it is the sentence someone would cite to decide `events.py`'s
+`try/except` is dead code, and it is wrong in the direction that makes deleting the guard look
+safe. The eval harness and `python -m governed_bi.serve` both **run the graph**, so they are
+*inside* a runnable context and nothing raises there. `Pregel.astream` installs a writer
+unconditionally: `"custom"` in the stream modes gets the real one (`pregel/main.py:3283-3296`),
+otherwise a parent's writer is inherited, otherwise the fallback is `def stream_writer(c):
+pass` (`main.py:3300-3303`; the sync twin is `main.py:2841-2860`). `ainvoke` is
+`astream(stream_mode="values")` (`main.py:4013`, `4066-4081`), so `"custom"` is absent and the
+writer discards rather than raising. Probed on this venv: `emit()` under `ainvoke()`,
+`invoke()`, `astream("updates")` and `astream("custom")` all return without raising, and only
+the last one produces a chunk.
+
+The raise happens on one path only — `emit()` with **no graph running at all** — and it comes
+out of `get_config()` (`langgraph/config.py:29`, `"Called get_config outside of a runnable
+context"`), not out of `get_stream_writer`, which is two lines that read the runtime off the
+config and return `runtime.stream_writer` (`config.py:195-196`). That runtime's own default is
+also a no-op (`langgraph/runtime.py:107`, `206`, `288`), so even a partially-configured context
+degrades to silence rather than to an exception.
+
+So the guard stays, for the narrower reason: a unit test or a direct node call that never
+enters Pregel is a caller with no `var_child_runnable_config` set. That is the whole population
+of raising callers this repo has, and it is a test population — which also means the guard is
+buying much less than this section claimed, and the *real* silence on the eval and CLI paths is
+bought by the no-op writer inside LangGraph, not by our `except`.
+
+`emit`'s call sites have grown past §1's three since this was written. Six modules reach it:
+`serve/wrap.py` (every rail), `serve/tools.py` (the tools and the verdicts),
+`serve/nodes/stamp.py` (`final`), `serve/nodes/agent_core.py` (the `cap` row from the
+attempt-cap middleware, with `serve/tools.py`'s backstop behind
+`AttemptBook.cap_recorded`), and `serve/nodes/reflect.py` and `serve/nodes/abstain.py`, the two
+`stream=False` nodes that emit their own single row on the turns where they judged something.
+The last three are the boundaries §1 did not have to name because the nodes did not exist; the
+argument in §1 — one emitter per boundary, and a boundary is somewhere `wrap_node` cannot see —
+is what admits them.
 
 ### 6. `can_stream` is true, and `can_clarify` follows
 
@@ -214,6 +359,7 @@ twice, and a seq-derived id would have shown the same step twice.
 | `resolve` | rail | start, ok, error | `n_pulled_in`, `n_licensed` |
 | `connect` | rail | start, ok, declined, error | `n_crossings`, `n_licensed`, `reason` when declined |
 | `assemble` | rail | start, ok, error | `n_chars` |
+| `abstain` | rail | ok, declined, error | `policy`, `reason` (a `stages.ABSTENTION_REASONS` member when declined, else null). **One row, not a start/resolve pair, and only on turns where the policy ran** — like `reflect` it ships disabled (`abstention_policy_enabled`), and a disabled node putting a start row on every turn would have changed the timeline of every arm measured so far. Unlike `reflect` it *decides*: a `declined` row is followed by `decline` then `stamp`, and `agent_core` never runs. |
 | `agent_core` | rail | start, ok, error | `n_attempts` |
 | `read_body` | tool | start, ok, **blocked**, error | `n_asset_ids`, `error_type` |
 | `inspect_schema` | tool | start, ok, **blocked**, error | `table_id`, `error_type` |
@@ -222,6 +368,7 @@ twice, and a seq-derived id would have shown the same step twice.
 | `execute` | tool | ok, error | `sql`, `sql_sha256`, `row_count`, `truncated`, `n_columns` |
 | `cap` | tool | cap | `cap` |
 | `ask_user` | tool | start, ok, declined | `clarification_id` |
+| `reflect` | rail | ok, error | `verdict` (`answered` / `wrong` / `unsure`, or why it is unmeasured). **One row, not a start/resolve pair, and only on turns where the observer actually judged something** — it ships disabled (`reflect_enabled`), and a disabled observer that still put a start row on every turn would have changed the timeline of every arm measured so far. |
 | `narrate` | rail | start, ok, error | `source` (`narrated` / `none` / `skipped`), `n_chars` |
 | `refuse` | rail | start, refused, error | `terminal_reason` |
 | `decline` | rail | start, declined, error | `terminal_reason` |
@@ -351,10 +498,15 @@ unrecognised `step` as renderable-but-unlabelled rather than as an error.
   `tools/check_imports.py` orders `serve` before `api`. It swallows its own failures — a turn that
   answered is not a turn that failed, and the client already has the answer by then. Verified
   live: the audit count moved 11 → 12 on one streamed turn.
-- The eval harness and `python -m governed_bi.serve` are unaffected: no writer is available
-  outside a server run and emission is a no-op there (§5).
-- Local serving requires no flags. `--allow-blocking` is not needed (M4) and
-  `LANGGRAPH_ALLOW_BLOCKING` in `.env` never worked.
+- The eval harness and `python -m governed_bi.serve` are unaffected: emission is a no-op there.
+  ~~no writer is available outside a server run~~ — corrected 2026-08-07, a writer *is*
+  available on both paths, because both run the graph; it is LangGraph's discarding fallback,
+  installed because neither asks for `"custom"` (§5). The observable behaviour is what this
+  bullet claimed; the mechanism is not, and the difference decides whether `events.py`'s guard
+  is load-bearing.
+- Local serving requires no flags. `--allow-blocking` is not needed (M4, Amendment 3: the one
+  call that tripped `blockbuster` now runs off the loop) and `LANGGRAPH_ALLOW_BLOCKING`
+  never worked from `.env`, which is why `.env` no longer sets it.
 - **`POST /chat` becomes a degradation path, and it does not share a memory with the streamed
   one.** `routes.py` compiles its own `InMemorySaver`; `graph_app.make_graph` compiles with none
   so the server can supply its own, which is what makes `/threads` work. So one `session_id`

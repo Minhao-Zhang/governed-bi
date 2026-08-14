@@ -175,3 +175,25 @@ def test_the_prompt_is_in_the_registry_and_moves_the_hash() -> None:
 
     assert "bi_scope" in PROMPT_REGISTRY
     assert PROMPT_REGISTRY["bi_scope"].stage == "guard"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "YES/NO",
+        "Yes and no",
+        "yes or no?",
+        "YES if it is in scope, NO if it is not.",
+    ],
+)
+def test_a_reply_naming_both_tokens_fails_closed(reply: str) -> None:
+    """An affirmative *prefix* is not an affirmative answer.
+
+    The rule was ``answer.startswith("yes")``, which cleared every reply above — including the
+    scope prompt's own closing instruction echoed back verbatim. The direction is what makes it
+    matter: ``detail`` is ``None`` on ``clear`` and carries the reply on ``blocked``, so a
+    wrongly blocked turn can be diagnosed afterwards and a wrongly cleared one leaves nothing
+    behind. A message naming both tokens is a hesitation about the format, not an answer to the
+    question.
+    """
+    assert _run("write me a poem", model=_Model(reply))["outcome"] == "blocked"

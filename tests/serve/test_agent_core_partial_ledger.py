@@ -22,8 +22,10 @@ from typing import Any
 
 import httpx
 import openai
+import pytest
 from langchain_core.messages import AIMessage
 
+from governed_bi.corpus.analyst import analyst_corpus_from_keys
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.nodes.agent_core import agent_core_node
 from governed_bi.serve.scripted_model import ScriptedChatModel
@@ -50,18 +52,41 @@ class _DiesAfterOneToolCall(ScriptedChatModel):
         return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
 
+class _Stub:
+    """A connector that answers without a database.
+
+    Present because the turn has to reach ``check()`` for these tests to mean what they say.
+    Until the 2026-08-10 audit (C2) this fixture supplied **no** connector, and ``fetch.py``
+    manufactured ``refuse("r_not_a_read", "no connector configured")`` for that — so the single
+    "governed statement" asserted below was a fabricated refusal for a wiring failure, and the
+    statement never reached governance at all. The message read "the statement reached governance
+    before the model died" while nothing had. A missing connector now raises, which is what
+    exposed it.
+    """
+
+    dialect = "postgres"
+
+    def execute(self, sql: str, **_: Any) -> tuple[list[str], list[tuple[Any, ...]], bool]:
+        return (["n"], [(3,)], False)
+
+
 def _run_turn(model: Any) -> dict[str, Any]:
     state: dict[str, Any] = {
         "turn_index": 1,
         "turn_id": "t-partial",
         "messages": [],
         "usage": [],
+        # `ASK` proposes `FROM beer_factory.customers`, so the table has to be licensed or the
+        # attempt is a TABLES refusal rather than the passing statement these tests are about.
+        "licensed": ["beer_factory.customers"],
     }
     config = {
         "configurable": {
             "thread_id": "t-partial",
             "policy": GovernancePolicy(),
             "agent_model": model,
+            "connector": _Stub(),
+            "corpus": analyst_corpus_from_keys(allowed=["beer_factory.customers.id"]),
         }
     }
     # Through `wrap_node`, because that is the boundary that used to be the whole story: it
@@ -117,6 +142,154 @@ def test_a_clean_turn_is_unchanged_and_carries_no_failure() -> None:
 
     assert out["path_kind"] == "answered"
     assert "failure" not in out, "a turn that did not fail must not carry a failure marker"
+
+
+def test_a_node_timeout_keeps_the_streamed_ledger() -> None:
+    """``agent_core`` owns its hang-stop so a TimeoutError still projects the ledger.
+
+    The bound lives inside the node and fires between astream frames, so a timeout
+    still sees the last committed values snapshot (including attempts). A slow *next*
+    model call after the tool is long enough past the deadline that the frame completes
+    and then the hang-stop stamps crashed — mid-call cancel is deliberately not used
+    (see F1 / ``wrap.py``'s to_thread hazard).
+    """
+    import os
+    import time
+
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    class _HangsAfterOneToolCall(_DiesAfterOneToolCall):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[no-untyped-def]
+            if any(getattr(m, "type", "") == "tool" for m in messages):
+                time.sleep(0.5)
+                return ChatResult(
+                    generations=[ChatGeneration(message=AIMessage("too late"))]
+                )
+            return ScriptedChatModel._generate(
+                self, messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+
+    os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "0.15"
+    try:
+        out = _run_turn(_HangsAfterOneToolCall(responses=[ASK]))
+    finally:
+        del os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"]
+
+    assert out["path_kind"] == "crashed"
+    assert out["failure"] == {"stage": "agent_core", "error_type": "TimeoutError"}
+    attempts = (out.get("execution") or {}).get("attempts") or []
+    assert len(attempts) == 1, (
+        "the statement ran before the hang; a timeout must not drop it, got "
+        f"{attempts!r}"
+    )
+    assert out.get("generated_sql")
+
+
+def test_a_timeout_overlapping_in_flight_run_query_still_records_the_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hang-stop must not cancel mid-``to_thread`` after the statement finished.
+
+    ``asyncio.wait_for`` around ``_run`` used to cancel the tool coroutine between DB
+    completion and the ``attempts_by_call`` write, so the projected ledger omitted a
+    statement that had already run. Deadline checks between frames let the tool finish
+    recording first.
+    """
+    import os
+    import time
+
+    from governed_bi.serve import fetch
+
+    def _slow_run_query(*_a: Any, **_k: Any) -> tuple[str, dict[str, Any]]:
+        time.sleep(0.35)
+        return (
+            '{"columns":["n"],"rows":[[1]],"row_count":1,"truncated":false}',
+            {
+                "verdict_layer": None,
+                "passed": True,
+                "reason_code": "passed",
+                "path": "agent",
+                "executed_sql": "SELECT 1 AS n",
+            },
+        )
+
+    monkeypatch.setattr(fetch, "run_query", _slow_run_query)
+    os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "0.05"
+    try:
+        out = _run_turn(
+            ScriptedChatModel(
+                responses=[
+                    ASK,
+                    AIMessage("one row"),
+                ]
+            )
+        )
+    finally:
+        del os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"]
+
+    assert out["path_kind"] == "crashed"
+    assert out["failure"] == {"stage": "agent_core", "error_type": "TimeoutError"}
+    attempts = (out.get("execution") or {}).get("attempts") or []
+    assert len(attempts) == 1, (
+        "run_query finished under a firing node timeout; omitting it is executed-but-"
+        f"unrecorded, got {attempts!r}"
+    )
+    assert attempts[0].get("executed_sql") == "SELECT 1 AS n"
+    assert out.get("generated_sql") == "SELECT 1 AS n"
+
+
+def test_the_wall_still_ends_a_turn_that_produces_no_frame_at_all() -> None:
+    """The other half of the bound, and the half that had no test.
+
+    The soft wall is checked *between* frames, which is what the test above requires. On its own
+    that cannot fire while the agent is **hung**, because no frame ever arrives and ``async for``
+    never reaches the loop body — so ``agent_core`` had no wall clock at all for the one case a
+    wall exists for. Measured before the fix: a stub whose first superstep never yields ran past
+    a 0.3 s wall until the harness gave up.
+
+    ``grace`` is what closes it: the wait for a single frame is bounded by ``soft + grace``, and
+    only that wait is cancelled. Kept small here; in production it is ``llm_timeout_s``.
+    """
+    from governed_bi.serve.nodes.agent_core import _run
+
+    class NeverYields:
+        async def astream(self, _inbound: Any, _config: Any, stream_mode: str = "values") -> Any:
+            await asyncio.sleep(3600)
+            yield {"messages": []}
+
+    async def drive() -> tuple[dict[str, Any], dict[str, Any] | None]:
+        return await asyncio.wait_for(
+            _run(NeverYields(), [], {}, recursion_limit=40, timeout=0.05, grace=0.05),
+            timeout=5.0,
+        )
+
+    last, failure = asyncio.run(drive())
+    assert failure == {"stage": "agent_core", "error_type": "TimeoutError"}
+    assert last == {}, "nothing was ever streamed, so there is no ledger to keep"
+
+
+def test_a_tool_still_running_when_the_wall_expires_is_given_time_to_record() -> None:
+    """``grace`` must not become a second way to lose an executed statement.
+
+    The frame arrives *after* the soft wall has passed. It must still be consumed — that is the
+    frame carrying ``attempts_by_call`` — and the turn must then end on the soft wall with the
+    ledger intact, rather than being cancelled at the wall itself.
+    """
+    from governed_bi.serve.nodes.agent_core import _run
+
+    class LateFrame:
+        async def astream(self, _inbound: Any, _config: Any, stream_mode: str = "values") -> Any:
+            await asyncio.sleep(0.20)  # a statement finishing after the wall expired
+            yield {"messages": ["m"], "attempts_by_call": {"c1": {"executed_sql": "SELECT 1"}}}
+            await asyncio.sleep(3600)  # and then the loop wedges
+
+    last, failure = asyncio.run(
+        _run(LateFrame(), [], {}, recursion_limit=40, timeout=0.05, grace=5.0)
+    )
+    assert failure == {"stage": "agent_core", "error_type": "TimeoutError"}
+    assert last.get("attempts_by_call") == {"c1": {"executed_sql": "SELECT 1"}}, (
+        "the late frame carried the ledger; cancelling at the soft wall would have dropped it"
+    )
 
 
 def test_two_statements_in_one_super_step_keep_both_ledger_rows() -> None:

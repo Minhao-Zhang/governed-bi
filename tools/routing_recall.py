@@ -1,22 +1,20 @@
 """Shortlist recall for the schema router — with the facet rewriters and without them.
 
-**The measurement this repository claimed to have and does not.** ``governed_bi.toml`` cites
-recall@10 = 0.953 and recall@3 = 0.852 "measured on the curated corpus over all 1351 test
-questions (``scripts/routing_ablation.py``)". That script does not exist in the tree. So the
-number every routing decision is argued from is not reproducible, which is the exact shape of
-the stale claim ``tools/check_citations.py`` exists to catch one directory over.
+This script exists because the routing recall figures the project used to argue from — recall@10 =
+0.953 and recall@3 = 0.852 — came out of ``git-history:scripts/routing_ablation.py``, deleted with
+v1 on 2026-08-02, so nothing in this tree reproduces them. ``register/citations.py`` sources them
+to ``runs/ablation/e1-shortlist-curated.json`` (2026-07-31) and records what they may be compared
+to: a single-channel shortlist, not v2's five-facet route. Measure recall here or quote that.
 
-**Why the two arms.** ``eval.datalake.routing_recall`` needs no *agent* model, but the five facet
-query rewriters use the **utility** model, and with none configured they fall back to the raw
-question. So the same function measures two different systems depending on what the session
-carries, and nobody had separated them:
+Two arms, because ``eval.datalake.routing_recall`` needs no *agent* model but the five facet query
+rewriters use the **utility** model, falling back to the raw question when none is configured. The
+same function therefore measures two different systems depending on what the session carries:
 
 * ``--no-rewrite`` — the corpus and the router alone, on the user's own words. Free.
 * ``--rewrite``   — five short rewrites per question, which is what production does. ~150 tokens
   a call, so a 100-question arm is ~75k utility tokens.
 
-Run both on one question set and the difference is the rewriter's contribution to routing, which
-is the number the prompt work has been arguing about without it.
+Run both on one question set and the difference is the rewriter's contribution to routing.
 
 ``rank`` is reported, not just ``hit``: "the router never scored the gold schema" and "it ranked
 4th" are different failures, and collapsing them is how v1 published a documented failure bucket
@@ -32,7 +30,6 @@ import sys
 import time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "tools"))
 
 DEFAULT_CORPUS = "corpora/gold-semantic-layer-20260804"
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset"
@@ -75,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=pathlib.Path, default=None)
     args = parser.parse_args(argv)
 
-    import credentials
+    from governed_bi import credentials
 
     credentials.load_into_environ()
     dsn = credentials.secret(*credentials.PG_DSN_NAMES)
@@ -91,30 +88,33 @@ def main(argv: list[str] | None = None) -> int:
         table_coverage,
     )
     from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.model import provider as provider_mod
     from governed_bi.serve import session as session_mod
 
     embedder = None
     vector_cache = None
     if args.embed:
-        from governed_bi.model import OpenAIEmbedder
         from governed_bi.retrieve.vector_cache import vector_cache_from_environment
 
-        embedder = OpenAIEmbedder()
+        # The embedder's gateway is exactly what this tool measures the effect of: the
+        # semantic channel is half of routing, so an arm on a different embedding provider
+        # is a different recall number, not a detail. Printed for the same reason.
+        embed_provider = provider_mod.provider_for("embedding")
+        embedder = provider_mod.embedder(provider_mod.default_embedding_model(embed_provider))
         vector_cache = vector_cache_from_environment(model=embedder.requested_model)
+        print(f"embedder: {embedder.requested_model} on {embed_provider}")
 
     utility = None
     if args.rewrite:
         import os
 
-        from langchain.chat_models import init_chat_model
-
         model_id = os.environ.get("GOVERNED_BI_UTILITY_MODEL") or os.environ["GOVERNED_BI_MODEL"]
-        kwargs = {"model_provider": "openai"}
         effort = os.environ.get("GOVERNED_BI_UTILITY_MODEL_EFFORT")
-        if effort:
-            kwargs["reasoning_effort"] = effort
-        utility = init_chat_model(model_id, **kwargs)
-        print(f"rewriters ON: {model_id} effort={effort or '(default)'}")
+        chosen = provider_mod.provider_for("utility")
+        utility = provider_mod.chat_model(
+            model_id, surface="utility", provider=chosen, effort=effort or None
+        )
+        print(f"rewriters ON: {model_id} on {chosen} effort={effort or '(default)'}")
     else:
         print("rewriters OFF: facets search the raw question")
 
@@ -131,16 +131,14 @@ def main(argv: list[str] | None = None) -> int:
             vector_cache=vector_cache,
         )
 
-    # The **first** corpus decides the question set, and both arms then answer the same
-    # questions. Letting each arm derive its own would compare two scores over two populations
-    # the moment one variant covered a schema the other did not — which is the shape
-    # `measure/population.py` exists to refuse.
+    # The *first* corpus decides the question set, and both arms answer the same questions.
+    # Letting each derive its own compares two scores over two populations the moment one variant
+    # covers a schema the other does not — what `measure/population.py` exists to refuse.
     primary = build(args.corpus_dir)
     schemas = sorted({s for s in primary.structure.table_schemas.values() if s})
     questions = load_questions(
-        # `--dataset` is the *directory*, as `run_datalake_eval.py` takes it; the question
-        # file inside it is `test_final.jsonl`. Passing the directory raised PermissionError,
-        # which on Windows is what opening a directory looks like.
+        # `--dataset` is the *directory*, as `run_datalake_eval.py` takes it. Passing it whole
+        # raised PermissionError, which on Windows is what opening a directory looks like.
         args.dataset / "test_final.jsonl",
         schemas=schemas,
         limit=args.limit,
@@ -153,15 +151,12 @@ def main(argv: list[str] | None = None) -> int:
         started = time.time()
         rows = routing_recall(questions, session=session, top_n=args.top_n)
         took = time.time() - started
-        # **Table coverage is the number to lead with.** Schema recall@k can look fine
-        # while a turn still cannot answer: the per-type budget licenses at most 8 ranked
-        # tables, so coverage bounds EX and recall does not.
+        # Table coverage is the number to lead with: schema recall@k can look fine while a turn
+        # still cannot answer, because the per-type budget licenses at most 8 ranked tables.
         out = {
-            # **The corpus's content digest, not its directory name.** A variant iterated in
-            # place keeps its path and changes its meaning, so two artifacts would claim the
-            # same treatment while describing different corpora — `corpus/hash.py` opens by
-            # naming that as v1's `corpus_content_hash == "unknown"` defect, and a directory
-            # name is the same failure with a friendlier spelling.
+            # The content digest, not the directory name: a variant iterated in place keeps its
+            # path and changes its meaning, so two artifacts would claim the same treatment while
+            # describing different corpora (v1's `corpus_content_hash == "unknown"` defect).
             "corpus_dir": str(session.corpus_root),
             "corpus_content_hash": session.corpus_content_hash,
             "n_questions": len(rows),

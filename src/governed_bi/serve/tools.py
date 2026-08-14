@@ -24,30 +24,46 @@ from langgraph.types import Command, interrupt
 from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE, ToolBounds
 from governed_bi.govern.check import GovernanceUsageError
 from governed_bi.govern.ledger import (
+    ExecutorPath,
     statement_sha256,
 )
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.register.prompts import prompt_text
 from governed_bi.serve import fetch
-from governed_bi.serve.agent_state import AttemptBook
+from governed_bi.serve.agent_state import CAP_LEDGER_KEY, AttemptBook
 from governed_bi.serve.delivery import payload_digest, tool_bounds_from_state
 from governed_bi.serve.events import emit, tool_event_id
-from governed_bi.serve.ledger import attempt_field, cap_attempt, execution_from_attempts
-from governed_bi.serve.runtime import bool_knob, configurable
+from governed_bi.serve.ledger import (
+    attempt_field,
+    cap_attempt,
+    execution_from_attempts,
+    pipeline_error_attempt,
+)
+from governed_bi.serve.runtime import bool_knob, configurable, prompt_variants
 from governed_bi.serve.schema_term_guard import find_schema_leak
 from governed_bi.serve.structured_check import percentage_scale_suffix
 
 __all__ = [
-    "SYSTEM_PROMPT",
+    "analyst_prompt",
     "build_tools",
+    "policy_from_config",
     "resolve_assets",
     "attempt_field",
     "execution_from_attempts",
     "tool_bounds_from_state",
 ]
 
-#: Agent standing instructions (from ``register/prompts.py``).
-SYSTEM_PROMPT = prompt_text("analyst")
+
+def analyst_prompt(config: Mapping[str, Any] | None = None) -> str:
+    """Agent standing instructions, at the variant this run selected.
+
+    **A function, not the module constant it was.** ``SYSTEM_PROMPT = prompt_text("analyst")``
+    bound at import, so a run selecting a non-default variant sent the default and recorded the
+    override's ``prompt_set_hash`` — an artifact naming a treatment it did not receive, which is
+    strictly worse than not having the knob. The registry has carried ``variants`` since it was
+    written; nothing in ``src/`` ever passed one, so nothing exercised the gap.
+    """
+    return prompt_text("analyst", prompt_variants(config))
 
 def resolve_assets(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """``assets_by_id`` or ``corpus.by_id`` from configurable."""
@@ -64,6 +80,18 @@ def resolve_assets(config: Mapping[str, Any] | None) -> dict[str, Any]:
     if isinstance(corpus, Mapping):
         return {str(k): v for k, v in corpus.items()}
     return {}
+
+
+def policy_from_config(config: Mapping[str, Any] | None) -> GovernancePolicy:
+    """The turn's :class:`GovernancePolicy`, defaulted when configurable carries none.
+
+    One reader, because the attempt cap has two enforcers (:class:`AttemptBook` here and
+    ``agent_core``'s ``ToolCallLimitMiddleware``), and a second copy of "how the policy is
+    fetched" is how they come to enforce different numbers while both quoting
+    ``run_query_attempt_cap``.
+    """
+    policy = configurable(config).get("policy")
+    return policy if isinstance(policy, GovernancePolicy) else GovernancePolicy()
 
 
 def _call_id(runtime: Any) -> str:
@@ -85,13 +113,12 @@ async def _fetch(
     runtime: Any,
     detail: dict[str, Any],
     work: Callable[[], tuple[Any, ...]],
+    ledger_path: ExecutorPath | None = None,
 ) -> Command:
     """Corpus tools with stream events. Status: ok / blocked / error.
 
     ``work`` returns ``(payload, delivered)``, or ``(payload, delivered, attempt)`` when the
-    tool is an **executor path** and owes the ledger a row. ``sample_rows`` is that case, and
-    it used to return the two-tuple — which is precisely what "the sample path writes no ledger
-    entry" was: a shape with nowhere to put the fact.
+    tool is an **executor path** and owes the ledger a row. ``sample_rows`` is that case.
     """
     event_id = tool_event_id(stage, _call_id(runtime))
     emit(kind="tool", step=stage, status="start", event_id=event_id, detail=detail)
@@ -116,7 +143,18 @@ async def _fetch(
             event_id=event_id,
             detail={**detail, "error_type": type(exc).__name__},
         )
-        return _reply(runtime, f"{stage} error: {type(exc).__name__}: {exc}")
+        # Same as the `run_query` site (audit C1): an executor path that dies before its verdict
+        # exists still owes the ledger a row, or the turn reads as one that attempted nothing.
+        # `read_body` and `inspect_schema` build no statement and own no path, so they get no row
+        # -- inventing one would put a governance verdict on a corpus read.
+        updates: dict[str, Any] = {}
+        if ledger_path is not None:
+            updates["attempts_by_call"] = {
+                _call_id(runtime): pipeline_error_attempt(
+                    ledger_path, f"{type(exc).__name__}: {exc}"
+                )
+            }
+        return _reply(runtime, f"{stage} error: {type(exc).__name__}: {exc}", **updates)
     payload, delivered = result[0], result[1]
     attempt = result[2] if len(result) > 2 else None
     if delivered:
@@ -128,8 +166,8 @@ async def _fetch(
     updates: dict[str, Any] = dict(_delivered(runtime, payload)) if delivered else {}
     if attempt is not None:
         # The verdict rides **this** step's detail rather than emitting ``check`` / ``execute``
-        # rows. Those two steps are ``run_query``'s attempt numbering, and a sample verdict
-        # appearing among them would read as a SQL attempt the model never made.
+        # rows: those two are ``run_query``'s attempt numbering, and a sample verdict among
+        # them would read as a SQL attempt the model never made.
         detail = {
             **detail,
             "layer": attempt["verdict_layer"],
@@ -138,9 +176,8 @@ async def _fetch(
         }
         if attempt["executed_sql"] is not None:
             detail["sql_sha256"] = statement_sha256(attempt["executed_sql"])
-        # **The ledger row rides the same Command as the payload.** With no ``attempts_by_call``
-        # write on this path, ``guardrail_errors == 0`` and an empty attempt list were true of
-        # every value the tool ever showed the model.
+        # The ledger row rides the same Command as the payload. Without it,
+        # ``guardrail_errors == 0`` and an empty attempt list held vacuously for this path.
         updates["attempts_by_call"] = {f"{stage}:{_call_id(runtime)}": attempt}
     emit(kind="tool", step=stage, status=status, event_id=event_id, detail=detail)
     return _reply(runtime, payload, **updates)
@@ -277,15 +314,13 @@ def build_tools(
 ) -> list[Any]:
     """Build the five ADR tools closed over this turn's bounds + corpus."""
     cfg = configurable(config)
-    bounds = bounds or tool_bounds_from_state(state)
+    bounds = bounds or tool_bounds_from_state(state, cfg)
     assets = resolve_assets(config)
-    policy = cfg.get("policy")
-    if not isinstance(policy, GovernancePolicy):
-        policy = GovernancePolicy()
+    policy = policy_from_config(config)
     connector = cfg.get("connector")
-    # Passed through as whatever is on ``configurable``. A wrong-typed or absent corpus
-    # is a wiring failure and ``_run_query`` raises on it; coercing it to ``None`` here
-    # is what let the default below stand in for it (G1).
+    # Passed through as whatever is on ``configurable``: a wrong-typed or absent corpus is a
+    # wiring failure and ``fetch.run_query`` raises on it, where coercing it to ``None`` would
+    # let a default stand in for it (G1).
     corpus = cfg.get("corpus")
     # UtkuAI, ported (Phase 1b): the offline Clarifications ledger's own precondition --
     # ``session.corpus_root is not None`` -- matching every write route in ``api/routes.py``.
@@ -330,6 +365,7 @@ def build_tools(
                 corpus=corpus,
                 policy=policy,
             ),
+            ledger_path="sample",
         )
 
     @tool
@@ -338,10 +374,13 @@ def build_tools(
         call_id = _call_id(runtime)
         committed = (getattr(runtime, "state", None) or {}).get("attempts_by_call")
         if not book.admit(committed, call_id):
-            update: dict[str, Any] = {}
+            # The backstop, not the brake: `agent_core`'s middleware counts the same proposal a
+            # node earlier, so this branch belongs to callers that build tools without an agent.
+            # The row is written either way (`execution_from_attempts` reads the ledger, not the
+            # enforcer), and `CAP_LEDGER_KEY` makes a second write a no-op.
+            update: dict[str, Any] = {"attempts_by_call": {CAP_LEDGER_KEY: cap_attempt()}}
             if not book.cap_recorded:
                 book.cap_recorded = True
-                update["attempts_by_call"] = {f"cap:{call_id}": cap_attempt()}
                 emit(
                     kind="tool",
                     step="cap",
@@ -386,7 +425,21 @@ def build_tools(
                 event_id=tool_event_id("check", call_id),
                 detail={"attempt": attempt_number, "error_type": type(exc).__name__},
             )
-            return _reply(runtime, f"run_query error: {type(exc).__name__}: {exc}")
+            # **A row, not just a string** (audit C1). Everything reaching here failed before a
+            # verdict existed -- `fetch.run_query` already returns the attempt row when the
+            # *execution* fails, for the reason stated at that site -- so this is our checker
+            # breaking. Returning only the string left the ledger empty, and `stamp` reads an
+            # empty ledger as "answered from the delivered context": outcome `answered`,
+            # `guardrail_errors: 0`, every gate green, `generated_sql` holding a statement that
+            # never reached `prepare()`. The refund stays: the attempt cost the model nothing it
+            # should be charged for, and the row is what makes the failure countable.
+            return _reply(
+                runtime,
+                f"run_query error: {type(exc).__name__}: {exc}",
+                attempts_by_call={
+                    call_id: pipeline_error_attempt("agent", f"{type(exc).__name__}: {exc}")
+                },
+            )
         _emit_attempt(runtime, attempt, number=attempt_number, payload=payload)
         table = _result_table(payload)
         suffix = ""
@@ -399,6 +452,22 @@ def build_tools(
             attempts_by_call={call_id: attempt},
             **({"result_table": table} if table is not None else {}),
         )
+
+    #: One pending clarification per turn. Closure-level and mutable, the same shape as
+    #: ``book`` above, because both ``Send``s from one assistant message share this closure.
+    #:
+    #: **Two ``ask_user`` calls in one assistant message cross-wire the answer.** LangGraph
+    #: dispatches one ``Send`` per pending tool call and both interrupt; the surfacing order is
+    #: a race, ``_clarification`` returns the first interrupt, and ``Command(resume=...)`` always
+    #: lands on the first tool call. Measured: the user is shown "which region?", answers it, and
+    #: the answer is recorded against — and handed to the model as — "which year?". The resume
+    #: surface has no way to say which question is being answered, so the fix is upstream: there
+    #: is only ever one question outstanding.
+    #:
+    #: It resets on every ``build_tools``, which is once per node execution. That is correct: on
+    #: resume the satisfied call's ``Send`` is filtered out by its existing ``ToolMessage``, so a
+    #: second question after a resume is a genuinely new one.
+    pending_clarification: list[str] = []
 
     @tool
     async def ask_user(
@@ -441,7 +510,25 @@ def build_tools(
         ``allow_freeform`` defaults to ``True`` and should almost always stay ``True`` even
         when ``choices`` is given, so a real answer outside the offered list still reaches
         you rather than being boxed out.
+
+        Only one question may be outstanding per turn; a second call is refused with a reply
+        rather than queued.
         """
+        if pending_clarification:
+            # Refused, not queued, and no interrupt: the model gets a tool reply it can act on
+            # while the first question is still outstanding. Checked and set with no `await`
+            # between, so two concurrent `Send`s cannot both pass.
+            #
+            # Ahead of this fork's own validation below, because "a question is already
+            # outstanding" is true of the turn regardless of how well-formed this second
+            # question is -- validating first would tell the model to fix wording on a call
+            # that was never going to pause the turn.
+            return _reply(
+                runtime,
+                "Only one clarifying question may be outstanding at a time, and this turn "
+                "already has one. Ask the single question whose answer most changes the SQL; "
+                "if more are needed, ask them after this one is answered.",
+            )
         leak = find_schema_leak(question, why)
         if leak is not None:
             return _reply(
@@ -470,6 +557,7 @@ def build_tools(
                 )
         digest = hashlib.sha256(f"{turn_id}\x1f{question}".encode()).hexdigest()[:12]
         clarification_id = f"clar-{turn_id}-{digest}"
+        pending_clarification.append(clarification_id)
         started = {"clarification_id": clarification_id}
         emit(
             kind="tool",

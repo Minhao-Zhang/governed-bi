@@ -56,9 +56,9 @@ def seed(introspection: Introspection, schema: str) -> tuple[list[Asset], list[P
     )
 
     for table in tables:
-        # The convention is declared once, in identity.py: the endpoint reconciliation
-        # in retrieve/structure.py keys on it, and a second spelling there would bind
-        # an edge to the wrong table rather than merely losing it (ADR 0005 §2.8.2).
+        # The convention is declared once, in identity.py: endpoint reconciliation in
+        # retrieve/structure.py keys on it, and a second spelling there binds an edge to
+        # the wrong table rather than merely losing it (ADR 0005 §2.8.2).
         table_id = table_id_for(schema, table.physical_name)
         col_names = [c.physical_name for c in table.columns]
         summary = fit_summary(
@@ -84,9 +84,9 @@ def seed(introspection: Introspection, schema: str) -> tuple[list[Asset], list[P
                     schema=schema,
                     parent_table=table_id,  # the table's id, not its bare name (0008 D4)
                     physical_name=column.physical_name,
-                    # One identifier and one type; nothing to drop, so an over-cap value
-                    # here means a pathological physical name and belongs to the
-                    # validator, not to a silent slice.
+                    # Not run through `fit_summary`: one identifier and one type, nothing
+                    # to drop, so an over-cap value means a pathological physical name and
+                    # belongs to the validator rather than to a silent slice.
                     summary=f"{table.physical_name}.{column.physical_name} ({ctype})",
                     physical_type=column.physical_type,
                     nullable=column.nullable,

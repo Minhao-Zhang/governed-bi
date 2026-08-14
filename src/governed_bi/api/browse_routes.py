@@ -1,6 +1,14 @@
 """Browsing routes: filtering, lean catalog, table detail (ADR 0009).
 
 HTTP shell over :mod:`governed_bi.api.browse`. Projections match the client's declared shapes.
+
+**Every handler reads the session through** :func:`~governed_bi.api.visibility.visible`
+(ADR 0012 §8.5), never the one it was constructed with. Reading the raw session was how
+``GET /corpus/rows?type=column`` returned a column the same deployment's grant withheld from
+the model — including its ``sample_values`` through ``/schema/{table_id}``. Narrowing at the
+entrance rather than in each of the five handlers is the same argument
+``serve/context.py::_build_pieces._add`` makes for its one gate: five filters are five things
+that can each be forgotten separately.
 """
 
 from __future__ import annotations
@@ -17,121 +25,139 @@ from governed_bi.api.browse import (
     row_for,
     sort_rows,
 )
+from governed_bi.api.visibility import visible
 from governed_bi.corpus.schema import class_for
 from governed_bi.register.assets import ASSET_REGISTER
 
-__all__ = ["router"]
-
-#: Mounted by ``routes.app``. Declare ``/schema/summary`` before ``/schema/{table_id}``.
-router = APIRouter()
-
-
-def _request_session() -> Any:
-    """This request's session (imported lazily to avoid a circular import with ``routes``)."""
-    from governed_bi.api.routes import _session
-
-    return _session()
-
-
-@router.get("/corpus/fields")
-def corpus_fields(type: str | None = None) -> dict[str, Any]:
-    """Filterable columns of one asset type, derived from its dataclass."""
-    known = {t.value: t for t in ASSET_REGISTER}
-    if type is None or type not in known:
-        return {
-            "type": None,
-            "columns": [],
-            "types": sorted(known),
-            "detail": None if type is None else f"unknown asset type {type!r}",
-        }
-    asset_type = known[type]
-    return {
-        "type": type,
-        "columns": columns_for(asset_type, class_for(type)),
-        "types": sorted(known),
-    }
-
-
-@router.get("/corpus/rows")
-def corpus_rows(
-    type: str,
-    where: list[str] | None = Query(default=None),
-    sort: str | None = None,
-    order: str = "asc",
-    offset: int = 0,
-    limit: int = 50,
-) -> dict[str, Any]:
-    """Filtered, sorted, paginated assets of one type (ADR 0009 D1).
-
-    ``where`` repeats as ``field:op:value``. Unknown predicates land in ``unknown_where``
-    and are not applied. ``total`` is the count after filtering.
-    """
-    known_types = {t.value: t for t in ASSET_REGISTER}
-    if type not in known_types:
-        return {
-            "rows": [],
-            "total": 0,
-            "offset": 0,
-            "limit": limit,
-            "columns": [],
-            "unknown_where": [],
-            "detail": f"unknown asset type {type!r}",
-        }
-
-    session = _request_session()
-    columns = columns_for(known_types[type], class_for(type))
-    ops_by_field = {column["name"]: column["ops"] for column in columns}
-
-    predicates, malformed = parse_where(where or ())
-    assets = [a for a in session.assets_by_id.values() if a.asset_type.value == type]
-    matched, unknown = apply_where(assets, predicates, ops_by_field)
-    ordered = sort_rows(matched, sort, order)
-
-    start = max(0, int(offset))
-    end = start + max(1, min(500, int(limit)))
-    return {
-        "rows": [row_for(asset) for asset in ordered[start:end]],
-        "total": len(ordered),
-        "offset": start,
-        "limit": end - start,
-        "columns": columns,
-        "unknown_where": [*unknown, *malformed],
-    }
-
+__all__ = ["make_router", "related_to_column", "SUMMARY_PAGE_LIMIT"]
 
 #: Default/ceiling for ``/schema/summary``. Catalog consumers need the full table list.
 SUMMARY_PAGE_LIMIT = 1000
 
 
-@router.get("/schema/summary")
-def schema_summary(schema: str | None = None, limit: int = SUMMARY_PAGE_LIMIT, offset: int = 0) -> dict[str, Any]:
-    """Lean table catalog: enough for a browser row and a badge, no prose.
+def make_router(session: Any) -> APIRouter:
+    """The browsing routes over one ``session``.
 
-    ``offset`` and ``limit`` are echoed as applied after clamping.
+    A factory, not a module-level ``router``. The handlers used to reach a process-wide session
+    through ``_request_session``, which imported :mod:`governed_bi.api.routes` **at call time**
+    to dodge the import cycle that would otherwise exist — a backwards import whose only job was
+    to reach a global. Accepting the session removes the global and the cycle together.
+
+    Declaration order is load-bearing: ``/schema/summary`` before ``/schema/{table_id}``, or the
+    parameterised path captures the literal one.
     """
-    session = _request_session()
-    tables = sorted(
-        (
-            a
-            for a in session.assets_by_id.values()
-            if a.asset_type.value == "table" and (schema is None or getattr(a, "schema", None) == schema)
-        ),
-        key=lambda a: a.id,
-    )
-    start = max(0, int(offset))
-    applied_limit = max(1, min(SUMMARY_PAGE_LIMIT, int(limit)))
-    items = [_table_summary(session, table) for table in tables[start : start + applied_limit]]
-    return {"total": len(tables), "offset": start, "limit": applied_limit, "items": items}
+    router = APIRouter()
 
+    def _seen() -> Any:
+        """This session, narrowed to what the grant discloses. **Per request, not per app.**
 
-@router.get("/schema/{table_id}")
-def schema_detail(table_id: str) -> dict[str, Any]:
-    """One table's full detail. Declared after ``/schema/summary`` so the literal path wins."""
-    session = _request_session()
-    table = session.assets_by_id.get(table_id)
-    if table is None or table.asset_type.value != "table":
-        raise HTTPException(status_code=404, detail=f"no table asset {table_id!r}")
-    return _table_view(session, table)
+        Per app would resolve ``_DeferredSession`` at import — ``langgraph.json`` names a module
+        attribute, so building the router must not require a database — and would pin one
+        answer for the process. Per request costs one boolean under the open grant, which is
+        what this repository ships.
+        """
+        return visible(session)
+
+    @router.get("/corpus/fields")
+    def corpus_fields(type: str | None = None) -> dict[str, Any]:
+        """Filterable columns of one asset type, derived from its dataclass."""
+        known = {t.value: t for t in ASSET_REGISTER}
+        if type is None or type not in known:
+            return {
+                "type": None,
+                "columns": [],
+                "types": sorted(known),
+                "detail": None if type is None else f"unknown asset type {type!r}",
+            }
+        return {
+            "type": type,
+            "columns": columns_for(known[type], class_for(type)),
+            "types": sorted(known),
+        }
+
+    @router.get("/corpus/rows")
+    def corpus_rows(
+        type: str,
+        where: list[str] | None = Query(default=None),
+        sort: str | None = None,
+        order: str = "asc",
+        offset: int = 0,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Filtered, sorted, paginated assets of one type (ADR 0009 D1).
+
+        ``where`` repeats as ``field:op:value``. Unknown predicates land in ``unknown_where``
+        and are not applied. ``total`` is the count after filtering.
+        """
+        known_types = {t.value: t for t in ASSET_REGISTER}
+        if type not in known_types:
+            return {
+                "rows": [],
+                "total": 0,
+                "offset": 0,
+                "limit": limit,
+                "columns": [],
+                "unknown_where": [],
+                "detail": f"unknown asset type {type!r}",
+            }
+
+        columns = columns_for(known_types[type], class_for(type))
+        ops_by_field = {column["name"]: column["ops"] for column in columns}
+
+        predicates, malformed = parse_where(where or ())
+        assets = [a for a in _seen().assets_by_id.values() if a.asset_type.value == type]
+        matched, unknown = apply_where(assets, predicates, ops_by_field)
+        ordered = sort_rows(matched, sort, order)
+
+        start = max(0, int(offset))
+        end = start + max(1, min(500, int(limit)))
+        return {
+            "rows": [row_for(asset) for asset in ordered[start:end]],
+            "total": len(ordered),
+            "offset": start,
+            "limit": end - start,
+            "columns": columns,
+            "unknown_where": [*unknown, *malformed],
+        }
+
+    @router.get("/schema/summary")
+    def schema_summary(
+        schema: str | None = None, limit: int = SUMMARY_PAGE_LIMIT, offset: int = 0
+    ) -> dict[str, Any]:
+        """Lean table catalog: enough for a browser row and a badge, no prose.
+
+        ``offset`` and ``limit`` are echoed as applied after clamping.
+        """
+        seen = _seen()
+        tables = sorted(
+            (
+                a
+                for a in seen.assets_by_id.values()
+                if a.asset_type.value == "table"
+                and (schema is None or getattr(a, "schema", None) == schema)
+            ),
+            key=lambda a: a.id,
+        )
+        start = max(0, int(offset))
+        applied_limit = max(1, min(SUMMARY_PAGE_LIMIT, int(limit)))
+        items = [_table_summary(seen, table) for table in tables[start : start + applied_limit]]
+        return {"total": len(tables), "offset": start, "limit": applied_limit, "items": items}
+
+    @router.get("/schema/{table_id}")
+    def schema_detail(table_id: str) -> dict[str, Any]:
+        """One table's full detail. Declared after ``/schema/summary`` so the literal path wins."""
+        seen = _seen()
+        table = seen.assets_by_id.get(table_id)
+        if table is None or table.asset_type.value != "table":
+            raise HTTPException(status_code=404, detail=f"no table asset {table_id!r}")
+        return _table_view(seen, table)
+
+    @router.get("/columns/{column_id}/related")
+    def column_related(column_id: str) -> dict[str, Any]:
+        """Every semantic-layer item touching one physical column."""
+        return related_to_column(_seen(), column_id)
+
+    return router
 
 
 def _table_summary(session: Any, table: Any) -> dict[str, Any]:
@@ -233,14 +259,15 @@ def _column_ref(session: Any, column_id: str) -> dict[str, Any] | None:
     }
 
 
-@router.get("/columns/{column_id}/related")
-def column_related(column_id: str) -> dict[str, Any]:
-    """Every semantic-layer item touching one physical column.
+def related_to_column(session: Any, column_id: str) -> dict[str, Any]:
+    """``GET /columns/{column_id}/related``'s payload as a function of the session.
 
     Unknown id → 200 with ``column_resolvable: false`` (not 404).
     Joins match by parsing the ON clause, not by substring.
+
+    Flat rather than nested inside :func:`make_router`: it is the long one, and a 120-line
+    closure would bury the four short handlers above it.
     """
-    session = _request_session()
     by_id = session.assets_by_id
     column = by_id.get(column_id)
     if column is None or column.asset_type.value != "column":

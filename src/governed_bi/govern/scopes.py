@@ -19,10 +19,8 @@ from .identifiers import fold
 __all__ = ["ScopeView", "scope_nodes", "iter_scopes", "SCOPE_BOUNDARY_NODES"]
 
 #: Node types that start a new scope. Pruning at these is what makes the walk local.
-#:
-#: ``exp.Subquery`` and ``exp.CTE`` are wrappers whose inner ``Select`` is its own
-#: scope; ``exp.Union`` owns its two sides. Anything not listed belongs to the scope
-#: that contains it.
+#: ``Subquery`` and ``CTE`` wrap an inner ``Select`` that is its own scope; ``Union``
+#: owns its two sides. Anything not listed belongs to the scope containing it.
 SCOPE_BOUNDARY_NODES: tuple[type[exp.Expr], ...] = (
     exp.Select, exp.Union, exp.Subquery, exp.CTE,
 )
@@ -50,11 +48,10 @@ class ScopeView:
 
     scope: Scope
     nodes: tuple[exp.Expr, ...]
-    #: Folded alias for every source, plus the bare table name where a base source
-    #: is not aliased. This is what the whole-row argument rule (§2, closing B2)
-    #: tests a function's bare arguments against: ``json_agg(t)`` names a *source*,
-    #: not a column, and that is the only thing distinguishing it from an ordinary
-    #: column reference in the AST.
+    #: Folded alias for every source, plus the bare table name where a base source is
+    #: not aliased. What the whole-row argument rule (§2, closing B2) tests bare
+    #: function arguments against: ``json_agg(t)`` names a *source*, not a column, and
+    #: nothing else in the AST distinguishes it from a column reference.
     source_names: frozenset[str]
 
     @property
@@ -70,11 +67,9 @@ class ScopeView:
     def functions(self) -> Iterator[exp.Func]:
         """Every function node in this scope: typed subclasses **and** ``Anonymous``.
 
-        ADR 0006 §2's third recorded defect: "every function call" is ambiguous
-        against sqlglot, because matching only ``exp.Anonymous`` and matching all
-        ``exp.Func`` are different allowlists, and ``CASE``/``CAST`` are typed nodes
-        rather than ``Anonymous``. ``exp.Anonymous`` is a subclass of ``exp.Func``,
-        so this is the wider of the two — deliberately.
+        Matching only ``exp.Anonymous`` and matching all ``exp.Func`` are different
+        allowlists (``CASE``/``CAST`` are typed nodes), and ``Anonymous`` is a subclass
+        of ``Func``, so this is deliberately the wider of the two. ADR 0006 §2.
         """
         for node in self.nodes:
             if isinstance(node, exp.Func):
@@ -105,10 +100,9 @@ def _source_names(scope: Scope) -> frozenset[str]:
 def iter_scopes(tree: exp.Expr) -> tuple[ScopeView, ...]:
     """Every scope in ``tree``, innermost first, each with its own nodes.
 
-    Order is ``traverse_scope``'s: children before parents. Callers that resolve
-    references against ancestor scopes (correlated subqueries) must therefore build
-    the whole map before resolving any of it, which is why :mod:`.binding` runs two
-    passes.
+    ``traverse_scope`` order: children before parents. Callers resolving against
+    ancestor scopes (correlated subqueries) must build the whole map first, which is
+    why :mod:`.binding` runs two passes.
     """
     return tuple(
         ScopeView(scope=scope, nodes=tuple(scope_nodes(scope)), source_names=_source_names(scope))

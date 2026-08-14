@@ -28,78 +28,78 @@ def _scripted(response_json: str):
 
 
 def test_no_existing_assets_is_always_novel() -> None:
-    from governed_bi.curator.enhancer import decide
+    from governed_bi.curator.enhancer import decide_fold
 
     model = _scripted('{"duplicate_of": null, "conflict_with": null}')
-    decision = decide(model, "some candidate", existing=[])
+    decision = decide_fold(model, "some candidate", existing=[])
     assert decision.duplicate_of is None
     assert decision.conflict_with is None
     assert model.prompts_seen == []  # never called -- nothing to compare against
 
 
 def test_duplicate_is_recognized_and_the_id_is_validated() -> None:
-    from governed_bi.curator.enhancer import decide
+    from governed_bi.curator.enhancer import decide_fold
 
     existing = [_Existing("fs.rev", "total revenue by month")]
     model = _scripted('{"duplicate_of": "fs.rev", "conflict_with": null}')
-    decision = decide(model, "monthly revenue total", existing=existing)
+    decision = decide_fold(model, "monthly revenue total", existing=existing)
     assert decision.duplicate_of == "fs.rev"
     assert decision.conflict_with is None
 
 
 def test_conflict_is_recognized() -> None:
-    from governed_bi.curator.enhancer import decide
+    from governed_bi.curator.enhancer import decide_fold
 
     existing = [_Existing("metric.net_rev", "net revenue = gross - discounts")]
     model = _scripted('{"duplicate_of": null, "conflict_with": "metric.net_rev"}')
-    decision = decide(model, "net revenue = gross - discounts - returns", existing=existing)
+    decision = decide_fold(model, "net revenue = gross - discounts - returns", existing=existing)
     assert decision.conflict_with == "metric.net_rev"
 
 
 def test_a_novel_candidate_sets_neither() -> None:
-    from governed_bi.curator.enhancer import decide
+    from governed_bi.curator.enhancer import decide_fold
 
     existing = [_Existing("fs.unrelated", "customer churn rate")]
     model = _scripted('{"duplicate_of": null, "conflict_with": null}')
-    decision = decide(model, "average order value", existing=existing)
+    decision = decide_fold(model, "average order value", existing=existing)
     assert decision.duplicate_of is None
     assert decision.conflict_with is None
 
 
 def test_an_invented_id_raises_rather_than_being_trusted() -> None:
     """Rule 1/2: the model may reference only ids it was given."""
-    from governed_bi.curator.enhancer import EnhancerError, decide
+    from governed_bi.curator.enhancer import EnhancerError, decide_fold
 
     existing = [_Existing("fs.rev", "total revenue by month")]
     model = _scripted('{"duplicate_of": "fs.made-up-id", "conflict_with": null}')
     with pytest.raises(EnhancerError, match="not one of the ids"):
-        decide(model, "candidate", existing=existing)
+        decide_fold(model, "candidate", existing=existing)
 
 
 def test_both_set_raises_rather_than_being_silently_narrowed() -> None:
-    from governed_bi.curator.enhancer import EnhancerError, decide
+    from governed_bi.curator.enhancer import EnhancerError, decide_fold
 
     existing = [_Existing("a", "x"), _Existing("b", "y")]
     model = _scripted('{"duplicate_of": "a", "conflict_with": "b"}')
     with pytest.raises(EnhancerError, match="both"):
-        decide(model, "candidate", existing=existing)
+        decide_fold(model, "candidate", existing=existing)
 
 
 def test_unparseable_response_raises() -> None:
-    from governed_bi.curator.enhancer import EnhancerError, decide
+    from governed_bi.curator.enhancer import EnhancerError, decide_fold
 
     existing = [_Existing("a", "x")]
     model = _scripted("not json at all")
     with pytest.raises(EnhancerError, match="could not parse"):
-        decide(model, "candidate", existing=existing)
+        decide_fold(model, "candidate", existing=existing)
 
 
 def test_a_fenced_json_response_is_still_parsed() -> None:
-    from governed_bi.curator.enhancer import decide
+    from governed_bi.curator.enhancer import decide_fold
 
     existing = [_Existing("a", "x")]
     model = _scripted('```json\n{"duplicate_of": "a", "conflict_with": null}\n```')
-    decision = decide(model, "candidate", existing=existing)
+    decision = decide_fold(model, "candidate", existing=existing)
     assert decision.duplicate_of == "a"
 
 

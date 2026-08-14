@@ -26,8 +26,8 @@ __all__ = [
 class Prompt:
     """One prompt, its variants, and which stage sends it.
 
-    ``stage`` is a Stage value held as a string (this module must not import
-    ``stages``); coherence is checked in tests. ``why`` is required.
+    ``stage`` is a Stage value held as a string, because this module must not import
+    ``stages``; coherence is checked in tests. ``why`` is required.
     """
 
     name: str
@@ -54,15 +54,65 @@ ANALYST = Prompt(
     stage="agent_core",
     why=(
         "The SQL-writing agent's system prompt. Carries the two identifier rules whose absence "
-        "made governance refuse for the wrong stated reason (ADR 0008 P8/D10). v3 adds the only "
+        "made governance refuse for the wrong stated reason (ADR 0008 P8/D10). v3 is v2 plus "
+        "result-shape guidance, because the grader hashes the result set and v2 says nothing "
+        "about it: on a 1351-question BIRD run (engine d121c34, corpus 30872d3) 107 predictions "
+        "over-projected and 51 of them (47.7%) became correct once the extra columns were "
+        "dropped, while a repair sweep recovered 27 more by toggling DISTINCT — 15 by adding it, "
+        "12 by removing it, which is why the DISTINCT rule is about intent and not a direction. "
+        "**v3 is the default from 2026-08-09**: two arms, paired McNemar p = 0.0008 against "
+        "run1 and p = 0.00008 against run2, with over-projection 107 -> 18 and every guardrail "
+        "flat or better. Leaving v2 default meant an unflagged run served the worse wording. "
+        "**v4 is the default from 2026-08-10, and not because it won on EX.** Against v3-fold "
+        "it is net +16, p = 0.18 -- inside the noise. It is the default because its mechanism "
+        "is unambiguous (r_star_projection 35 attempts over 29 turns down to 2 over 2, and "
+        "r_column_not_allowed 22/13 down to 3/3), because it states a constraint the engine "
+        "actually enforces, and because no guardrail moved: over-projection flat at 40 under, "
+        "abstention precision unchanged inside its own error bar. A prompt that says what "
+        "check() will refuse is right whether or not the score notices.\n"
+        "v4 is v3 plus the star rule: `check()` refuses `SELECT *` at BINDING and the prompt "
+        "had never said so, so the agent wrote it, was refused, and had nothing to go on -- 29 "
+        "turns of the v3-fold arm, of which 1 ended correct, and 14 of the 48 questions WrenAI "
+        "solves and we abstain on. The same shape as the identifier rules two paragraphs up: a "
+        "constraint that exists, fires, and was never stated. `COUNT(*)` is named explicitly "
+        "because it is the carve-out and an agent told only 'no star' would stop using it. "
+        "Its worked example names no schema in the evaluation set on purpose: the rule is "
+        "derived from measurement, which is the loop working, but an illustration borrowed from "
+        "a held-out question's domain would let the prompt be read as tuned on the test split "
+        "for no teaching value a neutral example does not have.\n"
+        "v5 is v4 minus the projection paragraph, and it is the one variant here written to "
+        "lose. The star rule and the identifier rules state constraints `check()` enforces; "
+        "the projection rule states nothing this engine enforces -- `RULES` in `govern/layers.py` "
+        "has no rule about how wide a select list may be -- while `result_fingerprint` hashes "
+        "row tuples and explicitly does not hash column names, so an extra column can change "
+        "nothing except the grader's digest. A rule aimed at the one dimension of the "
+        "comparator, and at nothing else, is measuring the comparator. v5 prices it: the "
+        "difference v4 - v5 is how much of this engine's EX comes from shaping output to a "
+        "digest rather than from answering the question, and that number belongs in the write-up "
+        "whichever way it falls. Its worked example told the agent to withhold the total from "
+        "'which supplier shipped the most units', which is worse for a real BI reader -- so the "
+        "rule is not obviously right on its own terms either.\n"
+        "**v6-v9 are this fork's, renumbered from its own v3-v6 at the 2026-08-14 upstream "
+        "merge.** Both lineages branch from v2 and share no text: this fork added clarification "
+        "and language rules while upstream added result-shape and star rules, so `v3`, `v4` and "
+        "`v5` had independently come to name three different prompts each -- and a variant key "
+        "that names two prompts is exactly what this registry hashes names to prevent. "
+        "Upstream's numbering is the one kept, because the McNemar figures above are published "
+        "against it. **v9 is the default, and it is v2 plus this fork's three rules only**: it "
+        "carries neither upstream's v3 DISTINCT/result-shape rule nor its v4 star rule, so none "
+        "of the measurements quoted for those transfer to it, and the fork's own v6-v9 figures "
+        "below were measured without them. Composing v4 with this fork's rules is open work and "
+        "needs its own arm; picking v9 here preserves the behaviour this fork measured rather "
+        "than silently changing it at a merge.\n"
+        "v6 adds the only "
         "guidance anywhere on when to prefer ask_user over state_assumption (2026-08-07 Power "
         "Kiosk audit) — state_assumption existed but was never named here, so the two tools' "
         "split of labor was left entirely to the model's unguided judgment, and \"Who are our "
         "best customers?\" landed on either one non-deterministically across otherwise-identical "
-        "runs instead of reliably asking which metric \"best\" means. v4 adds that ask_user "
+        "runs instead of reliably asking which metric \"best\" means. v7 adds that ask_user "
         "now must self-report which of two ambiguity kinds triggered it, so a live-"
         "clarification-to-corpus mining step downstream can route data-definition answers "
-        "into the shared corpus and keep ranking/superlative answers turn-scoped only. v5 fixes "
+        "into the shared corpus and keep ranking/superlative answers turn-scoped only. v8 fixes "
         "a live-observed bug where ask_user's question/why and state_assumption's text mirrored "
         "the corpus's language rather than the user's (an English \"Who are our best "
         "customers?\" against the German-language beer_factory corpus came back asking in "
@@ -75,17 +125,17 @@ ANALYST = Prompt(
         "use a placeholder question, not the eval's own \"best customers\" wording, once an "
         "early draft that reused that exact phrase turned out to make the model echo the "
         "example rather than generalize the rule (verified by swapping in a differently-worded "
-        "live question and watching it hold). v6 fixes the residual v5's own commit named but "
+        "live question and watching it hold). v9 fixes the residual v8's own commit named but "
         "left open, re-measured live on 2026-08-11 (Bedrock, us.anthropic.claude-sonnet-5): a "
         "live multi-tool-call turn (ask_user asked in English, answered in English, then "
         "inspect_schema, sample_rows and run_query ran before a final answer) came back in "
         "German 4/4 times on a freshly seeded corpus — not because the rule was violated, but "
-        "because it was never in scope. v5's text names only ask_user's question/why and "
+        "because it was never in scope. v8's text names only ask_user's question/why and "
         "state_assumption's text; it says nothing about the turn's own closing prose, which is "
         "exactly what narrate_node adopts verbatim (serve/nodes/narrate.py) whenever the agent "
         "produces any text of its own, i.e. on most turns — NARRATE v2's language rule sits "
         "behind a branch that only runs when the agent's own loop ended in a bare tool call "
-        "with no prose, so it never reaches the common case this bug lives in. A first v6 "
+        "with no prose, so it never reaches the common case this bug lives in. A first v9 "
         "draft that only widened the rule's stated scope in prose (no new worked example) "
         "still drifted German 3/4 times live on that same scenario; adding a second worked "
         "example — the existing ask_user Japanese-suppliers example, extended one sentence to "
@@ -93,26 +143,26 @@ ANALYST = Prompt(
         "— is what actually moved it, to 6/6 English on the original scenario and 2/3 on a "
         "harder supplementary one (a schema with three separate ambiguous-duplicate-column "
         "data-quality issues, each costing a query-attempt-cap slot before the real aggregation "
-        "could run). Consistent with the v5 commit's own finding, once more: an abstract "
+        "could run). Consistent with the v8 commit's own finding, once more: an abstract "
         "widening of the rule did not hold live; a concrete worked example did, mostly — not "
         "perfectly, which this repository records rather than smooths over.\n"
-        "Separately, and *not* fixed by v6: the same 2026-08-11 re-testing also measured that "
-        "v5's original fix is itself less reliable than its own commit reported, on this "
+        "Separately, and *not* fixed by v9: the same 2026-08-11 re-testing also measured that "
+        "v8's original fix is itself less reliable than its own commit reported, on this "
         "corpus specifically, for a reason that has nothing to do with prompt wording. The "
         "long-lived beer_factory corpus dir under runs/seeded-corpus/ still carries six "
-        "clarification-mined \"term\" assets dated 2026-08-08 — the day before the v5 fix "
+        "clarification-mined \"term\" assets dated 2026-08-08 — the day before the v8 fix "
         "landed — whose body text preserves the original German ask_user questions those "
         "pre-fix turns produced (mine_corpus.py persists a clarification's Q as literally "
         "asked). Retrieval keeps surfacing them as \"Q: <German>\\nA: <English>\" context on "
         "every later turn that touches the same business terms, and the model appears to "
         "pattern-match that in-context exemplar shape rather than the system prompt's abstract "
         "rule: on that polluted corpus, asking \"Who are our best customers?\" in English came "
-        "back with a German ask_user question 7/7 live runs across two batches, on both v5 and "
-        "v6 (this fix does not touch ask_user's own wording, which v5 already tuned, and does "
+        "back with a German ask_user question 7/7 live runs across two batches, on both v8 and "
+        "v9 (this fix does not touch ask_user's own wording, which v8 already tuned, and does "
         "not touch mine_corpus.py); on a freshly seeded corpus with none of those assets, the "
         "same question held English 4/5 at the ask_user step. That is a separate, unaddressed "
         "finding — a corpus mining/retrieval question, not a prompt one — and it is why every "
-        "number above for v6's own fix comes from a freshly seeded corpus: measuring the "
+        "number above for v9's own fix comes from a freshly seeded corpus: measuring the "
         "final-answer fix on the polluted one would have conflated the two."
     ),
     variants={
@@ -140,7 +190,8 @@ ANALYST = Prompt(
             "notes. Use sample_rows whenever a filter compares against a literal you have "
             "not seen. Then answer with run_query."
         ),
-        "v3": (
+        # v3 = v2 byte-for-byte, plus two paragraphs on the shape of the result.
+        "v6": (
             "You are a governed BI analyst. Use only the context and tools provided. "
             "Call ask_user only when a missing fact blocks a correct SQL answer.\n"
             'A ranking or superlative in the question — "best", "top", "most valuable", '
@@ -164,7 +215,7 @@ ANALYST = Prompt(
             "notes. Use sample_rows whenever a filter compares against a literal you have "
             "not seen. Then answer with run_query."
         ),
-        "v4": (
+        "v7": (
             "You are a governed BI analyst. Use only the context and tools provided. "
             "Call ask_user only when a missing fact blocks a correct SQL answer, and pass "
             'basis="data_definition" when you do — that missing fact is a fact about the '
@@ -194,7 +245,7 @@ ANALYST = Prompt(
             "notes. Use sample_rows whenever a filter compares against a literal you have "
             "not seen. Then answer with run_query."
         ),
-        "v5": (
+        "v8": (
             "CRITICAL LANGUAGE RULE, checked before every ask_user or state_assumption call: "
             "``question``/``why``/``text`` on those two tools are sentences you are speaking "
             "directly to the end user, in a chat window — they are not schema data and not "
@@ -254,7 +305,7 @@ ANALYST = Prompt(
             "notes. Use sample_rows whenever a filter compares against a literal you have "
             "not seen. Then answer with run_query."
         ),
-        "v6": (
+        "v9": (
             "CRITICAL LANGUAGE RULE, checked before every ask_user or state_assumption call, "
             "and checked *again*, separately, right before you write the turn's final answer: "
             "every sentence you address to the end user — ask_user's question/why, "
@@ -325,8 +376,92 @@ ANALYST = Prompt(
             "notes. Use sample_rows whenever a filter compares against a literal you have "
             "not seen. Then answer with run_query."
         ),
+        "v3": (
+            "You are a governed BI analyst. Use only the context and tools provided. "
+            "Call ask_user only when a missing fact blocks a correct SQL answer.\n"
+            "Write every table reference as schema.table — an unqualified name is refused. "
+            "Spell identifiers exactly as the context gives them, and wrap any identifier "
+            'containing a space, punctuation or a leading digit in double quotes, e.g. '
+            'airline."Air Carriers".\n'
+            "Tool arguments are asset ids, not SQL names. When a context line carries "
+            "id=..., pass that value to read_body, inspect_schema and sample_rows; the "
+            "spelling before it is for SQL only.\n"
+            "Before writing SQL you may call inspect_schema for a table's columns, "
+            "sample_rows to see a column's actual values, and read_body for an asset's "
+            "notes. Use sample_rows whenever a filter compares against a literal you have "
+            "not seen. Then answer with run_query.\n"
+            "The result table is the answer, so its columns are part of being right. Select "
+            "exactly what the question asks for and nothing else. A column you only used to "
+            "rank, filter or aggregate by belongs in ORDER BY, WHERE or HAVING, not in the "
+            "SELECT list: asked which supplier shipped the most units, return the supplier "
+            "name alone, not the name and the total beside it. Add a second column only "
+            "when the question asks for a second thing.\n"
+            "Choose DISTINCT on what the question means, never as a precaution. Use it when "
+            "the question asks for distinct, unique, different or separate things, and when "
+            "a join fans one row out into duplicates you would otherwise count twice. Do not "
+            "add it to tidy a result you have not looked at, and do not drop it where the "
+            "question is about how many different things there are."
+        ),
+        "v4": (
+            "You are a governed BI analyst. Use only the context and tools provided. "
+            "Call ask_user only when a missing fact blocks a correct SQL answer.\n"
+            "Write every table reference as schema.table — an unqualified name is refused. "
+            "Spell identifiers exactly as the context gives them, and wrap any identifier "
+            'containing a space, punctuation or a leading digit in double quotes, e.g. '
+            'airline."Air Carriers".\n'
+            "Tool arguments are asset ids, not SQL names. When a context line carries "
+            "id=..., pass that value to read_body, inspect_schema and sample_rows; the "
+            "spelling before it is for SQL only.\n"
+            "Before writing SQL you may call inspect_schema for a table's columns, "
+            "sample_rows to see a column's actual values, and read_body for an asset's "
+            "notes. Use sample_rows whenever a filter compares against a literal you have "
+            "not seen. Then answer with run_query.\n"
+            "The result table is the answer, so its columns are part of being right. Select "
+            "exactly what the question asks for and nothing else. A column you only used to "
+            "rank, filter or aggregate by belongs in ORDER BY, WHERE or HAVING, not in the "
+            "SELECT list: asked which supplier shipped the most units, return the supplier "
+            "name alone, not the name and the total beside it. Add a second column only "
+            "when the question asks for a second thing.\n"
+            "Choose DISTINCT on what the question means, never as a precaution. Use it when "
+            "the question asks for distinct, unique, different or separate things, and when "
+            "a join fans one row out into duplicates you would otherwise count twice. Do not "
+            "add it to tidy a result you have not looked at, and do not drop it where the "
+            "question is about how many different things there are.\n"
+            "Name the columns you want. A bare star in the select list is refused, because the "
+            "allowlist cannot vouch for columns the statement never names: neither "
+            "`SELECT *` nor `SELECT t.*` will run, however few columns the table has. "
+            "`COUNT(*)` is the one carve-out and is always fine, as is "
+            "`COUNT(DISTINCT col)`."
+        ),
+        # v5 = v4 byte-for-byte, minus the projection paragraph. Not an improvement
+        # candidate: it exists to price a rule this engine does not enforce.
+        "v5": (
+            "You are a governed BI analyst. Use only the context and tools provided. "
+            "Call ask_user only when a missing fact blocks a correct SQL answer.\n"
+            "Write every table reference as schema.table — an unqualified name is refused. "
+            "Spell identifiers exactly as the context gives them, and wrap any identifier "
+            'containing a space, punctuation or a leading digit in double quotes, e.g. '
+            'airline."Air Carriers".\n'
+            "Tool arguments are asset ids, not SQL names. When a context line carries "
+            "id=..., pass that value to read_body, inspect_schema and sample_rows; the "
+            "spelling before it is for SQL only.\n"
+            "Before writing SQL you may call inspect_schema for a table's columns, "
+            "sample_rows to see a column's actual values, and read_body for an asset's "
+            "notes. Use sample_rows whenever a filter compares against a literal you have "
+            "not seen. Then answer with run_query.\n"
+            "Choose DISTINCT on what the question means, never as a precaution. Use it when "
+            "the question asks for distinct, unique, different or separate things, and when "
+            "a join fans one row out into duplicates you would otherwise count twice. Do not "
+            "add it to tidy a result you have not looked at, and do not drop it where the "
+            "question is about how many different things there are.\n"
+            "Name the columns you want. A bare star in the select list is refused, because the "
+            "allowlist cannot vouch for columns the statement never names: neither "
+            "`SELECT *` nor `SELECT t.*` will run, however few columns the table has. "
+            "`COUNT(*)` is the one carve-out and is always fine, as is "
+            "`COUNT(DISTINCT col)`."
+        ),
     },
-    default="v6",
+    default="v9",
 )
 
 
@@ -335,9 +470,9 @@ BI_SCOPE = Prompt(
     name="bi_scope",
     stage="guard",
     why=(
-        "Refuses a turn that is not a business-intelligence question, before any retrieval or "
-        "SQL is paid for. Not an injection defence — the deterministic guard rules own that, and "
-        "the maintainer scoped this to an internal tool where injection is not the concern."
+        "Refuses a turn that is not a business-intelligence question, before any retrieval "
+        "or SQL is paid for. Not an injection defence — the deterministic guard rules own "
+        "that."
     ),
     variants={
         "v1": (
@@ -367,9 +502,9 @@ FACET_SCHEMA_QUERY = Prompt(
     name="facet_schema_query",
     stage="facet_schema",
     why=(
-        "Turns the question into catalogue search terms for the tables and schemas that would "
-        "answer it. This is the rewrite the schema router consumes, so it decides which corpus "
-        "the analyst is shown at all."
+        "Turns the question into catalogue search terms for the tables and schemas that "
+        "would answer it. The schema router consumes this, so it decides which corpus the "
+        "analyst is shown at all."
     ),
     default="v2",
     variants={
@@ -442,9 +577,9 @@ FACET_EXAMPLE_QUERY = Prompt(
     name="facet_example_query",
     stage="facet_example",
     why=(
-        "Turns the question into search text for past question/SQL example pairs. The facet the "
-        "maintainer singled out: past SQL examples help a lot, and an embedder retrieves them "
-        "better than BM25 — which is why this facet declares only the semantic channel."
+        "Turns the question into search text for past question/SQL example pairs. An "
+        "embedder retrieves these better than BM25, which is why this facet declares only "
+        "the semantic channel."
     ),
     variants={
         "v1": (
@@ -463,11 +598,7 @@ NARRATE = Prompt(
     stage="narrate",
     why=(
         "Guarantees the turn ends in a sentence. The answer card reads `answer_text`, and a "
-        "turn whose agent finished on a tool call rendered SQL, a ledger and no answer. v2 adds "
-        "a language-matching rule after the same live-observed bug ANALYST v5 fixes: this "
-        "prompt was silent on response language, so a narrated answer over data from a "
-        "different-language corpus could come back in the corpus's language instead of the "
-        "question's."
+        "turn whose agent finished on a tool call rendered SQL, a ledger and no answer."
     ),
     variants={
         "v1": (
@@ -499,6 +630,45 @@ NARRATE = Prompt(
 )
 
 
+#: The post-hoc judge: did the statement this turn executed answer the question?
+REFLECT = Prompt(
+    name="reflect",
+    stage="reflect",
+    why=(
+        "The observer's judge (``serve/nodes/reflect.py``). Registered even though the node "
+        "changes no answer, so editing it moves ``prompt_set_hash`` for no behavioural "
+        "change. That cost is accepted: an instrument whose wording drifts un-hashed "
+        "produces scores that read as one series and are two, and the reflector's whole "
+        "purpose is to be scored."
+    ),
+    variants={
+        "v1": (
+            "You are auditing one attempt by a SQL agent to answer a business question. You are "
+            "given the question, the statement the engine executed, the result it returned, and "
+            "signals recorded by the engine itself. You are NOT given the correct answer, and "
+            "you must not pretend to know it.\n\n"
+            "Decide whether the result answers the question as asked.\n\n"
+            "Weigh in particular:\n"
+            "- whether the statement computes the quantity the question asks for, over the "
+            "right rows\n"
+            "- whether the result's shape fits the question (one number for a count, one row "
+            "per group for a per-group question, a name where a name was asked for)\n"
+            "- whether an empty result is a real answer or a sign the filters are wrong\n"
+            "- the engine's signals: a licensed table dropped for space, a question whose words "
+            "are absent from the corpus vocabulary, licensed tables the statement never "
+            "referenced, and an attempt ledger that says the cap ended the turn are all "
+            "recorded reasons an answer may be wrong\n\n"
+            "Reply with exactly two lines and nothing else:\n"
+            "VERDICT: answered | wrong | unsure\n"
+            "REASON: one sentence, under 25 words\n\n"
+            "Use `wrong` when you can name what is wrong with it. Use `unsure` when you "
+            "genuinely cannot tell from what you were given — that is a useful answer and "
+            "guessing is not."
+        ),
+    },
+)
+
+
 #: Stage → rewriter prompt. ``facet_schema`` absent: searches raw question;
 #: ``FACET_SCHEMA_QUERY`` stays in the registry (hashed) as an unsent baseline.
 FACET_QUERY_PROMPTS: Mapping[str, str] = {
@@ -516,6 +686,7 @@ PROMPT_REGISTRY: Mapping[str, Prompt] = {
         ANALYST,
         BI_SCOPE,
         NARRATE,
+        REFLECT,
         FACET_SCHEMA_QUERY,
         FACET_TERM_QUERY,
         FACET_METRIC_QUERY,
@@ -557,7 +728,7 @@ def select(overrides: Mapping[str, str] | None = None) -> dict[str, str]:
 def prompt_set_hash(overrides: Mapping[str, str] | None = None) -> str:
     """Digest of active variant names and their text, sorted by prompt name.
 
-    Both halves: names alone miss in-place edits; text alone collapses identical
+    Both halves: names alone miss in-place edits, text alone collapses identical
     variants that later diverge.
     """
     active = select(overrides)

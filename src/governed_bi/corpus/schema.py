@@ -70,8 +70,8 @@ class ColumnRole(str, Enum):
 
 
 class ReliabilityStatus(str, Enum):
-    """AI-authorable. ``suspect`` argues against a column and the analyst still
-    sees it; ``governance.excluded`` removes it, which a person signs for."""
+    """AI-authorable. ``suspect`` argues against a column and the analyst still sees it;
+    removing it is ``governance.excluded``, which a person signs for."""
 
     ok = "ok"
     suspect = "suspect"
@@ -117,10 +117,10 @@ class Governance:
     """Human-authored override, outside the three tiers (D6).
 
     ``excluded=True`` removes the asset from everything the analyst sees, in every
-    environment. **There is no tool that writes this** -- exclusion is human-only,
-    enforced by the absence of a tool plus the phase-boundary guard that re-stamps
-    every model-authored ``governance`` block (ADR 0005 §1.5). This class is the
-    shape; it is not the enforcement.
+    environment. **No tool writes this**: exclusion is human-only, enforced by the absence
+    of a tool. There is no phase-boundary re-stamper — ``corpus/provenance.py`` was deleted
+    on 2026-08-06 for having zero callers, and ``tests/corpus/test_analyst_view.py`` is the
+    control that replaced it. This class is the shape, not the enforcement.
     """
 
     excluded: bool = False
@@ -133,9 +133,9 @@ class Governance:
 class Reliability:
     """A caveat on a column. AI-authorable; renders every turn, never budgeted out.
 
-    I3: a relevance cap is exactly what removes a decoy column, because under
-    obfuscation a decoy is *designed* to rank low -- and deleting the warning while
-    leaving the column reachable is strictly worse than not capping.
+    I3: a relevance cap would remove exactly the decoy columns this warns about, since
+    under obfuscation a decoy is *designed* to rank low — and dropping the warning while
+    leaving the column reachable is worse than not capping.
     """
 
     status: ReliabilityStatus = ReliabilityStatus.ok
@@ -156,10 +156,9 @@ class Provenance:
 class Audit:
     """Why the inference was made. Never enters the analyst context.
 
-    ``extra`` is the one place unknown keys are kept rather than rejected: evidence
-    prose and human-appended provenance vary, and v1's block was ``extra="allow"``
-    for that reason. Everywhere else an unknown key is an error, because a mistyped
-    field name that parses is a field nobody writes and nothing reads.
+    ``extra`` is the one place unknown keys are kept rather than rejected, because evidence
+    prose and human-appended provenance vary. Everywhere else an unknown key is an error: a
+    mistyped field name that parses is a field nobody writes and nothing reads.
     """
 
     provenance: Provenance | None = None
@@ -171,10 +170,8 @@ class Audit:
 class Binding:
     """What a ``TermAsset`` refers to. **A mandatory mapping, not a description.**
 
-    Renamed from v1's ``TermBinding(asset_type, asset_id)``: a nested field called
-    ``asset_type`` shadows the discriminator that decides the *outer* asset's type,
-    and one field name meaning two things in one file is the drift this package
-    exists to avoid.
+    Fields are ``target_*`` and not ``asset_*``: a nested ``asset_type`` would shadow the
+    discriminator that decides the *outer* asset's type in the same file.
     """
 
     target_type: AssetType
@@ -197,9 +194,8 @@ COMMON_FIELDS: tuple[str, ...] = ("id", "summary", "body", "governance", "confid
 
 @dataclass(frozen=True, slots=True)
 class SchemaAsset:
-    """A namespace. New in v2, and it collapses three problems at once: cross-table
-    hard rules get a home, schema routing stops concatenating every table's text,
-    and both retrieval levels get a first-class asset."""
+    """A namespace. Gives cross-table hard rules a home and lets schema routing rank one
+    asset per schema instead of concatenating every table's text."""
 
     asset_type: ClassVar[AssetType] = AssetType.schema
     id: str
@@ -216,10 +212,9 @@ class SchemaAsset:
 class TableAsset:
     """``columns`` holds **derived column ids**, not inline column objects.
 
-    On disk a column lives inline under its table (ADR 0005 §1.2); in memory it is
-    its own asset, because the index has one entry per asset and a column that also
-    lived inside its table's object would be two copies of one thing. The loader
-    expands one into the other and derives the ids.
+    On disk a column lives inline under its table (ADR 0005 §1.2); in memory it is its own
+    asset, because the index has one entry per asset and a column living inside its table's
+    object too would be two copies of one thing. The loader expands one into the other.
     """
 
     asset_type: ClassVar[AssetType] = AssetType.table
@@ -266,11 +261,10 @@ class ColumnAsset:
 class JoinAsset:
     """An edge, identified by the **relationship** rather than the table pair.
 
-    No ``schema`` field: the tag rule reads ``left_table``'s schema, and carrying a
-    second copy of that fact is how two relationships between one table pair
-    collapsed in v1 -- 33 of 57 schemas lost at least one edge before the curator
-    ever ran. ADR 0005 §1.2 puts the ON-clause digest in the id for the same
-    reason.
+    No ``schema`` field: the tag rule reads ``left_table``'s schema, and a second copy of
+    that fact is how two relationships between one table pair collapsed in v1 — 33 of 57
+    schemas lost an edge before the curator ran (2026-07-29, pre-2026-08-05). ADR 0005 §1.2
+    puts the ON-clause digest in the id for the same reason.
     """
 
     asset_type: ClassVar[AssetType] = AssetType.join
@@ -312,12 +306,10 @@ class MetricAsset:
 class TermAsset:
     """Always explanatory: a phrase, and what it refers to.
 
-    ``summary`` must include **all of the aliases**: under I1 only ``summary`` is
-    indexed, so synonyms living only in ``synonyms`` or ``body`` would sever the
-    term-to-asset bridge -- and that bridge is why every *other* summary may be
-    precise instead of keyword-stuffed. A term whose aliases do not fit in 250
-    characters splits into two assets sharing a binding (§1.2), rather than
-    truncating the thing the asset is for.
+    ``summary`` must include **all of the aliases**: under I1 only ``summary`` is indexed,
+    so synonyms living only in ``synonyms`` or ``body`` sever the term-to-asset bridge —
+    the bridge that lets every *other* summary be precise instead of keyword-stuffed. A
+    term whose aliases exceed 250 chars splits into two assets sharing a binding (§1.2).
     """
 
     asset_type: ClassVar[AssetType] = AssetType.term
@@ -358,9 +350,9 @@ class FewShotAsset:
 class NegativeExampleAsset:
     """One question class per asset. ``schema=None`` means system-wide.
 
-    Empty on BIRD by construction and kept deliberately: it is the only asset whose
-    hit is a **decision** rather than a ranking, and its budget is the literal
-    ``"n/a"`` precisely so no implicit zero can drop it the way v1's did.
+    Empty on BIRD by construction, kept anyway: it is the only asset whose hit is a
+    **decision** rather than a ranking, and its budget is the literal ``"n/a"`` so that no
+    implicit zero can drop it the way v1's did.
     """
 
     asset_type: ClassVar[AssetType] = AssetType.negative_example
@@ -401,8 +393,8 @@ ASSET_CLASSES: Mapping[AssetType, type] = {
 def class_for(asset_type: object) -> type:
     """The class for a wire ``asset_type``. Raises ``ValueError`` on anything else.
 
-    Direct indexing, never ``.get`` with a default: an unrecognised type must stop
-    here loudly rather than become an empty something downstream.
+    Direct indexing, never ``.get`` with a default: an unrecognised type must stop here
+    rather than become an empty something downstream.
     """
     try:
         member = AssetType(asset_type)
@@ -415,10 +407,9 @@ def class_for(asset_type: object) -> type:
 def _assert_every_asset_carries_the_common_fields() -> None:
     """Import-time closure over the repetition above.
 
-    The six common fields are written out eight times because inheritance orders
-    them wrongly. Repetition that nothing checks is exactly the shape that let two
-    v1 tables disagree for a year, so a class that forgets ``governance`` -- or a
-    ninth type with no policy row -- fails the import instead of the run.
+    The six common fields are written out eight times because inheritance orders them
+    wrongly. Unchecked repetition drifts, so a class that forgets ``governance`` — or a
+    ninth type with no register policy row — fails the import instead of the run.
     """
     missing_rows = sorted(t.value for t in ASSET_CLASSES if t not in ASSET_REGISTER)
     if missing_rows:  # pragma: no cover - import-time guard

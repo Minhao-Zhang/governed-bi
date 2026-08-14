@@ -135,10 +135,13 @@ def test_the_trace_stage_grouping_is_derived_from_the_register() -> None:
     source = (Path(__file__).resolve().parent.parent.parent / "src" / "governed_bi" / "api" / "routes.py").read_text(
         encoding="utf-8"
     )
-    body = source.split("def audit_trace(", 1)[1].split("\ndef ", 1)[0]
+    # `trace_for`, not the route: `make_app` turned the handlers into closures over the app's
+    # turn log, and `audit_trace` is now the three lines that call this. The claim is about
+    # where the payload is *built*, which is here.
+    body = source.split("def trace_for(", 1)[1].split("\ndef ", 1)[0]
 
     assert "for field in RECORD_REGISTER" in body and "field.owner" in body, (
-        "audit_trace no longer groups by the register's declared owner stage"
+        "trace_for no longer groups by the register's declared owner stage"
     )
 
     # Scoped to the **grouping**, not the whole function. The response envelope reads
@@ -166,8 +169,9 @@ def test_every_registered_field_reaches_a_trace_stage(turn_log) -> None:
     from governed_bi.api import routes
 
     turn_log.append_turn(_record(), question="q")
-    # The route reads through the module-level store, which the fixture has repointed.
-    trace = routes.audit_trace("t-1")
+    # The turn log is an argument now, so this hands over the fixture's rather than repointing
+    # a module-level store and hoping the route reads the same one.
+    trace = routes.trace_for(turn_log, "t-1")
 
     assert trace["found"] is True
     traced = {f["name"] for stage in trace["stages"] for f in stage["fields"]}
@@ -199,7 +203,7 @@ def test_the_trace_names_keys_the_register_does_not_declare(turn_log) -> None:
     from governed_bi.api import routes
 
     turn_log.append_turn(_record(invented_by_nobody="surprise"), question="q")
-    trace = routes.audit_trace("t-1")
+    trace = routes.trace_for(turn_log, "t-1")
 
     assert trace["undeclared_keys"] == ["invented_by_nobody"]
     assert trace["record"]["invented_by_nobody"] == "surprise", (
@@ -221,7 +225,7 @@ def test_a_missing_turn_says_so_rather_than_rendering_an_empty_one(turn_log) -> 
     """
     from governed_bi.api import routes
 
-    assert routes.audit_trace("nope")["found"] is False
+    assert routes.trace_for(turn_log, "nope")["found"] is False
     assert not hasattr(routes, "audit_turn"), (
         "the per-turn route was deleted so there is one shape per turn; a re-added second one "
         "is a shape to keep in step with this one, for a caller that does not exist"

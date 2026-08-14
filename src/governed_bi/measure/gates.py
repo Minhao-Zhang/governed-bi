@@ -15,6 +15,7 @@ from typing import Callable, Mapping
 from ..register.knobs import resume_drift_keys
 from ..register.quantity import Measured
 from ..register.record import GATE_CONDITIONS
+from ..register.stages import Outcome
 from .degradation import channel_anomalies
 from .population import Population
 
@@ -76,9 +77,8 @@ def _result(
 def _zero_count_gate(field: str, counter: str) -> GateFn:
     """A gate of the form "``counter`` is zero across the arm".
 
-    Factored because four of the six gates have this shape, and four hand-written
-    copies is four chances to invert a comparison — v1 shipped two
-    ``LOW_CONFIDENCE_JOIN`` constants whose operators disagreed.
+    Factored because most gates have this shape, and each hand-written copy is another
+    chance to invert the comparison.
     """
 
     def gate(arm: Population) -> GateResult:
@@ -104,9 +104,9 @@ def _zero_count_gate(field: str, counter: str) -> GateFn:
 def _outcome_gate(arm: Population) -> GateResult:
     """No turn classified ``crashed``.
 
-    The single most expensive v1 defect: a crash counted as a refusal contaminated
-    every arm-to-arm delta by a *different* amount, because arms do not crash at the
-    same rate. So this gate is on the classification, not on an error string.
+    A crash counted as a refusal contaminates every arm-to-arm delta by a *different*
+    amount, since arms do not crash at the same rate. Gated on the classification, never
+    on an error string.
     """
     return _zero_count_gate("outcome", "crashed")(arm)
 
@@ -114,15 +114,11 @@ def _outcome_gate(arm: Population) -> GateResult:
 def _facet_channels_gate(arm: Population) -> GateResult:
     """No channel state differs from its declared expectation — on turns that ran.
 
-    The wording matters and is the reason this is not a ``_zero_count_gate``. Eight
-    record fields are stage-conditional, and ``facet_channels`` is one: a
-    guard-blocked turn never runs the fan-out. Under a naive rate an **empty**
-    ``facet_channels`` reads as "no channel differed", i.e. as clean, on a turn where
-    no channel ran at all — absence reading as agreement, in the field added to stop
-    absence reading as agreement.
-
-    So the denominator is turns where the fan-out ran, and that count is published.
-    Zero such turns is :attr:`Verdict.cannot_evaluate`, never a pass.
+    Not a ``_zero_count_gate``: ``facet_channels`` is stage-conditional (a guard-blocked
+    turn never runs the fan-out), so under a naive rate an empty ``facet_channels`` reads
+    as "no channel differed" on a turn where no channel ran. The denominator is therefore
+    turns where the fan-out ran, published; zero such turns is
+    :attr:`Verdict.cannot_evaluate`, never a pass.
     """
     ran = arm.restrict(lambda r: r.get("facet_channels") not in (None, [], {}), "fan-out ran")
     if ran.n == 0:
@@ -142,13 +138,10 @@ def _facet_channels_gate(arm: Population) -> GateResult:
 def _drift(arm: Population) -> str:
     """Which facet's which channel differed, for a gate that has already failed.
 
-    The verdict comes from the stamped ``facet_degraded`` counter, not from here: this only
-    names the drift, so that a refused run does not send its reader to the code. The
-    judgement is ``register.facets.channel_anomaly`` through
-    :func:`~.degradation.channel_anomalies` — the same function ``serve.stamp`` decides the
-    counter with, because a second comparison here could disagree with the record it is
-    reporting on. ``extra_channel`` is included: it is drift, it did not refuse this run,
-    and a reader looking at a failure wants to see it anyway.
+    Naming only — the verdict comes from the stamped ``facet_degraded`` counter. Judged
+    through :func:`~.degradation.channel_anomalies`, the same function ``serve.stamp``
+    decides the counter with, so this cannot disagree with the record it reports on.
+    ``extra_channel`` is included: it is drift, and it did not refuse this run.
     """
     seen: dict[str, int] = {}
     unjudgeable = 0
@@ -172,35 +165,27 @@ def _drift(arm: Population) -> str:
 
 
 def _context_hash_gate(arm: Population) -> GateResult:
-    """The delivery gate: the treatment actually differed between arms.
+    """The delivery gate's single-arm half: every turn carries a ``context_hash``. L-R2.
 
-    L-R2. v1 ran a ladder in which two arms received byte-identical context and
-    reported the difference between them as an effect. This gate is on
-    ``context_hash`` and not ``delivery_hash`` because the latter depends on which
-    tool calls the model chose to make, so a gate on it would conflate "the treatment
-    differs" with "the model behaved differently".
+    On ``context_hash`` and not ``delivery_hash``, because the latter depends on which tool
+    calls the model chose, conflating "the treatment differs" with "the model behaved
+    differently".
 
-    **This gate had two conditions in it and returned ``cannot_evaluate`` for both.** One is
-    genuinely single-arm — every turn must *carry* a ``context_hash``, or there is nothing to
-    compare later — and one is genuinely cross-arm: the >= 95% distinctness threshold needs both
-    arms and lives in ``eval/report.context_hashes_distinct``. Returning
-    ``cannot_evaluate`` even when coverage was complete made :func:`quotable` a function that
-    **could never return True**, because ``cannot_evaluate`` blocks quotation. A permanent
-    refusal is not a strict gate; it is an API no caller can use, and the observable consequence
-    was that no driver called it and no number this repository published passed any gate at all.
-
-    So the single-arm half is decided here and the cross-arm half is still refused to the
-    caller that holds both arms. That preserves the actual principle — *a single-arm
-    approximation of a two-arm condition is how a gate ends up measuring something adjacent to
-    what it claims* — while letting the condition this arm can answer be answered.
+    **This gate does not test that the treatment differed, and nothing does it by hash any
+    more.** The cross-arm half used to be a >= 95% distinctness threshold in
+    ``eval/report.context_hashes_distinct``; audit D9 retired it, because retrieval is
+    nondeterministic and the hashes differ whether or not the treatment did — it passed at
+    0.9993 on a pair differing only by a random seed. That function is now an existence check
+    over the shared questions, and the declared treatment is judged from knobs by
+    ``eval/report.knobs_comparable``. What one arm can answer is only this: a turn with no
+    ``context_hash`` assembled no context, so no later comparison against it holds.
     """
     coverage = arm.coverage("context_hash")
-    # Three states, not two. **Never recorded** is an absence — the arm was not instrumented for
-    # this and there is nothing to judge, which is what `cannot_evaluate` means and what an
-    # uninstrumented arm must report. **Recorded on some turns and not others** is a defect: the
-    # instrumentation exists and is dropping turns, so the treatment cannot be identified and a
-    # later comparison against this arm is untrustworthy. Collapsing the two would either
-    # excuse broken instrumentation or fail an arm for not having any.
+    # Three states, not two. **Never recorded**: the arm is not instrumented, nothing to judge
+    # (`cannot_evaluate`). **Recorded on some turns and not others**: the instrumentation exists
+    # and is dropping turns, so the treatment cannot be identified and no later comparison
+    # against this arm holds (`failed`). Collapsing the two either excuses broken
+    # instrumentation or fails an arm for not having any.
     if not coverage.is_measured or coverage.value == 0.0:
         return _result(
             "context_hash",
@@ -225,34 +210,110 @@ def _context_hash_gate(arm: Population) -> GateResult:
         Verdict.passed,
         coverage,
         arm,
-        "every turn carries a context_hash. The >= 95% cross-arm distinctness condition is "
-        "a two-arm comparison and is evaluated by eval/report.comparison_quotable",
+        "every turn carries a context_hash. Whether the treatment differed is a two-arm "
+        "question and audit D9 retired hash distinctness as its test; "
+        "eval/report.knobs_comparable judges it from the declared knobs instead",
+    )
+
+
+def _corpus_content_hash_gate(arm: Population) -> GateResult:
+    """One corpus per arm, and it is named. D7.
+
+    ``AGENTS.md`` and the register both call the corpus the treatment identity of every
+    measurement, and until 2026-08-10 no gate read it. Two consequences were live at once: an arm
+    whose rows carry no corpus hash passed every gate (both runs of the designated null replicate
+    are in that state, 1351/1351 null), and two arms measured over *different* corpora also
+    passed, because nothing compared the field across them.
+
+    Single-arm half only, like :func:`_context_hash_gate`: every row present and all rows equal.
+    Two arms carrying *different* single hashes is the desired case for a corpus intervention and
+    the disqualifying case for everything else, so which one it is cannot be decided from one arm.
+
+    **And nothing decides it.** ``eval/report.comparison_quotable`` runs two cross-arm gates,
+    ``context_hashes_distinct`` (an existence check on ``context_hash``) and
+    ``knobs_comparable`` (over ``comparability_keys()``, which does not contain
+    ``corpus_content_hash`` — it is a ``RecordField``, not a knob). So the second consequence
+    named above, two arms measured over different corpora both passing, is still live for the
+    cross-arm case; only the within-arm case is closed here. What exists instead is
+    ``register/arm_profiles.reconcile``, which the driver runs before the first paid question
+    and which checks one arm's rows against the digest that arm's profile declares.
+
+    Three-valued for the same reason as ``context_hash``: an arm predating the field is not
+    instrumented (``cannot_evaluate``), whereas an arm that records it on some turns and not
+    others, or that changed corpus mid-run, cannot be identified (``failed``).
+
+    **Stage-conditional, like ``facet_channels``.** ``stamp`` is what writes this field, and a
+    turn paused on ``ask_user`` never reaches it — so a clarification legitimately carries no
+    corpus hash. Measured on the arms on disk: every null row in the five instrumented artifacts
+    is ``outcome: clarification`` (4 to 13 per arm). Judging those as missing instrumentation
+    would fail every arm that ever asked a question, which is a gate nobody can keep green and
+    therefore a preference rather than a gate. The denominator is turns that reached ``stamp``,
+    published; zero such turns is ``cannot_evaluate``, never a pass.
+    """
+    field = "corpus_content_hash"
+    arm = arm.restrict(lambda r: r.get("outcome") != Outcome.clarification.value, "reached stamp")
+    if arm.n == 0:
+        return _result(
+            field,
+            Verdict.cannot_evaluate,
+            Measured.unmeasured("every turn paused for clarification, so none reached stamp"),
+            arm,
+            "an arm that never finished a turn has no treatment identity to check",
+        )
+    coverage = arm.coverage(field)
+    if not coverage.is_measured or coverage.value == 0.0:
+        return _result(
+            field,
+            Verdict.cannot_evaluate,
+            coverage,
+            arm,
+            "no turn names a corpus, so this arm carries no treatment identity and nothing "
+            "measured against it is comparable to anything",
+        )
+    if coverage.value < 1.0:
+        return _result(
+            field,
+            Verdict.failed,
+            coverage,
+            arm,
+            "corpus_content_hash is recorded on some turns and missing on others, so which "
+            "corpus this arm served is not answerable from its own rows",
+        )
+    distinct = {str(row.get(field)) for row in arm.rows}
+    if len(distinct) > 1:
+        return _result(
+            field,
+            Verdict.failed,
+            coverage,
+            arm,
+            f"{len(distinct)} different corpus_content_hash values inside one arm, so the "
+            "corpus changed while the arm was running and its turns are not one treatment",
+        )
+    return _result(
+        field,
+        Verdict.passed,
+        coverage,
+        arm,
+        "every turn names the same corpus. Whether it differs from another arm's is a two-arm "
+        "condition and no gate evaluates it: comparison_quotable compares context_hash and the "
+        "comparability knobs, and corpus_content_hash is neither",
     )
 
 
 def _knobs_resolved_gate(arm: Population) -> GateResult:
     """Every row in one arm ran under the same configuration.
 
-    **This is the gate that gives ``knobs.Role`` a production consumer** (audit §10). The
-    taxonomy declared three roles and derived three key sets from them —
-    ``comparability_keys``, ``resume_drift_keys``, ``config_hash_keys`` — and *none* had a
-    reader in ``src/``: no config hash existed and no resume-drift check existed. A knob whose
-    role decides nothing is a knob whose role is a comment.
+    ``resume_drift_keys()`` is the set by its own definition — comparability plus operational
+    plus scope, i.e. everything whose change *within one run directory* is fatal, and an arm
+    is one run directory. A row resolving ``route_top_n`` to 3 beside one resolving it to 5
+    is not one arm, so any rate over the pair is a rate over a population that does not exist
+    (L-R3, with the filter moved into the configuration).
 
-    ``resume_drift_keys()`` is the right set, and it is the role's own definition: comparability
-    knobs plus operational plus scope, i.e. everything whose change *within one run directory*
-    is fatal. An arm is one run directory. So a row that resolved ``route_top_n`` to 3 sitting
-    beside one that resolved it to 5 is not one arm, and any rate over the pair is a rate over a
-    population that does not exist — which is L-R3's defect with the filter moved into the
-    configuration.
+    Declared keys only: an undeclared key is caught by ``undeclared_keys``, and failing here
+    too would refuse a run for a reason a reader would look for in the wrong place.
 
-    Compared over the declared keys only, not over the whole mapping: a key the register does
-    not declare is caught by ``undeclared_keys``, and failing here on one as well would refuse
-    a run for a reason a reader would look for in the wrong place.
-
-    Absent ``knobs_resolved`` is unmeasured, not passing. ``Absence.never`` already makes an
-    absent one a ``missing_required`` failure; reporting *this* gate as clean on the same row
-    would be two gates disagreeing about the same hole.
+    Absent ``knobs_resolved`` is unmeasured, not passing — ``Absence.never`` already reports
+    it as ``missing_required``, and passing here would be two gates disagreeing about one hole.
     """
     keys = resume_drift_keys()
     seen: dict[tuple[tuple[str, str], ...], int] = {}
@@ -262,8 +323,8 @@ def _knobs_resolved_gate(arm: Population) -> GateResult:
         if not isinstance(knobs, Mapping):
             absent += 1
             continue
-        # `repr` of the value, so two runs differing in a knob's *type* (3 vs "3") are two
-        # configurations. A comparison that coerced them would report a drift as agreement.
+        # `repr`, so two runs differing in a knob's *type* (3 vs "3") are two configurations;
+        # a comparison that coerced them would report drift as agreement.
         signature = tuple(sorted((k, repr(knobs.get(k))) for k in keys))
         seen[signature] = seen.get(signature, 0) + 1
 
@@ -315,9 +376,9 @@ GATE_IMPLEMENTATIONS: Mapping[str, GateFn] = {
     "outcome": _outcome_gate,
     "facet_channels": _facet_channels_gate,
     "context_hash": _context_hash_gate,
+    "corpus_content_hash": _corpus_content_hash_gate,
     "knobs_resolved": _knobs_resolved_gate,
     "guardrail_errors": _zero_count_gate("guardrail_errors", "guardrail_error"),
-    "n_re_served": _zero_count_gate("n_re_served", "re_served"),
     "negative": _zero_count_gate("negative", "negative_failed_open"),
 }
 
@@ -330,10 +391,9 @@ def evaluate(arm: Population) -> tuple[GateResult, ...]:
 def quotable(arm: Population) -> tuple[bool, tuple[GateResult, ...]]:
     """Whether this arm's numbers may be quoted, and every gate's result.
 
-    Both are returned because a bare ``False`` sends the reader to the code to find
-    out which gate refused, and a bare ``True`` hides that four gates could not run.
-    **``cannot_evaluate`` blocks quotation**: a check that did not happen is not a
-    check that passed.
+    Both, because a bare ``False`` hides which gate refused and a bare ``True`` hides that
+    some could not run. **``cannot_evaluate`` blocks quotation**: a check that did not
+    happen is not a check that passed.
     """
     results = evaluate(arm)
     return all(r.verdict is Verdict.passed for r in results), results

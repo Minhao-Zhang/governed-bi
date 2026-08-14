@@ -7,7 +7,7 @@ associated with the following sentence?"*
 The reason it matters is concrete. A user asks *"what is the average star rating for restaurants
 in this area"*; a schema summary reads *"stores basic information about restaurants"*. Neither
 BM25 nor an embedder finds much between those two, and until now every facet searched with the
-raw question — which is why the maintainer's own testing found retrieval "完全没有做对".
+raw question — which is why the maintainer's own testing found retrieval was getting nothing right.
 
 Two properties carry the weight here, and both are about honesty rather than quality: the
 ``extraction`` channel must be marked ``ran`` **only** when a rewrite actually came back, and a
@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from governed_bi.register.facets import FACET_EXTRACTS, Channel
+from governed_bi.register.facets import FACET_EXTRACTS, Channel, ChannelState
 from governed_bi.register.prompts import FACET_QUERY_PROMPTS, PROMPT_REGISTRY, prompt_text
 from governed_bi.register.stages import FACET_STAGES, Stage
 from governed_bi.serve.nodes import facets as facets_mod
@@ -186,11 +186,12 @@ def test_a_rewrite_is_embedded_so_the_semantic_channel_sees_it() -> None:
     state = {"query_vector": [9.0, 9.0]}
     config = {"configurable": {"embedder": embedder}}
 
-    vector = facets_mod._query_vector(
+    vector, state_of = facets_mod._query_vector(
         state, config, query="tables holding restaurant ratings", question="star rating nearby"
     )
     assert embedder.seen == ["tables holding restaurant ratings"]
     assert vector != [9.0, 9.0], "the cached question vector was used despite a rewrite"
+    assert state_of is ChannelState.ran
 
 
 def test_no_rewrite_uses_the_turns_cached_vector() -> None:
@@ -200,23 +201,47 @@ def test_no_rewrite_uses_the_turns_cached_vector() -> None:
     state = {"query_vector": [9.0, 9.0]}
     config = {"configurable": {"embedder": embedder}}
 
-    vector = facets_mod._query_vector(state, config, query="same", question="same")
+    vector, state_of = facets_mod._query_vector(state, config, query="same", question="same")
     assert embedder.seen == []
     assert vector == [9.0, 9.0]
+    # The cached vector *is* this query's vector, so reusing it is a cache hit and not a
+    # substitution — the distinction the test below turns on.
+    assert state_of is ChannelState.ran
 
 
-def test_an_embedder_failure_falls_back_to_the_question_vector() -> None:
+def test_an_embedder_failure_is_reported_and_not_papered_over(caplog) -> None:
+    """Audit I7. A dead embedder yields ``failed``, **not** the raw question's vector.
+
+    This test asserted the opposite until 2026-08-10, on the reasoning that "a dead embedder must
+    degrade, not drop the semantic channel". The rejected alternative is worth stating, because it
+    is the more intuitive one: returning ``fallback`` keeps *a* cosine in the score rather than
+    none.
+
+    What it actually produced was a facet whose lexical channel searched the rewrite while its
+    semantic channel searched the original question, blended into one ``score``, recorded as
+    ``semantic: ran``. That is not a weaker measurement of the same query — it is a measurement of
+    a different one, presented as the first. Nothing in any artifact distinguished it from a
+    healthy turn, which is the defect class this whole audit is about.
+
+    Falling back on **both** channels was considered and rejected too: it gives one facet two
+    possible search texts decided by a provider error, and ``queries`` would then have to carry
+    which — a second hidden path in the scoring loop, to save a channel on the rare turn a
+    retried embed call still fails.
+    """
     class _Broken:
         def embed(self, texts: list[str]) -> list[list[float]]:
             raise RuntimeError("provider down")
 
-    vector = facets_mod._query_vector(
+    vector, state_of = facets_mod._query_vector(
         {"query_vector": [9.0, 9.0]},
         {"configurable": {"embedder": _Broken()}},
         query="rewritten",
         question="original",
     )
-    assert vector == [9.0, 9.0], "a dead embedder must degrade, not drop the semantic channel"
+    assert vector is None, "the raw question's vector was substituted for the rewrite's"
+    assert state_of is ChannelState.failed, (
+        "a rate-limited embed must not be reported as a channel that ran"
+    )
 
 
 def test_the_schema_facet_searches_the_users_own_words() -> None:

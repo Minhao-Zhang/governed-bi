@@ -16,21 +16,27 @@ SOFT_LIMIT = 400
 #: Fatal. ADR 0005 §6.
 HARD_LIMIT = 1000
 
-#: Roots scanned (src, tools, tests).
+#: Roots scanned. ``scripts`` was a fourth root until 2026-08-11, holding the one-shot corpus
+#: rebuild kit — listed here because leaving it out would have made "move it to scripts/" a way
+#: to leave the checks. The kit now lives at ``tools/corpus_rebuild/``, so that escape is closed
+#: by there being no second root to move to rather than by this tuple remembering one.
 ROOTS: tuple[str, ...] = ("src", "tools", "tests")
 
-#: Directory names skipped wherever they appear. Generated or vendored trees are
-#: not code anyone reads, and ``__pycache__`` holds no ``.py`` files but costs a
-#: walk.
-SKIP_DIRS: frozenset[str] = frozenset({"__pycache__", ".venv", "venv", "node_modules"})
+#: Directory names skipped wherever they appear: generated or vendored trees are not code
+#: anyone reads, and ``__pycache__`` holds no ``.py`` files but costs a walk. ``_build`` is
+#: the corpus-rebuild kit's gitignored staging area — throwaway audit scripts, not a length
+#: anyone should act on.
+SKIP_DIRS: frozenset[str] = frozenset(
+    {"__pycache__", ".venv", "venv", "node_modules", "_build"}
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def _files() -> list[Path]:
+def _files(base: Path = ROOT) -> list[Path]:
     out: list[Path] = []
     for name in ROOTS:
-        root = ROOT / name
+        root = base / name
         if not root.exists():
             continue
         for path in sorted(root.rglob("*.py")):
@@ -47,13 +53,20 @@ def measure(path: Path) -> int:
 
 
 def main() -> int:
-    files = _files()
+    # ``--root DIR`` measures a tree the caller owns, so a negative test never writes an
+    # over-length probe into ``src/`` (see ``check_one_implementation.py``).
+    argv = sys.argv[1:]
+    base = ROOT
+    if "--root" in argv:
+        base = Path(argv[argv.index("--root") + 1]).resolve()
+
+    files = _files(base)
     if not files:
         print(f"no Python files under {', '.join(ROOTS)} — refusing to pass vacuously",
               file=sys.stderr)
         return 1
 
-    counted = [(measure(p), p.relative_to(ROOT).as_posix()) for p in files]
+    counted = [(measure(p), p.relative_to(base).as_posix()) for p in files]
     hard = sorted((c for c in counted if c[0] > HARD_LIMIT), reverse=True)
     soft = sorted((c for c in counted if SOFT_LIMIT < c[0] <= HARD_LIMIT), reverse=True)
 

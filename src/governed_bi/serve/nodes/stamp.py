@@ -8,12 +8,12 @@ from typing import Any
 
 from governed_bi.corpus.schema import Reliability, ReliabilityStatus
 from governed_bi.govern.guard import GUARD_PUBLIC_MESSAGE
-from governed_bi.govern.layers import GUARDRAIL_REFUSED_BY
+from governed_bi.govern.layers import GUARDRAIL_ERROR, GUARDRAIL_REFUSED_BY
 from governed_bi.govern.ledger import ExecutionRecord
 from governed_bi.measure.degradation import facets_degraded
 from governed_bi.register.quantity import Measured
 from governed_bi.register.record import project
-from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY, Outcome, classify_outcome
+from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY, Outcome, Stage, classify_outcome
 from governed_bi.serve.events import emit, rail_event_id
 from governed_bi.serve.ledger import answering_attempts, attempt_field, execution_from_attempts
 from governed_bi.serve.state import cleared
@@ -31,16 +31,9 @@ def _usage_for_turn(state: Mapping[str, Any]) -> list[dict[str, Any]]:
 def _cache_total(usage: list[dict[str, Any]], field: str) -> int | Measured[int]:
     """Sum one cache-token field across this turn's usage rows, or *unmeasured*.
 
-    **The counts existed and were never projected up** (audit §10). ``cache_read_tokens`` and
-    ``cache_write_tokens`` were declared record fields with zero writers, permanently null —
-    while ``serve/usage.reported_tokens`` was already reading ``cache_read`` and
-    ``cache_creation`` out of the provider's ``input_token_details`` and putting them on every
-    usage row. The record simply never added them together.
-
-    Unmeasured when **no** row reported the field, because that is the difference this
-    repository keeps losing: a provider that reports no cache activity has told us nothing
-    about caching, and ``0`` there is this code's claim wearing the provider's clothes. A row
-    that reported an explicit ``0`` is a measurement and counts.
+    Unmeasured when **no** row reported the field: a provider that reports no cache activity
+    has said nothing about caching, and ``0`` there would be this code's claim wearing the
+    provider's clothes. A row reporting an explicit ``0`` is a measurement and counts.
     """
     total = 0
     seen = False
@@ -60,18 +53,12 @@ def _cache_total(usage: list[dict[str, Any]], field: str) -> int | Measured[int]
 def _latency_sec(state: Mapping[str, Any]) -> float | Measured[float]:
     """Wall-clock seconds from the turn's first node to now, or *unmeasured*.
 
-    ``wrap_node`` stamps ``turn_started_at``, so this is measured on every path that ran a
-    wrapped node — which is every path, since ``stamp`` is the only unwrapped one and it cannot
-    be reached without one. Unmeasured is therefore the hand-built-state case (a unit test
-    calling ``stamp`` directly), and it says so rather than reporting 0.0.
+    ``wrap_node`` stamps ``turn_started_at``, so unmeasured is the hand-built-state case (a unit
+    test calling ``stamp`` directly), and it says so rather than reporting 0.0. A clarified turn
+    includes the human's thinking time deliberately — the field is how long the user waited.
 
-    **A clarified turn includes the human's thinking time**, deliberately. The field is how long
-    the user waited for an answer, and a turn that stopped to ask them something did make them
-    wait. Separating engine time from human time needs a second field and a reason to want it.
-
-    Unrounded, because ``tools/check_measurement_locality.py`` refuses formatting outside
-    ``register/quantity.py`` — and it is right to: v1's rounding helpers turned an unmeasured
-    quantity into ``0.0`` on the way to a report. Presentation is ``Measured.render``'s job.
+    Unrounded: ``tools/check_measurement_locality.py`` refuses formatting outside
+    ``register/quantity.py``. Presentation is ``Measured.render``'s job.
     """
     started = state.get("turn_started_at")
     if not isinstance(started, (int, float)) or isinstance(started, bool):
@@ -84,11 +71,9 @@ def _latency_sec(state: Mapping[str, Any]) -> float | Measured[float]:
 def _execution(state: Mapping[str, Any]) -> ExecutionRecord:
     """The turn's ``ExecutionRecord``, written on every path including "no SQL".
 
-    ``path_kind`` used to decide ``terminal`` here — a second implementation of the
-    decision ``execution_from_attempts`` makes, and it disagreed with the ledger in the
-    same direction: ``answered`` for any turn the agent node reached, empty attempts and
-    all. There is one derivation now and it reads the attempts, so a turn that attempted
-    nothing says ``no_sql`` whether it was guard-blocked, declined or stubbed.
+    ``terminal`` is never derived here from ``path_kind``: ``execution_from_attempts`` is the
+    one derivation and it reads the attempts, so a turn that attempted nothing says ``no_sql``
+    whether it was guard-blocked, declined or stubbed.
     """
     existing = state.get("execution")
     if isinstance(existing, Mapping) and "attempts" in existing:
@@ -116,9 +101,8 @@ def _facet_channels(state: Mapping[str, Any]) -> dict[str, Any] | None:
 def _attempts(execution: Mapping[str, Any] | Any) -> list[Any]:
     """This turn's **answering** ledger rows.
 
-    Filtered, because ``sample`` rows are in the same ledger and a passing sample row would
-    make ``_path_signals`` report a turn as answered whose every ``run_query`` was refused —
-    the crash-counted-as-refusal inversion, re-introduced through a second executor path.
+    Filtered: ``sample`` rows share the ledger, and a passing sample row would make
+    ``_path_signals`` report a turn as answered whose every ``run_query`` was refused.
     """
     if not isinstance(execution, Mapping):
         return []
@@ -194,16 +178,31 @@ def _path_signals(
 
     if path_kind == "answered":
         # The agent loop finished, which is not the same as the turn having answered. The
-        # ledger decides: a turn whose every attempt was refused is a refusal, and a turn
-        # the cap ended is `capped`. `has_sql` came from the tool-call *arguments*, so
-        # producing a string counted as producing an answer and `outcome: answered` sat
-        # beside `passed: false` — the crash-counted-as-refusal inversion, reversed.
+        # ledger decides: a turn whose every attempt was refused is a refusal, and a turn the
+        # cap ended is `capped`. `has_sql` alone is not enough — it comes from the tool-call
+        # *arguments*, so producing a string counted as producing an answer.
         execution = state.get("execution")
         attempts = _attempts(execution)
         terminal = execution.get("terminal") if isinstance(execution, Mapping) else None
+        # The cap first, and on its own condition — nested inside the "no attempt passed"
+        # branch it is unreachable on any turn where a statement ever succeeded, so a capped
+        # turn with two passing attempts records `outcome: answered`. `execution_from_attempts`
+        # decides this and here we read its verdict, so the two cannot disagree.
+        if terminal == "capped":
+            return ATTEMPT_CAP_REFUSED_BY, None, None, None, False
         if attempts and not any(attempt_field(a, "passed") is True for a in attempts):
-            reason = ATTEMPT_CAP_REFUSED_BY if terminal == "capped" else GUARDRAIL_REFUSED_BY
-            return reason, None, None, None, False
+            # Nothing passed. *Why* nothing passed decides the outcome, and the two answers are
+            # different engineering problems: the layer stack objecting is the product working,
+            # a swallowed exception inside `check()` is our bug. `Outcome` requires they stay
+            # apart and this branch used to collapse them, so a systematically broken `check()`
+            # read as an arm that refused everything with `crash_rate == 0` — the exact symptom
+            # `govern.layers.GUARDRAIL_ERROR` documents. `guardrail_errors` is derived by
+            # `execution_from_attempts`, so as with the cap above we read its verdict rather
+            # than re-deriving one that could disagree. 2026-08-10 audit (C3).
+            errors = execution.get("guardrail_errors") if isinstance(execution, Mapping) else None
+            if isinstance(errors, int) and errors > 0:
+                return GUARDRAIL_ERROR, Stage.check.value, None, None, False
+            return GUARDRAIL_REFUSED_BY, None, None, None, False
         # No attempt at all: the model answered from the delivered context (or the F3 stub
         # did). That is `answered` with `generated_sql` null, which the register declares.
         return None, None, None, None, True
@@ -221,7 +220,10 @@ def _extract_factory(
     failed_stage: str | None,
     error_type: str | None,
 ) -> Any:
-    delivery_keys = {"context_hash", "delivery_hash", "tool_delivered"}
+    # ``evicted`` included, so the served record carries it too: it was reaching the eval row
+    # and nothing else, which would have left ``runs/serve/*.jsonl`` with no trace that the
+    # char budget dropped a licensed table before the model ever saw it.
+    delivery_keys = {"context_hash", "delivery_hash", "tool_delivered", "evicted"}
 
     def extract(state: Mapping[str, Any], name: str) -> Any:
         if name == "outcome":
@@ -256,17 +258,23 @@ def _extract_factory(
             "negative",
             "crossings",
             "licensed",
-            # Why a decline declined. `outcome: "declined"` is one value for four
-            # different engineering problems, and this lived in graph state only -- so
-            # "routing found nothing" and "the join graph is disconnected" were the same
-            # recorded row.
+            # Copied and never interpreted: `stamp` reading it to adjust `outcome` would be
+            # the control flow `reflect` is defined not to have.
+            "reflect_verdict",
+            # Why a decline declined. `outcome: "declined"` is one value for four different
+            # engineering problems, so without this "routing found nothing" and "the join
+            # graph is disconnected" are the same recorded row.
             "terminal_reason",
+            # The abstention policy's verdict and its evidence (ADR 0013). Copied and never
+            # interpreted, like `reflect_verdict` above and for the inverse reason: `abstain`
+            # has *already* decided, and re-reading its verdict here to adjust `outcome` would
+            # be two answers to "did this turn withhold". The one answer is `terminal_reason`,
+            # which the node writes into the same channel `route` and `connect` write.
+            "abstention",
         ):
             return state.get(name)
 
-        # The three cost fields, derived here rather than read off state. All three had zero
-        # writers and were permanently null (audit §10); `latency_sec` had never been measured
-        # at all, because no clock was read anywhere in `src/governed_bi`.
+        # The three cost fields, derived here rather than read off state — nothing writes them.
         if name == "latency_sec":
             return latency
         if name in ("cache_read_tokens", "cache_write_tokens"):
@@ -298,14 +306,20 @@ def _extract_factory(
         if name == "facet_channels":
             return _facet_channels(state)
         if name == "facet_degraded":
-            # Null when the fan-out did not run, like the field it is derived from: `False`
-            # there would be the degradation gate reading absence as clean, which is the
-            # defect the field was added to stop.
+            # Null when the fan-out did not run, like the field it derives from: `False` there
+            # is the degradation gate reading absence as clean.
             channels = _facet_channels(state)
             if channels is None:
                 return None
             return facets_degraded(channels)
-        if name in ("schema_ranking", "pulled_in", "lexical_coverage"):
+        # The keys the register reads straight off `retrieved`. Both budget witnesses are here
+        # from 2026-08-12: `merge_delta` stopped `resolve` destroying them, but a key that
+        # survives to `stamp` and is not projected reaches no artifact, so "the cap discarded
+        # the gold table" was still unanswerable from a record. They are `NotRequired` on
+        # `RetrievalResult` — absent when no cap bit — and `.get` writes the null the register
+        # declares for that.
+        if name in ("schema_ranking", "pulled_in", "lexical_coverage",
+                    "budget_dropped", "budget_best_dropped_score"):
             if isinstance(retrieved, Mapping):
                 return retrieved.get(name)
             return None
@@ -318,19 +332,17 @@ def _extract_factory(
 def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
     """Build the turn ``Answer`` and the register projection. Sole writer of ``answer``.
 
-    **The three reset-bearing channels are normalised first, and that is not defensive
-    programming.** ``Session.turn`` writes :data:`~governed_bi.serve.state.RESET` to
-    ``path_kind``, ``failure`` and ``facets``, and LangGraph assigns a channel's **first** value
-    without calling its reducer — so on a turn where nothing else writes one, the bare sentinel
-    reaches this function. ``failure`` is the common case, because a turn that succeeds never
-    writes it: ``state.get("failure") is not None`` was then true for **every** successful turn,
-    and this function stamped ``outcome: "crashed"`` on all of them. ``facets`` was a latent
-    crash of the same shape — a guard-refused turn never runs the fan-out, and
-    ``"reset".items()`` raises here, in the one node that is deliberately unwrapped.
+    ``Session.turn`` writes :data:`~governed_bi.serve.state.RESET` to ``path_kind``, ``failure``
+    and ``facets``, and the first two must be normalised here: their annotations are Unions, so
+    the channel seeds ``MISSING`` and LangGraph assigns the first write raw (see
+    :func:`~governed_bi.serve.state.cleared`). ``failure`` is the one that bites — a successful
+    turn never writes it, so the bare sentinel made ``state.get("failure") is not None`` true on
+    every successful first turn of a fresh thread. ``facets`` strips to ``dict`` and is never at
+    risk; it stays in the tuple for symmetry.
 
     Normalised in ``stamp`` rather than in each reader because this is the only node that
-    *interprets* these channels. Every other reader compares them against known values, where
-    an unrecognised string already behaves as "not terminal", which is correct for a fresh turn.
+    *interprets* these channels — every other reader compares them against known values, where
+    an unrecognised string already behaves as "not terminal".
     """
     state = {**state, **{k: cleared(state.get(k)) for k in ("path_kind", "failure", "facets")}}
     path_kind = state.get("path_kind")
@@ -349,22 +361,32 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
         outcome = Outcome.crashed
 
     execution = _execution(state)
+    # Attempts stay; rewrite terminal so outcome=crashed never sits beside
+    # execution.terminal=answered (a careless reader would treat the crash as answered).
+    if outcome is Outcome.crashed and execution.get("terminal") != "crashed":
+        execution = {**execution, "terminal": "crashed"}
     usage = _usage_for_turn(state)
 
-    # ``guard`` is Absence.never and it is **not** substituted here. Three lines used to
-    # put ``{"outcome": "error_failed_open"}`` in place of a missing guard, under a comment
-    # naming the invariant they broke: that sentinel means the guard ran, errored and let
-    # the question through, ``register/record.py`` gates on it, and inventing it for a guard
-    # that never ran fabricates a security event — the quotability gate then refuses a run
-    # for something that did not happen. An absent guard stays absent, and
-    # ``missing_required`` names it, which is a wiring failure reported as one.
+    # ``guard`` is Absence.never and must **not** be substituted here. Standing in
+    # ``{"outcome": "error_failed_open"}`` fabricates a security event — that sentinel means the
+    # guard ran, errored and let the question through, and it is what a reader counts to find
+    # out whether the gate worked. (No quotability gate reads it; see ``guard.py::_bi_scope``.)
+    # An absent guard stays absent; ``missing_required`` names it as the wiring failure it is.
     projected_state: dict[str, Any] = dict(state)
     projected_state["execution"] = execution
     projected_state["usage"] = usage
     if projected_state.get("n_re_served") is None:
         projected_state["n_re_served"] = 0
-    if projected_state.get("knobs_resolved") is None:
-        projected_state["knobs_resolved"] = {}
+    # ``knobs_resolved`` gets the same treatment as ``guard`` above, and for the same reason —
+    # it used to be substituted with ``{}`` here, which is the one case ``measure.gates`` names
+    # as the thing it must never see: ``{}`` is a ``Mapping``, so the drift gate reads it as a
+    # real configuration in which every knob resolved to ``None``, every row's signature is
+    # identical, and **an arm of empties passes**. `gates.py::_knobs_gate` says so in as many
+    # words ("Absent ``knobs_resolved`` is unmeasured, not passing"), and `harness.py` carries the
+    # same "absent stays absent" comment, while this line defeated both. Absent now reaches
+    # ``project`` as absent, so ``Absence.never`` reports ``missing_required`` and the gate
+    # returns ``cannot_evaluate`` — which is what a turn whose knobs were never wired *is*.
+    # Found by the 2026-08-10 audit (C5).
 
     record = project(
         projected_state,
@@ -385,24 +407,15 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
         "error_type": error_type,
         "refused_by": refused_by,
         "record": record,
-        # **The table, beside the explanation the model already wrote.** The maintainer asked for
-        # "the table alongside an explanation"; measured on a live turn, the explanation was the
-        # half that already existed — the agent's final message narrates the number — and the rows
-        # were reachable only by parsing a `ToolMessage`. `None` on every path that ran no query,
-        # which is most of them, and `None` is a different fact from an empty table.
-        #
         # On the `answer` and deliberately **not** in `record`: ADR 0006 §11 puts result rows in
         # the class the durable projection drops, and the audit log persists the record only.
+        # `None` on every path that ran no query, which is a different fact from an empty table.
         "result_table": state.get("result_table"),
-        # **The sentence, from ``narrate``.** Same class as `result_table` and for the same
-        # reason — *"There are 9,590 restaurants"* is the result set spelled out, so it rides
-        # the live answer and stays out of the durable record.
-        #
-        # Distinct from `text` above, which is *system* copy. On an answered turn `text` is null
-        # and this is set; on a refusal it is the other way round, and the client renders on that
-        # asymmetry. Read from state rather than recomputed here: `narrate` is the one stage that
-        # decides what the turn says, and a second derivation in the recorder is how the audit
-        # list and the answer card came to disagree about `answer_text` in the first place.
+        # From ``narrate``; same class as `result_table` and out of the record for the same
+        # reason. Distinct from `text` above, which is *system* copy: on an answered turn `text`
+        # is null and this is set, on a refusal the other way round, and the client renders on
+        # that asymmetry. Read from state and never recomputed — a second derivation here is how
+        # the audit list and the answer card came to disagree about `answer_text`.
         "answer_text": state.get("answer_text"),
         # **The model's own self-reported assumptions (Gap 1, utku-ai-deployment-targets.md),
         # unconditionally — never gated on delivery/confidence the way `uncertainty_flags` is.**
@@ -418,11 +431,9 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
         # stays out of ``record``.
         "reliability": _reliability(state),
     }
-    # The turn's one ``final`` event (ADR 0010 §1). Emitted here rather than from ``wrap.py``
-    # because ``stamp`` is the one node deliberately left unwrapped — wrapping the recorder
-    # turned "the recorder crashed" into a turn with no answer and no reason — so the wrapper's
-    # emitter never sees it. Emitted after ``answer`` is built, from ``answer``, so the row and
-    # the record cannot disagree about how the turn ended.
+    # The turn's one ``final`` event (ADR 0010 §1). Emitted here because ``stamp`` is the one
+    # node deliberately left unwrapped, so ``wrap.py``'s emitter never sees it. Emitted after
+    # ``answer`` is built and from ``answer``, so the row and the record cannot disagree.
     emit(
         kind="final",
         step="stamp",
@@ -437,9 +448,8 @@ def _final_status(path_kind: Any, outcome: Outcome) -> str:
     """The ``stamp`` row's status.
 
     ``path_kind`` is consulted first for exactly one distinction: :class:`Outcome` has no
-    ``declined`` member — a decline classifies as ``refused``, which is right for measurement
-    and wrong for a timeline, where "no schema matched" and "the guard blocked this" are not the
-    same event to a person reading it.
+    ``declined`` member, so a decline classifies as ``refused`` — right for measurement, wrong
+    for a timeline where "no schema matched" and "the guard blocked this" differ.
     """
     if path_kind == "decline":
         return "declined"

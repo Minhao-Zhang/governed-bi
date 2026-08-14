@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 __all__ = [
     "State",
@@ -37,9 +37,8 @@ class State(str, Enum):
 
 
 class Relation(str, Enum):
-    """How :attr:`Measured.raw` relates to the true quantity.
-
-    One-sided bounds must not render as point estimates.
+    """How :attr:`Measured.raw` relates to the true quantity, so that a one-sided
+    bound does not render as a point estimate.
     """
 
     exact = "="
@@ -65,6 +64,33 @@ class Measured(Generic[T]):
     #: Why there is no value. Required when absent, forbidden when present.
     why: str = ""
     relation: Relation = Relation.exact
+
+    # ── surviving a checkpoint ────────────────────────────────────────────────
+
+    def __class_getitem__(cls, item: object) -> type[Measured[Any]]:
+        """``Measured[int]`` **is** ``Measured`` at runtime: the subscript is erased.
+
+        Erasure is what registers the class with LangGraph's msgpack serde. Under
+        strict mode (langgraph 1.2.11) ``StateGraph.compile`` derives the allowlist by
+        walking the state schema (``_internal._serde.build_serde_allowlist`` →
+        ``BaseCheckpointSaver.with_allowlist``) — the only seam that reaches the
+        deployed server's saver, which this repository never builds. That walk
+        recognises real classes only. Without this method
+        ``dataclasses.is_dataclass(Measured[int])`` would be ``False``, because a
+        subscripted generic is a ``typing._GenericAlias``, and the allowlist derived
+        from ``ServeState`` named nothing from this module.
+
+        Unregistered, an absence comes back as a plain dict — ``.is_measured`` gone,
+        :func:`~.record.missing_required`'s presence test blind to it, and
+        :meth:`__bool__` no longer refusing, so a *truthy* dict makes ``if not
+        tokens:`` read "we measured something". Unmeasured collapsing into zero is the
+        defect this module exists to prevent.
+
+        The parameter is not load-bearing at runtime (nothing reads ``get_args`` of a
+        ``Measured``), and a type checker resolves ``Measured[int]`` against
+        ``Generic[T]`` rather than this method, so annotations still check.
+        """
+        return cls
 
     # ── construction ──────────────────────────────────────────────────────────
 
@@ -104,9 +130,8 @@ class Measured(Generic[T]):
 
     @classmethod
     def rate(cls, numerator: float, denominator: float, *, what: str) -> Measured[float]:
-        """``numerator / denominator``, or unmeasured when the denominator is zero.
-
-        Zero denominator is no rate, not a rate of zero.
+        """``numerator / denominator``. A zero denominator is no rate, not a rate of
+        zero, so it returns unmeasured.
         """
         if denominator == 0:
             return Measured(
@@ -130,10 +155,7 @@ class Measured(Generic[T]):
         return self.raw
 
     def or_else(self, default: U) -> T | U:
-        """The value, or ``default`` — spelled out at the call site.
-
-        For display fallbacks only; not for arithmetic or comparisons.
-        """
+        """The value, or ``default``. Display fallbacks only, never arithmetic."""
         return self.raw if self.state is State.measured else default  # type: ignore[return-value]
 
     def __bool__(self) -> bool:
@@ -179,9 +201,8 @@ class Measured(Generic[T]):
         return self.map(lambda v: round(float(v), places))  # type: ignore[arg-type]
 
     def render(self, places: int = 2, unit: str = "", *, scale: float = 1.0) -> str:
-        """The one permitted way to turn a quantity into display text.
-
-        Absent quantities never render as numbers; bounds keep their relation.
+        """The one permitted way to turn a quantity into display text: absent
+        quantities never render as numbers and bounds keep their relation.
         """
         if self.state is State.not_measured:
             return f"not measured ({self.why})"

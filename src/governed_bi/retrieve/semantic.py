@@ -45,7 +45,7 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 def check_query_vector(vector: Sequence[float], *, width: int) -> None:
     """Refuse a query :func:`cosine` would refuse (wrong width, empty, or zero).
 
-    LanceDB does not make these refusals; keep one definition shared with the store.
+    LanceDB makes none of these refusals, so the store shares this one definition.
     """
     if len(vector) != width:
         raise ValueError(f"cosine width mismatch: {len(vector)} vs {width}")
@@ -83,15 +83,14 @@ def semantic_search(
     if index.embedder_model is None or store is None or len(store) == 0 or query_vector is None:
         return [], ChannelState.not_configured
 
-    # A candidate set that is empty **ran** — it is a measurement ("nothing of these types
-    # is a candidate"), not a missing channel — and it must not reach `search`, whose
-    # `limit` is mandatory and where zero is refused outright.
+    # An empty candidate set **ran**: it measures "nothing of these types is a candidate",
+    # not a missing channel. It must not reach `search`, whose `limit` refuses zero.
     if not ids:
         return [], ChannelState.ran
 
     scored = store.search(query_vector, keys=ids)
-    # LanceDB orders by distance and breaks ties by insertion order. Re-sorted here so two
-    # indexes built from the same assets in a different order cannot disagree.
+    # LanceDB breaks ties by insertion order. Re-sorted so two indexes built from the same
+    # assets in a different order cannot disagree.
     scored.sort(key=lambda pair: (-pair[1], pair[0]))
     if top_n is not None:
         scored = scored[:max(0, int(top_n))]

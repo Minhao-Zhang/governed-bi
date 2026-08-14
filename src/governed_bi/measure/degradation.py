@@ -23,13 +23,10 @@ def channel_observations(
     """Every ``(facet, channel, observed)`` triple a recorded ``facet_channels`` names.
 
     Empty for ``None`` or ``{}`` — the fan-out did not run, which is a stage-conditional
-    absence and **not** a clean turn. The caller must not read the empty tuple as "no
-    channel differed"; ``gates.py`` handles that by restricting the population first.
+    absence and **not** "no channel differed"; ``gates.py`` restricts the population first.
 
-    Raises ``ValueError`` for a facet or channel name the register does not declare.
-    Skipping it silently would be this system's own defect: an unrecognised key means the
-    record and the register disagree about what a facet is, and answering "nothing wrong
-    here" is the answer that cannot be right.
+    Raises ``ValueError`` on an undeclared facet or channel name: the record and the
+    register disagreeing about what a facet is cannot be answered with "nothing wrong here".
     """
     if not isinstance(facet_channels, Mapping):
         return ()

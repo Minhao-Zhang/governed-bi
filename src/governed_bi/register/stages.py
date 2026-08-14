@@ -17,6 +17,7 @@ __all__ = [
     "FACET_STAGES",
     "TERMINAL_STAGES",
     "REFUSED_BY_TO_STAGE",
+    "ABSTENTION_REASONS",
     "CRASH_REFUSED_BY",
     "ATTEMPT_CAP_REFUSED_BY",
     "INFRA_ERROR_PREFIX",
@@ -80,8 +81,18 @@ class Stage(str, Enum):
     #: Attempt cap terminated the turn. Distinct from crash and model refusal.
     cap = "cap"
 
-    #: Turns the turn into a sentence. Adopts the agent's closing text when
-    #: present; generates only when the loop ended without prose.
+    #: The declared abstention policy (ADR 0013), between ``assemble`` and ``agent_core``.
+    #: It **decides**, unlike ``reflect``, so it appears in the refusal table below — and it
+    #: sits before the agent because deciding after five ``run_query`` attempts is not a
+    #: decision, it is a report on one.
+    abstain = "abstain"
+
+    #: Post-hoc judgement of whether the statement answered the question. An observer:
+    #: it decides nothing, so it appears in no refusal table and ends no turn.
+    reflect = "reflect"
+
+    #: Turns the turn into a sentence. Adopts the agent's closing text when present;
+    #: generates only when the loop ended without prose.
     narrate = "narrate"
 
     # ── Terminals ──
@@ -114,9 +125,9 @@ TERMINAL_STAGES: frozenset[Stage] = frozenset({Stage.refuse, Stage.decline, Stag
 class Outcome(str, Enum):
     """How a turn ended, from the measurement's point of view.
 
-    ``crashed`` vs ``refused`` must stay separate: a crash is our bug; a refusal
-    is the product working. ``capped`` is separate from both (ADR 0006 §5).
-    Graded delivery is not an outcome — the turn ``answered``.
+    ``crashed`` vs ``refused`` must stay separate: a crash is our bug, a refusal is
+    the product working, and ``capped`` is neither (ADR 0006 §5). Graded delivery is
+    not an outcome — the turn ``answered``.
     """
 
     answered = "answered"
@@ -125,6 +136,47 @@ class Outcome(str, Enum):
     capped = "capped"
     crashed = "crashed"
 
+
+#: The abstention policy's closed vocabulary — **the reason the engine decided to withhold**,
+#: as opposed to the rule a layer happened to refuse under (ADR 0013).
+#:
+#: Declared here rather than in ``serve/`` because that is what makes it *closed*, and the
+#: mechanism is worth naming exactly — this comment used to claim three readers of
+#: :data:`REFUSED_BY_TO_STAGE` and on 2026-08-12 there were none (ADR 0013 §2 records the
+#: measurement). Two things hold it closed:
+#:
+#: * :func:`_assert_refusal_tables_are_closed` below and
+#:   ``serve/nodes/abstain.py::_assert_the_policy_speaks_the_declared_vocabulary``, which are
+#:   **bidirectional** and run at import. They are what stops a fifth reason arriving as a string
+#:   in a node. What they cannot see is a value neither side declares: they compare declarations
+#:   to declarations, never to a row.
+#: * ``eval/report.py::refusal_histogram``, which is the reader, and whose ``unattributed`` bucket
+#:   is the half the guards cannot cover — a reason in no register is counted **by name** and
+#:   outside ``by_stage``, so a histogram that stops adding up says which string is why.
+#:
+#: Order is **not** encoded here — that is the policy's, in ``serve/nodes/abstain.py``, because
+#: which rule wins when two fire is a judgement about what a person should be told, not a fact
+#: about the vocabulary.
+#:
+#: Every member reads state that already exists on the turn and needs no model, no threshold and
+#: no fitted parameter. That is the constraint the reasons were chosen under: AUC 0.597 for
+#: the reflector and an OOF-AUC ceiling of 0.721 for everything that does not read meaning
+#: (open-work.md §3.11) say a *learned* abstainer is not available, and every risk-coverage curve
+#: reading 0.7144 at the engine's own coverage says a *thresholded* one buys nothing. What was
+#: missing was never a score; it was that the decision is nowhere declared.
+ABSTENTION_REASONS: frozenset[str] = frozenset({
+    #: A facet channel that was configured to run, ran, and errored. The shortlist this turn
+    #: worked from was produced by a retriever that is not the declared one.
+    "retrieval_channel_failed",
+    #: The turn licensed no table. No statement it writes can clear Layer 6, so the five
+    #: ``run_query`` attempts are spent discovering what ``connect`` already knew.
+    "nothing_licensed",
+    #: The rendered context is empty. The model has been handed nothing to work from.
+    "empty_context",
+    #: The char budget dropped a whole licensed table before the model saw it, so the turn is
+    #: asking for SQL over a relation it did not show.
+    "licensed_table_evicted",
+})
 
 #: Where each ``refused_by`` value was decided. Inventory of legal values for
 #: :func:`classify_outcome`.
@@ -135,12 +187,27 @@ REFUSED_BY_TO_STAGE: Mapping[str, Stage] = {
     "missing_join_path": Stage.connect,
     "over_connect_bounds": Stage.connect,
     "guardrail": Stage.check,
+    "guardrail_error": Stage.check,
     "attempt_cap": Stage.cap,
     "model_error": Stage.agent_core,
+    **{reason: Stage.abstain for reason in sorted(ABSTENTION_REASONS)},
 }
 
 #: ``refused_by`` values that mean our bug (crash wearing a refusal stamp).
-CRASH_REFUSED_BY: frozenset[str] = frozenset({"model_error"})
+#:
+#: ``guardrail_error`` was added by the 2026-08-10 audit (C3). A turn whose every attempt ended
+#: in a swallowed exception inside ``check()`` rather than in a verdict is *ours*, and
+#: :class:`Outcome` says the two must stay apart — yet it recorded ``refused``.
+#: ``govern.layers.GUARDRAIL_ERROR``'s own docstring names the consequence ("presents as an arm
+#: that refuses everything, with ``crash_rate == 0`` and every register key present"): the count
+#: was there, ``outcome`` contradicted it, and only the count was gated.
+#:
+#: Spelled as a literal for the same reason ``"guardrail"`` is — ``register`` sits below
+#: ``govern``, so the named constant cannot be imported here, and ``layers.py`` asserts at import
+#: that the two agree.
+#:
+#: ``model_error`` has no producer in ``src/`` and stays a declared value.
+CRASH_REFUSED_BY: frozenset[str] = frozenset({"model_error", "guardrail_error"})
 
 #: Attempt-cap ``refused_by``. Named so rename stays in step with the table.
 ATTEMPT_CAP_REFUSED_BY = "attempt_cap"
@@ -171,6 +238,9 @@ def classify_outcome(
     if refused_by == ATTEMPT_CAP_REFUSED_BY:
         return Outcome.capped
     if clarification_requested:
+        # Serve never sets this True: ask_user pauses via GraphInterrupt before stamp.
+        # Transport surfaces clarification via __interrupt__ / HTTP outcome instead.
+        # Kept so a test or future writer can still classify a stamped clarification.
         return Outcome.clarification
     if refused_by:
         return Outcome.refused
@@ -179,14 +249,10 @@ def classify_outcome(
     return Outcome.crashed
 
 
-# **``classify_row`` was here and is gone** (audit §10). It was named by ``register/record.py``
-# as the reader of the outcome tier and had **zero callers**: every real classification goes
-# through :func:`classify_outcome`, which ``stamp`` calls with the state it already holds.
-#
-# It was a second entry point to one decision -- read the stamped ``outcome`` if it parses,
-# otherwise re-derive -- and the two would have disagreed exactly when the stamp was wrong,
-# which is the case a reader would have used it to check. One derivation, no fallback: a row
-# whose ``outcome`` does not parse is a broken row, not a row to guess about.
+# ``classify_row`` was here and is gone (audit §10): zero callers, and it was a second
+# entry point to one decision (read the stamped ``outcome`` if it parses, else re-derive)
+# that would have disagreed exactly when the stamp was wrong. One derivation, no fallback:
+# a row whose ``outcome`` does not parse is a broken row, not a row to guess about.
 
 
 def _assert_refusal_tables_are_closed() -> None:
@@ -216,6 +282,27 @@ def _assert_refusal_tables_are_closed() -> None:
     overlap = TERMINAL_STAGES & set(FACET_STAGES)
     if overlap:  # pragma: no cover - import-time guard
         raise AssertionError(f"a facet cannot be a terminal stage: {sorted(overlap)}")
+
+    unmapped = sorted(ABSTENTION_REASONS - set(REFUSED_BY_TO_STAGE))
+    if unmapped:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"abstention reasons with no stage: {unmapped}. A reason outside "
+            "REFUSED_BY_TO_STAGE is a terminal nothing can attribute, which is the "
+            "free-text refusal the closed vocabulary exists to replace."
+        )
+    misplaced = sorted(r for r in ABSTENTION_REASONS if REFUSED_BY_TO_STAGE[r] is not Stage.abstain)
+    if misplaced:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"abstention reasons attributed to another stage: {misplaced}. A decision the "
+            "abstention policy took must not be filed under the node it happens to be about, "
+            "or the refusal histogram credits `route` with a policy's judgement."
+        )
+    crashing = sorted(ABSTENTION_REASONS & CRASH_REFUSED_BY)
+    if crashing:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"abstention reasons classified as crashes: {crashing}. Declining on purpose is "
+            "the product working; `Outcome` requires it stay apart from our own bugs."
+        )
 
 
 _assert_refusal_tables_are_closed()

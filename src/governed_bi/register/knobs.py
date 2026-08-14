@@ -6,6 +6,7 @@ not a default — reading an uncalibrated knob raises.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Final, Mapping
@@ -24,11 +25,13 @@ __all__ = [
     "comparability_keys",
     "resume_drift_keys",
     "config_hash_keys",
+    "env_overrides",
+    "env_override",
 ]
 
 
 class Unset:
-    """A knob deliberately shipped uncalibrated. Distinct from every value.
+    """A knob deliberately shipped uncalibrated; distinct from every value.
 
     Reading one raises rather than substituting a plausible number.
     """
@@ -71,15 +74,32 @@ class Knob:
     #: Digest of something larger (function list, budgets) so the hash moves
     #: when content does.
     hashed_by_content: bool = False
+    #: The environment variable a *reader* consults **before** this knob's resolved value.
+    #:
+    #: Declared here because the recording side has to know it exists. Three variables
+    #: (``GOVERNED_BI_RAIL_NODE_TIMEOUT_S``, ``GOVERNED_BI_AGENT_NODE_TIMEOUT_S``,
+    #: ``GOVERNED_BI_AGENT_RECURSION_LIMIT``) were read env-first by ``serve/graph.py`` and
+    #: ``serve/nodes/agent_core.py`` while ``session._resolved_knobs`` built the record from
+    #: ``defaults()`` alone -- so setting one moved the behaviour and the artifact still
+    #: published 120.0 / 1200.0 / 40. All three are ``Role.comparability``, which makes that
+    #: two treatments sharing one config hash.
+    env_var: str | None = None
 
 
-def _k(name: str, default: Any, role: Role, why: str, *, hashed_by_content: bool = False) -> Knob:
-    return Knob(name, default, role, why, hashed_by_content=hashed_by_content)
+def _k(
+    name: str,
+    default: Any,
+    role: Role,
+    why: str,
+    *,
+    hashed_by_content: bool = False,
+    env_var: str | None = None,
+) -> Knob:
+    return Knob(name, default, role, why, hashed_by_content=hashed_by_content, env_var=env_var)
 
 
-#: Digest input for the per-type budgets, which are declared in :mod:`.assets`
-#: beside the types they belong to. Referenced here so that changing a budget
-#: moves the config hash without duplicating the table.
+#: Digest input for the per-type budgets, declared in :mod:`.assets` beside the types.
+#: Referenced rather than duplicated, so changing a budget moves the config hash.
 _ASSET_BUDGETS: Final[tuple[tuple[str, Any], ...]] = tuple(
     sorted((t.value, p.budget) for t, p in ASSET_REGISTER.items())
 )
@@ -88,9 +108,9 @@ _ASSET_BUDGETS: Final[tuple[tuple[str, Any], ...]] = tuple(
 KNOB_REGISTER: tuple[Knob, ...] = (
     # ── corpus and validation ───────────────────────────────────────────────
     _k("summary_max_chars", 250, Role.comparability,
-       "the index's unit of text. Enforced in the model, not at the tool boundary, "
-       "so every writer is covered: tool calls, the seed, hand-edited YAML, the "
-       "loader. Over-length is a validation error, never a truncation"),
+       "the index's unit of text. Enforced in the model rather than at the tool "
+       "boundary, so every writer is covered; over-length is a validation error, "
+       "never a truncation"),
     _k("summary_min_chars", 1, Role.comparability,
        "a blank document is a live provider hazard: OpenAI returns a vector that "
        "can score above zero and pollute a ranking, Bedrock Titan rejects it and "
@@ -112,15 +132,20 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "renormalised by active channels, so a single-channel facet is not "
        "structurally half-weighted"),
     _k("w_semantic", 0.5, Role.comparability, "as above"),
+    _k("semantic_scale_ceiling", 0.6, Role.comparability,
+       "the cosine at which this embedder's evidence is as strong as it gets, so the two "
+       "channels are commensurate without a per-query normaliser (audit I1). FITTED, and only "
+       "for text-embedding-3-large: measured over 120 questions x 57 schema summaries on corpus "
+       "86ed1dbf, the best-matching pair tops out at 0.5443 (an earlier independent measurement "
+       "said 0.635). A different embedding surface needs a different value -- Titan and 3-large "
+       "do not share a scale -- so this is the one knob an arm on a new embedder must re-fit. "
+       "The lexical channel needs no partner: raw/(raw+k) is already in [0,1) by construction, "
+       "which is the absolute scale tests/retrieve/test_scoring_contract.py prescribes"),
     _k("lexical_saturation_k", 1.2, Role.comparability,
-       "the k in raw/(raw+k). Declared at 1.2 because that is the value every run "
-       "has always used: it shipped UNSET here while retrieve/lexical.py defaulted "
-       "k=1.2 and index.py called BM25(docs) with no k, so the register said nobody "
-       "had chosen it and the code chose it anyway. Declaring what runs is not the "
-       "same as fitting it -- 1.2 is still UNFITTED, and it is the constant that sets "
-       "where the lexical scale sits, so a fit is real outstanding work. It matters "
-       "less than it did: nodes/facets.py now scales each channel within its own "
-       "facet before comparing them, so k no longer decides which channel wins"),
+       "the k in raw/(raw+k), declared at the value every run has used. Still "
+       "UNFITTED -- it sets where the lexical scale sits, so a fit is outstanding "
+       "work, though nodes/facets.py now scales each channel within its own facet, so "
+       "k no longer decides which channel wins"),
     _k("expand_hops", 0, Role.comparability,
        "FK-neighbourhood expansion, off until its contribution is measured: of the "
        "tables gold SQL uses, how many entered neither by facet hit nor by Steiner "
@@ -134,21 +159,17 @@ KNOB_REGISTER: tuple[Knob, ...] = (
 
     # ── context and delivery ────────────────────────────────────────────────
     _k("context_budget_chars", 80_000, Role.comparability,
-       "the total rendered budget, a BACKSTOP and not a cost lever. Counted in "
-       "CHARACTERS because a token count needs a tokeniser per provider and must "
-       "be right at delivery time in production, where chars are free and exact. "
-       "80_000 sits above the largest context v1 ever delivered (76,354 chars, "
-       "max over 19,095 turns), so it provably never fires on observed traffic. "
-       "That is deliberate: measured per arm, any BINDING threshold truncates only "
-       "the treated arms -- at 24,000 it fires on 23.5% of `curated` and 27.4% of "
-       "`curated_sme` turns and 0.0% of `baseline` and `seeded` -- which weakens "
-       "the treatment in exactly the arms whose treatment is being measured. Per "
-       "the R2 rule, truncation MUST be recorded when it fires; a cap that "
-       "silently trims context is an undelivered treatment reported as delivered"),
+       "the total rendered budget, a BACKSTOP and not a cost lever. In CHARACTERS "
+       "because a token count needs a per-provider tokeniser at delivery time. "
+       "80_000 sits above the largest context v1 ever delivered (76,354 chars over "
+       "19,095 turns), so it provably never fires on observed traffic -- deliberate, "
+       "because a BINDING threshold truncates only the treated arms (at 24,000: "
+       "23.5% of `curated`, 27.4% of `curated_sme`, 0.0% of `baseline` and `seeded`). "
+       "Per R2, truncation MUST be recorded when it fires"),
     _k("read_body_max_tokens", 20_000, Role.comparability,
-       "below the deep-agent middleware eviction threshold. Past roughly 80 KB a "
-       "tool result is evicted to a file and replaced by a preview, so one read "
-       "silently becomes several turns out of the step budget"),
+       "below the deep-agent middleware eviction threshold: past roughly 80 KB a tool "
+       "result is evicted to a file and replaced by a preview, so one read silently "
+       "becomes several turns out of the step budget"),
 
     # ── models ──────────────────────────────────────────────────────────────
     _k("chat_model", None, Role.comparability, "the main generation model"),
@@ -158,62 +179,86 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("rewrite_model", None, Role.comparability,
        "separate from facet_model even though both are small: two call sites under "
        "one knob means a run with a different rewrite model hashes identically"),
-    # `llm_temperature` was here and is gone (audit §10): zero readers, and it entered the
-    # config hash. Its own justification was that "a defaulted parameter passes a presence check
-    # while recording a value the run never used" -- and that is precisely what it then did,
-    # for its whole life. Nothing in this repository sets a temperature on a model, so the knob
-    # recorded `None` for every run and hashed it. Re-declare it when something forwards one.
+    # `llm_temperature` was here and is gone (audit §10): zero readers, yet it entered the
+    # config hash and recorded `None` for every run. Re-declare it when something forwards
+    # a temperature to a model.
     _k("llm_reasoning_effort", None, Role.comparability,
        "two v1 ladders differed ONLY in this and compared as one experiment; it "
-       "moved the baseline arm +2.5pp against a 2.3pp detection threshold"),
+       "moved the baseline arm past that ladder's detection threshold (sizes retired)"),
     _k("llm_utility_model", None, Role.comparability,
        "the model behind the guard's scope gate and the five facet query rewriters. "
-       "Separate from llm_model because it is separately choosable and it decides what "
-       "gets retrieved at all: a cheaper rewriter that phrases the schema query worse "
-       "moves routing recall, which moves everything downstream. Written even when it "
-       "falls back to llm_model, because 'shared one model' and 'split them' are two "
-       "treatments and a blank would make them compare as one"),
+       "Separate from llm_model because a cheaper rewriter phrases the schema query "
+       "worse, which moves routing recall and everything downstream. Written even when "
+       "it falls back to llm_model: 'shared one model' and 'split them' are two "
+       "treatments, and a blank makes them compare as one"),
+    _k("llm_provider", "openai", Role.comparability,
+       "which gateway served the model. `llm_model` records only the id, and `model_id` "
+       "reads it off the client -- so the same id behind two gateways resolves to one config "
+       "hash and two runs compare as one treatment, though the routing, the snapshot behind "
+       "the id and the failure modes all differ. Added 2026-08-07 with the the internal proxy, whose "
+       "arm was until then distinguishable only by its artifact filename"),
+    _k("llm_utility_provider", "openai", Role.comparability,
+       "the gateway behind the utility model, which since Bedrock landed no longer has to "
+       "be the agent's. The `llm_provider` argument applies unchanged: two gateways serving "
+       "one id are two treatments. Separate knob rather than reuse because the cheap-utility "
+       "configuration -- a small model on one gateway beside a large one on another -- is the "
+       "reason per-surface providers exist, and a shared knob would hash those as one"),
+    _k("embedding_provider", "openai", Role.comparability,
+       "the gateway behind the embedder. The cache cannot collide across gateways -- "
+       "`cache_key` takes the embedder's `model`, and the port requires that to be "
+       "provider-qualified (`openai:...`, `proxy:...`, `bedrock:...`), which is the whole "
+       "reason for that rule. This knob is the reporting half: `embedding_model` alone "
+       "carries the prefix but nothing reads it back out, so an arm's gateway was legible "
+       "only by eye"),
     _k("llm_max_retries", 3, Role.comparability,
-       "how many times the provider SDK retries one call, across EVERY model surface: the "
-       "agent, the utility model and the embedder. It was the SDK's own default of 2 and "
-       "nothing in this repository set it, while governed_bi.toml carried max_retries = 8 "
-       "under a comment calling it 'the entire defence' against 429s -- in a file v2 deleted "
-       "the reader for. It is comparability and not just config because retries move "
-       "crash_rate, and crash_rate is what the quotability gates read: two runs differing "
-       "only here would compare as one, which is precisely what llm_reasoning_effort did"),
+       "how many times the provider SDK retries one call, across the agent, the utility "
+       "model, and the OpenAI and Bedrock embedders. **The proxy embedder drops it** "
+       "(audit N6): `provider.py` builds `ProxyEmbedder` with the model and the dimensions "
+       "only, so a proxy arm records this knob and runs the embedder on the SDK default. "
+       "Comparability and not merely "
+       "operational because retries move crash_rate. This is NOT LangGraph RetryPolicy "
+       "(banned: node retry resamples after seeing failure) and not ModelRetryMiddleware; "
+       "it is the ChatModel/httpx layer. Keep it identical across arms"),
     _k("llm_timeout_s", 300.0, Role.comparability,
-       "wall clock for one AGENT call. Separate from the retry count because the two answer "
-       "different questions -- how long may a legitimate call take, versus how flaky is the "
-       "provider -- and separate from the utility timeout because the two tiers now run at "
-       "different reasoning efforts. The number that matters is the product: worst case for "
-       "one call is timeout x (retries + 1), so the SDK's 600s default at 3 retries is a "
-       "40-minute hang, not a defence. More retries is also the WRONG fix for a slow call, "
-       "which the replaced toml comment conflated: retries defend against 429/5xx, timeouts "
-       "against hangs, and raising one without the other multiplies the ceiling"),
+       "wall clock for one AGENT call. Separate from the retry count and from the "
+       "utility timeout because the three answer different questions. The product is "
+       "what matters -- worst case is timeout x (retries + 1), so the SDK's 600s "
+       "default at 3 retries is a 40-minute hang. Retries defend against 429/5xx and "
+       "timeouts against hangs; raising one without the other multiplies the ceiling"),
     _k("llm_utility_timeout_s", 30.0, Role.comparability,
-       "wall clock for the small calls -- the scope gate, the five facet rewriters, and the "
-       "embedder, which shares this because it is the same latency class on the same critical "
-       "path. Measured at 1.2-1.5s each, and they all run BEFORE anything appears on screen, "
-       "so the SDK's 600s default meant one hung call stalled a turn for ten minutes when "
-       "every one of those call sites already degrades gracefully. Failing fast into a "
-       "degradation the code already handles beats waiting for a call that is not coming"),
-    _k("rail_node_timeout_s", 60.0, Role.comparability,
-       "wall clock for ONE utility rail node -- the scope gate, a facet rewriter, narrate. "
-       "Distinct from llm_utility_timeout_s, which bounds one provider CALL: retries multiply "
-       "that, and a node also does retrieval and rendering around it, so the call bound is not "
-       "a node bound. Set above the call bound on purpose -- a node hitting this means "
-       "something other than the provider is wrong, not that the model was slow"),
-    _k("agent_node_timeout_s", 900.0, Role.comparability,
-       "wall clock for the whole agent_core loop, which is the one node with no other ceiling. "
-       "llm_timeout_s bounds one of its calls; the loop makes several, and LangGraph's default "
-       "recursion_limit is 10007 under the server, so nothing bounded the node itself. 900s is "
-       "generous against a measured 7-14s turn: this is a hang stop, not a latency target. "
-       "NOT paired with a retry -- agent_core executes governed SQL, so a retried node re-runs "
-       "statements the ledger has already recorded"),
+       "wall clock for the small calls -- the scope gate, the five facet rewriters, and "
+       "the embedder, same latency class on the same critical path. Measured at 1.2-1.5s "
+       "each and all run before anything appears on screen, so the SDK's 600s default "
+       "stalled a turn for ten minutes; every one of those call sites already degrades "
+       "gracefully, so failing fast is better than waiting"),
+    _k("rail_node_timeout_s", 120.0, Role.comparability,
+       "wall clock for ONE cancellable utility rail -- today only the scope gate (guard). "
+       "Default matches llm_utility_timeout_s * (llm_max_retries + 1) = 30 * 4 so a provider "
+       "retry budget can finish before the rail stamps crashed (fail-open on model error vs "
+       "crashed on rail timeout must not disagree for the same hung call). Facets and narrate "
+       "are excluded: facets by unmeasured five-way quota; narrate so an answered turn cannot "
+       "be rewritten to crashed",
+       env_var="GOVERNED_BI_RAIL_NODE_TIMEOUT_S"),
+    _k("agent_node_timeout_s", 1200.0, Role.comparability,
+       "wall clock for the whole agent_core loop; applied INSIDE agent_core (not wrap_node) so "
+       "a timeout still projects the streamed ledger. Default matches "
+       "llm_timeout_s * (llm_max_retries + 1) = 300 * 4 so one hung agent call's full provider "
+       "retry budget can finish before the node stamps crashed (same pairing as "
+       "rail_node_timeout_s vs utility). create_agent binds recursion_limit=9999; we override "
+       "with agent_recursion_limit. NOT paired with a node RetryPolicy -- agent_core executes "
+       "governed SQL",
+       env_var="GOVERNED_BI_AGENT_NODE_TIMEOUT_S"),
+    _k("agent_recursion_limit", 40, Role.comparability,
+       "superstep ceiling for the nested create_agent graph. create_agent's own default "
+       "is 9999; without an explicit outer override that ceiling wins. run_query is also "
+       "capped by AttemptBook, but read_body/inspect_schema/sample_rows are not -- this "
+       "bound is what stops a non-SQL tool loop. Measured with cap tests at 60; 40 is the "
+       "production default so a hung loop fails before the agent_node_timeout_s wall clock",
+       env_var="GOVERNED_BI_AGENT_RECURSION_LIMIT"),
     _k("embedding_model", None, Role.comparability,
-       "part of every vector cache key. cosine returns 0.0 on a width mismatch "
-       "rather than raising, so a cross-model cache hit degrades routing to "
-       "'nothing scores' with no error anywhere"),
+       "part of every vector cache key: two same-width models are indistinguishable to "
+       "cosine, which raises only when the widths differ (audit N2), so a cross-model cache "
+       "hit at the same width degrades routing with no error anywhere"),
     _k("embedding_dimensions", None, Role.comparability, "as above"),
     _k("prompt_set", None, Role.comparability,
        "resolved variant per stage. The hash covers the TEXT, so editing a variant "
@@ -221,19 +266,17 @@ KNOB_REGISTER: tuple[Knob, ...] = (
 
     # ── execution governance (ADR 0006) ─────────────────────────────────────
     _k("permitted_functions", UNSET, Role.comparability,
-       "the positive function allowlist, hashed by content. UNSET rather than None "
-       "because ADR 0006 G1 is 'absence refuses' and this is the knob that defines "
-       "what may execute: a None default contributes None to the config hash, and "
-       "`if not permitted_functions` reads it as an empty allowlist — which either "
-       "blocks everything or, read the other way, is exactly the hole a positive "
-       "allowlist exists to close. The value is the committed list in "
+       "the positive function allowlist, hashed by content. UNSET and not None "
+       "because ADR 0006 G1 is 'absence refuses': None contributes None to the config "
+       "hash, and `if not permitted_functions` reads it as an empty allowlist -- the "
+       "hole a positive allowlist exists to close. The value is the committed list in "
        "govern.functions; config resolution copies its digest here",
        hashed_by_content=True),
     _k("sqlglot_version", UNSET, Role.comparability,
-       "canonical function names are release-dependent and the allowlist is keyed "
-       "on them, so an unresolved version means the allowlist's correctness is "
-       "unknown. Resolved from installed metadata at config time; UNSET so it "
-       "cannot be silently absent"),
+       "canonical function names are release-dependent and the allowlist is keyed on "
+       "them, so an unresolved version means the allowlist's correctness is unknown. "
+       "Resolved from installed metadata at config time; UNSET so it cannot be "
+       "silently absent"),
     _k("guard_rules_enabled", UNSET, Role.comparability,
        "per rule_id. UNSET because ADR 0006 OQ3 requires both numbers — red-team "
        "recall and benign firing rate — before a rule ships enabled, so there is no "
@@ -243,19 +286,36 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "True in development and on the benchmark, False in production, where a "
        "suspect column warns instead of refusing"),
     _k("graded_delivery_enabled", True, Role.comparability,
-       "eligible only on a cost-layer failure. An open question asks whether the "
-       "path earns its complexity at all, and with the rule narrowed to one layer "
-       "deleting it is a small change"),
-    _k("run_query_attempt_cap", 3, Role.comparability,
-       "the cap TERMINATES the turn. v1's returned a 'capped' tool message and the "
-       "agent kept going, burning unbounded round-trips against a cap it could "
-       "never clear"),
+       "eligible only on a cost-layer failure. An open question asks whether the path "
+       "earns its complexity at all; narrowed to one layer, deleting it is small"),
+    _k("run_query_attempt_cap", 5, Role.comparability,
+       "how many governed run_query attempts a turn gets. A tool return cannot end an "
+       "agent loop -- measured at cap=5, five statements executed, then 25 further "
+       "model calls, then GraphRecursionError -- so since 2026-08-07 a "
+       "ToolCallLimitMiddleware on run_query jumps the loop to end, costing one model "
+       "call because the cap fires on the proposal that would exceed it (six calls, "
+       "not thirty). It counts run_query attempts and nothing else; sample_rows also "
+       "writes ledger rows and used to spend this budget. Raised 3 -> 5 on 2026-08-07: "
+       "a slot is charged before governance runs, so a blocked attempt costs the same "
+       "as an executed one. Comparability-roled, so every number measured at 3 is a "
+       "different arm from one measured at 5"),
     _k("max_rows", 200_000, Role.comparability,
-       "applied in the connector base class as max_rows + 1 so truncation is "
-       "detectable. v1 documented a gateway-wide cap and SQLite was the one path "
-       "without it"),
+       "applied by each connector adapter as max_rows + 1 so truncation is detectable. "
+       "There is no connector base class: ports.Connector is a Protocol, and "
+       "datasource/postgres.py and datasource/sqlite.py each fetchmany(cap + 1) "
+       "themselves (audit D2)"),
     _k("g_length_max_chars", 8_000, Role.comparability, "guard's hard input bound"),
     _k("cost_budget", UNSET, Role.comparability, "the cost layer's shape estimate bound"),
+    _k("access_grant", None, Role.comparability,
+       "digest of the Grant this run's AccessPolicy returned (ADR 0012 §7). ADR 0006 §13 "
+       "requires security configuration to enter the config hash, or two runs under different "
+       "authorization hash identically -- harmless while the only shipped grant is open, and "
+       "fatal the day a fork ships a restrictive one. The default is None and NOT the open "
+       "grant's digest, deliberately: a digest that came from this register rather than from "
+       "the policy would publish `open` for a fork serving a restriction, which is exactly the "
+       "agent_recursion_limit defect (behaviour moves, the artifact says the default) in the "
+       "security register. session._resolved_knobs reads it off GovernancePolicy.access_grant, "
+       "so a null here means no policy was threaded, never that the grant was open"),
 
     # ── structured checks (serve-level result sanity, not ADR 0006 governance) ──
     _k("enable_structured_percentage_check", False, Role.comparability,
@@ -281,28 +341,49 @@ KNOB_REGISTER: tuple[Knob, ...] = (
 
     # ── measurement ─────────────────────────────────────────────────────────
     _k("cache_cost_reduction_target", 0.30, Role.comparability,
-       "the acceptance criterion for message placement and cache breakpoints, "
-       "measured over 200 questions with EX reported alongside and NOT asserted "
-       "equal — equivalence needs more power than difference detection, and "
-       "nothing tighter than about 3pp is demonstrable at this sample size"),
+       "the acceptance criterion for message placement and cache breakpoints, measured "
+       "over 200 questions with EX reported alongside and NOT asserted equal -- "
+       "equivalence needs more power than difference detection, and nothing tighter "
+       "than about 3pp is demonstrable at this sample size"),
+
+    _k("abstention_policy_enabled", False, Role.comparability,
+       "the declared abstention policy (serve/nodes/abstain.py, ADR 0013), OFF. It decides "
+       "before the agent spends its run_query attempts whether this turn should be answered at "
+       "all, and writes a closed-vocabulary reason either way. Comparability and not "
+       "operational because it changes which turns are delivered, which is the coverage half "
+       "of every selective-accuracy number: v4 is the control and must keep meaning what it "
+       "meant. OFF because the trade has not been measured -- the policy withholds turns the "
+       "engine currently answers, and `docs/analysis/selective-delivery-v4.md` is 300 lines "
+       "about how easy it is to buy accuracy with coverage and call it a win. Turning it on is "
+       "one paired arm, and the paired arm is the point of the knob"),
+
+    _k("reflect_enabled", False, Role.comparability,
+       "the post-hoc reflector (serve/nodes/reflect.py), OFF. An observer -- it writes "
+       "a verdict and no control flow -- so all it can do today is spend a model call. "
+       "Comparability and not operational because that extra call draws on the same "
+       "provider quota whose saturation moves the two fields the quotability gates "
+       "read. Stays off until tools/score_reflector.py shows the verdict beats the base "
+       "rate on rows carrying a gold verdict: a retry loop built on a reflector that "
+       "cannot tell right from wrong re-rolls a draw after seeing it. Node RetryPolicy "
+       "is banned for that reason; n_re_served is a frozen always-0 field, not a gate"),
 
     # ── operational: recorded, never a comparability key ────────────────────
     _k("git_sha", None, Role.operational,
-       "two runs at different commits are the NORMAL comparison. Inside one run "
-       "directory the same difference is corrupting, which is why this is a "
-       "resume-drift key and not a comparability key"),
+       "two runs at different commits are the NORMAL comparison, so this is a "
+       "resume-drift key rather than a comparability key -- inside one run directory "
+       "the same difference is corrupting"),
     _k("git_main_sha", None, Role.operational,
-       "on the experiment server the code sits on a branch never equal to main, so "
-       "the branch tip alone cannot say which main commit a paid run was based on"),
+       "on the experiment server the code sits on a branch never equal to main, so the "
+       "branch tip alone cannot say which main commit a paid run was based on"),
     _k("working_tree_dirty", None, Role.operational, "see diff_sha256"),
     _k("diff_sha256", None, Role.operational,
-       "uncommitted changes. v1 checked git_sha only, so a resume across an "
-       "uncommitted edit blended two harness versions into one arm's score with no "
-       "gate firing"),
+       "uncommitted changes. Checking git_sha alone lets a resume across an "
+       "uncommitted edit blend two harness versions into one arm's score with no gate "
+       "firing"),
     _k("serve_workers", None, Role.operational,
-       "results are worker-count invariant BY TEST, but the two fields the gates "
-       "read — crashed outcomes and channel degradation — come from a shared "
-       "provider quota that worker count is precisely what saturates"),
+       "results are worker-count invariant BY TEST, but the two fields the gates read "
+       "-- crashed outcomes and channel degradation -- come from a shared provider "
+       "quota that worker count is precisely what saturates"),
     _k("build_workers", None, Role.operational,
        "separate from serve_workers: a build worker holds a connection AND a "
        "long-lived agent conversation, so the sensible ceilings differ"),
@@ -310,14 +391,13 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     # ── scope: fatal on resume, not a comparability key ─────────────────────
     _k("arms", None, Role.scope, "which arms exist"),
     _k("schemas_under_test", None, Role.scope,
-       "serve from an explicit list, never a directory scan: a schema dropped from "
-       "one attempt leaves its YAML behind and competes as a router candidate for "
-       "every other schema's questions"),
+       "serve from an explicit list, never a directory scan: a schema dropped from one "
+       "attempt leaves its YAML behind and competes as a router candidate for every "
+       "other schema's questions"),
     _k("split", None, Role.scope, "train or test"),
     _k("question_subset", None, Role.scope,
-       "a probe set's identity is not its count, and its EX is a biased sample "
-       "because the questions were picked as ones an intervention could plausibly "
-       "move"),
+       "a probe set's identity is not its count, and its EX is a biased sample because "
+       "the questions were picked as ones an intervention could plausibly move"),
 )
 
 
@@ -331,10 +411,7 @@ def defaults() -> Mapping[str, Any]:
 
 
 def knob_default(name: str) -> Any:
-    """One knob's declared default. Raises ``KeyError`` if undeclared.
-
-    Returns ``UNSET`` as ``UNSET``, never resolved to a number.
-    """
+    """One knob's declared default; ``UNSET`` stays ``UNSET``. Raises if undeclared."""
     for knob in KNOB_REGISTER:
         if knob.name == name:
             return knob.default
@@ -347,9 +424,8 @@ def comparability_keys() -> frozenset[str]:
 
 
 def resume_drift_keys() -> frozenset[str]:
-    """Knobs whose change within one run directory is fatal.
-
-    Superset of comparability keys plus operational and scope.
+    """Knobs whose change within one run directory is fatal: comparability, plus
+    operational and scope.
     """
     return comparability_keys() | frozenset(
         k.name for k in KNOB_REGISTER if k.role in (Role.operational, Role.scope)
@@ -359,6 +435,69 @@ def resume_drift_keys() -> frozenset[str]:
 def config_hash_keys() -> frozenset[str]:
     """Knobs that enter the serve config hash (the comparability set)."""
     return comparability_keys()
+
+
+def env_overrides() -> Mapping[str, str]:
+    """``{knob name -> environment variable}`` for every knob a reader reads env-first."""
+    return {k.name: k.env_var for k in KNOB_REGISTER if k.env_var}
+
+
+def env_override(name: str) -> Any | None:
+    """What ``name``'s environment variable says this run will run at, or ``None``.
+
+    The **recording** half of an env-first knob, and the reason it lives in the register
+    rather than beside either reader: ``serve/graph.py`` and ``serve/nodes/agent_core.py``
+    consult the variable before anything else, while ``session._resolved_knobs`` built the
+    record from :func:`defaults` — so all three variables moved behaviour and left the
+    artifact saying 120.0 / 1200.0 / 40.
+
+    Two parsing rules are copied from those readers on purpose, because a record that
+    disagreed with the reader would be the same defect wearing the opposite sign:
+
+    * **Blank is unset.** ``graph.py`` tests ``if raw`` and ``agent_core.py`` tests
+      ``str(raw).strip() != ""``; an exported-but-empty variable falls through to the knob.
+    * **The declared default decides the type.** ``agent_recursion_limit`` defaults to an
+      ``int`` and its reader calls ``int()``; the two timeouts default to ``float`` and their
+      readers call ``float()``. Deriving the cast from the default is what stops the record's
+      type drifting from the reader's when a default changes — ``_knobs_resolved_gate``
+      compares by ``repr``, so ``40`` and ``40.0`` are two configurations.
+
+    A value the reader would choke on raises here instead, at session construction, rather
+    than mid-run in a node: the run is lost either way and the early failure names the
+    variable.
+    """
+    for knob in KNOB_REGISTER:
+        if knob.name != name:
+            continue
+        if not knob.env_var:
+            return None
+        raw = os.environ.get(knob.env_var)
+        if raw is None or not str(raw).strip():
+            return None
+        default = knob.default
+        # bool before int: `bool` is an int subclass and `int("true")` raises, so an
+        # env-overridable boolean would otherwise fail on the spelling people actually type.
+        if isinstance(default, bool):
+            text = str(raw).strip().lower()
+            if text not in ("true", "false"):
+                raise ValueError(
+                    f"{knob.env_var}={raw!r} is not a boolean; knob {name!r} declares "
+                    f"{default!r}"
+                )
+            return text == "true"
+        try:
+            if isinstance(default, int):
+                return int(str(raw).strip())
+            if isinstance(default, float):
+                return float(str(raw).strip())
+        except ValueError as err:
+            raise ValueError(
+                f"{knob.env_var}={raw!r} cannot be read as the {type(default).__name__} "
+                f"that knob {name!r} declares. The node that reads it would raise mid-run; "
+                "refusing here names the variable instead."
+            ) from err
+        return str(raw).strip()
+    raise KeyError(f"{name!r} is not a declared knob")
 
 
 #: Knobs whose role placement must not drift (asserted at import).

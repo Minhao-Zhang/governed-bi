@@ -32,7 +32,8 @@ A regex over English can be wrong in both directions. A SQLSTATE class cannot.
 **A query `govern` permits must be one the connector executes.** This is the cross-parcel
 property that nobody owned, and its absence meant the intersection of "govern permits" and
 "the connector executes" was **empty** for the whole of 2026-08-03 — `govern` licenses
-`{schema}.{physical_name}`, SQLite rejected the qualified form, and nothing tested the
+`{schema}.{slug(physical_name)}` (`govern/identifiers.py::table_key`; the slug is what makes
+`airline."Air Carriers"` a key at all), SQLite rejected the qualified form, and nothing tested the
 pair. It did not surface because the grader re-executed outside governance. Postgres-only
 makes it native; this test is what keeps it that way.
 
@@ -390,8 +391,10 @@ def test_the_sqlite_adapter_classifies_by_code_and_not_by_prose(tmp_path) -> Non
 def test_a_statement_govern_permits_is_one_the_connector_executes(connector, fixture_schema) -> None:
     """#39a, turned into a test so it cannot come back.
 
-    ``govern`` licenses ``{schema}.{physical_name}`` deliberately — a pooled corpus repeats
-    table names across schemas. For the whole of 2026-08-03 the only working connector
+    ``govern`` licenses ``{schema}.{slug(physical_name)}`` deliberately — a pooled corpus
+    repeats table names across schemas, and ``govern/identifiers.py::table_key`` folds the
+    slug in so a name SQL has to quote still has a key. For the whole of 2026-08-03 the only
+    working connector
     rejected that qualified form, so **the intersection of "govern permits" and "the
     connector executes" was empty**, and nothing noticed because the grader re-executed
     outside governance.

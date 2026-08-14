@@ -1,10 +1,11 @@
 """Retries and timeouts reach the provider, and the run records what it ran with.
 
-**The defect.** `governed_bi.toml` carried `max_retries = 8` and `request_timeout_s = 900.0`
+**The defect.** A TOML config file carried `max_retries = 8` and `request_timeout_s = 900.0`
 under a comment calling them *"the entire defence"* against provider rate limits — and v2
 deleted the reader for that file, so nothing had loaded them since the rewrite. Measured on the
 real objects: `ChatOpenAI.max_retries` was `None`, the underlying `openai` client fell back to
-its own default of **2**, and there was no timeout at all.
+its own default of **2**, and there was no timeout at all. The file itself is gone; retries and
+timeouts are knobs now.
 
 Two things are asserted here and they fail differently, which is why both exist:
 
@@ -57,6 +58,22 @@ def test_the_worst_case_for_one_call_is_bounded() -> None:
     assert utility_ceiling < agent_ceiling, (
         "the split exists so the small calls fail faster than the agent; equal ceilings mean "
         "the second knob is buying nothing"
+    )
+
+
+def test_node_timeouts_cover_one_call_provider_retry_budget() -> None:
+    """Rail/agent hang-stops must not fire inside a single call's SDK retry budget.
+
+    Same pairing as the knob docstrings: ``rail_node_timeout_s`` vs utility×(retries+1),
+    ``agent_node_timeout_s`` vs agent×(retries+1). Shrinking either below its ceiling makes
+    ``TimeoutError`` and a provider retry disagree about the same hung call.
+    """
+    attempts = int(knob_default("llm_max_retries")) + 1
+    assert float(knob_default("rail_node_timeout_s")) >= (
+        float(knob_default("llm_utility_timeout_s")) * attempts
+    )
+    assert float(knob_default("agent_node_timeout_s")) >= (
+        float(knob_default("llm_timeout_s")) * attempts
     )
 
 

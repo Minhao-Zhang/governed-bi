@@ -320,6 +320,15 @@ def read_observed_values(
     ``sample_rows`` returns its payload as JSON because its other caller is a language model.
     Parsing it back is the cost of having one implementation of the read instead of two.
     """
+    if connector is None:
+        # No database to read, so nothing measured -- and nothing pretended. Guarded here rather
+        # than downstream because ``serve/fetch``'s readers now *raise* on a missing connector
+        # (``test_a_wiring_failure_is_not_a_verdict``: a refusal row built in ``serve/`` files our
+        # own misconfiguration in the ledger as the layer stack refusing the statement). Before
+        # this guard the whole scan propagated that as a 500; a corpus-only session should still
+        # get the signals that need no rows, and honestly get none of the ones that do.
+        return {}, []
+
     from governed_bi.govern.bounds import ToolBounds
     from governed_bi.serve.fetch import SAMPLE_ROWS_MAX_VALUES, sample_rows
 

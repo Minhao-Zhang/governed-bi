@@ -3,13 +3,15 @@
 > **Superseded (2026-08-03).** The implementation this ADR describes was deleted
 > in commit `2347ae3`. The *transport* decision it records — LangGraph Server plus
 > `useStream`, rather than a bespoke SSE endpoint — is carried forward and still
-> holds; everything it says about graph shape does not.
+> holds; everything it says about graph shape does not, and neither does the list of
+> custom routes in the Decision, which is v1's.
 > [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §3 is the current
-> serve graph.
+> serve graph; [ADR 0007](0007-http-surface-and-the-ui-contract.md) and
+> [ADR 0009](0009-browsing-and-filtering-api.md) are the current HTTP surface.
 
-- **Status:** Accepted (2026-07-10); superseded in part by [ADR 0002](0002-governed-agentic-serve-runtime.md) (2026-07-14) — the runtime choice (LangGraph Server + `useStream`) still stands; the single-node `answer_question` framing was replaced.
+- **Status:** Accepted (2026-07-10). The single-node `answer_question` framing was replaced by [ADR 0002](0002-governed-agentic-serve-runtime.md) (2026-07-14); the implementation was deleted in `2347ae3` (2026-08-03) and the HTTP surface re-decided by [ADR 0007](0007-http-surface-and-the-ui-contract.md). The transport choice stands and is live: `langgraph.json` mounts `api/graph_app.py::make_graph` as `graphs.serve`, and `ui/hooks/use-stream-chat.ts` consumes it through `useStream`.
 - **Deciders:** project owner + design session
-- **Related:** [ui-frontend-handoff.md](../v1/ui-frontend-handoff.md)
+- **Related:** `v1/ui-frontend-handoff.md` (deleted with v1)
 
 ## Context
 

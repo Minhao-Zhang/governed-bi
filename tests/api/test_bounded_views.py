@@ -135,14 +135,15 @@ def test_several_joins_to_one_far_table_are_one_destination() -> None:
 
 
 def _related(session: Any, column_id: str) -> dict[str, Any]:
-    from governed_bi.api import browse_routes
+    """The payload, as a function of the session it projects.
 
-    original = browse_routes._request_session
-    browse_routes._request_session = lambda: session  # type: ignore[assignment]
-    try:
-        return browse_routes.column_related(column_id)
-    finally:
-        browse_routes._request_session = original  # type: ignore[assignment]
+    This used to swap ``browse_routes._request_session`` — a module-level function that reached
+    back into ``routes`` for a process-wide session — around the call, and put it back in a
+    ``finally``. The projection takes its session now, so there is nothing to swap.
+    """
+    from governed_bi.api.browse_routes import related_to_column
+
+    return related_to_column(session, column_id)
 
 
 def _column_session() -> Any:

@@ -128,18 +128,68 @@ def test_unknown_prompts_reports_instead_of_raising() -> None:
 
 def test_the_engine_sends_the_registered_text() -> None:
     """One text. A second copy beside the caller is how the hash and the sent prompt drift."""
-    from governed_bi.serve.tools import SYSTEM_PROMPT
+    from governed_bi.serve.tools import analyst_prompt
 
-    assert SYSTEM_PROMPT == prompt_text("analyst")
+    assert analyst_prompt() == prompt_text("analyst")
 
 
-def test_the_session_reports_the_registry_hash() -> None:
-    """``session.py`` computed ``_digest(SYSTEM_PROMPT)``. If it drifts back, this catches it."""
-    import inspect
+def test_a_selected_variant_actually_reaches_the_analyst() -> None:
+    """The whole point of the knob, and the way it would fail: silently.
 
-    from governed_bi.serve import session as session_mod
+    ``analyst_prompt`` was ``SYSTEM_PROMPT = prompt_text("analyst")``, bound at import. A run
+    selecting ``v1`` would have recorded ``v1``'s ``prompt_set_hash`` and sent ``v2`` — an
+    artifact naming a treatment it never received, which is worse than having no knob, because
+    a later reader has no way to tell.
 
-    source = inspect.getsource(session_mod)
-    assert "prompt_set_hash=prompt_set_hash()" in source, (
-        "the session must publish the registry's hash, not a digest of one prompt"
+    Uses ``v1`` because it is a real registered variant that differs from the default; the test
+    is about the wire, not about which wording wins.
+    """
+    from governed_bi.serve.tools import analyst_prompt
+
+    default = analyst_prompt()
+    selected = analyst_prompt({"configurable": {"prompt_variants": {"analyst": "v1"}}})
+
+    assert selected == prompt_text("analyst", {"analyst": "v1"})
+    assert selected != default, (
+        "the fixture variant no longer differs from the default, so this test cannot fail"
     )
+
+
+def test_the_session_hashes_the_variants_it_also_sends() -> None:
+    """The hash and the configurable must come from **one** selection.
+
+    ``session.py`` once computed ``_digest(SYSTEM_PROMPT)``; it now computes
+    ``prompt_set_hash(prompt_variants)``. Asserted on behaviour rather than on source text —
+    the previous version of this test grepped for a literal call expression, which passes for
+    any code that contains the string and says nothing about what the session publishes.
+    """
+    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.serve.session import Session
+
+    variants = {"analyst": "v1"}
+    session = Session(
+        index=None, structure=None, assets_by_id={}, corpus=None, connector=None,
+        policy=GovernancePolicy(guard_rules_enabled={}),
+        corpus_content_hash="c", prompt_set_hash=prompt_set_hash(variants),
+        knobs_resolved={}, db_id="d", run_id="r", prompt_variants=variants,
+    )
+
+    assert session.prompt_set_hash == prompt_set_hash(variants)
+    assert session.prompt_set_hash != prompt_set_hash(), "the override did not move the hash"
+    assert session.configurable()["configurable"]["prompt_variants"] == variants, (
+        "the session hashed a selection it does not hand to the nodes"
+    )
+
+
+def test_a_session_selecting_nothing_carries_no_variant_key() -> None:
+    """Absent, not ``{}``: an empty mapping in the config reads as a deliberate empty selection,
+    and every served turn would carry it."""
+    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.serve.session import Session
+
+    session = Session(
+        index=None, structure=None, assets_by_id={}, corpus=None, connector=None,
+        policy=GovernancePolicy(guard_rules_enabled={}), corpus_content_hash="c",
+        prompt_set_hash=prompt_set_hash(), knobs_resolved={}, db_id="d", run_id="r",
+    )
+    assert "prompt_variants" not in session.configurable()["configurable"]

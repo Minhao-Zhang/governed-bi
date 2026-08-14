@@ -443,3 +443,50 @@ def test_a_missing_corpus_has_no_digest_rather_than_a_sentinel_one(tmp_path) -> 
 
     with pytest.raises(FileNotFoundError):
         corpus_content_hash(tmp_path / "no_such_corpus")
+
+
+def test_the_hash_ignores_the_version_controls_own_bookkeeping(tmp_path) -> None:
+    """A corpus in a git repository must not change identity when the repository does.
+
+    Found by moving the corpus into ``../BIRD-corpus``: with ``schemas=None`` the tree is the
+    manifest and ``rglob`` had no exclusions, so the digest was reading 29 files inside ``.git``.
+    A treatment identity that moves on every commit, fetch and ``git gc`` is not an identity, and
+    it would have defeated the point of putting the corpus under version control.
+    """
+    from governed_bi.corpus.hash import corpus_content_hash
+
+    (tmp_path / "beer_factory").mkdir()
+    (tmp_path / "beer_factory" / "t.yaml").write_text(TABLE_YAML, encoding="utf-8")
+    for noise in (".git", "__pycache__"):
+        (tmp_path / noise).mkdir()
+        (tmp_path / noise / "HEAD").write_text("ref: refs/heads/v2\n", encoding="utf-8")
+
+    before = corpus_content_hash(tmp_path)
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/other\n", encoding="utf-8")
+    (tmp_path / ".git" / "index").write_bytes(b"\x00binary")
+    assert corpus_content_hash(tmp_path) == before, "committing must not restate the corpus"
+
+    # …and the corpus's own content still moves it, or the exclusion is too wide.
+    (tmp_path / "beer_factory" / "t.yaml").write_text(
+        TABLE_YAML + "\nnote: edited\n", encoding="utf-8"
+    )
+    assert corpus_content_hash(tmp_path) != before
+
+
+def test_a_corpus_repositorys_readme_is_still_corpus_content(tmp_path) -> None:
+    """The narrow exclusion, stated as a test: only tooling is dropped, not prose.
+
+    ``corpus_content_hash`` documents that everything in the selected subtrees counts. Dropping a
+    root ``README.md`` would be deciding that a corpus's own description is not part of it — a
+    judgement for a caller, which already has ``schemas`` to say "the assets alone".
+    """
+    from governed_bi.corpus.hash import corpus_content_hash
+
+    (tmp_path / "beer_factory").mkdir()
+    (tmp_path / "beer_factory" / "t.yaml").write_text(TABLE_YAML, encoding="utf-8")
+    before = corpus_content_hash(tmp_path)
+    (tmp_path / "README.md").write_text("# BIRD-corpus\n", encoding="utf-8")
+    assert corpus_content_hash(tmp_path) != before
+    assert corpus_content_hash(tmp_path, schemas=["beer_factory"]) == corpus_content_hash(
+        tmp_path, schemas=["beer_factory"]
+    )

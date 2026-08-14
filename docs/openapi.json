@@ -1,18 +1,41 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "governed-bi API",
-    "summary": "Governed NL2SQL serve flow + corpus/schema/audit, as JSON.",
-    "version": "0.1.0"
+    "title": "governed-bi",
+    "summary": "Corpus browsing, relationship graphs, governed NL2SQL turns, and the turn audit log, as JSON.",
+    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\nEvery handler is annotated `-> dict[str, Any]`, so FastAPI neither validates nor filters a response against the schemas here: they document what the handlers build. Paths, parameters and operation ids in this file are taken from the running app.\n\n**No route requires a credential, and that is why there is no security scheme and no 401 in this file.** Reaching the port is sufficient \u2014 on every route, including `/audit/turns` and `/audit/turns/{turn_id}/trace`, which return every thread's SQL, the full turn records, and an absolute path to the log directory. The shared key that guarded these routes until 2026-08-13 is gone, and audit findings A1 and A7 are live again with it; `docs/usage.md` records why (LangGraph Studio's bootstrap calls carry no header) and what it costs. This engine expects to be reachable only on 127.0.0.1.\n\n`api/auth.py` survives and is still wired, but what it enforces is not authentication: `threads.update` and `threads.create_run` refuse a client-supplied state-writing `command` (audit A2/A3/A4). Those are LangGraph Server's own routes and are not described here.\n\nServing needs a live Postgres connector and a corpus; there is no offline mode.",
+    "version": "2"
   },
   "paths": {
+    "/livez": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "Livez",
+        "description": "Process liveness. Touches neither the corpus nor the database, so it answers before the session is built. Corpus status is /audit/corpus.\n\nIt used to be the one route served without a key. Since 2026-08-13 no route needs one, so it is no longer special \u2014 what still makes it the liveness probe is that it returns `{\"ok\": true}` and nothing else, so it reports the process's health and not that of anything the process depends on.",
+        "operationId": "livez_livez_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivezResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/capabilities": {
       "get": {
         "tags": [
           "meta"
         ],
         "summary": "Capabilities",
-        "description": "What this backend can do \u2014 the UI adapts its affordances to this.",
+        "description": "What this backend can do \u2014 the UI blocks on this response and adapts its affordances to it.",
         "operationId": "capabilities_capabilities_get",
         "responses": {
           "200": {
@@ -28,716 +51,14 @@
         }
       }
     },
-    "/livez": {
-      "get": {
-        "tags": [
-          "meta"
-        ],
-        "summary": "Livez",
-        "description": "Process liveness (no corpus work). Use /health for corpus status.",
-        "operationId": "livez_livez_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Livez Livez Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/health": {
-      "get": {
-        "tags": [
-          "audit"
-        ],
-        "summary": "Health",
-        "description": "Corpus health: asset counts, CI status, and the triage flags.",
-        "operationId": "health_health_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HealthResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/schema": {
-      "get": {
-        "tags": [
-          "schema"
-        ],
-        "summary": "Schema",
-        "description": "Every table with its columns (types, roles, governance flags).\n\nParam-less this is the full dump (backward-compatible). ``schema`` filters\nto one namespace; ``limit``/``offset`` paginate (default: all rows, offset 0).",
-        "operationId": "schema_schema_get",
-        "parameters": [
-          {
-            "name": "schema",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Filter to one schema namespace",
-              "title": "Schema"
-            },
-            "description": "Filter to one schema namespace"
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "offset",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "title": "Offset"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TableResponse"
-                  },
-                  "title": "Response Schema Schema Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/schema/summary": {
-      "get": {
-        "tags": [
-          "schema"
-        ],
-        "summary": "Schema Summary",
-        "description": "Lean catalog for the virtualized table list + the client search index.\n\nHeavy fields (sample_values, evidence, description) are dropped; fetch full\ndetail lazily via ``/schema/{table_id}``. ``schema`` filters to one\nnamespace; ``limit``/``offset`` paginate (default: all rows, offset 0);\n``total`` is the count BEFORE pagination.",
-        "operationId": "schema_summary_schema_summary_get",
-        "parameters": [
-          {
-            "name": "schema",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Filter to one schema namespace",
-              "title": "Schema"
-            },
-            "description": "Filter to one schema namespace"
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "offset",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "title": "Offset"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SchemaSummaryResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/schema/{table_id}": {
-      "get": {
-        "tags": [
-          "schema"
-        ],
-        "summary": "Schema Table",
-        "description": "Full detail for one table by asset id (404 when the id is unknown).",
-        "operationId": "schema_table_schema__table_id__get",
-        "parameters": [
-          {
-            "name": "table_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Table Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TableResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/columns/{column_id}/related": {
-      "get": {
-        "tags": [
-          "schema"
-        ],
-        "summary": "Column Related",
-        "description": "Every semantic-layer item that touches one physical column (handoff \u00a714).\n\n``column_id`` is the derived id ``col_<table>_<physical_name>``. Returns\nterms binding it, rules scoping it, FK in/out, joins whose predicate touches\nit (resolved server-side), and metrics on its table (table-grain only).\n``404`` when the id does not resolve to a known column.",
-        "operationId": "column_related_columns__column_id__related_get",
-        "parameters": [
-          {
-            "name": "column_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Column Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ColumnRelatedResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/graph": {
-      "get": {
-        "tags": [
-          "schema"
-        ],
-        "summary": "Graph",
-        "description": "Table-relationship graph for the ER view (nodes + join edges).\n\nOptional D15 scope: ``schema`` / ``focus`` / ``radius`` / ``node_budget``.\nWhen scoped, the response includes ``boundary`` (cross-schema stubs) and\n``meta`` (truncation + echoed scope). Param-less = full graph.",
-        "operationId": "graph_graph_get",
-        "parameters": [
-          {
-            "name": "schema",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Filter to one schema namespace",
-              "title": "Schema"
-            },
-            "description": "Filter to one schema namespace"
-          },
-          {
-            "name": "focus",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Focus table asset id for a neighborhood",
-              "title": "Focus"
-            },
-            "description": "Focus table asset id for a neighborhood"
-          },
-          {
-            "name": "radius",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "BFS hops from focus (default 1)",
-              "title": "Radius"
-            },
-            "description": "BFS hops from focus (default 1)"
-          },
-          {
-            "name": "node_budget",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Max nodes to return (capped)",
-              "title": "Node Budget"
-            },
-            "description": "Max nodes to return (capped)"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SchemaGraphResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/knowledge-graph": {
-      "get": {
-        "tags": [
-          "schema"
-        ],
-        "summary": "Knowledge Graph",
-        "description": "Full corpus knowledge graph: every asset a node, typed relationships as\nedges. Optional D15 scope (same as ``/graph``) plus ``kinds`` pre-filter.\nWhen scoped, includes ``boundary`` + ``meta``. Param-less = full graph.",
-        "operationId": "knowledge_graph_knowledge_graph_get",
-        "parameters": [
-          {
-            "name": "schema",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Filter to one schema namespace",
-              "title": "Schema"
-            },
-            "description": "Filter to one schema namespace"
-          },
-          {
-            "name": "focus",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Focus table asset id for a neighborhood",
-              "title": "Focus"
-            },
-            "description": "Focus table asset id for a neighborhood"
-          },
-          {
-            "name": "radius",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "BFS hops from focus (default 1)",
-              "title": "Radius"
-            },
-            "description": "BFS hops from focus (default 1)"
-          },
-          {
-            "name": "node_budget",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Max nodes to return (capped)",
-              "title": "Node Budget"
-            },
-            "description": "Max nodes to return (capped)"
-          },
-          {
-            "name": "kinds",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Comma-separated node kinds to keep (e.g. table,join)",
-              "title": "Kinds"
-            },
-            "description": "Comma-separated node kinds to keep (e.g. table,join)"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/KnowledgeGraphResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/corpus/assets": {
-      "get": {
-        "tags": [
-          "corpus"
-        ],
-        "summary": "Corpus Assets",
-        "description": "Non-table assets (metrics/terms/joins/notes/few-shots/negatives).",
-        "operationId": "corpus_assets_corpus_assets_get",
-        "parameters": [
-          {
-            "name": "type",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "join",
-                    "metric",
-                    "term",
-                    "note",
-                    "few_shot",
-                    "negative_example"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Type"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AssetRowResponse"
-                  },
-                  "title": "Response Corpus Assets Corpus Assets Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/corpus/edit": {
-      "post": {
-        "tags": [
-          "corpus"
-        ],
-        "summary": "Corpus Edit",
-        "description": "Validate a corpus asset and, when enabled, write it to the YAML tree.\n\nGated on auth (401 when ``[serve].api_key_env`` is configured but the key\nis missing/wrong) then ``capabilities.can_edit`` (403 otherwise). The asset\nis schema-validated (422 on a bad shape) then reference-checked against the\nrest of the corpus; findings block the write and are returned with the diff\nso the editor can fix them. Prod PR mode is deferred; the request shape is\nstable.",
-        "operationId": "corpus_edit_corpus_edit_post",
-        "parameters": [
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EditRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EditResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/chat": {
       "post": {
         "tags": [
           "chat"
         ],
         "summary": "Chat",
-        "description": "Answer one turn. Working memory is rebuilt from ``history`` (the API is\nstateless); the caller persists the transcript.",
+        "description": "Answer one turn, blocking. The degradation path: streaming over LangGraph Server is the primary transport, and clarification only works there.\n\n`session_id` becomes the LangGraph thread_id, so state is server-side and rebuilt from the checkpoint, not from `history`. Threads are held in a process-local saver capped at 32; one with a pending clarification is never evicted.\n\nA rejected request still answers 200 with `outcome: crashed` \u2014 this route reports failures in the answer shape rather than as HTTP errors.",
         "operationId": "chat_chat_post",
-        "parameters": [
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -771,14 +92,786 @@
           }
         }
       }
+    },
+    "/chat/resume": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Chat Resume",
+        "description": "Answer a clarification a turn paused on, and run the turn to completion.\n\nRefused (200, `outcome: crashed`) when `session_id` is missing, nothing is pending on that thread, `clarification_id` does not match the pending question, or the caller identity differs from the one checkpointed when the turn paused.",
+        "operationId": "chat_resume_chat_resume_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatResumeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/corpus/assets": {
+      "get": {
+        "tags": [
+          "corpus"
+        ],
+        "summary": "Corpus Assets",
+        "description": "Assets of one type as flat rows. Omit `type` for every asset in the corpus. An unknown `type` returns an empty list, not an error.",
+        "operationId": "corpus_assets_corpus_assets_get",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            },
+            "description": "Asset type to list. Known values: column, few_shot, join, metric, negative_example, schema, table, term. Omit for every asset; an unknown value yields an empty list."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssetRowResponse"
+                  },
+                  "title": "Response Corpus Assets Corpus Assets Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/corpus/fields": {
+      "get": {
+        "tags": [
+          "corpus"
+        ],
+        "summary": "Corpus Fields",
+        "description": "The filterable columns of one asset type, derived from its dataclass \u2014 so a new field in the corpus schema becomes filterable with no change here and none in the UI. Also lists every known asset type.",
+        "operationId": "corpus_fields_corpus_fields_get",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            },
+            "description": "Asset type whose columns to describe. Known values: column, few_shot, join, metric, negative_example, schema, table, term. Omit or name an unknown one and `columns` is empty with a `detail`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorpusFieldsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/corpus/rows": {
+      "get": {
+        "tags": [
+          "corpus"
+        ],
+        "summary": "Corpus Rows",
+        "description": "Filtered, sorted, paginated assets of one type (ADR 0009 D1).\n\n`where` repeats as `field:op:value`, split on the first two colons only, so a value may contain them. Predicates are conjunctive. A predicate that cannot be applied is returned in `unknown_where` rather than dropped. Filtering runs over the in-memory corpus, which is what retrieval runs on (ADR 0009 D5).\n\nSorting always tiebreaks on `id`, so a page is stable across requests.",
+        "operationId": "corpus_rows_corpus_rows_get",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type"
+            },
+            "description": "Asset type to list. Known values: column, few_shot, join, metric, negative_example, schema, table, term. An unknown value yields an empty page with a `detail`, not an error."
+          },
+          {
+            "name": "where",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Where"
+            },
+            "description": "Repeatable predicate, `field:op:value`. Split on the first two colons only, so the value may contain them. Conjunctive."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sort"
+            },
+            "description": "Column to sort by. Unset sorts by `id`."
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "asc",
+              "title": "Order"
+            },
+            "description": "`desc` reverses; any other value sorts ascending."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Clamped to >= 0."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Clamped to 1..500."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorpusRowsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schema/summary": {
+      "get": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Schema Summary",
+        "description": "Lean table catalog: enough for a browser row and a badge, no prose. Fetch full detail lazily from /schema/{table_id}.",
+        "operationId": "schema_summary_schema_summary_get",
+        "parameters": [
+          {
+            "name": "schema",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Schema"
+            },
+            "description": "Filter to one schema namespace."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1000,
+              "title": "Limit"
+            },
+            "description": "Clamped to 1..1000."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Clamped to >= 0."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaSummaryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schema/{table_id}": {
+      "get": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Schema Detail",
+        "description": "One table in full, by asset id, with every column.",
+        "operationId": "schema_detail_schema__table_id__get",
+        "parameters": [
+          {
+            "name": "table_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Table Id"
+            },
+            "description": "Table asset id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No table asset with this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/columns/{column_id}/related": {
+      "get": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Column Related",
+        "description": "Every semantic-layer item touching one physical column: terms bound to it, rules on its table, FK in and out, joins whose ON clause names it, and table-grain metrics on its table.\n\nJoins are matched by parsing the predicate, not by substring, so `id` does not match inside `customer_id`. An id that resolves to no column answers 200 with `meta.column_resolvable: false` and empty lists.",
+        "operationId": "column_related_columns__column_id__related_get",
+        "parameters": [
+          {
+            "name": "column_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Column Id"
+            },
+            "description": "Column asset id, as carried by `columns[].id` on /schema/summary and /schema/{table_id}. Never derive one (ADR 0008 D4)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ColumnRelatedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/graph": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Er Graph",
+        "description": "Bounded ER view: tables as nodes, curated joins as edges (ADR 0009 D2).\n\n`schema` and `kinds` narrow the candidate set, `focus` then walks outward over that set's edges for `radius` hops, and the budget is applied last, breadth-first from the focus \u2014 so what survives truncation is what is nearest. With no focus the budget is spent growing neighbourhoods from the best-connected node, because alphabetical order rarely holds both ends of any edge.\n\n`boundary` and `meta` are always present. `meta.truncated` and `meta.dropped` say what was cut; a view that renders them as complete coverage is the failure this bound exists to prevent.",
+        "operationId": "er_graph_graph_get",
+        "parameters": [
+          {
+            "name": "schema",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Schema"
+            },
+            "description": "Filter to one schema namespace."
+          },
+          {
+            "name": "focus",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Focus"
+            },
+            "description": "Table asset id to centre the neighbourhood on. Ignored when the id is outside the filtered candidate set."
+          },
+          {
+            "name": "radius",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "title": "Radius"
+            },
+            "description": "BFS hops from `focus`. No effect without one."
+          },
+          {
+            "name": "node_budget",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 120,
+              "title": "Node Budget"
+            },
+            "description": "Max nodes to return. Clamped to >= 1."
+          },
+          {
+            "name": "kinds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kinds"
+            },
+            "description": "Comma-separated node kinds to keep. Every node here is a table, so this either keeps the graph or empties it."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaGraphResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/knowledge-graph": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Knowledge Graph",
+        "description": "Bounded semantic graph: every asset kind as a node, edges from the reference closure. Same scope contract, `boundary` and `meta` as /graph.\n\nColumns are not drawn; an edge touching one re-points to its owning table. Node kinds actually produced are table, join, metric, term, few_shot and negative_example.",
+        "operationId": "knowledge_graph_knowledge_graph_get",
+        "parameters": [
+          {
+            "name": "schema",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Schema"
+            },
+            "description": "Filter to one schema namespace."
+          },
+          {
+            "name": "focus",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Focus"
+            },
+            "description": "Asset id to centre the neighbourhood on. Ignored when the id is outside the filtered candidate set."
+          },
+          {
+            "name": "radius",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "title": "Radius"
+            },
+            "description": "BFS hops from `focus`. No effect without one."
+          },
+          {
+            "name": "node_budget",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 120,
+              "title": "Node Budget"
+            },
+            "description": "Max nodes to return. Clamped to >= 1."
+          },
+          {
+            "name": "kinds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kinds"
+            },
+            "description": "Comma-separated node kinds to keep, e.g. `table,join`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeGraphResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit/turns": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Audit Turns",
+        "description": "Served turns, newest first, from the durable log under runs/serve/.\n\n`thread_id` narrows to one conversation, which is what a transcript needs: the graph checkpoint holds only a thread's newest turn, so this log is the only source for the earlier ones.",
+        "operationId": "audit_turns_audit_turns_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Max rows. Clamped to >= 1."
+          },
+          {
+            "name": "thread_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Thread Id"
+            },
+            "description": "Narrow to one conversation."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditTurnsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit/turns/{turn_id}/trace": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Audit Trace",
+        "description": "One logged turn's record, grouped by the stage that owns each field. An unknown turn_id answers 200 with `found: false`, not 404.",
+        "operationId": "audit_trace_audit_turns__turn_id__trace_get",
+        "parameters": [
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Turn Id"
+            },
+            "description": "Turn id from `record.turn_id`, as carried by /audit/turns rows and by every chat response."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditTraceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit/corpus": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Audit Corpus",
+        "description": "Corpus inventory plus problems: content hash, asset counts, schemas, structure totals. `fatal` and `degradations` stay separate (ADR 0008 D9) and `servable` is false when any fatal problem is present.",
+        "operationId": "audit_corpus_audit_corpus_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditCorpusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
       "AnswerResponse": {
-        "title": "AnswerResponse",
-        "description": "The v2 answer shape, as api/routes._shape builds it.\n\nReplaced 2026-08-06. This schema declared eight required fields -- tier, safety_clearance, semantic_assurance, text, sql, escalation, provenance, result -- and the engine produces **none** of them: it is v1's AnswerView, left behind when v1 was deleted. safety_clearance and semantic_assurance in particular exist in no source file at all (audit sections 4.5 and 11), so a client generated from this spec waited for a reliability badge that no turn has ever sent.\n\nTwo ADRs and api/routes.py's own docstring call this file the spec-of-record, and nothing checks it against the served app -- which is why it could differ on 9 of 18 paths. This schema is now correct; the paths are not yet all verified.",
-        "type": "object",
         "properties": {
           "outcome": {
             "type": "string",
@@ -790,7 +883,7 @@
               "clarification"
             ],
             "title": "Outcome",
-            "description": "register/stages.Outcome. Derived from the ledger, not from whether a SQL string exists."
+            "description": "register/stages.Outcome. Derived from the attempt ledger, not from whether a SQL string exists."
           },
           "text": {
             "anyOf": [
@@ -814,7 +907,7 @@
               }
             ],
             "title": "Answer Text",
-            "description": "The model's prose answer, from the narrate stage."
+            "description": "The model's prose answer, from the narrate stage. Null unless outcome is answered."
           },
           "failed_stage": {
             "anyOf": [
@@ -826,7 +919,7 @@
               }
             ],
             "title": "Failed Stage",
-            "description": "Which node raised, on a crashed turn. A register/stages.Stage value."
+            "description": "Which node raised, on a crashed turn: a register/stages.Stage value. A request this route itself rejects (no question, unknown session, mismatched clarification_id, identity mismatch) reports the literal \"resume\"."
           },
           "error_type": {
             "anyOf": [
@@ -853,48 +946,54 @@
             "description": "Which control refused, keyed into register/stages.REFUSED_BY_TO_STAGE."
           },
           "record": {
-            "type": "object",
-            "title": "Record",
-            "description": "The turn record: exactly register/record.record_keys(), projected by serve/nodes/stamp.py. Empty object on a paused (clarification) turn."
-          },
-          "result_table": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Result Table",
-            "description": "{columns, rows, row_count, truncated, preview_rows} from the last successful query. Live only -- deliberately not in `record`."
+            "$ref": "#/components/schemas/TurnRecord"
           },
           "clarification": {
             "anyOf": [
               {
-                "type": "object"
+                "$ref": "#/components/schemas/ClarificationResponse"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Clarification",
             "description": "Set only when outcome is clarification; the pending ask_user interrupt."
+          },
+          "result_table": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResultTableResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Rows from the last successful query. Live only \u2014 deliberately not in `record`, so it is absent from the durable audit log. Null on every path that ran no query, which is a different fact from an empty table. Absent on a paused turn and on a request this route rejected."
           },
           "audit_logged": {
             "type": "boolean",
             "title": "Audit Logged",
-            "description": "Whether the turn reached the durable log. Absent on a paused turn."
+            "description": "Whether the turn reached the durable log under runs/serve/. Absent on a paused turn and on a turn whose record carries no turn_id, because neither is logged."
+          },
+          "audit_error": {
+            "type": "string",
+            "title": "Audit Error",
+            "description": "``ExceptionName: message`` from the log write. Present only when it failed; a turn that answered is not a turn that failed."
           }
         },
+        "type": "object",
         "required": [
           "outcome",
           "text",
+          "answer_text",
           "failed_stage",
           "error_type",
           "refused_by",
-          "record"
-        ]
+          "record",
+          "clarification"
+        ],
+        "title": "AnswerResponse",
+        "description": "The answer shape both chat routes return, as api/routes._shape builds it.\n\nThe eight required keys are on every reply, including a paused turn and a request the route rejects. `result_table`, `audit_logged` and `audit_error` are conditional."
       },
       "AssetRowResponse": {
         "properties": {
@@ -910,6 +1009,18 @@
             "type": "string",
             "title": "Summary"
           },
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema",
+            "description": "Null on an asset kind that carries no namespace."
+          },
           "provenance_status": {
             "anyOf": [
               {
@@ -919,7 +1030,8 @@
                 "type": "null"
               }
             ],
-            "title": "Provenance Status"
+            "title": "Provenance Status",
+            "description": "Null means not measured, which is not the same as clean (ADR 0005 \u00a76)."
           },
           "excluded": {
             "type": "boolean",
@@ -931,16 +1043,527 @@
           "id",
           "asset_type",
           "summary",
+          "schema",
           "provenance_status",
           "excluded"
         ],
         "title": "AssetRowResponse"
       },
+      "AuditCorpusAssetsResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Loaded assets of every type."
+          },
+          "by_type": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "By Type",
+            "description": "Count per asset_type, key-sorted. A type with no assets is absent."
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "by_type"
+        ],
+        "title": "AuditCorpusAssetsResponse"
+      },
+      "AuditCorpusProblemsResponse": {
+        "properties": {
+          "fatal": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fatal",
+            "description": "Problems that make the corpus unservable."
+          },
+          "degradations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Degradations",
+            "description": "Problems the corpus is served despite. Kept apart from `fatal` (ADR 0008 D9)."
+          },
+          "n_fatal": {
+            "type": "integer",
+            "title": "N Fatal"
+          },
+          "n_degradations": {
+            "type": "integer",
+            "title": "N Degradations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fatal",
+          "degradations",
+          "n_fatal",
+          "n_degradations"
+        ],
+        "title": "AuditCorpusProblemsResponse"
+      },
+      "AuditCorpusResponse": {
+        "properties": {
+          "corpus_content_hash": {
+            "type": "string",
+            "title": "Corpus Content Hash",
+            "description": "Digest of the served corpus tree. The treatment identity of any measurement taken against this server."
+          },
+          "assets": {
+            "$ref": "#/components/schemas/AuditCorpusAssetsResponse"
+          },
+          "schemas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Schemas",
+            "description": "Sorted distinct schema namespaces over the loaded table assets."
+          },
+          "structure": {
+            "$ref": "#/components/schemas/AuditCorpusStructureResponse"
+          },
+          "problems": {
+            "$ref": "#/components/schemas/AuditCorpusProblemsResponse"
+          },
+          "servable": {
+            "type": "boolean",
+            "title": "Servable",
+            "description": "False when any fatal problem is present."
+          }
+        },
+        "type": "object",
+        "required": [
+          "corpus_content_hash",
+          "assets",
+          "schemas",
+          "structure",
+          "problems",
+          "servable"
+        ],
+        "title": "AuditCorpusResponse"
+      },
+      "AuditCorpusStructureResponse": {
+        "properties": {
+          "join_edges": {
+            "type": "integer",
+            "title": "Join Edges",
+            "description": "Distinct ordered table pairs carrying a join."
+          },
+          "references": {
+            "type": "integer",
+            "title": "References",
+            "description": "Assets that reference at least one other asset."
+          },
+          "schema_tags": {
+            "type": "integer",
+            "title": "Schema Tags",
+            "description": "Assets carrying a schema tag."
+          },
+          "untagged_assets": {
+            "type": "integer",
+            "title": "Untagged Assets",
+            "description": "Loaded assets minus tagged ones."
+          },
+          "table_pairs_with_joins": {
+            "type": "integer",
+            "title": "Table Pairs With Joins"
+          }
+        },
+        "type": "object",
+        "required": [
+          "join_edges",
+          "references",
+          "schema_tags",
+          "untagged_assets",
+          "table_pairs_with_joins"
+        ],
+        "title": "AuditCorpusStructureResponse"
+      },
+      "AuditTraceResponse": {
+        "properties": {
+          "found": {
+            "type": "boolean",
+            "title": "Found",
+            "description": "False when no logged turn carries this turn_id. `turn_id` is then the only other key."
+          },
+          "turn_id": {
+            "type": "string",
+            "title": "Turn Id"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "answer_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Text"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "asked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asked At",
+            "description": "UTC ISO-8601, second precision."
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/TraceStageResponse"
+            },
+            "type": "array",
+            "title": "Stages",
+            "description": "Every register field grouped by owning stage, in register/stages.Stage order; stages the register does not name sort last, alphabetically."
+          },
+          "ledger": {
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "type": "array",
+            "title": "Ledger",
+            "description": "`record.execution.attempts` \u2014 one row per SQL attempt. Empty when the turn attempted none."
+          },
+          "terminal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal",
+            "description": "`record.execution.terminal`."
+          },
+          "missing_required": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Required",
+            "description": "Sorted names of required register fields this record does not carry. Judged against today's register, not the one in force when the turn was logged."
+          },
+          "record": {
+            "$ref": "#/components/schemas/TurnRecord"
+          },
+          "undeclared_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Undeclared Keys",
+            "description": "Sorted record keys the register does not declare."
+          }
+        },
+        "type": "object",
+        "required": [
+          "found",
+          "turn_id"
+        ],
+        "title": "AuditTraceResponse",
+        "description": "One logged turn, its record split by the stage that owns each field. Every key beyond `found` and `turn_id` is present only when `found` is true."
+      },
+      "AuditTurnSummaryResponse": {
+        "properties": {
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "question_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Id"
+          },
+          "db_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Db Id"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "terminal_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Reason"
+          },
+          "schemas": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schemas"
+          },
+          "generated_sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated Sql"
+          },
+          "latency_sec": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Sec",
+            "description": "Seconds, unrounded. A string when the turn recorded the quantity as not measured \u2014 the log is written with `default=str`, so a Measured lands as its rendered text."
+          },
+          "execution": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution",
+            "description": "The attempt ledger as logged."
+          },
+          "asked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asked At",
+            "description": "UTC ISO-8601, second precision."
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "answer_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Text"
+          },
+          "licensed_count": {
+            "type": "integer",
+            "title": "Licensed Count",
+            "description": "Length of `record.licensed`."
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "attempts_passed": {
+            "type": "integer",
+            "title": "Attempts Passed"
+          },
+          "incomplete_fields": {
+            "type": "integer",
+            "title": "Incomplete Fields",
+            "description": "How many required register fields this record is missing, judged against today's register."
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "run_id",
+          "thread_id",
+          "question_id",
+          "db_id",
+          "outcome",
+          "terminal_reason",
+          "schemas",
+          "generated_sql",
+          "latency_sec",
+          "execution",
+          "asked_at",
+          "question",
+          "answer_text",
+          "licensed_count",
+          "attempts",
+          "attempts_passed",
+          "incomplete_fields"
+        ],
+        "title": "AuditTurnSummaryResponse",
+        "description": "One row of the turn log. The record-sourced keys are exactly api/trace_store.SUMMARY_FIELDS: turn_id, run_id, thread_id, question_id, db_id, outcome, terminal_reason, schemas, generated_sql, latency_sec, execution."
+      },
+      "AuditTurnsMetaResponse": {
+        "properties": {
+          "n": {
+            "type": "integer",
+            "title": "N",
+            "description": "Rows returned, after the limit and any thread_id filter."
+          },
+          "log_dir": {
+            "type": "string",
+            "title": "Log Dir",
+            "description": "Absolute path the turns were read from."
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Columns",
+            "description": "api/trace_store.SUMMARY_FIELDS in display order."
+          }
+        },
+        "type": "object",
+        "required": [
+          "n",
+          "log_dir",
+          "columns"
+        ],
+        "title": "AuditTurnsMetaResponse"
+      },
+      "AuditTurnsResponse": {
+        "properties": {
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/AuditTurnSummaryResponse"
+            },
+            "type": "array",
+            "title": "Turns",
+            "description": "Newest first."
+          },
+          "meta": {
+            "$ref": "#/components/schemas/AuditTurnsMetaResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turns",
+          "meta"
+        ],
+        "title": "AuditTurnsResponse"
+      },
       "BoundaryEdgeResponse": {
         "properties": {
           "id": {
             "type": "string",
-            "title": "Id"
+            "title": "Id",
+            "description": "``boundary_<in-scope table>__<far table>``."
           },
           "in_scope_table": {
             "type": "string",
@@ -960,7 +1583,8 @@
           },
           "on": {
             "type": "string",
-            "title": "On"
+            "title": "On",
+            "description": "The join predicate. Empty when the edge declares none."
           },
           "cardinality": {
             "anyOf": [
@@ -987,7 +1611,7 @@
           "low_confidence": {
             "type": "boolean",
             "title": "Low Confidence",
-            "default": false
+            "description": "confidence is set and below 0.5."
           }
         },
         "type": "object",
@@ -997,9 +1621,13 @@
           "other_schema",
           "other_table_id",
           "other_label",
-          "on"
+          "on",
+          "cardinality",
+          "confidence",
+          "low_confidence"
         ],
-        "title": "BoundaryEdgeResponse"
+        "title": "BoundaryEdgeResponse",
+        "description": "A curated join leaving the scope for another namespace, as a navigable stub. One stub per (in-scope table, far table), whatever the number of joins between them."
       },
       "CapabilitiesResponse": {
         "properties": {
@@ -1009,11 +1637,13 @@
           },
           "dialect": {
             "type": "string",
-            "title": "Dialect"
+            "title": "Dialect",
+            "description": "The connector's SQL dialect."
           },
           "can_edit": {
             "type": "boolean",
-            "title": "Can Edit"
+            "title": "Can Edit",
+            "description": "Always false: this server has no corpus write route. The corpus is edited in its own repository through review and a pinned hash."
           },
           "edit_mode": {
             "anyOf": [
@@ -1024,7 +1654,17 @@
                 "type": "null"
               }
             ],
-            "title": "Edit Mode"
+            "title": "Edit Mode",
+            "description": "Always \"none\", for the same reason as can_edit."
+          },
+          "can_stream": {
+            "type": "boolean",
+            "title": "Can Stream"
+          },
+          "has_live_model": {
+            "type": "boolean",
+            "title": "Has Live Model",
+            "description": "False when no agent model is configured; the graph still runs and refuses."
           },
           "model": {
             "anyOf": [
@@ -1035,19 +1675,13 @@
                 "type": "null"
               }
             ],
-            "title": "Model"
-          },
-          "has_live_model": {
-            "type": "boolean",
-            "title": "Has Live Model"
-          },
-          "can_stream": {
-            "type": "boolean",
-            "title": "Can Stream"
+            "title": "Model",
+            "description": "Resolved agent model id, from knobs_resolved.llm_model."
           },
           "can_scope": {
             "type": "boolean",
-            "title": "Can Scope"
+            "title": "Can Scope",
+            "description": "Whether /graph and /knowledge-graph accept a scope."
           },
           "can_search": {
             "type": "boolean",
@@ -1056,7 +1690,17 @@
           "can_clarify": {
             "type": "boolean",
             "title": "Can Clarify",
-            "default": false
+            "description": "Clarification needs both the streaming transport and a live model."
+          },
+          "checkpoint_durable": {
+            "type": "boolean",
+            "title": "Checkpoint Durable",
+            "description": "False: /chat compiles with an in-process saver and LangGraph Server injects its own non-Postgres one, so no checkpoint outlives the process."
+          },
+          "hitl_survives_process_restart": {
+            "type": "boolean",
+            "title": "Hitl Survives Process Restart",
+            "description": "False on both surfaces \u2014 a paused clarification is lost with the process."
           }
         },
         "type": "object",
@@ -1065,36 +1709,37 @@
           "dialect",
           "can_edit",
           "edit_mode",
-          "model",
-          "has_live_model",
           "can_stream",
+          "has_live_model",
+          "model",
           "can_scope",
-          "can_search"
+          "can_search",
+          "can_clarify",
+          "checkpoint_durable",
+          "hitl_survives_process_restart"
         ],
-        "title": "CapabilitiesResponse"
+        "title": "CapabilitiesResponse",
+        "description": "What this server can actually do. The UI blocks on it, so every key is always present."
       },
       "ChatRequest": {
         "properties": {
           "question": {
             "type": "string",
-            "maxLength": 8000,
-            "minLength": 1,
-            "title": "Question"
+            "title": "Question",
+            "description": "Empty or absent is answered with outcome=crashed, not 422."
           },
           "session_id": {
             "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
             "title": "Session Id",
-            "default": "default"
+            "description": "Becomes the LangGraph thread_id. Absent or empty gets a fresh random one, so a caller that omits it cannot resume a clarification."
           },
           "history": {
             "items": {
               "$ref": "#/components/schemas/TurnIn"
             },
             "type": "array",
-            "maxItems": 100,
-            "title": "History"
+            "title": "History",
+            "description": "Only its user entries are counted, to derive turn_index. Working memory comes from the thread's checkpoint, not from this list."
           },
           "identity": {
             "anyOf": [
@@ -1102,17 +1747,105 @@
                 "type": "string"
               },
               {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
                 "type": "null"
               }
             ],
-            "title": "Identity"
+            "title": "Identity",
+            "description": "Caller identity a later /chat/resume must match. A string is the token; a mapping contributes its first truthy value. Absent falls back to session_id."
+          }
+        },
+        "type": "object",
+        "required": [],
+        "title": "ChatRequest",
+        "description": "The handler reads a plain JSON object and ignores keys it does not know, so nothing here is enforced by the framework: a malformed body fails inside the turn, not at validation.",
+        "additionalProperties": true
+      },
+      "ChatResumeRequest": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "The thread the clarification is paused on. Absent is answered with outcome=crashed."
+          },
+          "clarification_id": {
+            "type": "string",
+            "title": "Clarification Id",
+            "description": "Checked against the pending question when supplied; a mismatch is refused. Omit to answer whatever is pending."
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer",
+            "description": "Free-text reply."
+          },
+          "choice_id": {
+            "type": "string",
+            "title": "Choice Id",
+            "description": "Reply by option id instead of text."
+          },
+          "declined": {
+            "type": "boolean",
+            "title": "Declined",
+            "description": "True resumes the turn with a declined-to-answer reply."
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity",
+            "description": "Must match the identity checkpointed when the turn paused, or the resume is refused. Absent falls back to session_id."
+          }
+        },
+        "type": "object",
+        "required": [],
+        "title": "ChatResumeRequest",
+        "description": "Only `answer`, `choice_id` and `declined` reach the paused tool; `declined` wins, then `answer`, then `choice_id`.",
+        "additionalProperties": true
+      },
+      "ClarificationResponse": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "clarification",
+            "title": "Kind"
+          },
+          "clarification_id": {
+            "type": "string",
+            "title": "Clarification Id",
+            "description": "``clar-<turn_id>-<digest>``."
+          },
+          "question": {
+            "type": "string",
+            "title": "Question",
+            "description": "What the agent is asking the human."
+          },
+          "why": {
+            "type": "string",
+            "title": "Why",
+            "description": "Why the turn cannot proceed without an answer."
           }
         },
         "type": "object",
         "required": [
-          "question"
+          "kind",
+          "clarification_id",
+          "question",
+          "why"
         ],
-        "title": "ChatRequest"
+        "title": "ClarificationResponse",
+        "description": "The pending ask_user interrupt. Answer it with POST /chat/resume on the same session_id."
       },
       "ColumnIdentityResponse": {
         "properties": {
@@ -1122,14 +1855,22 @@
           },
           "table_id": {
             "type": "string",
-            "title": "Table Id"
+            "title": "Table Id",
+            "description": "Empty when the id did not resolve."
           },
           "table_physical_name": {
             "type": "string",
             "title": "Table Physical Name"
           },
           "schema": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Schema"
           },
           "physical_name": {
@@ -1174,7 +1915,8 @@
         "properties": {
           "column_resolvable": {
             "type": "boolean",
-            "title": "Column Resolvable"
+            "title": "Column Resolvable",
+            "description": "False when the id names no column asset. Every list above is then empty and the status is still 200."
           }
         },
         "type": "object",
@@ -1193,14 +1935,16 @@
               "$ref": "#/components/schemas/RelatedTermResponse"
             },
             "type": "array",
-            "title": "Terms"
+            "title": "Terms",
+            "description": "Terms bound to this column."
           },
           "rules": {
             "items": {
               "$ref": "#/components/schemas/RelatedRuleResponse"
             },
             "type": "array",
-            "title": "Rules"
+            "title": "Rules",
+            "description": "Rules on this column's table."
           },
           "fk_out": {
             "anyOf": [
@@ -1224,14 +1968,16 @@
               "$ref": "#/components/schemas/RelatedJoinResponse"
             },
             "type": "array",
-            "title": "Joins"
+            "title": "Joins",
+            "description": "Joins whose ON clause names this column, matched by parsing the predicate."
           },
           "metrics": {
             "items": {
               "$ref": "#/components/schemas/RelatedMetricResponse"
             },
             "type": "array",
-            "title": "Metrics"
+            "title": "Metrics",
+            "description": "Metrics based on this column's table."
           },
           "meta": {
             "$ref": "#/components/schemas/ColumnRelatedMetaResponse"
@@ -1252,6 +1998,11 @@
       },
       "ColumnResponse": {
         "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "The column's asset id. Callers must never derive one (ADR 0008 D4)."
+          },
           "physical_name": {
             "type": "string",
             "title": "Physical Name"
@@ -1262,15 +2013,18 @@
           },
           "logical_type": {
             "type": "string",
-            "title": "Logical Type"
+            "title": "Logical Type",
+            "description": "Empty string when unset."
           },
           "nullable": {
             "type": "boolean",
-            "title": "Nullable"
+            "title": "Nullable",
+            "description": "False also covers unobserved."
           },
           "is_unique": {
             "type": "boolean",
-            "title": "Is Unique"
+            "title": "Is Unique",
+            "description": "False also covers unobserved."
           },
           "sample_values": {
             "items": {},
@@ -1286,7 +2040,8 @@
                 "type": "null"
               }
             ],
-            "title": "Description"
+            "title": "Description",
+            "description": "The column body, falling back to its summary."
           },
           "role": {
             "anyOf": [
@@ -1308,7 +2063,8 @@
                 "type": "null"
               }
             ],
-            "title": "References"
+            "title": "References",
+            "description": "Asset id of the column this one points at."
           },
           "confidence": {
             "anyOf": [
@@ -1323,7 +2079,8 @@
           },
           "reliability": {
             "type": "string",
-            "title": "Reliability"
+            "title": "Reliability",
+            "description": "\"ok\" when nothing was recorded."
           },
           "reliability_note": {
             "anyOf": [
@@ -1376,6 +2133,7 @@
         },
         "type": "object",
         "required": [
+          "id",
           "physical_name",
           "physical_type",
           "logical_type",
@@ -1397,13 +2155,19 @@
       },
       "ColumnSummaryResponse": {
         "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "The column's asset id. Callers must never derive one (ADR 0008 D4)."
+          },
           "physical_name": {
             "type": "string",
             "title": "Physical Name"
           },
           "physical_type": {
             "type": "string",
-            "title": "Physical Type"
+            "title": "Physical Type",
+            "description": "Empty string when unset."
           },
           "role": {
             "anyOf": [
@@ -1418,53 +2182,104 @@
           },
           "reliability": {
             "type": "string",
-            "title": "Reliability"
+            "title": "Reliability",
+            "description": "\"ok\" when nothing was recorded."
           },
           "excluded": {
             "type": "boolean",
             "title": "Excluded"
+          },
+          "nullable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nullable",
+            "description": "Tri-state: null means not observed (ADR 0005 \u00a76)."
+          },
+          "is_unique": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Unique",
+            "description": "Tri-state: null means not observed (ADR 0005 \u00a76)."
           }
         },
         "type": "object",
         "required": [
+          "id",
           "physical_name",
           "physical_type",
           "role",
           "reliability",
-          "excluded"
+          "excluded",
+          "nullable",
+          "is_unique"
         ],
         "title": "ColumnSummaryResponse"
       },
-      "EditRequest": {
+      "CorpusFieldResponse": {
         "properties": {
-          "asset": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Asset"
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Dataclass field name; also the left-hand side of a `where` triple."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "string",
+              "number",
+              "boolean",
+              "enum",
+              "ref",
+              "list",
+              "block"
+            ],
+            "title": "Kind",
+            "description": "api/browse.FieldKind. Decides which operators the field offers."
+          },
+          "ops": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ops",
+            "description": "Operators accepted for this field. Anything else lands in `unknown_where` and is not applied."
+          },
+          "sortable": {
+            "type": "boolean",
+            "title": "Sortable",
+            "description": "False for block and list kinds."
+          },
+          "identifier": {
+            "type": "boolean",
+            "title": "Identifier",
+            "description": "The register names this field as the type's identifier."
           }
         },
         "type": "object",
         "required": [
-          "asset"
+          "name",
+          "kind",
+          "ops",
+          "sortable",
+          "identifier"
         ],
-        "title": "EditRequest",
-        "description": "A corpus asset to validate and write. ``asset`` is the raw asset mapping\n(same shape as the on-disk YAML), discriminated by its ``asset_type``."
+        "title": "CorpusFieldResponse"
       },
-      "EditResponse": {
+      "CorpusFieldsResponse": {
         "properties": {
-          "written": {
-            "type": "boolean",
-            "title": "Written"
-          },
-          "asset_id": {
-            "type": "string",
-            "title": "Asset Id"
-          },
-          "asset_type": {
-            "type": "string",
-            "title": "Asset Type"
-          },
-          "path": {
+          "type": {
             "anyOf": [
               {
                 "type": "string"
@@ -1473,68 +2288,159 @@
                 "type": "null"
               }
             ],
-            "title": "Path"
+            "title": "Type",
+            "description": "Echoed back; null when the request named none or an unknown one."
           },
-          "findings": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/CorpusFieldResponse"
+            },
+            "type": "array",
+            "title": "Columns",
+            "description": "Derived from the asset dataclass, so a new field becomes filterable with no change here. Empty when `type` is null."
+          },
+          "types": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Findings"
+            "title": "Types",
+            "description": "Every asset type the register knows, sorted."
           },
-          "diff": {
-            "type": "string",
-            "title": "Diff"
-          }
-        },
-        "type": "object",
-        "required": [
-          "written",
-          "asset_id",
-          "asset_type",
-          "path",
-          "findings",
-          "diff"
-        ],
-        "title": "EditResponse"
-      },
-      "GraphMetaResponse": {
-        "properties": {
-          "total_nodes": {
-            "type": "integer",
-            "title": "Total Nodes"
-          },
-          "returned_nodes": {
-            "type": "integer",
-            "title": "Returned Nodes"
-          },
-          "total_edges": {
-            "type": "integer",
-            "title": "Total Edges"
-          },
-          "truncated": {
-            "type": "boolean",
-            "title": "Truncated",
-            "default": false
-          },
-          "scope": {
+          "detail": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/GraphScopeResponse"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Detail",
+            "description": "Why `columns` is empty. Present only when the request named no type or an unknown one; a known type omits the key entirely."
           }
         },
         "type": "object",
         "required": [
-          "total_nodes",
-          "returned_nodes",
-          "total_edges"
+          "type",
+          "columns",
+          "types"
         ],
-        "title": "GraphMetaResponse"
+        "title": "CorpusFieldsResponse"
+      },
+      "CorpusRowsResponse": {
+        "properties": {
+          "rows": {
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "type": "array",
+            "title": "Rows",
+            "description": "One flat object per asset: every dataclass field plus `asset_type`. Enums render as their value, lists as lists of text, nested blocks as their rendered text or null."
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Matching assets after filtering, before pagination."
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "description": "As applied, after clamping to >= 0."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "As applied, after clamping to 1..500."
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/CorpusFieldResponse"
+            },
+            "type": "array",
+            "title": "Columns",
+            "description": "The same column set /corpus/fields returns for this type."
+          },
+          "unknown_where": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unknown Where",
+            "description": "Predicates that were **not** applied \u2014 unknown field, unsupported operator, or a malformed triple. Reported rather than dropped, so a filtered-looking list is never silently unfiltered."
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "Why the result is empty. Present only when `type` names no known asset type."
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "total",
+          "offset",
+          "limit",
+          "columns",
+          "unknown_where"
+        ],
+        "title": "CorpusRowsResponse"
+      },
+      "GraphMetaResponse": {
+        "properties": {
+          "n_nodes": {
+            "type": "integer",
+            "title": "N Nodes",
+            "description": "Nodes in this response, after the budget."
+          },
+          "n_edges": {
+            "type": "integer",
+            "title": "N Edges",
+            "description": "Edges in this response \u2014 both endpoints kept."
+          },
+          "n_total_nodes": {
+            "type": "integer",
+            "title": "N Total Nodes",
+            "description": "Nodes in the whole graph, before any scope."
+          },
+          "n_matched_nodes": {
+            "type": "integer",
+            "title": "N Matched Nodes",
+            "description": "Nodes the scope selected, before the budget."
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "description": "The budget cut nodes the scope had selected."
+          },
+          "dropped": {
+            "type": "integer",
+            "title": "Dropped",
+            "description": "n_matched_nodes minus n_nodes."
+          },
+          "node_budget": {
+            "type": "integer",
+            "title": "Node Budget",
+            "description": "The budget as applied, after clamping to >= 1."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/GraphScopeResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "n_nodes",
+          "n_edges",
+          "n_total_nodes",
+          "n_matched_nodes",
+          "truncated",
+          "dropped",
+          "node_budget",
+          "scope"
+        ],
+        "title": "GraphMetaResponse",
+        "description": "What the view cut. `truncated` and `dropped` are load-bearing: a view that silently renders 120 of 656 nodes reads as complete coverage (ADR 0009 D2)."
       },
       "GraphScopeResponse": {
         "properties": {
@@ -1561,30 +2467,52 @@
             "title": "Focus"
           },
           "radius": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "integer",
             "title": "Radius"
           },
-          "node_budget": {
+          "kinds": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
               {
                 "type": "null"
               }
             ],
+            "title": "Kinds",
+            "description": "Sorted, or null when none were requested."
+          },
+          "node_budget": {
+            "type": "integer",
             "title": "Node Budget"
           }
         },
         "type": "object",
-        "title": "GraphScopeResponse"
+        "required": [
+          "schema",
+          "focus",
+          "radius",
+          "kinds",
+          "node_budget"
+        ],
+        "title": "GraphScopeResponse",
+        "description": "The scope **as applied**, complete. The client compares it field-for-field against what it asked for and re-scopes when they differ, so every key is always present."
+      },
+      "HTTPError": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "HTTPError"
       },
       "HTTPValidationError": {
         "properties": {
@@ -1599,55 +2527,12 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
-      "HealthResponse": {
-        "properties": {
-          "counts": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Counts"
-          },
-          "n_suspect_columns": {
-            "type": "integer",
-            "title": "N Suspect Columns"
-          },
-          "n_excluded": {
-            "type": "integer",
-            "title": "N Excluded"
-          },
-          "n_low_confidence_joins": {
-            "type": "integer",
-            "title": "N Low Confidence Joins"
-          },
-          "ci_green": {
-            "type": "boolean",
-            "title": "Ci Green"
-          },
-          "findings": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Findings"
-          }
-        },
-        "type": "object",
-        "required": [
-          "counts",
-          "n_suspect_columns",
-          "n_excluded",
-          "n_low_confidence_joins",
-          "ci_green",
-          "findings"
-        ],
-        "title": "HealthResponse"
-      },
       "KnowledgeGraphEdgeResponse": {
         "properties": {
           "id": {
             "type": "string",
-            "title": "Id"
+            "title": "Id",
+            "description": "``<source>-><target>``."
           },
           "source": {
             "type": "string",
@@ -1659,7 +2544,8 @@
           },
           "relation": {
             "type": "string",
-            "title": "Relation"
+            "title": "Relation",
+            "description": "Labelled from the source asset's kind: join, measures (metric), grounds (term), exemplifies (few_shot), belongs_to (column), has_column (table); anything else is \"related\"."
           },
           "confidence": {
             "anyOf": [
@@ -1670,12 +2556,13 @@
                 "type": "null"
               }
             ],
-            "title": "Confidence"
+            "title": "Confidence",
+            "description": "The source asset's confidence."
           },
           "low_confidence": {
             "type": "boolean",
             "title": "Low Confidence",
-            "default": false
+            "description": "confidence is set and below 0.5."
           }
         },
         "type": "object",
@@ -1683,7 +2570,9 @@
           "id",
           "source",
           "target",
-          "relation"
+          "relation",
+          "confidence",
+          "low_confidence"
         ],
         "title": "KnowledgeGraphEdgeResponse"
       },
@@ -1695,11 +2584,13 @@
           },
           "kind": {
             "type": "string",
-            "title": "Kind"
+            "title": "Kind",
+            "description": "The asset type. Columns are not drawn; their edges re-point to the owning table."
           },
           "label": {
             "type": "string",
-            "title": "Label"
+            "title": "Label",
+            "description": "physical_name, else name, else the id."
           },
           "excluded": {
             "type": "boolean",
@@ -1714,7 +2605,8 @@
                 "type": "null"
               }
             ],
-            "title": "Provenance Status"
+            "title": "Provenance Status",
+            "description": "Null means not measured, which is not the same as clean (ADR 0005 \u00a76)."
           },
           "confidence": {
             "anyOf": [
@@ -1727,11 +2619,6 @@
             ],
             "title": "Confidence"
           },
-          "has_suspect": {
-            "type": "boolean",
-            "title": "Has Suspect",
-            "default": false
-          },
           "schema": {
             "anyOf": [
               {
@@ -1741,7 +2628,8 @@
                 "type": "null"
               }
             ],
-            "title": "Schema"
+            "title": "Schema",
+            "description": "The asset's schema tag."
           }
         },
         "type": "object",
@@ -1750,7 +2638,9 @@
           "kind",
           "label",
           "excluded",
-          "provenance_status"
+          "provenance_status",
+          "confidence",
+          "schema"
         ],
         "title": "KnowledgeGraphNodeResponse"
       },
@@ -1768,7 +2658,8 @@
               "$ref": "#/components/schemas/KnowledgeGraphEdgeResponse"
             },
             "type": "array",
-            "title": "Edges"
+            "title": "Edges",
+            "description": "Only edges with both endpoints kept."
           },
           "boundary": {
             "items": {
@@ -1778,22 +2669,31 @@
             "title": "Boundary"
           },
           "meta": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GraphMetaResponse"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/GraphMetaResponse"
           }
         },
         "type": "object",
         "required": [
           "nodes",
-          "edges"
+          "edges",
+          "boundary",
+          "meta"
         ],
         "title": "KnowledgeGraphResponse"
+      },
+      "LivezResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ok"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "LivezResponse"
       },
       "RelatedJoinResponse": {
         "properties": {
@@ -1811,7 +2711,8 @@
           },
           "other_table_id": {
             "type": "string",
-            "title": "Other Table Id"
+            "title": "Other Table Id",
+            "description": "Whichever endpoint is not this column's table."
           },
           "on": {
             "type": "string",
@@ -1869,7 +2770,8 @@
           },
           "granularity": {
             "type": "string",
-            "title": "Granularity"
+            "title": "Granularity",
+            "description": "Always \"table\": only table-grain metrics are listed."
           }
         },
         "type": "object",
@@ -1884,11 +2786,13 @@
         "properties": {
           "id": {
             "type": "string",
-            "title": "Id"
+            "title": "Id",
+            "description": "``<table_id>#rule-<index>``. Positional: table rules are strings, not assets."
           },
           "kind": {
             "type": "string",
-            "title": "Kind"
+            "title": "Kind",
+            "description": "Always \"table\"."
           },
           "statement": {
             "type": "string",
@@ -1903,7 +2807,8 @@
                 "type": "null"
               }
             ],
-            "title": "Confidence"
+            "title": "Confidence",
+            "description": "Always null: a rule string carries none."
           },
           "provenance_status": {
             "anyOf": [
@@ -1914,7 +2819,8 @@
                 "type": "null"
               }
             ],
-            "title": "Provenance Status"
+            "title": "Provenance Status",
+            "description": "Always null, for the same reason."
           }
         },
         "type": "object",
@@ -1992,15 +2898,30 @@
               "type": "array"
             },
             "type": "array",
-            "title": "Rows"
+            "title": "Rows",
+            "description": "Row-major; cells keep their JSON type."
           },
           "row_count": {
-            "type": "integer",
-            "title": "Row Count"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count",
+            "description": "Rows the statement produced, which may exceed the rows delivered."
           },
           "truncated": {
             "type": "boolean",
-            "title": "Truncated"
+            "title": "Truncated",
+            "description": "The delivered rows are a prefix of the result."
+          },
+          "preview_rows": {
+            "type": "integer",
+            "title": "Preview Rows",
+            "description": "Length of `rows`."
           }
         },
         "type": "object",
@@ -2008,7 +2929,8 @@
           "columns",
           "rows",
           "row_count",
-          "truncated"
+          "truncated",
+          "preview_rows"
         ],
         "title": "ResultTableResponse"
       },
@@ -2016,7 +2938,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "title": "Id"
+            "title": "Id",
+            "description": "The first join asset's id, else ``<source>-><target>``."
           },
           "source": {
             "type": "string",
@@ -2028,7 +2951,8 @@
           },
           "on": {
             "type": "string",
-            "title": "On"
+            "title": "On",
+            "description": "The first join's predicate; empty when it declares none."
           },
           "cardinality": {
             "anyOf": [
@@ -2054,7 +2978,21 @@
           },
           "low_confidence": {
             "type": "boolean",
-            "title": "Low Confidence"
+            "title": "Low Confidence",
+            "description": "confidence is set and below 0.5."
+          },
+          "join_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Join Ids",
+            "description": "Every join asset on this table pair."
+          },
+          "n_relationships": {
+            "type": "integer",
+            "title": "N Relationships",
+            "description": "Distinct ON digests among `join_ids` \u2014 a bidirectional declaration is one relationship, not two."
           }
         },
         "type": "object",
@@ -2065,7 +3003,9 @@
           "on",
           "cardinality",
           "confidence",
-          "low_confidence"
+          "low_confidence",
+          "join_ids",
+          "n_relationships"
         ],
         "title": "SchemaGraphEdgeResponse"
       },
@@ -2075,9 +3015,32 @@
             "type": "string",
             "title": "Id"
           },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "physical_name, falling back to the id."
+          },
           "physical_name": {
             "type": "string",
             "title": "Physical Name"
+          },
+          "kind": {
+            "type": "string",
+            "const": "table",
+            "title": "Kind",
+            "description": "Only tables are drawn."
+          },
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema",
+            "description": "The table's schema tag."
           },
           "row_count": {
             "anyOf": [
@@ -2092,7 +3055,8 @@
           },
           "n_columns": {
             "type": "integer",
-            "title": "N Columns"
+            "title": "N Columns",
+            "description": "Column assets that actually resolved."
           },
           "excluded": {
             "type": "boolean",
@@ -2100,9 +3064,10 @@
           },
           "has_suspect": {
             "type": "boolean",
-            "title": "Has Suspect"
+            "title": "Has Suspect",
+            "description": "Any column of this table is marked suspect."
           },
-          "schema": {
+          "provenance_status": {
             "anyOf": [
               {
                 "type": "string"
@@ -2111,17 +3076,21 @@
                 "type": "null"
               }
             ],
-            "title": "Schema"
+            "title": "Provenance Status"
           }
         },
         "type": "object",
         "required": [
           "id",
+          "label",
           "physical_name",
+          "kind",
+          "schema",
           "row_count",
           "n_columns",
           "excluded",
-          "has_suspect"
+          "has_suspect",
+          "provenance_status"
         ],
         "title": "SchemaGraphNodeResponse"
       },
@@ -2139,7 +3108,8 @@
               "$ref": "#/components/schemas/SchemaGraphEdgeResponse"
             },
             "type": "array",
-            "title": "Edges"
+            "title": "Edges",
+            "description": "Only edges with both endpoints kept."
           },
           "boundary": {
             "items": {
@@ -2149,20 +3119,15 @@
             "title": "Boundary"
           },
           "meta": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GraphMetaResponse"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/GraphMetaResponse"
           }
         },
         "type": "object",
         "required": [
           "nodes",
-          "edges"
+          "edges",
+          "boundary",
+          "meta"
         ],
         "title": "SchemaGraphResponse"
       },
@@ -2170,7 +3135,18 @@
         "properties": {
           "total": {
             "type": "integer",
-            "title": "Total"
+            "title": "Total",
+            "description": "Matching tables before pagination."
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "description": "As applied, after clamping to >= 0."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "As applied, after clamping to 1..1000."
           },
           "items": {
             "items": {
@@ -2183,6 +3159,8 @@
         "type": "object",
         "required": [
           "total",
+          "offset",
+          "limit",
           "items"
         ],
         "title": "SchemaSummaryResponse"
@@ -2199,7 +3177,8 @@
           },
           "schema": {
             "type": "string",
-            "title": "Schema"
+            "title": "Schema",
+            "description": "Empty string when the table carries no namespace."
           },
           "row_count": {
             "anyOf": [
@@ -2221,7 +3200,8 @@
                 "type": "null"
               }
             ],
-            "title": "Description"
+            "title": "Description",
+            "description": "The table body, falling back to its summary."
           },
           "grain": {
             "anyOf": [
@@ -2276,7 +3256,16 @@
               "$ref": "#/components/schemas/ColumnResponse"
             },
             "type": "array",
-            "title": "Columns"
+            "title": "Columns",
+            "description": "In the table's declared column order."
+          },
+          "rules": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rules",
+            "description": "Free-text rules on the table."
           }
         },
         "type": "object",
@@ -2291,7 +3280,8 @@
           "excluded",
           "excluded_reason",
           "provenance_status",
-          "columns"
+          "columns",
+          "rules"
         ],
         "title": "TableResponse"
       },
@@ -2307,7 +3297,8 @@
           },
           "schema": {
             "type": "string",
-            "title": "Schema"
+            "title": "Schema",
+            "description": "Empty string when the table carries no namespace."
           },
           "row_count": {
             "anyOf": [
@@ -2322,7 +3313,8 @@
           },
           "n_columns": {
             "type": "integer",
-            "title": "N Columns"
+            "title": "N Columns",
+            "description": "Column assets that actually resolved."
           },
           "excluded": {
             "type": "boolean",
@@ -2365,29 +3357,104 @@
         ],
         "title": "TableSummaryResponse"
       },
-      "TurnIn": {
+      "TraceRecordFieldResponse": {
         "properties": {
-          "role": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The register field name."
+          },
+          "tier": {
             "type": "string",
             "enum": [
-              "user",
-              "assistant"
+              "cost",
+              "decision",
+              "health",
+              "identity",
+              "outcome",
+              "treatment"
             ],
-            "title": "Role"
+            "title": "Tier"
           },
-          "text": {
+          "value": {
+            "title": "Value",
+            "description": "The recorded value, or null when absent."
+          },
+          "present": {
+            "type": "boolean",
+            "title": "Present",
+            "description": "The key is in the record and its value is not null."
+          },
+          "required_and_absent": {
+            "type": "boolean",
+            "title": "Required And Absent",
+            "description": "The register requires this field and the record does not carry it \u2014 the turn is not quotable."
+          },
+          "why": {
             "type": "string",
-            "maxLength": 8000,
-            "minLength": 1,
-            "title": "Text"
+            "title": "Why",
+            "description": "The register's stated reason the field exists."
           }
         },
         "type": "object",
         "required": [
-          "role",
-          "text"
+          "name",
+          "tier",
+          "value",
+          "present",
+          "required_and_absent",
+          "why"
         ],
-        "title": "TurnIn"
+        "title": "TraceRecordFieldResponse"
+      },
+      "TraceStageResponse": {
+        "properties": {
+          "stage": {
+            "type": "string",
+            "title": "Stage",
+            "description": "A register/stages.Stage value."
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TraceRecordFieldResponse"
+            },
+            "type": "array",
+            "title": "Fields",
+            "description": "In register declaration order."
+          }
+        },
+        "type": "object",
+        "required": [
+          "stage",
+          "fields"
+        ],
+        "title": "TraceStageResponse"
+      },
+      "TurnIn": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "description": "Only \"user\" is counted; any other value is ignored."
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "Carried for the caller's own transcript; the server does not read it."
+          }
+        },
+        "type": "object",
+        "required": [],
+        "title": "TurnIn",
+        "additionalProperties": true
+      },
+      "TurnRecord": {
+        "properties": {},
+        "type": "object",
+        "required": [],
+        "title": "TurnRecord",
+        "description": "The turn record: exactly the 38 keys register/record.record_keys() declares, projected by serve/nodes/stamp.py \u2014 attempt_id, cache_read_tokens, cache_write_tokens, context_hash, corpus_content_hash, crossings, db_id, delivery_hash, error_type, evicted, execution, facet_channels, facet_degraded, facet_hits, failed_stage, generated_sql, guard, guardrail_errors, knobs_resolved, latency_sec, lexical_coverage, licensed, n_re_served, negative, outcome, prompt_set_hash, pulled_in, question_id, reflect_verdict, rewrite, run_id, schema_ranking, schemas, terminal_reason, thread_id, tool_delivered, turn_id, usage.\n\nAn empty object on a paused (clarification) turn and on a request a chat route rejected. A quantity the turn could not measure is an object ``{state, raw, why, relation}`` rather than a number, so `not measured` never renders as 0.",
+        "additionalProperties": true
       },
       "ValidationError": {
         "properties": {

@@ -36,9 +36,10 @@ recorded here because it is the same kind of statement as the four above:
    lower its score. The original implementation violated this, and it violated it *because*
    property 2's mechanism was missing: with no way to be told which channels ran, ``fuse``
    inferred it from the score dict, so "absent" was neutral and "scored 0.0" cost half the
-   score — and ``scale_within_channel`` floors every channel's weakest document at exactly
-   0.0. The two properties are one property; property 2 was stated and not given a parameter
-   to be stated *through*.
+   score — and the then-current per-facet min-max scaler floored every channel's weakest
+   document at exactly 0.0. (That scaler is deleted; ``retrieve/fuse.py``'s
+   ``scale_to_ceiling`` replaced it, audit I1.) The two properties are one property; property
+   2 was stated and not given a parameter to be stated *through*.
 """
 
 from __future__ import annotations
@@ -230,9 +231,10 @@ def test_fuse_is_monotone_in_evidence() -> None:
     """A fifth property, from the 2026-08-06 audit §7.1. Evidence must never cost you.
 
     The old rule averaged over the channels **present** in the score dict, so an absent
-    channel was neutral and a present one scored 0.0 was maximally penalising — while
-    ``scale_within_channel`` floors each channel's weakest document at exactly 0.0. With the
-    shipped 0.5/0.5 weights that made
+    channel was neutral and a present one scored 0.0 was maximally penalising — while the
+    then-current per-facet min-max scaler (since deleted, see ``retrieve/fuse.py``) floored
+    each channel's weakest document at exactly 0.0. With the shipped 0.5/0.5 weights that
+    made
 
         lexical 0.6, semantic never scored it   ->  0.60
         lexical 0.6, semantic scaled it to 0.0  ->  0.30

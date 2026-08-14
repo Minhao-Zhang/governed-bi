@@ -33,20 +33,15 @@ class Problem:
         return f"{self.where}: {self.reason}"
 
 
-#: How each tag rule is satisfied: the field the index will read, and whether it may
-#: be absent.
+#: How each tag rule is satisfied: the field the index will read, and whether that field is
+#: **required** (``True`` ⇒ a missing value is a problem). A predicate table, **not** a copy of
+#: the register — the register says which rule a type uses, this says what makes that rule
+#: answerable. Closed at import against :class:`~governed_bi.register.assets.TagRule`, which
+#: declares seven, so an eighth rule cannot be added without deciding what satisfies it.
 #:
-#: This is a **predicate table, not a copy of the register.** The register says
-#: *which* rule an asset type uses; this says what makes that rule answerable, which
-#: is a comparison and therefore lives with the code that tests it. Closed at import
-#: against :class:`~governed_bi.register.assets.TagRule`, so a ninth rule cannot be
-#: added without deciding what satisfies it.
-#:
-#: The two optional entries are values rather than oversights. An unbound term is
-#: **untagged**, and untagged is a state: it does not vote in ``route``, but it is
-#: carried into pass two unconditionally and budgeted like anything else. A
-#: system-wide negative example is untagged for the same reason. Requiring a schema
-#: on either would delete a legitimate asset class.
+#: The two optional entries are values, not oversights: an unbound term and a system-wide
+#: negative example are **untagged**, which is a state — no vote in ``route``, but carried
+#: into pass two unconditionally. Requiring a schema on either deletes a legitimate class.
 TAG_RULE_FIELDS: Mapping[TagRule, tuple[str, bool]] = {
     TagRule.itself: ("name", True),
     TagRule.own_schema: ("schema", True),
@@ -61,11 +56,8 @@ TAG_RULE_FIELDS: Mapping[TagRule, tuple[str, bool]] = {
 def _bounds() -> tuple[int, int]:
     """The inclusive summary length bounds, read from the knob register.
 
-    The *values* come from ``register/knobs.py`` via
-    :func:`~governed_bi.register.knobs.knob_default`; what lives here is the
-    refusal to accept an ``UNSET`` bound. A knob that ships uncalibrated must not
-    become a threshold nobody chose -- that is a fabricated measurement, and a
-    validator reading one would be worse than no validator.
+    The values come from ``register/knobs.py``; what lives here is the refusal to accept an
+    ``UNSET`` bound, so an uncalibrated knob cannot become a threshold nobody chose.
     """
     low, high = knob_default("summary_min_chars"), knob_default("summary_max_chars")
     if isinstance(low, Unset) or isinstance(high, Unset):
@@ -77,14 +69,11 @@ def _bounds() -> tuple[int, int]:
 
 
 def problems_with(asset: object) -> list[str]:
-    """Every rule ``asset`` breaks, as reasons a reader can act on.
+    """Every rule ``asset`` breaks, as reasons a reader can act on. Empty means valid.
 
-    Empty means valid. Each reason **names the asset**, so a caller that reports the
-    bare strings still produces something actionable -- the seed does exactly that.
-
-    Never raises for a malformed asset: an object with no ``summary`` at all reports
-    that as a problem. This function is called from a loader that must not raise for
-    a bad item.
+    Each reason **names the asset**, so a caller reporting the bare strings still produces
+    something actionable. Never raises for a malformed asset — an object with no ``summary``
+    reports that as a problem — because the loader calling it must not raise for a bad item.
     """
     asset_type = getattr(asset, "asset_type", None)
     if not isinstance(asset_type, AssetType):
@@ -147,12 +136,10 @@ def problems_with(asset: object) -> list[str]:
 
     physical = getattr(asset, "physical_name", None)
     if physical is not None:
-        # The **slug** is what becomes a path component, not the physical name. ADR 0008
-        # D1: a key is not a name. Validating the raw identifier here is what made
-        # `airline."Air Carriers"` unrepresentable -- the charset rejected it, `table_id`
-        # derived the id from it, and the table simply had no asset while 24 few-shots
-        # cited it. `physical_name` now carries the engine's spelling verbatim and the
-        # rule moves to the string that actually names a file.
+        # The **slug** is what becomes a path component, not the physical name (ADR 0008
+        # D1: a key is not a name). Validating the raw identifier here is what made
+        # `airline."Air Carriers"` unrepresentable -- the charset rejected it, so the table
+        # had no asset while 24 few-shots cited it.
         from .identity import UnsafeName, slug, validate_path_component
 
         try:
@@ -175,21 +162,18 @@ def _name(asset: object) -> str:
 def _bare(value: str) -> str:
     """The last dot-separated segment of an identifier.
 
-    So that a producer storing ``left_table`` as a qualified id
-    (``beer_factory.customers``) and one storing it as a bare physical name
-    (``customers``) both satisfy "the identifier appears in summary". ADR 0005 does
-    not settle which of those a join carries, and the reasoning is the one already
-    recorded for columns as decision #6: the qualifier is established by the tag
-    rule, not by prose, and spending the 250-character budget on it buys nothing a
-    reader or the index needs.
+    So a producer storing ``left_table`` qualified (``beer_factory.customers``) and one
+    storing it bare (``customers``) both satisfy "the identifier appears in summary"; ADR
+    0005 does not settle which a join carries. Per decision #6, the qualifier comes from the
+    tag rule, not from prose, so spending the 250-char budget on it buys nothing.
     """
     return value.rsplit(".", 1)[-1]
 
 
 def _assert_every_tag_rule_has_a_predicate() -> None:
-    """Import-time closure. A tag rule with no predicate would be silently skipped,
-    which is the ``budgets.get(cls, 0)`` shape: the rule exists, something iterates
-    the enum, and the missing row becomes a check that never runs."""
+    """Import-time closure. A tag rule with no predicate here is silently skipped: the rule
+    exists, something iterates the enum, and the missing row becomes a check that never
+    runs (the ``budgets.get(cls, 0)`` shape)."""
     missing = sorted(rule.value for rule in TagRule if rule not in TAG_RULE_FIELDS)
     if missing:  # pragma: no cover - import-time guard
         raise AssertionError(f"TAG_RULE_FIELDS has no predicate for: {missing}")
