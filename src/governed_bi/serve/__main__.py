@@ -53,43 +53,28 @@ def _credentials() -> Any:
     return credentials
 
 
-def _model(name: str, creds: Any, effort: str | None = None, provider: str = "openai") -> Any:
+def _model(name: str, creds: Any, effort: str | None = None) -> Any:
     """A real chat model, constructed **here** rather than behind a port.
 
     Decision #1: LangChain's ``BaseChatModel`` already *is* that port, and v1's three layers
     over it (`llm/client.py` + `llm/langchain_client.py` + `llm/fake.py`) are recorded as a
     mistake. So this is the only place a model is chosen.
-
-    Kept identical to ``api/graph_app.py::_agent_model`` deliberately (both branches) — two
-    entry points that construct a model differently are two answers to "what did this run
-    use", on a comparability knob. Not shared as one function: ``tools/check_imports.py``
-    orders ``serve`` before ``api``, so ``serve`` cannot import from it.
     """
+    if not creds.have(*creds.OPENAI_KEY_NAMES):
+        raise SystemExit(
+            f"no model credential: set one of {' / '.join(creds.OPENAI_KEY_NAMES)} in the "
+            "environment or .env, or pass --no-model to serve the stub path"
+        )
     from langchain.chat_models import init_chat_model
 
-    if provider == "openai":
-        if not creds.have(*creds.OPENAI_KEY_NAMES):
-            raise SystemExit(
-                f"no model credential: set one of {' / '.join(creds.OPENAI_KEY_NAMES)} in the "
-                "environment or .env, or pass --no-model to serve the stub path"
-            )
-        # This agent binds tools, and the provider refuses tools alongside `reasoning_effort`
-        # on chat completions -- `use_responses_api` reaches the endpoint that allows both.
-        kwargs: dict[str, Any] = {"model_provider": "openai", "use_responses_api": True}
-        if effort:
-            kwargs["reasoning_effort"] = effort
-        return init_chat_model(name, **kwargs)
-
-    if provider == "bedrock_converse":
-        # No credential pre-check: AWS resolves through a chain (env vars,
-        # `~/.aws/credentials`, an IAM role) with no single variable whose presence is the
-        # honest yes/no answer `creds.have` needs. See `api/graph_app.py::_agent_model`.
-        kwargs = {"model_provider": "bedrock_converse"}
-        if effort:
-            kwargs["reasoning_effort"] = effort
-        return init_chat_model(name, **kwargs)
-
-    raise SystemExit(f"--provider {provider!r} is not supported (openai, bedrock_converse)")
+    # Same two LangChain fields the server passes, and for the same reason: this agent binds
+    # tools, and the provider refuses tools alongside `reasoning_effort` on chat completions.
+    # Kept identical to `api/graph_app.py` deliberately — two entry points that construct a
+    # model differently are two answers to "what did this run use", on a comparability knob.
+    kwargs: dict[str, Any] = {"model_provider": "openai", "use_responses_api": True}
+    if effort:
+        kwargs["reasoning_effort"] = effort
+    return init_chat_model(name, **kwargs)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -98,10 +83,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--schema", help="schema to seed from, or the manifest entry to load")
     parser.add_argument("--corpus-dir", help="a corpus already on disk; omit to seed from --schema")
     parser.add_argument("--model", default="gpt-4o-mini")
-    parser.add_argument(
-        "--provider", default="openai", choices=("openai", "bedrock_converse"),
-        help="UtkuAI, ported: which provider --model names a model under",
-    )
     parser.add_argument("--no-model", action="store_true", help="serve without a model (stub answer path)")
     parser.add_argument("--embed", action="store_true", help="build the index with an embedder (costs tokens)")
     parser.add_argument("--effort", help="reasoning effort for models that take one (none/low/medium/high/xhigh)")
@@ -140,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         # LanceDB migration removed, and it had gone unnoticed because nothing here reports
         # how many vectors were reused.
         vector_cache = vector_cache_from_environment(model=embedder.requested_model)
-    model = None if args.no_model else _model(args.model, creds, args.effort, args.provider)
+    model = None if args.no_model else _model(args.model, creds, args.effort)
 
     kwargs: dict[str, Any] = {
         "connector": connector,
