@@ -16,12 +16,15 @@ import { LANGGRAPH_URL, USE_MOCKS } from "@/lib/env";
 import {
   MOCK_ANSWER,
   MOCK_ASSETS,
+  MOCK_ASSUMPTIONS,
   MOCK_AUDIT_CORPUS,
   MOCK_AUDIT_TRACE,
   MOCK_AUDIT_TURNS,
   MOCK_CAPABILITIES,
+  MOCK_CLARIFICATIONS,
+  MOCK_CONFLICTS,
+  MOCK_ELICITATION_CANDIDATES,
   MOCK_ER_GRAPH,
-  MOCK_GRADED_ANSWER,
   MOCK_GRAPH,
   MOCK_REFUSAL,
   MOCK_SCHEMA,
@@ -34,16 +37,23 @@ import {
   filterSummaryItems,
 } from "@/lib/graph-scope";
 import {
+  allowUserClarificationResponseSchema,
   answerViewSchema,
   assetListSchema,
+  assumptionListSchema,
   auditCorpusSchema,
   auditTraceSchema,
   auditTurnsSchema,
   corpusFieldsSchema,
   corpusRowsSchema,
   capabilitiesSchema,
+  clarificationListSchema,
+  clarificationRecordSchema,
   columnRelatedResponseSchema,
+  conflictListSchema,
+  conflictResolveResponseSchema,
   editResponseSchema,
+  elicitationGenerateResponseSchema,
   erGraphSchema,
   knowledgeGraphSchema,
   schemaSummaryResponseSchema,
@@ -51,8 +61,10 @@ import {
   tableViewSchema,
 } from "@/lib/schemas";
 import type {
+  AllowUserClarificationResponse,
   AnswerView,
   AssetRow,
+  AssumptionRow,
   AuditCorpus,
   AuditTrace,
   AuditTurns,
@@ -61,8 +73,12 @@ import type {
   CorpusRows,
   CorpusWhere,
   ChatTurn,
+  ClarificationRecord,
   ColumnRelated,
+  ConflictResolveResponse,
+  ConflictRow,
   EditResponse,
+  ElicitationGenerateResponse,
   ErGraph,
   KnowledgeGraph,
   SchemaScope,
@@ -74,7 +90,9 @@ import type {
 /** Questions routed to a refusal in mock mode (mirrors the engine's fail-closed
  * negative-example / excluded-field gates). */
 const MOCK_REFUSAL_PATTERN = /restrict|exclud|pii|card|secret|password/i;
-const MOCK_GRADED_PATTERN = /graded|unverified|fenced/i;
+
+/** An empty bucket of a scan report's diff, for the mock generate response. */
+const EMPTY_SCAN_BUCKET = { count: 0, by_severity: {}, scopes: [] };
 
 export class ApiError extends Error {
   constructor(
@@ -230,6 +248,44 @@ export const api = {
       type ? MOCK_ASSETS.filter((a) => a.asset_type === type) : MOCK_ASSETS,
     ),
 
+  /** Admin-answered clarifications folded into the corpus (GET /corpus/assumptions;
+   * round 9) — the "agreed assumptions" log, distinct from the raw asset editor. */
+  assumptions: (): Promise<AssumptionRow[]> =>
+    get("/corpus/assumptions", assumptionListSchema, MOCK_ASSUMPTIONS),
+
+  /** Round C: clarifications whose Enhancer decision CONTRADICTED an existing
+   * asset (GET /corpus/conflicts), distinct from the settled assumptions log.
+   * Param-less returns both unresolved and resolved conflicts. */
+  conflicts: (status?: string): Promise<ConflictRow[]> =>
+    get(
+      `/corpus/conflicts${qs({ status })}`,
+      conflictListSchema,
+      status ? MOCK_CONFLICTS.filter((c) => c.status === status) : MOCK_CONFLICTS,
+    ),
+
+  /** Resolve one conflict (POST /corpus/conflicts/{id}/resolve; dev, gated on
+   * can_edit). `resolution` is "keep_existing" (discard the new answer) or
+   * "replace" (overwrite the existing asset's definition with it). */
+  resolveConflict: (
+    id: string,
+    resolution: "keep_existing" | "replace",
+  ): Promise<ConflictResolveResponse> => {
+    if (USE_MOCKS) {
+      const status = resolution === "replace" ? "resolved_replaced" : "resolved_kept_existing";
+      return Promise.resolve({
+        resolved: true,
+        conflict_id: id,
+        status,
+        detail: `ok: resolved ${id} (${resolution})`,
+      });
+    }
+    return post(
+      `/corpus/conflicts/${encodeURIComponent(id)}/resolve`,
+      { resolution, answered_by: "admin" },
+      conflictResolveResponseSchema,
+    );
+  },
+
   /** Every semantic-layer item touching one physical column (GET
    * /columns/{column_id}/related; handoff §14). `columnId` is the derived id from
    * the engine's column asset id, READ from a column payload — never derived client-side
@@ -247,7 +303,6 @@ export const api = {
   chat: (question: string, history: ChatTurn[], sessionId: string): Promise<AnswerView> => {
     if (USE_MOCKS) {
       if (MOCK_REFUSAL_PATTERN.test(question)) return Promise.resolve(MOCK_REFUSAL);
-      if (MOCK_GRADED_PATTERN.test(question)) return Promise.resolve(MOCK_GRADED_ANSWER);
       return Promise.resolve(MOCK_ANSWER);
     }
     return post(
@@ -270,6 +325,87 @@ export const api = {
       });
     }
     return post("/corpus/edit", { asset }, editResponseSchema);
+  },
+
+  /** SME clarification ledger (GET /clarifications) for the admin to answer.
+   * `status` matches one exact value; param-less returns every record. */
+  clarifications: (status?: string): Promise<ClarificationRecord[]> =>
+    get(
+      `/clarifications${qs({ status })}`,
+      clarificationListSchema,
+      status
+        ? MOCK_CLARIFICATIONS.filter((c) => c.status === status)
+        : MOCK_CLARIFICATIONS,
+    ),
+
+  /** Answer one clarification (POST /clarifications/{id}/answer; dev, gated on
+   * can_edit). One of `choiceId`/`choiceIds`/`answer` must be set — `choiceIds`
+   * is the elicitation wizard's category-B multi-select checklist; every other
+   * category/source uses `choiceId` and/or `answer`, unchanged. */
+  answerClarification: (
+    id: string,
+    body: { choiceId?: string; choiceIds?: string[]; answer?: string },
+  ): Promise<ClarificationRecord> => {
+    if (USE_MOCKS) {
+      const record =
+        MOCK_CLARIFICATIONS.find((c) => c.id === id) ??
+        MOCK_ELICITATION_CANDIDATES.find((c) => c.id === id);
+      if (!record) return Promise.reject(new ApiError(`/clarifications/${id}/answer not found.`, 404));
+      return Promise.resolve({
+        ...record,
+        status: "answered",
+        answer: body.answer ?? null,
+        answer_choice_id: body.choiceId ?? null,
+        answer_choice_ids: body.choiceIds ?? null,
+        answered_by: "admin",
+      });
+    }
+    return post(
+      `/clarifications/${encodeURIComponent(id)}/answer`,
+      { choice_id: body.choiceId, choice_ids: body.choiceIds, answer: body.answer },
+      clarificationRecordSchema,
+    );
+  },
+
+  /** Phase 1 elicitation wizard candidates — open AND answered
+   * ``source="elicitation_wizard"`` ledger records (GET /elicitation/candidates).
+   * Answer the same way as any other clarification, via `answerClarification`. */
+  elicitationCandidates: (): Promise<ClarificationRecord[]> =>
+    get("/elicitation/candidates", clarificationListSchema, MOCK_ELICITATION_CANDIDATES),
+
+  /** Trigger candidate-question generation from the served schema (POST
+   * /elicitation/generate; gated on can_curate_corpus, not can_edit -- see
+   * api/curation_routes.py's own docstring). Idempotent on the backend —
+   * safe to call again; returns only newly proposed candidates, plus `report`,
+   * the diff against what the ledger and the corpus already knew. */
+  elicitationGenerate: (): Promise<ElicitationGenerateResponse> => {
+    if (USE_MOCKS)
+      return Promise.resolve({
+        generated: [],
+        n_generated: 0,
+        report: {
+          nothing_new: true,
+          summary: "No new gaps found.",
+          new: EMPTY_SCAN_BUCKET,
+          still_open: EMPTY_SCAN_BUCKET,
+          settled: EMPTY_SCAN_BUCKET,
+          stranded: EMPTY_SCAN_BUCKET,
+        },
+      });
+    return post("/elicitation/generate", {}, elicitationGenerateResponseSchema);
+  },
+
+  /** Flip the live `allow_user_clarification` override (POST
+   * /settings/allow-user-clarification; dev, gated on can_edit). Effective on
+   * the very next request — no restart. Callers should refetch `/capabilities`
+   * afterward so tab visibility etc. picks up the new value immediately. */
+  setAllowUserClarification: (enabled: boolean): Promise<AllowUserClarificationResponse> => {
+    if (USE_MOCKS) return Promise.resolve({ allow_user_clarification: enabled });
+    return post(
+      "/settings/allow-user-clarification",
+      { enabled },
+      allowUserClarificationResponseSchema,
+    );
   },
 
   /* ── the audit surface ─────────────────────────────────────────────────── */

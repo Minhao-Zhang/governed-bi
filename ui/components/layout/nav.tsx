@@ -4,10 +4,23 @@ import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
-import { Boxes, History, MenuIcon, MessagesSquare, MoonStar, Network, ScrollText, Sun } from "lucide-react";
+import {
+  Boxes,
+  Eye,
+  EyeOff,
+  History,
+  MenuIcon,
+  MessagesSquare,
+  MoonStar,
+  Network,
+  ScrollText,
+  Sun,
+} from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useCapabilities } from "@/hooks/queries";
+import { effectiveSimpleMode } from "@/lib/capabilities";
+import { setDisplayModeOverride, useDisplayModeOverride } from "@/lib/display-mode";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
@@ -63,7 +76,10 @@ export function Nav() {
     <aside className="hidden h-full w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground lg:flex">
       <div className="flex h-14 items-center justify-between gap-2 border-b px-4">
         <span className="font-mono text-sm font-semibold tracking-tight">governed-bi</span>
-        <ThemeToggle />
+        <div className="flex items-center gap-1">
+          <DisplayModeToggle />
+          <ThemeToggle />
+        </div>
       </div>
 
       <nav className="flex-1 space-y-1 p-2">
@@ -103,8 +119,44 @@ export function MobileNav() {
         </Sheet>
         <span className="font-mono text-sm font-semibold tracking-tight">governed-bi</span>
       </div>
-      <ThemeToggle />
+      <div className="flex items-center gap-1">
+        <DisplayModeToggle />
+        <ThemeToggle />
+      </div>
     </header>
+  );
+}
+
+/**
+ * UtkuAI Phase 1b follow-up: a live, in-UI Simple/Audit switch so a user can
+ * flip modes themselves — e.g. to demo the plain-language business-user view,
+ * then flip to Audit to show the underlying SQL/pipeline, all in one session —
+ * without editing `governed_bi.toml`'s `ui_display_mode` and restarting the
+ * backend. The override (`lib/display-mode.ts`) always wins over whatever
+ * `/capabilities` reports; clicking again clears it back to the backend default.
+ */
+function DisplayModeToggle() {
+  const { data: caps } = useCapabilities();
+  const override = useDisplayModeOverride();
+  const simple = effectiveSimpleMode(caps, override);
+
+  return (
+    <button
+      type="button"
+      onClick={() => setDisplayModeOverride(simple ? "audit" : "simple")}
+      aria-label={simple ? "Switch to Audit view" : "Switch to Simple view"}
+      title={
+        simple
+          ? "Simple view (click for Audit: SQL + pipeline)"
+          : "Audit view (click for Simple: plain-language only)"
+      }
+      className="flex items-center gap-1 rounded-md px-1.5 py-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+    >
+      {simple ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+      <span className="hidden font-mono text-[10px] uppercase tracking-wide xl:inline">
+        {simple ? "Simple" : "Audit"}
+      </span>
+    </button>
   );
 }
 

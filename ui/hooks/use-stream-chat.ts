@@ -455,6 +455,9 @@ export function useStreamChat(
           answer: {
             outcome: (turn.outcome ?? "answered") as AnswerView["outcome"],
             text: null,
+            // The turn log does not record the model's stated assumptions, so a transcript
+            // rebuilt from it has none to show. `[]` is what this row actually knows.
+            assumptions: [],
             answer_text: turn.answer_text ?? null,
             record: turn as unknown as Record<string, unknown>,
           },

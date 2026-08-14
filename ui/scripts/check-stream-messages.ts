@@ -26,6 +26,7 @@ const TOOL_JSON_2 =
 const channelAnswer = {
   outcome: "answered",
   text: null,
+  assumptions: [],
   answer_text: "No city population data for 2020 is available in the governed context.",
   record: {
     generated_sql: 'SELECT … FROM "shipping"."expedition"',
@@ -270,7 +271,13 @@ check(
  */
 const row = (question: string, text: string) => ({
   question,
-  answer: { outcome: "answered", text: null, answer_text: text, record: { question } } as AnswerView,
+  answer: {
+    outcome: "answered",
+    text: null,
+    answer_text: text,
+    assumptions: [],
+    record: { question },
+  } as AnswerView,
 });
 const realLog = [
   row("How many stores are there in the beer factory data?", "3 stores"), // foreign

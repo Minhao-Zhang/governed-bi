@@ -134,10 +134,14 @@ export function whyLines(provenance: Record<string, unknown>): string[] {
   return lines;
 }
 
-/** Quiet "schemas considered" line from `routed_schemas`. Not a record register field
- * today, so this returns null on a live turn. */
-export function routedSchemasLabel(provenance: Record<string, unknown>): string | null {
-  const schemas = asStringArray(provenance.routed_schemas);
+/** Quiet "schemas considered" line from `record.schemas` — the routed top-N, which is v2's
+ * `register/record.py` analog of v1's `provenance.routed_schemas`.
+ *
+ * Reads the record, not a provenance bag. The v1 spelling was still here and its own comment
+ * conceded it "returns null on a live turn", which is what reading a field the register does
+ * not declare looks like from the inside. */
+export function routedSchemasLabel(record: Record<string, unknown>): string | null {
+  const schemas = asStringArray(record.schemas);
   if (schemas.length === 0) return null;
   return `Schemas considered: ${schemas.join(", ")}`;
 }

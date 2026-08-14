@@ -161,6 +161,43 @@ export function useColumnRelated(columnId: string | null) {
   });
 }
 
+/** Admin-answered clarifications folded into the corpus (GET /corpus/assumptions;
+ * round 9), for the "agreed assumptions" log tab. */
+export function useAssumptions() {
+  return useQuery({ queryKey: ["assumptions"], queryFn: api.assumptions });
+}
+
+/** Round C: clarifications whose Enhancer decision CONTRADICTED an existing
+ * asset (GET /corpus/conflicts), for the "Needs Review" tab. `status` filters
+ * (e.g. "unresolved"); omit for every conflict, resolved or not. */
+export function useConflicts(status?: string) {
+  return useQuery({
+    queryKey: ["conflicts", status ?? "all"],
+    queryFn: () => api.conflicts(status),
+  });
+}
+
+/** SME clarification ledger (GET /clarifications), for the admin clarification
+ * panel. `status` filters on one exact value; omit for every record, which is
+ * what that panel does — it needs two statuses (`open` and `deferred`) and the
+ * route matches one. */
+export function useClarifications(status?: string) {
+  return useQuery({
+    queryKey: ["clarifications", status ?? "all"],
+    queryFn: () => api.clarifications(status),
+  });
+}
+
+/** Phase 1 elicitation wizard candidates (GET /elicitation/candidates) — every
+ * `source="elicitation_wizard"` ledger record, open and answered, for the
+ * proactive admin onboarding flow's grouped A > C+E > B > D view. */
+export function useElicitationCandidates() {
+  return useQuery({
+    queryKey: ["elicitation-candidates"],
+    queryFn: api.elicitationCandidates,
+  });
+}
+
 /* ── conversations ─────────────────────────────────────────────────────────── */
 
 /**

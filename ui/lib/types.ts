@@ -6,8 +6,10 @@
 
 import type { z } from "zod";
 import type {
+  allowUserClarificationResponseSchema,
   answerViewSchema,
   assetRowSchema,
+  assumptionRowSchema,
   auditCorpusSchema,
   auditLedgerRowSchema,
   auditTraceFieldSchema,
@@ -20,9 +22,13 @@ import type {
   corpusRowsSchema,
   boundaryEdgeSchema,
   capabilitiesSchema,
+  clarificationRecordSchema,
   columnRelatedResponseSchema,
   columnViewSchema,
+  conflictResolveResponseSchema,
+  conflictRowSchema,
   editResponseSchema,
+  elicitationGenerateResponseSchema,
   erGraphEdgeSchema,
   erGraphNodeSchema,
   erGraphSchema,
@@ -33,12 +39,16 @@ import type {
   knowledgeGraphSchema,
   leanColumnSchema,
   resultTableSchema,
+  scanReportSchema,
   schemaSummaryResponseSchema,
   searchHitSchema,
   searchResponseSchema,
+  serveOutcomeSchema,
   tableSummarySchema,
   tableViewSchema,
 } from "./schemas";
+
+export type ServeOutcome = z.infer<typeof serveOutcomeSchema>;
 
 /* ── the audit surface (GET /audit/*) ────────────────────────────────────── */
 
@@ -73,10 +83,28 @@ export type ErGraphNode = z.infer<typeof erGraphNodeSchema>;
 export type ErGraphEdge = z.infer<typeof erGraphEdgeSchema>;
 export type ErGraph = z.infer<typeof erGraphSchema>;
 export type AssetRow = z.infer<typeof assetRowSchema>;
+export type AssumptionRow = z.infer<typeof assumptionRowSchema>;
+export type ConflictRow = z.infer<typeof conflictRowSchema>;
+export type ConflictResolveResponse = z.infer<typeof conflictResolveResponseSchema>;
+export type AllowUserClarificationResponse = z.infer<typeof allowUserClarificationResponseSchema>;
 export type ColumnRelated = z.infer<typeof columnRelatedResponseSchema>;
 export type ResultTable = z.infer<typeof resultTableSchema>;
 export type AnswerView = z.infer<typeof answerViewSchema>;
 export type EditResponse = z.infer<typeof editResponseSchema>;
+export type { ClarificationChoice, ClarificationRequest, ClarificationResponse } from "@/lib/clarification";
+export type ClarificationRecord = z.infer<typeof clarificationRecordSchema>;
+
+/* ── Phase 1 elicitation wizard (proactive admin onboarding) ──────────────── */
+export type ElicitationGenerateResponse = z.infer<typeof elicitationGenerateResponseSchema>;
+export type ScanReport = z.infer<typeof scanReportSchema>;
+export type ElicitationCategory = NonNullable<ClarificationRecord["category"]>;
+export type ElicitationUiModality = NonNullable<ClarificationRecord["ui_modality"]>;
+export type ElicitationSeverity = NonNullable<ClarificationRecord["severity"]>;
+export type ElicitationAudience = NonNullable<ClarificationRecord["audience"]>;
+
+/* ── serve-time HITL (hitl-clarification-contract.md §3/§4/§9) ────────────── */
+
+/** The `interrupt()` value the `ask_user` tool raises; `stream.interrupt.value`. */
 
 /* ── D15 scope-on-demand (gated on capabilities.can_scope / can_search) ───── */
 export type LeanColumn = z.infer<typeof leanColumnSchema>;

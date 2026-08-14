@@ -13,6 +13,37 @@
 
 import { z } from "zod";
 
+// The HITL wire contract lives in `lib/clarification.ts` — it owns the request schema, the
+// response union and `parseClarification`, and `hooks/use-stream-chat.ts` reads it directly off
+// the interrupt. Re-exported rather than redeclared: this file had its own second copy of both,
+// and the two had already drifted (one carried `tier`, the other `basis`), which is a contract
+// with two answers.
+// Relative, not `@/lib/...`: `scripts/check-api-contract.ts` imports this file under plain
+// `node --experimental-strip-types`, which has no tsconfig path aliases. An `@/` here makes the
+// checker unrunnable, which would quietly cost the thing the checker exists to protect.
+export { clarificationChoiceSchema, clarificationRequestSchema } from "./clarification.ts";
+import { clarificationChoiceSchema } from "./clarification.ts";
+
+/* ── Answer delivery state ────────────────────────────────────────────────── */
+
+/** Mirrors ``governed_bi.register.stages.Outcome`` exactly (v2 engine).
+ *
+ * Replaces v1's two-axis ``tier``/``safety_clearance``/``semantic_assurance``
+ * stamp (utku-ai-deployment-targets.md, UI-retarget prerequisite for Gap 1):
+ * v2's ``/chat`` response has no equivalent measured field for either axis —
+ * it stamps one five-way outcome and nothing finer-grained about *how*
+ * grounded an ``answered`` turn was. This is a real capability difference,
+ * not a UI simplification: there is nothing on the wire to render a third
+ * state between "answered" and "refused" until v2 grows one.
+ */
+export const serveOutcomeSchema = z.enum([
+  "answered",
+  "refused",
+  "clarification",
+  "capped",
+  "crashed",
+]);
+
 /* ── /capabilities ───────────────────────────────────────────────────────── */
 
 export const capabilitiesSchema = z.object({
@@ -32,6 +63,19 @@ export const capabilitiesSchema = z.object({
   // server built without HITL (or the offline/REST profile) degrades cleanly —
   // the interrupt-prompt UI only mounts when this is true (contract §8).
   can_clarify: z.boolean().optional().default(false),
+  // Phase 5 of restoring v1 admin corpus curation onto v2: whether this
+  // session's corpus_root is writable, i.e. whether /corpus/conflicts*,
+  // /corpus/assumptions, and /corpus/drafts/{id}/approve will actually work —
+  // a different question from can_clarify above (that one is about a live
+  // ask_user interrupt, not corpus-write capability). Optional + default
+  // false so a pre-Phase-5 engine that omits it still parses and the
+  // curation tabs stay unmounted.
+  can_curate_corpus: z.boolean().optional().default(false),
+  // UtkuAI Phase 1b: "audit" (default) is today's technical cockpit, unchanged;
+  // "simple" is the business-user view (plain-language answer + reliability
+  // only). Optional + default "audit" so a pre-Phase-1b engine that omits it
+  // still parses and renders exactly as before.
+  ui_display_mode: z.enum(["audit", "simple"]).optional().default("audit"),
 });
 
 /* ── /health — deleted ────────────────────────────────────────────────────
@@ -39,6 +83,7 @@ export const capabilitiesSchema = z.object({
  * `corpusHealthSchema` is gone with the route (ADR 0007 Amendment 1). `auditCorpusSchema`
  * below covers everything it declared except three counters the engine hardcoded to zero,
  * and it keeps `fatal` apart from `degradations` where this flattened both into `findings`.
+ * Verified against this branch's own engine while porting: `GET /health` answers 404.
  * ────────────────────────────────────────────────────────────────────────── */
 
 /* ── /schema (tables + columns) ──────────────────────────────────────────── */
@@ -201,16 +246,23 @@ export const graphScopeSchema = z.object({
  * module that no longer exists.
  *
  * `truncated` / `dropped` are the load-bearing pair: a diagram that quietly renders 120 of
- * 656 nodes reads as complete coverage. Anything consuming this must render them. */
+ * 656 nodes reads as complete coverage. Anything consuming this must render them.
+ *
+ * **Which is why they are required here rather than defaulted.** Both branches of the port
+ * agreed on that sentence and then disagreed on what enforces it: defaulting `truncated` to
+ * `false` re-creates the exact silence the paragraph above describes, one layer down — an
+ * engine that stops sending the field reads as "nothing was cut". Required means the failure
+ * is a parse error somebody sees. Checked against this branch's engine before choosing:
+ * `/graph?schema=app_store&radius=1&node_budget=150` sends all seven fields. */
 export const graphMetaSchema = z.object({
   n_nodes: z.number(),
   n_edges: z.number(),
-  n_total_nodes: z.number().optional(),
+  n_total_nodes: z.number(),
   /** Nodes matching the scope *before* the budget was applied. */
-  n_matched_nodes: z.number().optional(),
-  truncated: z.boolean().optional().default(false),
-  dropped: z.number().optional().default(0),
-  node_budget: z.number().optional(),
+  n_matched_nodes: z.number(),
+  truncated: z.boolean(),
+  dropped: z.number(),
+  node_budget: z.number(),
   scope: graphScopeSchema.optional().nullable(),
 });
 
@@ -375,14 +427,39 @@ export const resultTableSchema = z.object({
  * `record` is the engine's 37-key projection over its `RECORD_REGISTER`. Left as an open
  * record rather than enumerated: the register is the authority, and a hand-copied field
  * list here would drift the first time one is added.
+ *
+ * **`result_table` is optional, not merely nullable.** `_shape()` builds the paused-turn
+ * reply key by key and never sets it, so requiring the key made a clarification response
+ * unparseable on the REST path.
  */
 export const answerViewSchema = z.object({
-  outcome: z.enum(["answered", "refused", "clarification", "capped", "crashed"]),
+  outcome: serveOutcomeSchema,
   text: z.string().nullable(),
   answer_text: z.string().nullable().optional(),
   failed_stage: z.string().nullable().optional(),
   error_type: z.string().nullable().optional(),
   refused_by: z.string().nullable().optional(),
+  /** Gap 1 (utku-ai-deployment-targets.md): the model's self-reported
+   * assumptions, shown unconditionally — never gated on outcome the way v1's
+   * `why` lines were gated on delivery/confidence. */
+  assumptions: z.array(z.string()).optional().default([]),
+  result_table: resultTableSchema.nullable().optional(),
+  /**
+   * Turn-level reliability, and the third thing wrong with defer.
+   *
+   * `serve/nodes/stamp.py::_reliability` sets this to
+   * `{status: "suspect", note: "Deferred rather than answered: …"}` when a clarification on
+   * this turn was deferred, and `_shape()` returns the whole `answer` dict, so it has always
+   * been on the wire. It was never declared here, so zod stripped it and no component could
+   * read it: the engine downgraded the answer's reliability, the backend has a test asserting
+   * it does, and the screen showed an ordinary confident answer. The other two halves — the
+   * ledger status and the admin queue — were fixed alongside this; this is the one the person
+   * who asked the question actually sees.
+   */
+  reliability: z
+    .object({ status: z.enum(["ok", "suspect"]), note: z.string() })
+    .nullable()
+    .optional(),
   record: z.record(z.string(), z.unknown()).default({}),
   // Whether this turn reached the durable turn log, and why not if it did not. The engine
   // sends both and they were undeclared, so zod stripped them: a silently-discarded "your
@@ -419,6 +496,52 @@ export const searchResponseSchema = z.object({
 // exactly one of them, which is the point — a detail is per-item.
 export const assetListSchema = z.array(assetRowSchema);
 
+/* ── GET /corpus/assumptions: admin "agreed assumptions" log (round 9) ────── */
+
+export const assumptionRowSchema = z.object({
+  id: z.string(),
+  question: z.string(),
+  answer: z.string(),
+  answered_by: z.string().nullable(),
+  answered_at: z.string().nullable(),
+  source: z.string().nullable(),
+});
+
+export const assumptionListSchema = z.array(assumptionRowSchema);
+
+/* ── GET /corpus/conflicts, POST /corpus/conflicts/{id}/resolve (round C) ── */
+
+export const conflictRowSchema = z.object({
+  id: z.string(),
+  status: z.enum(["unresolved", "resolved_kept_existing", "resolved_replaced"]),
+  existing_asset_id: z.string(),
+  existing_asset_type: z.string(),
+  existing_text: z.string(),
+  existing_question: z.string().nullable(),
+  new_question: z.string().nullable(),
+  new_text: z.string(),
+  answered_by: z.string().nullable(),
+  created_at: z.string().nullable(),
+  source: z.string().nullable(),
+});
+
+export const conflictListSchema = z.array(conflictRowSchema);
+
+export const conflictResolveResponseSchema = z.object({
+  resolved: z.boolean(),
+  conflict_id: z.string(),
+  status: z.string(),
+  detail: z.string(),
+});
+
+/* ── POST /settings/allow-user-clarification (dev only; gated on can_edit) ── */
+
+/** Response from flipping the live allow_user_clarification override — the new
+ * value, effective immediately (no restart; see api/runtime_toggles.py). */
+export const allowUserClarificationResponseSchema = z.object({
+  allow_user_clarification: z.boolean(),
+});
+
 /* ── POST /corpus/edit (dev only; gated on capabilities.can_edit) ─────────── */
 
 /** Response from writing/validating a corpus asset (EditResponse). */
@@ -430,6 +553,123 @@ export const editResponseSchema = z.object({
   findings: z.array(z.string()), // reference-integrity findings (empty = clean)
   diff: z.string(), // unified diff of the YAML file
 });
+
+/* ── /clarifications, POST /clarifications/{id}/answer (dev; gated on
+   can_curate_corpus, not can_edit — see api/routes.py's own docstring) ── */
+
+export const clarificationRecordSchema = z.object({
+  id: z.string(),
+  scope: z.string(),
+  question: z.string(),
+  // `deferred` is the user having pressed "I don't know -- ask the admin later" on a live
+  // `ask_user` (curator/clarifications.py::close_live_clarification). It has to be listed here
+  // or the whole tab blanks: `parse()` in api-client.ts throws on an undeclared enum member, so
+  // one deferred row would take down the queue it belongs in -- the exact failure mode
+  // `npm run check:api` exists to catch.
+  status: z.enum(["open", "answered", "deferred"]),
+  raised_by: z.array(z.string()),
+  choices: z.array(clarificationChoiceSchema).nullable(),
+  allow_freeform: z.boolean(),
+  answer: z.string().nullable(),
+  answer_choice_id: z.string().nullable(),
+  answer_choice_ids: z.array(z.string()).nullable().optional(),
+  answered_by: z.string().nullable(),
+  source: z.enum(["curator", "live_chat", "elicitation_wizard"]),
+  // Whether curator/clarification.py::fold_ledger_answer_into_corpus has already folded
+  // this answer into a corpus draft (idempotency flag on the record itself). Optional
+  // (no default, unlike capabilitiesSchema's similar flags) so a pre-Phase-1c backend
+  // that omits it still parses without forcing every mock fixture literal to set it.
+  converted_to_corpus: z.boolean().optional(),
+  // ask_user's basis ("data_definition" | "ranking_ambiguity") carried onto the ledger row
+  // for a live_chat-sourced record; null for curator/elicitation_wizard rows and any record
+  // that predates this field. Same enum as clarificationRequestSchema.basis above.
+  basis: z.enum(["data_definition", "ranking_ambiguity"]).nullable().optional(),
+  // Phase 1 elicitation wizard fields — null/undefined for curator/live_chat records.
+  category: z.enum(["A", "B", "C", "D", "E"]).nullable().optional(),
+  ui_modality: z
+    .enum(["column_picker", "numeric", "checkbox", "checklist"])
+    .nullable()
+    .optional(),
+  target_table: z.string().nullable().optional(),
+  target_column: z.string().nullable().optional(),
+  // Gap-model fields (utku-ai-setup-wizard-gap-model.md), set by the backend at generation
+  // time. `severity` is what an UNANSWERED gap costs, not how valuable the category is:
+  // T1 poison (silently wrong AND on an identity/join key, so it contaminates the schema),
+  // T2 silently wrong but local to one term, T3 worst case is a refusal, T4 retrieval polish.
+  // `audience` is who can answer -- a non-technical domain owner vs a DBA -- and is orthogonal
+  // to `category`. Both null/undefined on curator/live_chat rows and on any wizard record
+  // generated before the backend classified them.
+  severity: z.enum(["T1", "T2", "T3", "T4"]).nullable().optional(),
+  audience: z.enum(["business", "data"]).nullable().optional(),
+  // Ids of the candidates that must be ANSWERED before this one may be presented. The backend
+  // always emits an array (`[]`, never null), so `.optional()` without `.nullable()` -- the
+  // optionality is for the mock fixtures and for an older backend, same as
+  // `converted_to_corpus` above.
+  blocked_by: z.array(z.string()).optional(),
+  // Which of `blocked_by` were still open when this record was answered: null = never
+  // answered, [] = answered with every prerequisite behind it, non-empty = answered without
+  // that warrant. Nothing renders it yet -- the backend records it for a later phase that
+  // lands such an answer as a draft rather than certifying it.
+  unmet_prerequisites_at_answer: z.array(z.string()).nullable().optional(),
+  // GET /elicitation/candidates only (derived, like answer_text below): `blocked_by` names at
+  // least one question that is not answered yet. The wizard renders such a card as
+  // not-yet-answerable rather than hiding it, so the admin can see what it is waiting for.
+  blocked: z.boolean().optional(),
+  // GET /clarifications only: resolve_answer_text()'s rendered answer (a picked choice's
+  // label, plus any freeform text alongside it) -- distinct from `answer`, which stays null
+  // for a choice-only answer. Not part of the persisted ledger record itself (POST
+  // /clarifications/{id}/answer's own request body has no such field), so optional rather
+  // than required. No mounted consumer reads this today: ClarificationsPanel queries
+  // status=open only, so it never renders an answered record's text.
+  answer_text: z.string().nullable().optional(),
+});
+
+export const clarificationListSchema = z.array(clarificationRecordSchema);
+
+/* ── Phase 1 elicitation wizard: POST /elicitation/generate, GET
+   /elicitation/candidates (gated on can_curate_corpus, not can_edit -- see
+   api/curation_routes.py's own docstring) ── */
+
+/** One bucket of a re-run's diff: how many, of what tier, and which scopes. */
+const scanBucketSchema = z.object({
+  count: z.number(),
+  by_severity: z.record(z.string(), z.number()),
+  scopes: z.array(z.string()),
+});
+
+/** What changed since the last scan (`curator/scan_report.py`).
+ *
+ * `summary` is composed on the **backend**, deliberately, and this client renders it verbatim.
+ * The wording is the deliverable of the owner's "re-runnable, with honest reporting" decision
+ * (utku-ai-setup-wizard-gap-model.md § "Three owner decisions"), and a second copy of it in
+ * TypeScript would be a second thing that has to stay true. Whoever reads the route with `curl`
+ * reads the same words the wizard prints.
+ *
+ * `nothing_new` is a stated boolean rather than something derived from `new.count === 0`. The
+ * toast this replaces derived it and got it wrong — "the schema is already covered" is a claim
+ * nothing measured, and an empty array is equally consistent with "every detector is blind on
+ * your schema".
+ */
+export const scanReportSchema = z.object({
+  nothing_new: z.boolean(),
+  summary: z.string(),
+  new: scanBucketSchema,
+  still_open: scanBucketSchema,
+  settled: scanBucketSchema,
+  stranded: scanBucketSchema,
+});
+
+export const elicitationGenerateResponseSchema = z.object({
+  generated: z.array(clarificationRecordSchema),
+  n_generated: z.number(),
+  report: scanReportSchema,
+});
+
+/* ── serve-time HITL: interrupt().value from ask_user (hitl-clarification-
+   contract.md §3/§9). Server → client only; the client → server response
+   (§4) has no fixed shape to validate (it's what we send), so it stays a
+   plain TS union in lib/types.ts. */
+
 
 /* ── GET /audit/* — the trace and audit surface ───────────────────────────── */
 //

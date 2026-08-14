@@ -1,116 +1,91 @@
 "use client";
 
-import { useState } from "react";
-import { MessageCircleQuestion } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
-import type { ClarificationRequest, ClarificationResponse } from "@/lib/clarification";
-import { cn } from "@/lib/utils";
-
 /**
- * The serve-time clarification (HITL) prompt. When the governed agent interrupts
- * mid-turn to ask one question, this renders the active surface for it
- * (docs/plans/hitl-clarification-contract.md §3): the question, the WHY line
- * (governance transparency — the user always sees why they're asked), and the
- * answer controls per the request shape:
- *
- *  - `choices` present  → option buttons; `allow_freeform` also offers a text box.
- *  - `choices` absent    → freeform textarea only.
- *
- * Answering resumes the same turn; Decline fails the turn closed (contract §4).
- *
- * The gate is the **arriving interrupt**, not `capabilities.can_clarify`. A server
- * that interrupts is by definition able to clarify, and an interrupt the user has
- * no control to answer deadlocks the turn — so a stale/false capability flag must
- * not be able to hide this prompt. The flag stays advisory (it says whether to
- * *expect* clarifications), which is why nothing branches on it here.
- *
- * Shares `clarification_id` with the passive "Asked a question…" timeline row.
+ * Serve-time HITL prompt (round 4, hitl-clarification-contract.md). Renders
+ * inline in the transcript when a live Analyst run pauses on `ask_user`
+ * (`stream.interrupt.value` matches `ClarificationRequest`). Shares the
+ * choice-toggles + freeform-input UI with the curator-time admin queue
+ * (`components/corpus/clarifications-panel.tsx`, round 2) via
+ * `ClarificationAnswerForm`; this component owns only the chat-specific framing
+ * (question/why) and submits through `stream.respond(...)` (wired by the
+ * caller via `onRespond`), not `POST /clarifications/{id}/answer`.
  */
+
+import { CircleHelp, Clock3 } from "lucide-react";
+
+import { cn } from "@/lib/utils";
+import type { ClarificationRequest, ClarificationResponse } from "@/lib/types";
+import { ClarificationAnswerForm } from "@/components/common/clarification-answer-form";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+
 export function ClarificationPrompt({
   request,
+  submitting,
   onRespond,
 }: {
   request: ClarificationRequest;
+  submitting?: boolean;
   onRespond: (response: ClarificationResponse) => void;
 }) {
-  const [text, setText] = useState("");
   const hasChoices = !!request.choices && request.choices.length > 0;
-  const showFreeform = !hasChoices || request.allow_freeform === true;
-  const id = request.clarification_id;
+  // choices absent => freeform-only (contract §3); choices present => freeform
+  // only if allow_freeform is also set.
+  const allowFreeform = hasChoices ? request.allow_freeform === true : true;
 
   return (
-    <div className="mb-2 rounded-lg border border-primary/40 bg-primary/5 p-3">
-      <div className="flex items-start gap-2">
-        <MessageCircleQuestion className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-        <div className="min-w-0 flex-1 space-y-2">
-          <p className="text-sm font-medium">{request.question}</p>
-          <p className="text-xs text-muted-foreground">{request.why}</p>
-
-          {hasChoices && (
-            <div className="flex flex-col gap-1.5">
-              {request.choices!.map((choice) => (
-                <Button
-                  key={choice.id}
-                  variant="outline"
-                  size="sm"
-                  className="justify-start"
-                  onClick={() => onRespond({ clarification_id: id, choice_id: choice.id })}
-                >
-                  {choice.label}
-                </Button>
-              ))}
-            </div>
-          )}
-
-          {showFreeform && (
-            <form
-              className="flex items-end gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const trimmed = text.trim();
-                if (!trimmed) return;
-                onRespond({ clarification_id: id, answer: trimmed });
-                setText("");
-              }}
-            >
-              <textarea
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    (event.currentTarget.form as HTMLFormElement)?.requestSubmit();
-                  }
-                }}
-                rows={1}
-                placeholder={hasChoices ? "Or answer in your own words…" : "Type your answer…"}
-                aria-label="Answer the clarification"
-                className={cn(
-                  "flex max-h-32 min-h-8 w-full resize-y rounded-md border border-input bg-background px-2.5 py-1.5 text-sm outline-none transition-colors",
-                  "placeholder:text-muted-foreground",
-                  "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
-                )}
-              />
-              <Button type="submit" size="sm" disabled={text.trim() === ""} className="shrink-0">
-                Answer
-              </Button>
-            </form>
-          )}
-
-          <div className="pt-0.5">
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              className="text-muted-foreground"
-              onClick={() => onRespond({ clarification_id: id, declined: true })}
-            >
-              Decline
-            </Button>
+    <Card className="border-tier-lineage/40 bg-tier-lineage/5">
+      <CardHeader className="[.border-b]:pb-4">
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-tier-lineage/15">
+            <CircleHelp className="size-4 text-tier-lineage" />
+          </span>
+          <div className="flex-1 space-y-1.5">
+            <CardTitle className="text-sm leading-snug font-medium">{request.question}</CardTitle>
+            {request.why && (
+              <p className="text-xs leading-relaxed text-muted-foreground">{request.why}</p>
+            )}
           </div>
         </div>
-      </div>
-    </div>
+      </CardHeader>
+      <CardContent className="border-t border-tier-lineage/20 pt-4">
+        <ClarificationAnswerForm
+          choices={request.choices}
+          allowFreeform={allowFreeform}
+          submitting={submitting}
+          freeformAriaLabel="Free-text answer for the assistant's question"
+          onSubmit={(answer) => {
+            if (answer.choiceId) {
+              onRespond({ clarification_id: request.clarification_id, choice_id: answer.choiceId });
+            } else if (answer.answer) {
+              onRespond({ clarification_id: request.clarification_id, answer: answer.answer });
+            }
+          }}
+        />
+      </CardContent>
+      {/* Deferring to an admin only makes sense for data_definition questions
+          (objective schema/business-rule facts). ranking_ambiguity questions
+          (subjective, per-user judgment calls) must never offer it. `basis`
+          absent (older payload shape, or a future non-ask_user caller of this
+          component) fails toward today's behavior: show the button. */}
+      {request.basis !== "ranking_ambiguity" && (
+        <CardFooter className="justify-end gap-2 border-t border-tier-lineage/20 bg-transparent pt-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!!submitting}
+            className={cn(
+              "gap-1.5 border-dashed text-muted-foreground",
+              "hover:bg-tier-lineage/10 hover:text-tier-lineage",
+            )}
+            onClick={() => onRespond({ clarification_id: request.clarification_id, defer: true })}
+          >
+            <Clock3 className="size-3.5" />
+            I don&apos;t know — ask the admin later
+          </Button>
+        </CardFooter>
+      )}
+    </Card>
   );
 }

@@ -20,21 +20,29 @@ export const DEFAULT_ER_BUDGET = 60;
 export const DEFAULT_KG_BUDGET = 150;
 
 function scopeMeta(
-  totalNodes: number,
+  totalNodesInCorpus: number,
+  matchedNodes: number,
   returnedNodes: number,
   totalEdges: number,
   scope: SchemaScope | undefined,
 ): GraphMeta {
+  const dropped = matchedNodes - returnedNodes;
   return {
     // Engine field names (ADR 0009 D2). This builder is the *fallback* for an engine that
     // cannot scope, so it must produce the same shape the scoping engine does — otherwise
     // one of the two paths renders a truncation banner and the other cannot.
+    //
+    // `n_total_nodes` and `n_matched_nodes` are read from separate arguments rather than
+    // both from one count: "how big is the corpus" and "how many matched this scope" are
+    // different numbers, and the "showing X of Y in scope" line needs the second one.
+    // Collapsing them makes that line report the corpus size on every scoped view.
     n_nodes: returnedNodes,
     n_edges: totalEdges,
-    n_total_nodes: totalNodes,
-    n_matched_nodes: totalNodes,
-    truncated: returnedNodes < totalNodes,
-    dropped: Math.max(0, totalNodes - returnedNodes),
+    n_total_nodes: totalNodesInCorpus,
+    n_matched_nodes: matchedNodes,
+    truncated: dropped > 0,
+    dropped,
+    node_budget: scope?.nodeBudget ?? returnedNodes,
     scope: scope
       ? {
           schema: scope.schema ?? null,
@@ -126,7 +134,9 @@ export function applyErGraphScope(base: ErGraph, scope: SchemaScope | undefined)
     return {
       ...base,
       boundary: base.boundary ?? [],
-      meta: base.meta ?? scopeMeta(base.nodes.length, base.nodes.length, base.edges.length, scope),
+      meta:
+        base.meta ??
+        scopeMeta(base.nodes.length, base.nodes.length, base.nodes.length, base.edges.length, scope),
     };
   }
 
@@ -196,7 +206,7 @@ export function applyErGraphScope(base: ErGraph, scope: SchemaScope | undefined)
     nodes: kept,
     edges: inScopeEdges,
     boundary,
-    meta: scopeMeta(candidates.length, kept.length, inScopeEdges.length, scope),
+    meta: scopeMeta(base.nodes.length, candidates.length, kept.length, inScopeEdges.length, scope),
   };
 }
 
@@ -217,7 +227,9 @@ export function applyKnowledgeGraphScope(
     return {
       ...base,
       boundary: base.boundary ?? [],
-      meta: base.meta ?? scopeMeta(base.nodes.length, base.nodes.length, base.edges.length, scope),
+      meta:
+        base.meta ??
+        scopeMeta(base.nodes.length, base.nodes.length, base.nodes.length, base.edges.length, scope),
     };
   }
 
@@ -304,7 +316,7 @@ export function applyKnowledgeGraphScope(
     nodes: kept,
     edges: inScopeEdges,
     boundary,
-    meta: scopeMeta(keep.size, kept.length, inScopeEdges.length, scope),
+    meta: scopeMeta(base.nodes.length, keep.size, kept.length, inScopeEdges.length, scope),
   };
 }
 
