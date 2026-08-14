@@ -140,7 +140,11 @@ def test_ask_user_ledger_write_is_idempotent_across_a_resume(tmp_path: Path) -> 
 
     records = load_clarifications(tmp_path)
     assert len(records) == 1, "the resume must not have written a second record"
-    assert records[0].status.value == "open", (
-        "Phase 1b only writes the open record before interrupt(); folding a real answer into "
-        "the ledger (status -> answered) is a later phase, not this one"
-    )
+    # The "later phase" this assertion used to defer to has arrived: the resume now closes the
+    # row it opened (`curator/clarifications.py::close_live_clarification`), so `open` here would
+    # mean the close silently stopped happening. The bare-string resume above is the case that
+    # lands the answer text on the row rather than a `choice_id`; the outcomes themselves are
+    # covered in `test_the_ledger_row_records_what_happened.py`, and what this one still owns is
+    # that closing a row is an *update* and never a second record.
+    assert records[0].status.value == "answered"
+    assert records[0].answer == "2020"

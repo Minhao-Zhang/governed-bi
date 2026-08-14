@@ -122,7 +122,7 @@ def test_a_live_deferred_clarification_survives_open_then_folds_through_the_offl
 
     db_id = "olist"
 
-    # ── 1 & 2: a real ask_user interrupt fires, defer continues the turn, record stays open ──
+    # ── 1 & 2: a real ask_user interrupt fires, defer continues the turn, record stays homework ──
     model = _ask_user_then_defer_answer(basis="data_definition")
     graph = compile_graph()
     token = "identity-live-defer-offline-fold"
@@ -140,11 +140,16 @@ def test_a_live_deferred_clarification_survives_open_then_folds_through_the_offl
 
     records = load_clarifications(tmp_path)
     (record,) = records
-    assert record.status.value == "open", "Phase 1b: a resume never itself answers the ledger row"
+    # `deferred`, not `open`: the resume now closes the row it opened
+    # (`curator/clarifications.py::close_live_clarification`) so the admin can tell this apart
+    # from a question nobody has looked at. It is still *their* homework either way, which is
+    # what the rest of this test goes on to exercise -- and that makes the assertion below
+    # stronger than it was: the offline route folds a deferred row, not merely an open one.
+    assert record.status.value == "deferred"
     assert record.source == "live_chat"
     assert record.basis == "data_definition"
 
-    # ── 3: the SAME open record, answered offline -- no graph call from here on ──
+    # ── 3: the SAME deferred record, answered offline -- no graph call from here on ──
     session = _offline_session(tmp_path, db_id)
     client = _offline_client(monkeypatch, session)
     answer_text = "An active customer placed an order in the last 90 days."

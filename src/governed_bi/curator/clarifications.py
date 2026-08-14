@@ -39,6 +39,7 @@ __all__ = [
     "resolve_answer_text",
     "unmet_prerequisites",
     "answer_clarification",
+    "close_live_clarification",
     "restate_question",
     "mark_converted_to_corpus",
     "append_if_new_scope",
@@ -48,6 +49,17 @@ __all__ = [
 class ClarificationRecordStatus(str, Enum):
     open = "open"
     answered = "answered"
+    #: The user was asked live and pressed "I don't know — ask the admin later"
+    #: (``serve/tools.py``'s ``defer``). Still homework, like ``open``, but homework the ledger
+    #: can now tell apart from a question nobody has looked at yet — which is the distinction
+    #: this ledger exists to carry, and the one it could not express until
+    #: :func:`close_live_clarification` had somewhere to write it.
+    #:
+    #: There is deliberately no ``declined`` member beside it. No shipped surface can send a
+    #: decline (``components/chat/clarification-prompt.tsx`` offers defer and nothing else), and
+    #: a declined question is genuinely still unanswered homework, so ``open`` states it
+    #: correctly. A decline button would be the thing that earns a fourth member.
+    deferred = "deferred"
 
 
 #: Phase 2 Setup Wizard categories (fixed priority order A > C > E > B > D in v1). Declared
@@ -397,6 +409,58 @@ def answer_clarification(
         answer_choice_ids=tuple(choice_ids) if choice_ids is not None else None,
         answered_by=answered_by,
         unmet_prerequisites_at_answer=unmet,
+    )
+
+
+def close_live_clarification(
+    corpus_root: Path | str,
+    clarification_id: str,
+    *,
+    answer: str | None = None,
+    choice_id: str | None = None,
+    deferred: bool = False,
+) -> ClarificationRecord | None:
+    """Close the row a **live** ``ask_user`` opened, now that its resume has said what happened.
+
+    The other half of ``serve/tools.py::_log_live_clarification``, which writes the row ``open``
+    before ``interrupt`` pauses the turn so an abandoned turn still leaves homework behind.
+    Nothing closed it, so every live clarification stayed ``open`` for the corpus's whole life
+    and the admin's queue reported "never seen", "answered in chat" and "deferred to you" as one
+    state. ``deferred=True`` lands :attr:`ClarificationRecordStatus.deferred`; anything else
+    lands ``answered``.
+
+    **Not :func:`answer_clarification`, for two reasons.** That function stamps
+    ``unmet_prerequisites_at_answer``, which is a Setup-Wizard concept — a live ``ask_user``
+    question has no ``blocked_by`` prerequisites to be unmet — and it defaults
+    ``answered_by="admin"``, which a live answer is not. This writes ``answered_by="user"``, the
+    vocabulary ``ui/lib/mock/fixtures.ts`` already uses for a resolved live clarification.
+
+    **Deliberately leaves ``converted_to_corpus`` alone.** That field is the *ledger* fold's
+    idempotency marker (:func:`~governed_bi.curator.clarification.fold_ledger_answer_into_corpus`,
+    reached only from ``POST /clarifications/{id}/answer``). A live turn folds through
+    ``fold_answered_clarification``, which by design never touches this ledger, and mining runs
+    in ``serve/nodes/mine_corpus.py`` *after* this call — so there is nothing true to write here
+    yet, and nothing polls the field for a fold that never comes.
+
+    **Returns ``None`` rather than raising on an unknown id**, unlike every sibling here. This
+    runs on the resume path of a live turn, where the alternative is a bookkeeping miss killing
+    a turn that has already produced its answer. The row is normally guaranteed present
+    (``_log_live_clarification`` wrote it moments earlier), so ``None`` means the ledger was
+    edited or replaced mid-turn.
+    """
+    if not any(r.id == clarification_id for r in load_clarifications(corpus_root)):
+        return None
+    if deferred:
+        return _replace_record(
+            corpus_root, clarification_id, status=ClarificationRecordStatus.deferred
+        )
+    return _replace_record(
+        corpus_root,
+        clarification_id,
+        status=ClarificationRecordStatus.answered,
+        answer=answer,
+        answer_choice_id=choice_id,
+        answered_by="user",
     )
 
 

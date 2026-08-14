@@ -306,6 +306,39 @@ def _log_live_clarification(
     write_clarifications(corpus_root, records)
 
 
+def _close_live_clarification(
+    corpus_root: Any,
+    *,
+    clarification_id: str,
+    answer: str | None,
+    choice_id: str | None,
+    deferred: bool,
+) -> None:
+    """Record what became of the question :func:`_log_live_clarification` opened.
+
+    That function logged the row ``open`` before ``interrupt``; nothing closed it, so the
+    admin's queue reported "never seen", "answered in chat" and "deferred to you" as one state
+    for the corpus's whole life. Runs after ``interrupt`` returns, which is the first moment the
+    outcome exists.
+
+    Same no-op-without-a-``corpus_root`` precondition as its opening half, for the same
+    eval/offline callers. Swallows nothing else: the ledger function it calls returns ``None``
+    on a missing row rather than raising, because a bookkeeping miss must not kill a turn that
+    has already produced its answer.
+    """
+    if corpus_root is None:
+        return
+    from governed_bi.curator.clarifications import close_live_clarification
+
+    close_live_clarification(
+        corpus_root,
+        clarification_id,
+        answer=answer,
+        choice_id=choice_id,
+        deferred=deferred,
+    )
+
+
 def build_tools(
     state: Mapping[str, Any],
     config: Mapping[str, Any] | None,
@@ -613,6 +646,29 @@ def build_tools(
         # which needs its own, distinct signal on the ledger row rather than reusing `declined`.
         declined = bool(resume_reply.get("declined"))
         deferred = bool(resume_reply.get("defer"))
+        # The closing half of the log above. Skipped on a decline, deliberately: a declined
+        # question is still unanswered homework, so `open` states it correctly and there is no
+        # `declined` status to write (see `ClarificationRecordStatus.deferred`'s own note).
+        # `answer` is the user's own text and nothing else -- a bare-string resume is that
+        # string, a `{"choice_id": ...}` reply carries no text at all and stores the id instead
+        # (matching how the offline route stores a choice answer), and a defer's `text` is an
+        # instruction addressed to the model, which must never appear in the column an admin
+        # reads as "what the user said".
+        if not declined:
+            await asyncio.to_thread(
+                _close_live_clarification,
+                corpus_root,
+                clarification_id=clarification_id,
+                answer=(
+                    str(resume_reply["answer"])
+                    if resume_reply.get("answer")
+                    else (text or None if not isinstance(answer, Mapping) else None)
+                ),
+                choice_id=(
+                    str(resume_reply["choice_id"]) if resume_reply.get("choice_id") else None
+                ),
+                deferred=deferred,
+            )
         emit(
             kind="tool",
             step="ask_user",
