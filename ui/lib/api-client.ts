@@ -367,6 +367,31 @@ export const api = {
     );
   },
 
+  /** Abandon a pending clarification (POST /clarifications/{id}/cancel).
+   *
+   * **Not a resume.** The graph thread stays paused and is never answered; this only writes the
+   * ledger, and what it writes depends on the record's own `basis` — a `ranking_ambiguity`
+   * question lands `cancelled` and leaves the admin queue, anything else stays `open`. The server
+   * decides, which is why there is no body: see
+   * `docs/utkuai-role-tiers-and-clarification-cancel.md`.
+   *
+   * Returns the resulting row, so a caller can say which of the two happened without refetching. */
+  cancelClarification: (id: string): Promise<ClarificationRecord> => {
+    if (USE_MOCKS) {
+      const record = MOCK_CLARIFICATIONS.find((c) => c.id === id);
+      if (!record) return Promise.reject(new ApiError(`/clarifications/${id}/cancel not found.`, 404));
+      return Promise.resolve({
+        ...record,
+        status: record.basis === "ranking_ambiguity" ? "cancelled" : "open",
+      });
+    }
+    return post(
+      `/clarifications/${encodeURIComponent(id)}/cancel`,
+      {},
+      clarificationRecordSchema,
+    );
+  },
+
   /** Phase 1 elicitation wizard candidates — open AND answered
    * ``source="elicitation_wizard"`` ledger records (GET /elicitation/candidates).
    * Answer the same way as any other clarification, via `answerClarification`. */

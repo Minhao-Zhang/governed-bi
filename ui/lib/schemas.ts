@@ -71,11 +71,19 @@ export const capabilitiesSchema = z.object({
   // false so a pre-Phase-5 engine that omits it still parses and the
   // curation tabs stay unmounted.
   can_curate_corpus: z.boolean().optional().default(false),
-  // UtkuAI Phase 1b: "audit" (default) is today's technical cockpit, unchanged;
-  // "simple" is the business-user view (plain-language answer + reliability
-  // only). Optional + default "audit" so a pre-Phase-1b engine that omits it
-  // still parses and renders exactly as before.
-  ui_display_mode: z.enum(["audit", "simple"]).optional().default("audit"),
+  // Which role tier the deployment wants by default: `business` (plain-language answer +
+  // reliability only), `analyst` (+ SQL), `engineer` (+ provenance, corpus pin, reasoning trace).
+  // `simple`/`audit` are the two-state spellings this replaced, accepted and mapped forward by
+  // `lib/capabilities.ts::resolveTier` so a server still sending them keeps working.
+  //
+  // **No `.default()` here, unlike every other optional flag on this object.** A default would
+  // make an absent field indistinguishable from a deliberate `engineer`, and the engine does not
+  // populate this field at all today (`grep -r ui_display_mode src/` is empty). `resolveTier`
+  // owns the fallback and defaults to `business` — the tier that exposes least — so a
+  // misconfiguration hides surfaces rather than leaking them.
+  ui_display_mode: z
+    .enum(["business", "analyst", "engineer", "audit", "simple"])
+    .optional(),
 });
 
 /* ── /health — deleted ────────────────────────────────────────────────────
@@ -566,7 +574,11 @@ export const clarificationRecordSchema = z.object({
   // or the whole tab blanks: `parse()` in api-client.ts throws on an undeclared enum member, so
   // one deferred row would take down the queue it belongs in -- the exact failure mode
   // `npm run check:api` exists to catch.
-  status: z.enum(["open", "answered", "deferred"]),
+  // `cancelled` is the user having abandoned a question that no admin could have answered for
+  // them (`curator/clarifications.py::cancel_clarification` reaches it only for
+  // `basis="ranking_ambiguity"`). Listed here for the same reason `deferred` is: `parse()` throws
+  // on an undeclared enum member, so one such row would blank the whole queue.
+  status: z.enum(["open", "answered", "deferred", "cancelled"]),
   raised_by: z.array(z.string()),
   choices: z.array(clarificationChoiceSchema).nullable(),
   allow_freeform: z.boolean(),

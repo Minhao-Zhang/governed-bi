@@ -6,7 +6,7 @@ import { AnswerCard } from "@/components/answer/answer-card";
 import { ServeProgress } from "@/components/chat/serve-progress";
 import { useCapabilities } from "@/hooks/queries";
 import type { ChatMessage } from "@/hooks/use-chat";
-import { effectiveSimpleMode } from "@/lib/capabilities";
+import { resolveTier } from "@/lib/capabilities";
 import { useDisplayModeOverride } from "@/lib/display-mode";
 import type { TimelineStep } from "@/lib/steps";
 
@@ -17,11 +17,10 @@ import type { TimelineStep } from "@/lib/steps";
  * timeline, or a plain spinner before the first event / on the REST fallback.
  * Auto-scrolls to the newest turn as messages arrive or progress advances.
  *
- * **This is where the Simple/Audit choice is read** (UtkuAI Phase 1b), and it is read here
- * rather than passed down from `conversation.tsx` because this is the lowest component that
- * knows it is rendering *the chat transcript*. `AnswerCard` also renders on `/audit`, where
- * hiding the audit would be absurd, so the card takes a prop and defaults to showing
- * everything; only this caller turns it off.
+ * **This is where the role tier is read**, and it is read here rather than passed down from
+ * `conversation.tsx` because this is the lowest component that knows it is rendering *the chat
+ * transcript*. `AnswerCard` also renders on `/audit`, where hiding the audit would be absurd, so
+ * the card takes a prop and defaults to `engineer`; only this caller narrows it.
  */
 export function MessageList({
   messages,
@@ -37,10 +36,9 @@ export function MessageList({
   awaitingClarification?: boolean;
 }) {
   const { data: caps } = useCapabilities();
-  const override = useDisplayModeOverride();
-  //: The in-UI toggle wins over the backend's `/capabilities` default, so a user can flip
-  //: modes live without restarting the engine (`lib/display-mode.ts`).
-  const showAudit = !effectiveSimpleMode(caps, override);
+  //: `/settings`'s local choice wins over the backend's `/capabilities` default, so a user can
+  //: change tier live without restarting the engine (`lib/display-mode.ts`).
+  const tier = resolveTier(caps, useDisplayModeOverride());
 
   const bottomRef = useRef<HTMLDivElement>(null);
   // The pipeline is either actively running or paused waiting on the user; both
@@ -70,7 +68,7 @@ export function MessageList({
         ) : (
           <div key={message.id} className="w-full">
             {message.answer ? (
-              <AnswerCard answer={message.answer} steps={message.steps} showAudit={showAudit} />
+              <AnswerCard answer={message.answer} steps={message.steps} tier={tier} />
             ) : (
               // Defensive: assistant turns carry an AnswerView in practice.
               <p className="text-sm text-muted-foreground">{message.text}</p>
@@ -83,7 +81,7 @@ export function MessageList({
           also shown while suspended at a clarification, so the timeline stays. */}
       {inProgress && (
         <div className="w-full rounded-lg border bg-card p-4">
-          <ServeProgress isRunning={inProgress} steps={steps} showAudit={showAudit} />
+          <ServeProgress isRunning={inProgress} steps={steps} tier={tier} />
         </div>
       )}
 

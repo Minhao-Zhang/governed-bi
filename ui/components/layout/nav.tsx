@@ -6,21 +6,20 @@ import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
   Boxes,
-  Eye,
-  EyeOff,
   History,
   MenuIcon,
   MessagesSquare,
   MoonStar,
   Network,
   ScrollText,
+  Settings2,
   Sun,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useCapabilities } from "@/hooks/queries";
-import { effectiveSimpleMode } from "@/lib/capabilities";
-import { setDisplayModeOverride, useDisplayModeOverride } from "@/lib/display-mode";
+import { resolveTier, tierReaches } from "@/lib/capabilities";
+import { useDisplayModeOverride } from "@/lib/display-mode";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
@@ -31,23 +30,34 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 // `/history` sits directly under Chat because that is the pair: it lists conversations and its
 // rows lead straight back into one. It was a popover on the chat page, which put an unbounded
 // list inside a menu-sized panel — seventeen rows covered the answer and the composer both.
+//
+// **Which of these a visitor sees depends on their tier**, and `lib/capabilities.ts::tierReaches`
+// owns that rule — not this file. The list here is data; the filter is one expression over it, so
+// an upstream change to the rail's markup and a change to who sees what cannot conflict.
+//
+// `/settings` is last and reachable at every tier: a tier that could not get back out of itself
+// would be a trap.
 const LINKS = [
   { href: "/", label: "Chat", icon: MessagesSquare },
   { href: "/history", label: "History", icon: History },
   { href: "/schema", label: "Schema", icon: Network },
   { href: "/corpus", label: "Corpus", icon: Boxes },
   { href: "/audit", label: "Audit", icon: ScrollText },
+  { href: "/settings", label: "Settings", icon: Settings2 },
 ] as const;
 
 function isActive(pathname: string, href: string): boolean {
   return href === "/" ? pathname === "/" : pathname.startsWith(href);
 }
 
-/** The shared link list, reused by the desktop rail and the mobile sheet. */
+/** The shared link list, reused by the desktop rail and the mobile sheet, filtered to the tier. */
 function NavLinks({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+  const { data: caps } = useCapabilities();
+  const tier = resolveTier(caps, useDisplayModeOverride());
+
   return (
     <>
-      {LINKS.map(({ href, label, icon: Icon }) => (
+      {LINKS.filter(({ href }) => tierReaches(tier, href)).map(({ href, label, icon: Icon }) => (
         <Link
           key={href}
           href={href}
@@ -76,10 +86,7 @@ export function Nav() {
     <aside className="hidden h-full w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground lg:flex">
       <div className="flex h-14 items-center justify-between gap-2 border-b px-4">
         <span className="font-mono text-sm font-semibold tracking-tight">governed-bi</span>
-        <div className="flex items-center gap-1">
-          <DisplayModeToggle />
-          <ThemeToggle />
-        </div>
+        <ThemeToggle />
       </div>
 
       <nav className="flex-1 space-y-1 p-2">
@@ -119,46 +126,15 @@ export function MobileNav() {
         </Sheet>
         <span className="font-mono text-sm font-semibold tracking-tight">governed-bi</span>
       </div>
-      <div className="flex items-center gap-1">
-        <DisplayModeToggle />
-        <ThemeToggle />
-      </div>
+      <ThemeToggle />
     </header>
   );
 }
 
-/**
- * UtkuAI Phase 1b follow-up: a live, in-UI Simple/Audit switch so a user can
- * flip modes themselves — e.g. to demo the plain-language business-user view,
- * then flip to Audit to show the underlying SQL/pipeline, all in one session —
- * without editing `governed_bi.toml`'s `ui_display_mode` and restarting the
- * backend. The override (`lib/display-mode.ts`) always wins over whatever
- * `/capabilities` reports; clicking again clears it back to the backend default.
- */
-function DisplayModeToggle() {
-  const { data: caps } = useCapabilities();
-  const override = useDisplayModeOverride();
-  const simple = effectiveSimpleMode(caps, override);
-
-  return (
-    <button
-      type="button"
-      onClick={() => setDisplayModeOverride(simple ? "audit" : "simple")}
-      aria-label={simple ? "Switch to Audit view" : "Switch to Simple view"}
-      title={
-        simple
-          ? "Simple view (click for Audit: SQL + pipeline)"
-          : "Audit view (click for Simple: plain-language only)"
-      }
-      className="flex items-center gap-1 rounded-md px-1.5 py-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-    >
-      {simple ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-      <span className="hidden font-mono text-[10px] uppercase tracking-wide xl:inline">
-        {simple ? "Simple" : "Audit"}
-      </span>
-    </button>
-  );
-}
+// The Simple/Audit eye button used to sit in this header. It is gone, replaced by `/settings`:
+// it was a two-state control with no label, next to the theme toggle, changing what an entire
+// application shows — and there was no way for it to say what either state meant. A role is not a
+// display preference. See `docs/utkuai-role-tiers-and-clarification-cancel.md`.
 
 function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
@@ -186,9 +162,18 @@ function ThemeToggle() {
 
 function CapabilitiesStrip() {
   const { data: caps } = useCapabilities();
+  const tier = resolveTier(caps, useDisplayModeOverride());
 
   return (
     <div className="border-t p-3 text-xs text-muted-foreground">
+      {/* The tier is named here because the rail above it is filtered by it. A visitor who cannot
+          find Corpus should be able to see why without opening Settings to find out. */}
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="font-medium capitalize text-foreground">{tier}</span>
+        <Link href="/settings" className="underline underline-offset-2 hover:text-foreground">
+          change
+        </Link>
+      </div>
       <div className="flex items-center gap-2">
         <span
           className={cn(

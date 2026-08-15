@@ -16,6 +16,8 @@ import {
   terminalOf,
   whyLines,
 } from "@/lib/answer-delivery";
+import { tierShowsAudit, tierShowsSql } from "@/lib/capabilities";
+import type { Tier } from "@/lib/display-mode";
 import { buildStepsFromLedger, type TimelineStep } from "@/lib/steps";
 import { cn } from "@/lib/utils";
 import type { AnswerView } from "@/lib/types";
@@ -26,21 +28,30 @@ import type { AnswerView } from "@/lib/types";
  * from the engine's `outcome` + ledger terminal, and a component reading either directly
  * is a second copy of that rule.
  *
- * **`showAudit=false` is the business-user view** (UtkuAI Phase 1b): the answer and its
- * reliability stamp, without the SQL, the provenance drawer, the corpus pin or the step
- * trace. It is a prop and not a hook read here on purpose — the caller decides, because
- * `/audit` renders this same card and a page named Audit must not hide its audit.
- * `components/chat/message-list.tsx` is the one caller that passes `false`.
+ * **How much of it shows depends on the role tier**, and the split is by what a reader can act on:
+ *
+ * - `business` — the answer and its reliability stamp. Nothing else: a number's trustworthiness is
+ *   not an advanced feature, but the statement that produced it is not something this reader can
+ *   check.
+ * - `analyst` — plus the SQL and which schemas were considered. Someone answering other people's
+ *   questions has to be able to see what was actually asked of the database.
+ * - `engineer` — plus the provenance drawer, the corpus pin and the reasoning trace.
+ *
+ * A prop and not a hook read here, on purpose: the caller decides, because `/audit` renders this
+ * same card and a page named Audit must not hide its audit. Defaults to `engineer`;
+ * `components/chat/message-list.tsx` is the one caller that narrows it.
  */
 export function AnswerCard({
   answer,
   steps,
-  showAudit = true,
+  tier = "engineer",
 }: {
   answer: AnswerView;
   steps?: TimelineStep[];
-  showAudit?: boolean;
+  tier?: Tier;
 }) {
+  const showSql = tierShowsSql(tier);
+  const showAudit = tierShowsAudit(tier);
   const delivery = deriveDelivery(answer);
   const provenance = provenanceOf(answer);
   const why = whyLines(provenance);
@@ -110,8 +121,10 @@ export function AnswerCard({
                 to the model inside the turn and records the statement, not the result set.
                 Rendering an empty table would say "the query returned nothing", which is a
                 different claim from "we did not keep them". */}
-            {showAudit && sql && <SqlBlock sql={sql} />}
-            {schemasNote && (
+            {showSql && sql && <SqlBlock sql={sql} />}
+            {/* The "schemas considered" line rides with the SQL: both answer "what did it look
+                at", and one without the other is half a sentence. */}
+            {showSql && schemasNote && (
               <p className="text-xs text-muted-foreground">{schemasNote}</p>
             )}
             {showAudit && (

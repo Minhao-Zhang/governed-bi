@@ -4,6 +4,7 @@
  * rather than assuming.
  */
 
+import type { Tier } from "@/lib/display-mode";
 import type { Capabilities } from "@/lib/types";
 
 /** Editing affordances show only when the backend reports it can edit. */
@@ -72,26 +73,73 @@ export function canCurateCorpus(caps: Capabilities | undefined): boolean {
 }
 
 /**
- * UtkuAI Phase 1b: the backend wants the business-user view (plain-language
- * answer + reliability only, no SQL/pipeline) by default. The payload is
- * unchanged either way — this only picks the frontend's default rendering; a
- * user may still reveal the audit view client-side (see `chat/conversation.tsx`).
+ * **The one function that decides which tier this browser renders as.**
+ *
+ * Local override (`/settings`, persisted in `lib/display-mode.ts`) beats the server's
+ * `ui_display_mode`, which beats the safest default. Everything that branches on tier calls this
+ * — `nav.tsx` for which surfaces exist, `message-list.tsx` for how much of an answer card shows —
+ * so there is one place the precedence lives.
+ *
+ * **`business` is the default when nothing says otherwise**, and that direction is deliberate. The
+ * tiers differ in what they *expose*: `/audit` returns every thread's SQL and an absolute log path,
+ * and `/history` lists the server's threads rather than the caller's. Defaulting to the tier that
+ * shows least means a misconfiguration hides things rather than leaking them. It also means a
+ * fresh browser starts business-facing, which is the product this is.
+ *
+ * The server half is **not wired**: the engine never populates `ui_display_mode`
+ * (`grep -r ui_display_mode src/` is empty). The read stays here so a future multi-tenant server
+ * can set it per tenant with no change to any screen — see
+ * `docs/utkuai-role-tiers-and-clarification-cancel.md`.
  */
-export function isSimpleUiMode(caps: Capabilities | undefined): boolean {
-  return caps?.ui_display_mode === "simple";
+export function resolveTier(
+  caps: Capabilities | undefined,
+  override: Tier | null,
+): Tier {
+  if (override !== null) return override;
+  const fromServer = caps?.ui_display_mode;
+  if (fromServer === "business" || fromServer === "analyst" || fromServer === "engineer") {
+    return fromServer;
+  }
+  // The two-state spellings this replaced. Mapped rather than ignored so a server still sending
+  // them keeps working; see `lib/display-mode.ts` for the same mapping on the stored override.
+  if (fromServer === "simple") return "business";
+  if (fromServer === "audit") return "engineer";
+  return "business";
 }
 
-/**
- * Effective simple/audit mode: an in-UI toggle (`lib/display-mode.ts`) always
- * wins over the backend's `/capabilities` default, so a user can flip modes
- * live in one session without touching `governed_bi.toml` or restarting the
- * backend. See `useEffectiveSimpleMode` for the reactive hook form.
+/** Which sidebar surfaces a tier may reach, and the reason each exclusion is not taste.
+ *
+ * - **History is not in `business`** because `lib/threads.ts` lists the *server's* threads, not
+ *   the caller's. Until threads are per-principal, a business user would read other people's
+ *   questions.
+ * - **Corpus is not in `analyst`** because curating the semantic layer changes what the engine
+ *   answers for everyone. It stays additionally gated on `can_curate_corpus`: one gate asks
+ *   whether this person may curate, the other whether this deployment can curate at all.
+ * - **Audit is `engineer` only** because it returns every thread's SQL, the complete turn records
+ *   and `TURN_LOG_DIR` as an absolute path.
+ *
+ * `/settings` is absent from this map on purpose — it is reachable at every tier, so gating it
+ * would be a rule with no false case, and a tier that could not get back out of itself is a trap.
  */
-export function effectiveSimpleMode(
-  caps: Capabilities | undefined,
-  override: "simple" | "audit" | null,
-): boolean {
-  if (override === "simple") return true;
-  if (override === "audit") return false;
-  return isSimpleUiMode(caps);
+const REACHABLE: Record<Tier, readonly string[]> = {
+  business: ["/"],
+  analyst: ["/", "/schema", "/history"],
+  engineer: ["/", "/schema", "/history", "/corpus", "/audit"],
+};
+
+/** Whether `href` is a surface `tier` may reach. `/settings` is always true. */
+export function tierReaches(tier: Tier, href: string): boolean {
+  return href === "/settings" || REACHABLE[tier].includes(href);
+}
+
+/** How much of an answer card a tier sees. Named rather than inlined because two components
+ * branch on it (`answer-card.tsx`, `serve-progress.tsx`) and a second copy of the rule would
+ * drift the first time a tier changed. */
+export function tierShowsSql(tier: Tier): boolean {
+  return tier !== "business";
+}
+
+/** The provenance drawer, the corpus pin and the reasoning timeline — the audit surfaces. */
+export function tierShowsAudit(tier: Tier): boolean {
+  return tier === "engineer";
 }

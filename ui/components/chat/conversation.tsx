@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { MessageSquareText } from "lucide-react";
 
 import { ClarificationPrompt } from "@/components/chat/clarification-prompt";
@@ -7,6 +8,7 @@ import { Composer } from "@/components/chat/composer";
 import { MessageList } from "@/components/chat/message-list";
 import { useAssets } from "@/hooks/queries";
 import type { ChatTransport } from "@/hooks/use-chat";
+import { api } from "@/lib/api-client";
 
 /**
  * The chat cockpit's shared view: a full-height column where the transcript
@@ -30,9 +32,39 @@ export function Conversation({
   header,
 }: ChatTransport & { banner?: React.ReactNode; header?: React.ReactNode }) {
   const isEmpty = messages.length === 0 && !isRunning;
-  // While the agent is waiting on a clarification the turn is paused; the user
-  // answers the question, not sends a new turn, so lock the composer.
-  const pendingClarification = clarification != null && respondClarification != null;
+  //: Questions this user has abandoned. Held here rather than in the transport because cancelling
+  //: is not a transport event: the graph thread stays paused and is simply never resumed (the LRU
+  //: evicts it), so there is nothing for `useStream` to be told. Keeping it local also means the
+  //: `ChatTransport` interface — which upstream owns — does not move.
+  const [cancelled, setCancelled] = useState<ReadonlySet<string>>(() => new Set());
+
+  // While the agent is waiting on a clarification the turn is paused; the user answers the
+  // question, not sends a new turn, so lock the composer. A cancelled question stops counting as
+  // pending, which is what unlocks it again.
+  const pendingClarification =
+    clarification != null &&
+    respondClarification != null &&
+    !cancelled.has(clarification.clarification_id);
+
+  async function cancelPending(id: string) {
+    // Optimistic, and deliberately so: the button's job is to give the composer back, and the
+    // ledger write is bookkeeping the user is not waiting on. A failed write leaves a row `open`,
+    // which is the same state it was already in.
+    setCancelled((prev) => new Set(prev).add(id));
+    // **And stop the run.** Dropping the prompt is not enough: the composer is locked on
+    // `isRunning || pendingClarification`, and `useStream` keeps reporting the run as in flight
+    // while the graph sits at the interrupt — so without this the question disappears and the
+    // input stays dead, which is a worse trap than the one this button exists to fix. Found by
+    // clicking it. Stopping is also the honest reading: the turn *is* abandoned.
+    stop?.();
+    try {
+      await api.cancelClarification(id);
+    } catch (err) {
+      // Not a toast: from here the question is gone from the user's screen either way, and an
+      // error about a ledger they cannot see is noise. The admin queue is where it shows up.
+      console.warn(`could not record the cancellation of ${id}`, err);
+    }
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -65,14 +97,21 @@ export function Conversation({
       <div className="border-t pt-4">
         <div className="mx-auto w-full max-w-5xl">
           {pendingClarification && (
-            <ClarificationPrompt request={clarification} onRespond={respondClarification} />
+            <ClarificationPrompt
+              request={clarification}
+              onRespond={respondClarification}
+              onCancel={() => void cancelPending(clarification.clarification_id)}
+            />
           )}
           {banner}
-          {/* A pending clarification locks the composer the same way a running
-              turn does — the user answers the question rather than starting a new
-              turn. But it withholds Stop: Decline is the governed way out (it
-              fails the turn closed, stamped `clarification_declined`), whereas
-              aborting mid-interrupt abandons it with nothing recorded. */}
+          {/* A pending clarification locks the composer the same way a running turn does — the
+              user answers the question rather than starting a new turn — and withholds Stop,
+              because aborting mid-interrupt abandons the turn with nothing recorded.
+              *
+              This used to say Decline was the governed way out. It is not offered: this fork
+              replaced it with Defer and hides Defer for `ranking_ambiguity`, which left that
+              basis with no exit at all. The prompt's own Cancel button is the exit now, and it
+              records what happened. */}
           <Composer
             onSend={send}
             isRunning={isRunning || pendingClarification}
