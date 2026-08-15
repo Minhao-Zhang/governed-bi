@@ -1,6 +1,6 @@
 # Role tiers, a Settings surface, and cancelling a clarification
 
-**Status:** approved 2026-08-15, implementing. This fork's design, not upstream's.
+**Status:** implemented and verified live, 2026-08-15. This fork's design, not upstream's.
 **Branch:** `ryan/merge-upstream-0814`.
 **Why this file is here and not in `docs/adr/`:** the ADR sequence is numbered and upstream owns
 it. A fork-local `0014` would collide the first time upstream adds one — the same defect the
@@ -42,7 +42,9 @@ In: role tiers, a Settings surface, cancelling a clarification, and dropping the
 *"配色我不知道你抓的對不對，能先不處理配色"* — and they were right that it was being guessed at.
 Recorded below under *Deferred* with the one fact that makes it cheap later.
 
-**Out:** the `allow_user_clarification` toggle. See *Three client-only halves*.
+**Out of this round, done in the next one the same day:** the engine switches. See *Three
+client-only halves* for why they were deferred and the 2026-08-15 update at the end for what
+closing them corrected — including that the name in this sentence turned out not to be a knob.
 
 ---
 
@@ -53,9 +55,9 @@ while never having run:
 
 | Field / control | Client | Server |
 |---|---|---|
-| `POST /settings/allow-user-clarification` | full client: schema, `api-client` method, `ClarificationToggle` component | **route does not exist**, on either branch. `api-client.ts` cites `api/runtime_toggles.py`, which does not exist either. |
-| `capabilities.can_edit` | `ClarificationToggle` renders only when true | **hardcoded `False`** (`routes.py:319`) — so the control above can never appear |
-| `capabilities.ui_display_mode` | declared in `schemas.ts`, read by `isSimpleUiMode` | **never populated.** `grep -r ui_display_mode src/` is empty; the live response has no such key |
+| `POST /settings/allow-user-clarification` | full client: schema, `api-client` method, `ClarificationToggle` component | **route does not exist**, on either branch. `api-client.ts` cites `api/runtime_toggles.py`, which does not exist either. **Closed 2026-08-15 by deleting the client half** — there is no such knob to wire it to; the switches that exist are at `/settings/toggles`. |
+| `capabilities.can_edit` | `ClarificationToggle` renders only when true | **hardcoded `False`** (`routes.py:319`) — so the control above can never appear. **Closed with the component**; nothing this fork adds gates on it. |
+| `capabilities.ui_display_mode` | declared in `schemas.ts`, read by `isSimpleUiMode` | **never populated.** `grep -r ui_display_mode src/` is empty; the live response has no such key. **Still open**, and deliberately: a tier is per-principal and waits on multi-tenancy. |
 
 The third is why this design's tier is **client-side only**. The wire field stays declared, the
 server keeps not filling it, and that is stated rather than papered over: a future multi-tenant
@@ -63,10 +65,11 @@ server sets it and every screen below already honours it, with no interface chan
 the deliverable; the server half is not in this round.
 
 `allow_user_clarification` is worse than unfilled — it is **not in the knob register at all**
-(`governed_bi.local.toml`'s `[serve]` section is read by nothing). Wiring it needs a writable
-runtime knob, a route, and a decision about where an override persists. That is backend work on
-a register upstream also owns, and mixing it into a UI round would slow the two changes the
-owner actually asked for.
+(`governed_bi.local.toml`'s `[serve]` section is read by nothing), which is why a clarification
+fires regardless of what that file says. Wiring it needs a writable runtime knob, a route, and a
+decision about where an override persists; that was deferred out of this round and built the same
+day. The answer turned out to be that the name was wrong rather than the plumbing missing — see
+the 2026-08-15 update at the end.
 
 ---
 
@@ -216,7 +219,87 @@ Not "tests pass" — every claim below is checked by running it:
 | | Needs |
 |---|---|
 | **UChicago palette** | a decision on how far it goes (accent only vs full re-skin) and whether the four semantic tier colours move onto the secondary palette. ~40 values in `app/globals.css`, no component edits. |
-| **`allow_user_clarification` toggle** | a writable runtime knob in a register upstream owns, a route, and a persistence decision. Or: delete the client half. |
-| **Server-driven tier** | populate `capabilities.ui_display_mode`. Needs the same writable-knob mechanism as the row above, or a per-principal source once multi-tenancy exists. |
+| ~~**`allow_user_clarification` toggle**~~ | **Done 2026-08-15, and the answer was that the name was wrong.** There is no such knob; the two that exist (`enable_clarification_to_draft`, `enable_mistake_memory_mining`) are now writable through `serve/runtime_overrides.py` and `POST /settings/toggles/{name}`. The client half was deleted rather than wired. See the section below. |
+| **Server-driven tier** | populate `capabilities.ui_display_mode`. The writable-knob mechanism now exists, but a tier is per-*principal* and a knob is per-*deployment*, so this waits on multi-tenancy rather than on plumbing. |
 | **Defer's reliability caveat on the answer card** | the field is declared and no longer stripped (2026-08-14); nothing renders it. |
 | **The clarification question's own wording** | prompt work with a measured arm, alongside ANALYST v10. |
+
+
+---
+
+## Update 2026-08-15 — the switches, and two defects only clicking them found
+
+The deferred row above is closed, and closing it corrected the plan twice.
+
+### It is two knobs, not three, and "operational" was the wrong gate
+
+The plan named three toggles. `enable_structured_percentage_check` is declared
+`Role.comparability` — its own note says "a run with it on is not comparable to one without" — so
+changing it from a switch would make two runs incomparable with nothing recording that a human did
+it. That belongs in `arms.toml`, which exists to name such a change and reconcile it against an
+artifact. Two knobs are exposed: `enable_clarification_to_draft` and `enable_mistake_memory_mining`.
+
+And the first design gated on the `operational` role, which is wrong for a sharper reason: that
+role also carries `git_sha`, `git_main_sha`, `working_tree_dirty` and `diff_sha256` — the fields by
+which a measurement says *which code produced it*. A UI able to write any operational knob could
+**forge a run's provenance**. Toggleability is a second, explicit decision per knob
+(`serve/runtime_overrides.py::TOGGLEABLE`), and a test asserts the provenance four are absent.
+
+### Every row says where its value came from
+
+`describe()` returns a `source` of `default` / `override` / `environment` per knob, and the UI
+renders it. Without that field a client cannot tell an operator that a switch is pinned by an
+exported variable and would render a control that silently does nothing — the exact class this
+round exists to end. An environment-pinned knob is listed as not editable, names the variable, and
+a write to it is **409** rather than accepted-and-ignored: accepting it would leave the interface
+showing a value the engine does not use, which is the same lie in a new place.
+
+Precedence is default → policy → resolvers → **override** → environment. An exported variable is
+how an eval arm pins a run.
+
+### An override is recorded, never hidden
+
+It is layered by the two readers that mint a claim — `Session.turn` and `capabilities_for` — so it
+lands in every turn's `knobs_resolved`. That means `measure/gates.py::_knobs_resolved_gate` sees a
+mid-run flip as configuration drift and **fails that arm**, which is correct rather than a
+limitation: `enable_clarification_to_draft`'s own declaration says it "changes the corpus on disk
+between two turns of the SAME run".
+
+### Two defects, both found by clicking, both mine
+
+1. **Setting a switch changed nothing a node reads.** `_resolved_knobs` runs once at session
+   construction and `Session.turn` copies its output, so an override written after boot never
+   reached the turn `mine_corpus` reads its knob off. The feature reported success and did nothing
+   — a control with no server behind it, built in reverse.
+2. **Then clearing one changed nothing either.** The fix above layered the override in *two* places,
+   including inside `_resolved_knobs`, so a session built while a switch was on baked `True` into
+   its base and layering `{}` over that still resolved `True`. A switch that turns on and will not
+   turn off is worse than one that does neither, because the operator cannot tell which state the
+   engine is in. The base is clean now; the two readers own the layering.
+
+A third, smaller: nothing isolated the test suite from the real override file, so a switch flipped
+in a browser changed what the suite asserted. It surfaced as one API test failing on one machine.
+Now an autouse fixture in `tests/conftest.py`, repository-wide, because the failure mode is a test
+that never thought about the file.
+
+### The loop ran end to end for the first time
+
+With the switch on from the UI, a `data_definition` clarification answered **in chat** wrote
+`clarification.app_store.01e4b2e6842db898` as `proposed` — the corpus went from 5
+clarification-derived assets to 6. That path has existed since the 8/11 port and had never been
+reachable, because there was no way to turn the knob on. Clearing the switch from the route returned
+`/capabilities` to `false` in the same session.
+
+Worth recording alongside: the question the model asked on that turn was markedly better copy than
+the one that started this round — *"two columns that look like they should both hold the app's name,
+but on the same row they actually show different, unrelated app names"* — no row counts, no column
+casing. Part of that is the filler `why` being gone; the rest is the model, and it is not measured.
+
+### The scope gate blocked this verification three times
+
+Recorded because it is now the most reproducible instance of a defect nothing tracks. While trying
+to reach a `data_definition` pause: *"How many active apps are in the playstore?"* produced a
+`data_definition` clarification twice earlier in the session and then `refused by guard`; *"Which
+are the best apps in the play store?"* clarified once and refused twice; *"very best"* refused. Two
+further phrasings clarified as `ranking_ambiguity`, which `mine_corpus` skips by design. It took
+five live turns to get one usable pause.
