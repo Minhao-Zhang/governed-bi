@@ -25,8 +25,22 @@ import type { AnswerView } from "@/lib/types";
  * unverified warning), or hard refusal. Branch on `deriveDelivery` — it owns the mapping
  * from the engine's `outcome` + ledger terminal, and a component reading either directly
  * is a second copy of that rule.
+ *
+ * **`showAudit=false` is the business-user view** (UtkuAI Phase 1b): the answer and its
+ * reliability stamp, without the SQL, the provenance drawer, the corpus pin or the step
+ * trace. It is a prop and not a hook read here on purpose — the caller decides, because
+ * `/audit` renders this same card and a page named Audit must not hide its audit.
+ * `components/chat/message-list.tsx` is the one caller that passes `false`.
  */
-export function AnswerCard({ answer, steps }: { answer: AnswerView; steps?: TimelineStep[] }) {
+export function AnswerCard({
+  answer,
+  steps,
+  showAudit = true,
+}: {
+  answer: AnswerView;
+  steps?: TimelineStep[];
+  showAudit?: boolean;
+}) {
   const delivery = deriveDelivery(answer);
   const provenance = provenanceOf(answer);
   const why = whyLines(provenance);
@@ -96,25 +110,27 @@ export function AnswerCard({ answer, steps }: { answer: AnswerView; steps?: Time
                 to the model inside the turn and records the statement, not the result set.
                 Rendering an empty table would say "the query returned nothing", which is a
                 different claim from "we did not keep them". */}
-            {sql && <SqlBlock sql={sql} />}
+            {showAudit && sql && <SqlBlock sql={sql} />}
             {schemasNote && (
               <p className="text-xs text-muted-foreground">{schemasNote}</p>
             )}
-            <div className="flex items-center gap-2 pt-1">
-              <ProvenanceDrawer provenance={provenance} />
-              {/* Which pinned corpus answered — quiet, but on the card: reproducibility is
-                  a property of the answer, not of the drawer. */}
-              {corpusNote && (
-                <span className="font-mono text-xs text-muted-foreground">{corpusNote}</span>
-              )}
-            </div>
+            {showAudit && (
+              <div className="flex items-center gap-2 pt-1">
+                <ProvenanceDrawer provenance={provenance} />
+                {/* Which pinned corpus answered — quiet, but on the card: reproducibility is
+                    a property of the answer, not of the drawer. */}
+                {corpusNote && (
+                  <span className="font-mono text-xs text-muted-foreground">{corpusNote}</span>
+                )}
+              </div>
+            )}
           </>
         )}
 
         {/* Governed step trace in the main thread — starts expanded so routing /
             assembly / corpus hit dropdowns stay visible after the live placeholder
             is replaced. The Provenance sheet keeps the compact collapsed form. */}
-        {timeline.length > 0 && (
+        {showAudit && timeline.length > 0 && (
           <div className="border-t pt-3">
             <AgentTimeline steps={timeline} isRunning={false} defaultExpanded />
           </div>

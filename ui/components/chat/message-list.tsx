@@ -4,7 +4,10 @@ import { useEffect, useRef } from "react";
 
 import { AnswerCard } from "@/components/answer/answer-card";
 import { ServeProgress } from "@/components/chat/serve-progress";
+import { useCapabilities } from "@/hooks/queries";
 import type { ChatMessage } from "@/hooks/use-chat";
+import { effectiveSimpleMode } from "@/lib/capabilities";
+import { useDisplayModeOverride } from "@/lib/display-mode";
 import type { TimelineStep } from "@/lib/steps";
 
 /**
@@ -13,6 +16,12 @@ import type { TimelineStep } from "@/lib/steps";
  * placeholder assistant bubble shows the running progress — the live agent
  * timeline, or a plain spinner before the first event / on the REST fallback.
  * Auto-scrolls to the newest turn as messages arrive or progress advances.
+ *
+ * **This is where the Simple/Audit choice is read** (UtkuAI Phase 1b), and it is read here
+ * rather than passed down from `conversation.tsx` because this is the lowest component that
+ * knows it is rendering *the chat transcript*. `AnswerCard` also renders on `/audit`, where
+ * hiding the audit would be absurd, so the card takes a prop and defaults to showing
+ * everything; only this caller turns it off.
  */
 export function MessageList({
   messages,
@@ -27,6 +36,12 @@ export function MessageList({
    * the running-progress view mounted beside the prompt. */
   awaitingClarification?: boolean;
 }) {
+  const { data: caps } = useCapabilities();
+  const override = useDisplayModeOverride();
+  //: The in-UI toggle wins over the backend's `/capabilities` default, so a user can flip
+  //: modes live without restarting the engine (`lib/display-mode.ts`).
+  const showAudit = !effectiveSimpleMode(caps, override);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   // The pipeline is either actively running or paused waiting on the user; both
   // keep the live agent timeline on screen.
@@ -55,7 +70,7 @@ export function MessageList({
         ) : (
           <div key={message.id} className="w-full">
             {message.answer ? (
-              <AnswerCard answer={message.answer} steps={message.steps} />
+              <AnswerCard answer={message.answer} steps={message.steps} showAudit={showAudit} />
             ) : (
               // Defensive: assistant turns carry an AnswerView in practice.
               <p className="text-sm text-muted-foreground">{message.text}</p>
@@ -68,7 +83,7 @@ export function MessageList({
           also shown while suspended at a clarification, so the timeline stays. */}
       {inProgress && (
         <div className="w-full rounded-lg border bg-card p-4">
-          <ServeProgress isRunning={inProgress} steps={steps} />
+          <ServeProgress isRunning={inProgress} steps={steps} showAudit={showAudit} />
         </div>
       )}
 

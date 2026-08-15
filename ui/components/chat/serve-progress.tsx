@@ -16,14 +16,29 @@ import type { TimelineStep } from "@/lib/steps";
  * Nothing here keys on a step name. Every stage-name assumption lives in
  * `lib/steps.ts` (the vocabulary) and <AgentTimeline/> (the phases), so a stage
  * the engine renames or adds cannot reach this file.
+ *
+ * **`showAudit=false` collapses all of it to one line** (UtkuAI Phase 1b): the pipeline is
+ * the thing the business-user view exists not to show, and a stage list is the most audit-y
+ * surface in the app. The spinner still says something is happening, because a view with no
+ * progress indicator reads as a hung page.
  */
 export function ServeProgress({
   isRunning,
   steps,
+  showAudit = true,
 }: {
   isRunning: boolean;
   steps?: TimelineStep[];
+  showAudit?: boolean;
 }) {
+  if (!showAudit) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+        <span>Working on your answer…</span>
+      </div>
+    );
+  }
   if (steps && steps.length > 0) {
     return (
       <AgentTimeline
