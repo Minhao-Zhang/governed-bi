@@ -33,6 +33,10 @@ export function StreamChat() {
       clarification={clarification}
       respondClarification={respondClarification}
       header={<ConversationBar threadId={threadId} onNew={() => setThreadId(null)} />}
+      // Cancelling a clarification has to leave the thread, not just close the prompt: the graph
+      // is paused at an `interrupt()` and will refuse a new turn until it is answered. Same call
+      // the New button makes, for the same reason.
+      onAbandonThread={() => setThreadId(null)}
     />
   );
 }
