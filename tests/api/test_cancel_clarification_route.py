@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any
 
 from contracts import needs
-
 from governed_bi.curator.clarifications import (
     ClarificationRecord,
     ClarificationRecordStatus,
