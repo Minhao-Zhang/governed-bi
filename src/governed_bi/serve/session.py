@@ -395,6 +395,19 @@ def _resolved_knobs(policy: Any) -> dict[str, Any]:
     if callable(digest):
         knobs["access_grant"] = digest()
     knobs["sqlglot_version"] = sqlglot_version()
+    # The operator's own switches, **before** the environment and after everything else. An
+    # exported variable is how an eval arm pins a run, so a switch that overrode one would make the
+    # artifact lie about the run it came from; `runtime_overrides.describe` reports the source so a
+    # UI can say "pinned by the environment" rather than offer a dead control.
+    #
+    # Applied *here*, inside the function that builds the record, on purpose: that is what puts an
+    # override into every turn's `knobs_resolved`, which is what lets
+    # `measure/gates.py::_knobs_resolved_gate` see a mid-run flip as configuration drift and fail
+    # the arm. Reading the switch at the point of use instead would change behaviour while the
+    # record went on reporting the default -- the defect this docstring's own third bullet is about.
+    from .runtime_overrides import overrides as runtime_overrides
+
+    knobs.update(runtime_overrides())
     for name in knobs:
         override = env_override(name)
         if override is not None:
