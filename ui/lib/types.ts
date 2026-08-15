@@ -6,7 +6,7 @@
 
 import type { z } from "zod";
 import type {
-  allowUserClarificationResponseSchema,
+  runtimeToggleSchema,
   answerViewSchema,
   assetRowSchema,
   assumptionRowSchema,
@@ -86,7 +86,7 @@ export type AssetRow = z.infer<typeof assetRowSchema>;
 export type AssumptionRow = z.infer<typeof assumptionRowSchema>;
 export type ConflictRow = z.infer<typeof conflictRowSchema>;
 export type ConflictResolveResponse = z.infer<typeof conflictResolveResponseSchema>;
-export type AllowUserClarificationResponse = z.infer<typeof allowUserClarificationResponseSchema>;
+export type RuntimeToggle = z.infer<typeof runtimeToggleSchema>;
 export type ColumnRelated = z.infer<typeof columnRelatedResponseSchema>;
 export type ResultTable = z.infer<typeof resultTableSchema>;
 export type AnswerView = z.infer<typeof answerViewSchema>;

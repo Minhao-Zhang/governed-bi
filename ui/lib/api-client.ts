@@ -37,7 +37,6 @@ import {
   filterSummaryItems,
 } from "@/lib/graph-scope";
 import {
-  allowUserClarificationResponseSchema,
   answerViewSchema,
   assetListSchema,
   assumptionListSchema,
@@ -49,6 +48,8 @@ import {
   capabilitiesSchema,
   clarificationListSchema,
   clarificationRecordSchema,
+  runtimeToggleListSchema,
+  runtimeToggleSchema,
   columnRelatedResponseSchema,
   conflictListSchema,
   conflictResolveResponseSchema,
@@ -61,7 +62,6 @@ import {
   tableViewSchema,
 } from "@/lib/schemas";
 import type {
-  AllowUserClarificationResponse,
   AnswerView,
   AssetRow,
   AssumptionRow,
@@ -74,6 +74,7 @@ import type {
   CorpusWhere,
   ChatTurn,
   ClarificationRecord,
+  RuntimeToggle,
   ColumnRelated,
   ConflictResolveResponse,
   ConflictRow,
@@ -392,6 +393,25 @@ export const api = {
     );
   },
 
+  /** Engine switches an operator may flip, with where each current value came from
+   * (GET /settings/toggles). */
+  toggles: (): Promise<RuntimeToggle[]> =>
+    get("/settings/toggles", runtimeToggleListSchema, []),
+
+  /** Set one switch, or clear it back to its default with `null`
+   * (POST /settings/toggles/{name}). Returns the resulting row, so the caller renders what the
+   * engine actually resolved rather than what it asked for — the two differ when the environment
+   * pins the knob, which is a 409. */
+  setToggle: (name: string, value: boolean | null): Promise<RuntimeToggle> => {
+    if (USE_MOCKS) {
+      return Promise.resolve({
+        name, value, source: value === null ? "default" : "override",
+        default: false, why: "Mock transport: no engine attached.", editable: true, env_var: null,
+      });
+    }
+    return post(`/settings/toggles/${encodeURIComponent(name)}`, { value }, runtimeToggleSchema);
+  },
+
   /** Phase 1 elicitation wizard candidates — open AND answered
    * ``source="elicitation_wizard"`` ledger records (GET /elicitation/candidates).
    * Answer the same way as any other clarification, via `answerClarification`. */
@@ -420,18 +440,6 @@ export const api = {
     return post("/elicitation/generate", {}, elicitationGenerateResponseSchema);
   },
 
-  /** Flip the live `allow_user_clarification` override (POST
-   * /settings/allow-user-clarification; dev, gated on can_edit). Effective on
-   * the very next request — no restart. Callers should refetch `/capabilities`
-   * afterward so tab visibility etc. picks up the new value immediately. */
-  setAllowUserClarification: (enabled: boolean): Promise<AllowUserClarificationResponse> => {
-    if (USE_MOCKS) return Promise.resolve({ allow_user_clarification: enabled });
-    return post(
-      "/settings/allow-user-clarification",
-      { enabled },
-      allowUserClarificationResponseSchema,
-    );
-  },
 
   /* ── the audit surface ─────────────────────────────────────────────────── */
   //

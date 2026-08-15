@@ -313,6 +313,9 @@ def capabilities_for(session: Any) -> dict[str, Any]:
     """``/capabilities``' body. Every field is an observation (ADR 0007 §7)."""
     #: Bound once so ``can_clarify`` cannot drift from ``can_stream``.
     can_stream = True
+    from governed_bi.serve.runtime_overrides import overrides as _live_overrides
+
+    live_knobs = {**session.knobs_resolved, **_live_overrides()}
     return {
         "environment": "local",
         "dialect": getattr(session.connector, "dialect", "postgres"),
@@ -341,12 +344,17 @@ def capabilities_for(session: Any) -> dict[str, Any]:
         # `bool_knob`'s first precedence tier already checks, so these are the register's
         # declared values unless a deployment overrode them -- never a second literal that
         # could drift from what a turn actually used.
+        #
+        # Layered with the operator's live switches for the same reason `Session.turn` is:
+        # `session.knobs_resolved` was resolved once, at construction, so a switch flipped since
+        # then would be reported here as still off while every new turn ran with it on. This
+        # endpoint is a live claim about what the engine will do next, not a record of a past run,
+        # so it reads the current value -- and `Session.turn` is what puts that same value into the
+        # record, so the two cannot disagree.
         "enable_structured_percentage_check": bool_knob(
-            session.knobs_resolved, "enable_structured_percentage_check"
+            live_knobs, "enable_structured_percentage_check"
         ),
-        "enable_clarification_to_draft": bool_knob(
-            session.knobs_resolved, "enable_clarification_to_draft"
-        ),
+        "enable_clarification_to_draft": bool_knob(live_knobs, "enable_clarification_to_draft"),
     }
 
 

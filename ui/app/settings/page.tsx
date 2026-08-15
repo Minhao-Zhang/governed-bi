@@ -12,17 +12,29 @@
  * Reachable at every tier on purpose (`lib/capabilities.ts::tierReaches` special-cases it): a tier
  * that could not get back out of itself would be a trap.
  *
- * One section today. The next candidate is the `allow_user_clarification` switch — whether the
- * agent may pause a turn to ask — which is **not here** because its backend does not exist: no
- * route, and no writable knob in the register behind it. Adding a control for it would be a fourth
- * client-only half, which is the pattern
- * `docs/utkuai-role-tiers-and-clarification-cancel.md` exists partly to stop.
+ * **Two sections, and the split is who each one affects.** A role is a per-browser preference.
+ * Engine switches change what the deployment does for everyone it serves, so they are engineer-only
+ * — not as a security boundary (this engine binds to loopback and `api/auth.py` says reaching the
+ * port is sufficient) but because offering them to a business user would be offering a decision
+ * they have no way to evaluate.
+ *
+ * The engine switches replace `allow_user_clarification`, which had a schema, an `api-client`
+ * method and a rendered component in this fork and **no route on either branch** — the name is not
+ * in the engine's knob register at all. What is listed now is what
+ * `serve/runtime_overrides.py::TOGGLEABLE` actually allows.
  */
 
 import { PageShell } from "@/components/layout/page-shell";
+import { EngineToggles } from "@/components/settings/engine-toggles";
 import { RoleSwitcher } from "@/components/settings/role-switcher";
+import { resolveTier } from "@/lib/capabilities";
+import { useCapabilities } from "@/hooks/queries";
+import { useDisplayModeOverride } from "@/lib/display-mode";
 
 export default function SettingsPage() {
+  const { data: caps } = useCapabilities();
+  const tier = resolveTier(caps, useDisplayModeOverride());
+
   return (
     <PageShell
       title="Settings"
@@ -40,6 +52,21 @@ export default function SettingsPage() {
           </div>
           <RoleSwitcher />
         </section>
+
+        {tier === "engineer" && (
+          <section className="space-y-3">
+            <div className="space-y-1">
+              <h2 className="text-sm font-medium">Engine behaviour</h2>
+              <p className="max-w-prose text-xs text-muted-foreground">
+                These change what the engine does for <em>everyone</em> it serves, not just this
+                browser, and they take effect on the next turn. Each row says where its current
+                value came from — a switch the environment pins is disabled rather than accepting a
+                click the engine would ignore.
+              </p>
+            </div>
+            <EngineToggles />
+          </section>
+        )}
       </div>
     </PageShell>
   );

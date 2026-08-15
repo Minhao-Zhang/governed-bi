@@ -57,6 +57,15 @@ def _digest(*parts: object) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 
+def _runtime_overrides() -> dict[str, Any]:
+    """The operator's live switches. A function so the read happens per call rather than at import,
+    and so `Session.turn` names the same thing `_resolved_knobs` does.
+    """
+    from .runtime_overrides import overrides
+
+    return dict(overrides())
+
+
 @dataclass(frozen=True, slots=True)
 class Session:
     """Everything constant for one run, plus the two ways to use it."""
@@ -144,7 +153,14 @@ class Session:
             "db_id": self.db_id,
             "corpus_content_hash": self.corpus_content_hash,
             "prompt_set_hash": self.prompt_set_hash,
-            "knobs_resolved": dict(self.knobs_resolved),
+            # The operator's switches are layered on **per turn**, not just at session
+            # construction, because `_resolved_knobs` runs once and this mapping is a copy of what
+            # it produced. Without this a switch flipped after boot writes its file, reports
+            # success, and changes nothing a node reads -- the same defect as a control with no
+            # server behind it, built in reverse. Layering it here also keeps the record honest:
+            # this is the mapping the turn actually ran under, which is what
+            # `measure/gates.py::_knobs_resolved_gate` reads to catch a mid-run flip as drift.
+            "knobs_resolved": {**self.knobs_resolved, **_runtime_overrides()},
             "n_re_served": 0,
             "evidence": str(evidence or ""),
             "messages": [],
@@ -395,19 +411,13 @@ def _resolved_knobs(policy: Any) -> dict[str, Any]:
     if callable(digest):
         knobs["access_grant"] = digest()
     knobs["sqlglot_version"] = sqlglot_version()
-    # The operator's own switches, **before** the environment and after everything else. An
-    # exported variable is how an eval arm pins a run, so a switch that overrode one would make the
-    # artifact lie about the run it came from; `runtime_overrides.describe` reports the source so a
-    # UI can say "pinned by the environment" rather than offer a dead control.
-    #
-    # Applied *here*, inside the function that builds the record, on purpose: that is what puts an
-    # override into every turn's `knobs_resolved`, which is what lets
-    # `measure/gates.py::_knobs_resolved_gate` see a mid-run flip as configuration drift and fail
-    # the arm. Reading the switch at the point of use instead would change behaviour while the
-    # record went on reporting the default -- the defect this docstring's own third bullet is about.
-    from .runtime_overrides import overrides as runtime_overrides
-
-    knobs.update(runtime_overrides())
+    # **The operator's runtime switches are deliberately NOT applied here.** They are layered by the
+    # two readers that mint a claim -- `Session.turn` and `api/routes.py::capabilities_for` -- and
+    # this function is what produces the base they layer over. Applying them in both places is the
+    # bug that shipped first: a session built while a switch was on baked `True` into this mapping,
+    # so layering `{}` over it after the operator cleared the switch still resolved `True`. The
+    # switch turned on and would not turn off, which is worse than one that does neither, because
+    # the operator cannot tell which state the engine is in. Found by clicking it off.
     for name in knobs:
         override = env_override(name)
         if override is not None:

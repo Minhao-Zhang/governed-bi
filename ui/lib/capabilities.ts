@@ -43,23 +43,11 @@ export function canSearch(caps: Capabilities | undefined): boolean {
   return caps?.can_search === true;
 }
 
-/**
- * Whether the engine reports it *can* pause a turn to ask a question.
- *
- * **Never gate the clarification prompt on this.** Upstream deleted this helper for that
- * reason and the reason is right: HITL is gated on the arriving `interrupt()`, so a stale
- * flag must not be able to hide a prompt while the graph is waiting on an answer (see
- * `components/chat/clarification-prompt.tsx`).
- *
- * It survives for the one caller that is asking a different question:
- * `components/corpus/clarification-toggle.tsx`, the admin's `allow_user_clarification`
- * switch. That control is not rendering a pending question — it is offering to change a
- * setting, and a setting the engine cannot honour should read as unavailable rather than
- * silently do nothing.
- */
-export function canClarify(caps: Capabilities | undefined): boolean {
-  return caps?.can_clarify === true;
-}
+// No `canClarify` helper. Upstream deleted theirs because HITL is gated on the arriving
+// `interrupt()`, never on a flag that can be stale while the graph waits — and this fork kept one
+// for `clarification-toggle.tsx`, a component that gated on `can_edit` (hardcoded `False`, so it
+// never rendered) and posted to a route that never existed. The component is gone and so is the
+// helper. The wire field is still parsed in `lib/schemas.ts`.
 
 /**
  * Phase 5: whether this session's corpus_root is writable, i.e. whether the

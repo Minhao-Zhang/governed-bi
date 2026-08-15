@@ -103,17 +103,23 @@ def test_a_value_of_the_wrong_type_is_refused() -> None:
         runtime_overrides.set_override("enable_clarification_to_draft", "false")
 
 
-def test_the_override_reaches_knobs_resolved(monkeypatch) -> None:
-    """The point of the whole mechanism: a reader that consults ``knobs_resolved`` sees it."""
+def test_the_resolved_base_never_carries_an_override() -> None:
+    """``_resolved_knobs`` is the **clean base**, and keeping it clean is what makes clearing work.
+
+    The first cut applied overrides here *as well as* at each reader. A session built while a
+    switch was on then baked `True` into its cached mapping, so layering `{}` over it after the
+    operator cleared the switch still resolved `True` — a switch that turned on and would not turn
+    off. The two readers that mint a claim (``Session.turn``,
+    ``api/routes.py::capabilities_for``) own the layering; this function owns the base.
+    """
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve.session import _resolved_knobs
 
-    policy = GovernancePolicy(guard_rules_enabled={})
-    assert _resolved_knobs(policy)["enable_clarification_to_draft"] is False
-
     runtime_overrides.set_override("enable_clarification_to_draft", True)
 
-    assert _resolved_knobs(policy)["enable_clarification_to_draft"] is True
+    assert _resolved_knobs(GovernancePolicy(guard_rules_enabled={}))[
+        "enable_clarification_to_draft"
+    ] is False, "the base absorbed an override, so clearing it later cannot take effect"
 
 
 def test_an_environment_variable_still_wins(monkeypatch) -> None:
@@ -153,3 +159,79 @@ def test_a_toggleable_knob_is_in_the_drift_set() -> None:
             f"{name!r} is toggleable but outside resume_drift_keys(), so flipping it mid-run "
             "would pass the configuration-drift gate"
         )
+
+
+def test_an_override_set_after_boot_reaches_a_turn() -> None:
+    """The defect live verification found, and the one this whole module exists to prevent.
+
+    ``_resolved_knobs`` runs once, when the session is built, and ``Session.turn`` copies the
+    mapping it produced. So the first cut of this feature wrote the override, reported success, and
+    changed nothing: ``serve/nodes/mine_corpus.py`` reads the knob off the turn's state, and the
+    turn carried the boot-time value. A switch that says "on" over an engine still doing the old
+    thing is exactly the class of control this round was written to end -- it had simply been built
+    in reverse, with the working half on the server.
+
+    Asserted on the turn rather than on the session, because the turn is what a node reads.
+    """
+    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.retrieve.structure import CorpusStructure
+    from governed_bi.serve.session import Session
+
+    structure = CorpusStructure(
+        join_edges=frozenset(), references={}, asset_types={}, table_schemas={},
+        schema_tags={}, joins_by_edge={},
+    )
+    session = Session(
+        index=None, structure=structure, assets_by_id={}, corpus=None, connector=None,
+        policy=GovernancePolicy(guard_rules_enabled={}),
+        corpus_content_hash="c", prompt_set_hash="p",
+        knobs_resolved={"enable_clarification_to_draft": False},
+        db_id="app_store", run_id="r",
+    )
+    assert session.turn("q")["knobs_resolved"]["enable_clarification_to_draft"] is False
+
+    runtime_overrides.set_override("enable_clarification_to_draft", True)
+
+    assert session.turn("q")["knobs_resolved"]["enable_clarification_to_draft"] is True, (
+        "a turn minted after the switch was flipped still carries the boot-time value, so the "
+        "node that reads this knob never sees the change"
+    )
+
+
+def test_clearing_an_override_also_reaches_a_turn() -> None:
+    """The other half, and the half that was broken.
+
+    Found live: setting a switch took effect immediately, and clearing it did not. The override was
+    being applied *twice* — once in ``_resolved_knobs``, which bakes it into the session's cached
+    mapping, and again at each read. Layering `{}` over a base that already carried `True` leaves
+    `True`. So the base has to stay clean: ``_resolved_knobs`` no longer applies overrides, and the
+    two readers that mint a claim — ``Session.turn`` and ``capabilities_for`` — layer them on.
+
+    A switch that turns on but not off is worse than one that does neither, because the operator
+    has no way to tell which state the engine is in.
+    """
+    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.retrieve.structure import CorpusStructure
+    from governed_bi.serve.session import Session, _resolved_knobs
+
+    runtime_overrides.set_override("enable_clarification_to_draft", True)
+    policy = GovernancePolicy(guard_rules_enabled={})
+
+    # The session is built *while the override is on* -- the case that broke.
+    structure = CorpusStructure(
+        join_edges=frozenset(), references={}, asset_types={}, table_schemas={},
+        schema_tags={}, joins_by_edge={},
+    )
+    session = Session(
+        index=None, structure=structure, assets_by_id={}, corpus=None, connector=None,
+        policy=policy, corpus_content_hash="c", prompt_set_hash="p",
+        knobs_resolved=_resolved_knobs(policy), db_id="app_store", run_id="r",
+    )
+    assert session.turn("q")["knobs_resolved"]["enable_clarification_to_draft"] is True
+
+    runtime_overrides.clear_override("enable_clarification_to_draft")
+
+    assert session.turn("q")["knobs_resolved"]["enable_clarification_to_draft"] is False, (
+        "clearing the switch left the boot-time value behind, so the engine keeps doing the thing "
+        "the operator just turned off"
+    )

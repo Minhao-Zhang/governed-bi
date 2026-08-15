@@ -542,13 +542,29 @@ export const conflictResolveResponseSchema = z.object({
   detail: z.string(),
 });
 
-/* ── POST /settings/allow-user-clarification (dev only; gated on can_edit) ── */
+/* ── GET /settings/toggles, POST /settings/toggles/{name} ─────────────────── */
 
-/** Response from flipping the live allow_user_clarification override — the new
- * value, effective immediately (no restart; see api/runtime_toggles.py). */
-export const allowUserClarificationResponseSchema = z.object({
-  allow_user_clarification: z.boolean(),
+/** One knob an operator may flip, and **where its current value came from**.
+ *
+ * `source` is the load-bearing field: without it a client cannot tell an operator that a switch is
+ * pinned by an exported variable, and renders a control that silently does nothing. This replaces
+ * `POST /settings/allow-user-clarification`, which had a schema, an `api-client` method and a
+ * rendered component here and **no route on either branch** — `allow_user_clarification` is a v1
+ * name that is not in the engine's knob register at all. */
+export const runtimeToggleSchema = z.object({
+  name: z.string(),
+  value: z.union([z.boolean(), z.number(), z.string()]).nullable(),
+  source: z.enum(["default", "override", "environment"]),
+  default: z.union([z.boolean(), z.number(), z.string()]).nullable(),
+  /** What turning it on does. Rendered beside the switch — a control whose effect a reader has to
+   * guess at is how the dead ones got built. */
+  why: z.string(),
+  /** False when the environment pins it; the UI disables the switch and names the variable. */
+  editable: z.boolean(),
+  env_var: z.string().nullable(),
 });
+
+export const runtimeToggleListSchema = z.array(runtimeToggleSchema);
 
 /* ── POST /corpus/edit (dev only; gated on capabilities.can_edit) ─────────── */
 

@@ -48,7 +48,6 @@ import { AssetBrowser } from "@/components/corpus/asset-browser";
 import { AssetTable } from "@/components/corpus/asset-table";
 import { CorpusFatalNotice, CorpusStatus } from "@/components/corpus/corpus-status";
 import { AssumptionsLog } from "@/components/corpus/assumptions-log";
-import { ClarificationToggle } from "@/components/corpus/clarification-toggle";
 import { ClarificationsPanel } from "@/components/corpus/clarifications-panel";
 import { ConflictsPanel } from "@/components/corpus/conflicts-panel";
 import { ElicitationWizard } from "@/components/corpus/elicitation-wizard";
@@ -91,11 +90,11 @@ export default function CorpusPage() {
       <div className="flex min-h-0 flex-1 flex-col gap-4">
         <CorpusFatalNotice />
 
-        {/* Above the tabs, not in the header beside `CorpusStatus`: this is a `Card` with two
-            lines of explanation, and the switch changes what the *engine* does on the next turn
-            rather than what this page shows. Header actions are for the latter. */}
-        {curationFeatureOn && <ClarificationToggle />}
-
+        {/* The `allow_user_clarification` switch used to sit here. It is gone: it gated on
+            `can_edit`, which is hardcoded `False`, so it never rendered — and the route it posted
+            to never existed on either branch. Engine switches that are real now live under
+            `/settings`, which is also where they belong: they change what the engine does for
+            everyone, not what this page shows. */}
         <Tabs
           value={mode}
           onValueChange={(next) => setMode(next as Mode)}
