@@ -887,9 +887,15 @@ def test_a_clarification_interrupt_carries_an_id_and_a_reason() -> None:
     and asserts only that `__interrupt__` is truthy, which is true of every payload shape
     including the one that deadlocks the interface. The shape itself had no assertion anywhere.
 
-    `why` is asserted non-empty rather than equal to what the model sent, because the tool
-    substitutes a default when the model omits it — the client renders this string, and an
-    empty one is a prompt with no reason on it.
+    **`why` is asserted present, not non-empty, and that changed on 2026-08-15.** It used to be
+    non-empty because the tool substituted "The question is ambiguous and the answer depends on
+    which reading is meant." whenever the model omitted one — a sentence that restates what the
+    reader is already looking at, and part of the wall of text the product owner objected to. The
+    substitution is gone, so the key is now always present and sometimes empty, and
+    `clarification-prompt.tsx` renders no reason line when it is. The deadlock this test exists to
+    prevent never depended on `why`'s length: the client drops an interrupt over `kind` (a
+    `z.literal`) and cannot attribute an answer without `clarification_id`. Those two are what is
+    load-bearing, and both are still asserted below.
     """
     from langchain_core.messages import AIMessage, HumanMessage
     from langgraph.checkpoint.memory import InMemorySaver
@@ -932,7 +938,11 @@ def test_a_clarification_interrupt_carries_an_id_and_a_reason() -> None:
         "the question it answers"
     )
     assert payload["question"] == "which year?"
-    assert payload["why"], "the prompt renders a reason and this one would be blank"
+    # Present and a string, not necessarily non-empty -- see this test's own docstring. An absent
+    # key is still a contract break: `clarificationRequestSchema` declares `why: z.string()`,
+    # required, so a payload missing it fails `safeParse` and the prompt never mounts.
+    assert "why" in payload, "clarificationRequestSchema requires the key; a missing one deadlocks"
+    assert isinstance(payload["why"], str)
 
 
 def test_the_audit_log_can_be_asked_for_one_conversation() -> None:

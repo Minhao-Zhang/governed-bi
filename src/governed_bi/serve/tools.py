@@ -603,7 +603,12 @@ def build_tools(
             "kind": "clarification",
             "clarification_id": clarification_id,
             "question": question,
-            "why": why or "The question is ambiguous and the answer depends on which reading is meant.",
+            # Empty when the model gave no reason, rather than a filler sentence. The substitute
+            # here used to be "The question is ambiguous and the answer depends on which reading
+            # is meant." -- which restates the situation the reader is already looking at, and was
+            # a measurable share of the wall of text the product owner objected to on 2026-08-15.
+            # The UI renders no `why` line when this is empty (`clarification-prompt.tsx`).
+            "why": why,
             # Phase 6 of this initiative (governed-bi-analysis): withheld from this payload
             # deliberately in Phase 1 as "a backend-only routing signal" -- that reasoning held
             # while nothing downstream of the UI needed it. It no longer holds: the product

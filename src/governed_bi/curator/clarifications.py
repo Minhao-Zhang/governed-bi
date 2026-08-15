@@ -39,6 +39,7 @@ __all__ = [
     "resolve_answer_text",
     "unmet_prerequisites",
     "answer_clarification",
+    "cancel_clarification",
     "close_live_clarification",
     "restate_question",
     "mark_converted_to_corpus",
@@ -60,6 +61,11 @@ class ClarificationRecordStatus(str, Enum):
     #: a declined question is genuinely still unanswered homework, so ``open`` states it
     #: correctly. A decline button would be the thing that earns a fourth member.
     deferred = "deferred"
+    #: The user abandoned the question rather than answering it or handing it on, **and it was a
+    #: question no admin could have answered for them** — see :func:`cancel_clarification`, which
+    #: is the only writer and reaches this state only for ``basis="ranking_ambiguity"``. A
+    #: cancelled row is not homework: nobody is waiting on it and nobody can settle it.
+    cancelled = "cancelled"
 
 
 #: Phase 2 Setup Wizard categories (fixed priority order A > C > E > B > D in v1). Declared
@@ -461,6 +467,58 @@ def close_live_clarification(
         answer=answer,
         answer_choice_id=choice_id,
         answered_by="user",
+    )
+
+
+def cancel_clarification(
+    corpus_root: Path | str, clarification_id: str
+) -> ClarificationRecord | None:
+    """The user abandoned this question. What that costs the admin depends on the record's own
+    ``basis``, and this function is the only place that decides.
+
+    **There is no ``basis=`` argument, on purpose.** The record already carries the answer, and a
+    caller allowed to pass one is a second place the rule lives —
+    ``tests/curator/test_cancelling_depends_on_the_basis.py`` asserts the parameter's absence for
+    that reason.
+
+    * ``ranking_ambiguity`` → :attr:`ClarificationRecordStatus.cancelled`. "Which metric does
+      'best' mean" is a per-user judgment call; that is the whole reason this fork carries
+      ``basis`` at all, and it is why the defer button is hidden for it. An abandoned one is noise
+      on a queue nobody can clear.
+    * anything else, **including a missing ``basis``** → left ``open``. "How do you count an
+      active app" has one answer for everyone and is worth settling whether or not the person who
+      triggered it waited. Missing fails toward keeping the question, matching every other gate in
+      this fork that reads the field (``serve/nodes/mine_corpus.py``,
+      ``curator/clarification.py::fold_ledger_answer_into_corpus``): silently dropping an admin's
+      homework on the strength of an absent field is the expensive direction to be wrong in.
+
+    Returns the record either way — unchanged in the second case, so a caller can report what
+    happened without re-reading the ledger. Raises :class:`ClarificationNotFound` on an unknown
+    id, unlike :func:`close_live_clarification`: that one runs inside a turn which has already
+    produced its answer, whereas this is a deliberate action on a row the UI just rendered, and a
+    silent no-op would leave the prompt on screen with nothing explaining it.
+
+    Refuses an already-``answered`` record. Its answer may already be folded into the corpus under
+    an asset id hashed from the question text, and un-asking it would strand that fact behind a
+    ledger that no longer claims the question was put.
+    """
+    record = next(
+        (r for r in load_clarifications(corpus_root) if r.id == clarification_id), None
+    )
+    if record is None:
+        raise ClarificationNotFound(
+            f"no clarification {clarification_id!r} under {corpus_root}"
+        )
+    if record.status is ClarificationRecordStatus.answered:
+        raise ValueError(
+            f"clarification {clarification_id!r} is already answered, so it cannot be cancelled: "
+            "its answer may already be folded into the corpus under an id hashed from this "
+            "question, and the asset would outlive the ledger's claim that it was ever asked."
+        )
+    if record.basis != "ranking_ambiguity":
+        return record
+    return _replace_record(
+        corpus_root, clarification_id, status=ClarificationRecordStatus.cancelled
     )
 
 

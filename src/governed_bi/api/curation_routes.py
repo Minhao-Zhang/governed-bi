@@ -497,6 +497,47 @@ def make_curation_router(session: Any) -> APIRouter:
         )
         return _clarification_row(record)
 
+    @router.post("/clarifications/{clarification_id}/cancel")
+    def cancel_clarification_route(clarification_id: str) -> dict[str, Any]:
+        """The user abandoned a question rather than answering it or handing it to an admin.
+
+        **Not a kind of resume.** ``ask_user``'s ``interrupt()`` payload and the resume shape
+        (``answer | choice_id | declined | defer``) are untouched, which is deliberate: those two
+        are upstream's wire contract, and a fork-local escape hatch that widened them would
+        conflict at every merge. Cancelling is a ledger write and nothing else — the paused graph
+        thread is simply never resumed, and the LRU evicts it.
+
+        What it costs the admin depends on the record's own ``basis``, decided in one place
+        (``curator/clarifications.py::cancel_clarification``): a ``ranking_ambiguity`` question
+        lands ``cancelled`` and leaves their queue, anything else stays ``open``. The response
+        carries the resulting row so the client can report which happened without a second fetch.
+
+        No body. 404 on an unknown id, 409 on a record that is already answered — its answer may
+        be folded into the corpus under an id hashed from this question text, and un-asking it
+        would strand that asset behind a ledger no longer claiming the question was put.
+        """
+        from fastapi import HTTPException
+
+        from governed_bi.curator.clarifications import (
+            ClarificationNotFound,
+            cancel_clarification,
+        )
+
+        if session.corpus_root is None:
+            raise HTTPException(
+                status_code=409,
+                detail="this session has no corpus_root, so there is no ledger to cancel on",
+            )
+
+        try:
+            record = cancel_clarification(session.corpus_root, clarification_id)
+        except ClarificationNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        assert record is not None  # ClarificationNotFound is the only no-record path
+        return _clarification_row(record)
+
 
     @router.post("/elicitation/generate")
     def elicitation_generate(body: dict[str, Any] | None = None) -> dict[str, Any]:
