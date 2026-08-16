@@ -14,6 +14,7 @@ write surface exists on v2 at all (v2 otherwise deletes the HTTP corpus-write su
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 
@@ -496,6 +497,100 @@ def make_curation_router(session: Any) -> APIRouter:
             write_model=session.knobs_resolved.get("llm_model"),
         )
         return _clarification_row(record)
+
+
+    @router.post("/clarifications/from-refusal")
+    def clarification_from_refusal_route(body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """A reader who was refused submits what they meant (utku-ai-trust-loop-plan.md, task A).
+
+        **The one reader-initiated entrance to this ledger.** Every other write route here is an
+        admin acting on a record that already exists; this route is a record's *origin*. It
+        exists because ``no_schema_matched`` fires at ``Stage.route``, before ``agent_core`` --
+        and therefore before ``ask_user``, an agent tool -- ever runs, so the one moment the
+        engine names a semantic-layer gap most precisely is also the one moment it is structurally
+        unable to ask about it. The reader who asked the original question is the one filing it
+        instead. ``basis`` is hardcoded ``"data_definition"`` rather than accepted from the
+        caller: this route is scoped to exactly the shape of gap ``no_schema_matched`` names
+        (nothing in the corpus defines a term the reader used), not to ambiguity in general.
+
+        **Decided here: the explanation becomes the record's ``answer`` immediately, rather than
+        a freeform pre-fill left on an ``open`` row for an admin to separately confirm.** Both
+        keep a human between this write and certification either way --
+        ``corpus/drafts.py::approve_draft`` certifies a ``proposed`` draft and nothing here calls
+        it -- so the choice is about the *ledger's* shape, not the corpus's safety. Landing
+        ``open`` with a pre-filled ``answer`` would be a state nothing else on this ledger uses
+        (``ClarificationAnswerForm``'s freeform input never reads a starting value), so making it
+        visible to an admin would mean changing the shared clarification-queue components three
+        other surfaces already render through. Folding immediately through
+        :func:`~governed_bi.curator.clarification.fold_ledger_answer_into_corpus` -- the exact
+        function every other answer route here already calls, with no branch added for this
+        source -- needs none of that: the record is ``answered_by="user"`` the moment it exists,
+        the same vocabulary :func:`~governed_bi.curator.clarifications.close_live_clarification`
+        already uses for a live turn's *own* asking user, and it surfaces where an admin actually
+        reviews unreviewed facts (the drafts queue) rather than swelling the "still owed an
+        answer" queue with a row nobody owes an answer to.
+
+        Request body: ``{"question": "...", "answer": "..."}`` -- both required, else 422.
+        ``answer`` matches every other clarification route's own wire vocabulary for "the text a
+        person provided", not because an admin is answering anything here.
+
+        **Idempotent by content, not by turn.** No graph interrupt is involved -- the turn already
+        ended at ``Stage.route`` -- so there is no replay to guard against the way
+        ``serve/tools.py::_log_live_clarification`` guards a live question's id; only an
+        accidental double-submit of the identical text, which
+        :func:`~governed_bi.curator.clarifications.append_if_new_scope`'s own scope idempotency
+        already exists to absorb. Two different explanations for the same question are two
+        different records, deliberately -- a second reader's own words are not a duplicate of the
+        first reader's.
+
+        Not gated on ``can_curate_corpus`` or ``can_edit`` -- same reasoning as every sibling
+        route in this file: the real gate is ``session.corpus_root is not None`` (409), and a
+        capability is a client-side rendering signal, not a server-side permission check.
+        """
+        from fastapi import HTTPException
+
+        from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
+        from governed_bi.curator.clarifications import (
+            ClarificationRecord,
+            ClarificationRecordStatus,
+            append_if_new_scope,
+            load_clarifications,
+        )
+
+        if session.corpus_root is None:
+            raise HTTPException(status_code=409, detail="this session has no corpus_root to write back to")
+
+        body = body or {}
+        question = str(body.get("question") or "").strip()
+        answer = str(body.get("answer") or "").strip()
+        if not question or not answer:
+            raise HTTPException(status_code=422, detail="both question and answer are required")
+
+        digest = hashlib.sha256(f"{question}\x1f{answer}".encode()).hexdigest()[:16]
+        scope = f"refusal:{digest}"
+        record = ClarificationRecord(
+            id=f"refusal-{digest}",
+            scope=scope,
+            question=question,
+            status=ClarificationRecordStatus.answered,
+            answer=answer,
+            answered_by="user",
+            source="refusal",
+            basis="data_definition",
+        )
+        appended = append_if_new_scope(session.corpus_root, record)
+        stored = appended or next(
+            r for r in load_clarifications(session.corpus_root) if r.scope == scope
+        )
+        folded = fold_ledger_answer_into_corpus(
+            stored,
+            agent_model=session.agent_model,
+            corpus_root=session.corpus_root,
+            schema=session.db_id,
+            known_assets=_reload_assets(session),
+            write_model=session.knobs_resolved.get("llm_model"),
+        )
+        return _clarification_row(folded)
 
     @router.get("/settings/toggles")
     def list_toggles() -> list[dict[str, Any]]:

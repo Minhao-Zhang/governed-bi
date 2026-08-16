@@ -312,3 +312,129 @@ def test_answering_the_same_record_twice_via_the_route_does_not_double_write(
     assert (
         tmp_path / "beer" / f"{assets_after_second[0].id}.yaml"
     ).stat().st_mtime == written_at, "the draft file was rewritten on the second answer"
+
+
+# ── POST /clarifications/from-refusal (task A) ──────────────────────────────────────────────
+#
+# The one reader-initiated entrance to this ledger: a refusal fires before `ask_user` can ever
+# reach it, so the reader who asked the original question files it directly rather than through
+# a resumed graph turn.
+
+
+def test_filing_a_refusal_clarification_with_no_corpus_root_is_409(monkeypatch) -> None:
+    client = _client(monkeypatch, _session_without_corpus_root())
+    response = client.post(
+        "/clarifications/from-refusal",
+        json={"question": "Which apps are popular?", "answer": "Highest download count."},
+    )
+    assert response.status_code == 409
+
+
+def test_filing_a_refusal_clarification_with_no_answer_is_422(monkeypatch, tmp_path: Path) -> None:
+    """An explanation with nothing in it is not homework for an admin -- it is nothing at all,
+    so this must reject it rather than write an empty record to the ledger."""
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+    response = client.post(
+        "/clarifications/from-refusal", json={"question": "Which apps are popular?"}
+    )
+    assert response.status_code == 422
+
+
+def test_filing_a_refusal_clarification_with_no_question_is_422(monkeypatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+    response = client.post(
+        "/clarifications/from-refusal", json={"answer": "Highest download count."}
+    )
+    assert response.status_code == 422
+
+
+def test_filing_a_refusal_clarification_creates_an_answered_record_sourced_from_the_reader(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The reader's explanation lands as the record's own answer, not a freeform pre-fill left
+    for an admin to separately confirm (see the route's own docstring for the argument)."""
+    from governed_bi.curator.clarifications import load_clarifications
+
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+    response = client.post(
+        "/clarifications/from-refusal",
+        json={"question": "Which apps are popular?", "answer": "Highest download count."},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["question"] == "Which apps are popular?"
+    assert body["answer"] == "Highest download count."
+    assert body["status"] == "answered"
+    assert body["source"] == "refusal"
+    assert body["basis"] == "data_definition"
+    assert body["answered_by"] == "user"
+    assert body["converted_to_corpus"] is True
+
+    (on_disk,) = load_clarifications(tmp_path)
+    assert on_disk.source == "refusal"
+    assert on_disk.status.value == "answered"
+
+
+def test_filing_a_refusal_clarification_folds_into_a_proposed_corpus_draft(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Reaches the corpus through the exact same fold every admin answer route already uses --
+    a `proposed` draft a human must still approve before it is `certified` and visible to a
+    live turn, never a certified fact from one reader's unreviewed say-so."""
+    from governed_bi.corpus.schema import ProvenanceStatus
+    from governed_bi.corpus.store import load
+
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+    response = client.post(
+        "/clarifications/from-refusal",
+        json={"question": "Which apps are popular?", "answer": "Highest download count."},
+    )
+    assert response.status_code == 200, response.text
+
+    assets, problems = load(tmp_path)
+    assert not problems
+    (draft,) = assets
+    assert draft.asset_type.value == "term"
+    assert "Highest download count." in draft.summary
+    assert draft.audit is not None and draft.audit.provenance is not None
+    assert draft.audit.provenance.status is ProvenanceStatus.proposed
+
+
+def test_filing_the_same_question_and_explanation_twice_does_not_duplicate_the_ledger_row(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """An accidental double-submit of the identical text (no graph interrupt to guard against
+    here, unlike a live `ask_user` question) must not double the ledger row."""
+    from governed_bi.curator.clarifications import load_clarifications
+
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+    body = {"question": "Which apps are popular?", "answer": "Highest download count."}
+
+    first = client.post("/clarifications/from-refusal", json=body)
+    second = client.post("/clarifications/from-refusal", json=body)
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+
+    assert len(load_clarifications(tmp_path)) == 1
+
+
+def test_filing_two_different_explanations_for_the_same_question_keeps_both(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A second reader's own words are not a duplicate of the first reader's -- both are kept as
+    separate records, deliberately, per the route's own docstring."""
+    from governed_bi.curator.clarifications import load_clarifications
+
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+    question = "Which apps are popular?"
+
+    first = client.post(
+        "/clarifications/from-refusal", json={"question": question, "answer": "Highest downloads."}
+    )
+    second = client.post(
+        "/clarifications/from-refusal", json={"question": question, "answer": "Highest rating."}
+    )
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json()["id"] != second.json()["id"]
+
+    assert len(load_clarifications(tmp_path)) == 2
