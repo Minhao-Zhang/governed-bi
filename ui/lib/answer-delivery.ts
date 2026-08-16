@@ -174,6 +174,36 @@ export function refusalSentence(refusedBy: string | null): string | null {
 }
 
 /**
+ * Business-tier phrasing for `outcome` (utku-ai-trust-loop-plan.md, task A-0).
+ *
+ * `terminal` and `refused_by` got their own plain-language treatment in I-3/I-5; `outcome` did
+ * not, even though it is the *first* badge on the card (`reliability-stamp.tsx` renders it
+ * before either of the others). So a business reader whose turn hit `guardrail_error` read
+ * `crashed` -- a raw ledger token -- before ever reaching the sentence that explains it.
+ *
+ * `answered` and `refused` map to themselves: both are already plain English, and inventing a
+ * different phrase where the raw token already is the plain one is the thing `terminalLabel`
+ * and `refusalSentence` both avoid too. `crashed` reads the same as `REFUSAL_REASON_LABEL`'s own
+ * `guardrail_error`/`model_error` entries -- both name a bug, not a decision, on purpose (see
+ * that map's own comment on why those two "read differently on purpose").
+ */
+const OUTCOME_LABEL: Record<string, string> = {
+  answered: "answered",
+  refused: "refused",
+  clarification: "waiting on a clarification",
+  capped: "stopped after too many tries",
+  crashed: "something broke on our end",
+};
+
+/** `outcome`, in business-tier language. Analyst/engineer keep the raw token -- call this only
+ * where the tier check already decided to translate (see `reliability-stamp.tsx`). Same
+ * fall-through as `terminalLabel`/`refusalSentence`: an outcome this map does not recognise is
+ * shown raw, not hidden. */
+export function outcomeLabel(outcome: string): string {
+  return OUTCOME_LABEL[outcome] ?? outcome;
+}
+
+/**
  * "What I can see" line for a `no_schema_matched` refusal (I-5). `no_schema_matched` fires at
  * `Stage.route`, before the agent ever ran -- there is no attempt ledger, no SQL, nothing else
  * to show. Naming a handful of the tables the engine actually has turns that dead end into
