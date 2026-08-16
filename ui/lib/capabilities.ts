@@ -149,3 +149,20 @@ export function tierShowsRawTerminal(tier: Tier): boolean {
 export function tierShowsRefusalClarificationPrompt(tier: Tier): boolean {
   return tier === "business";
 }
+
+/** Whether `tier` may certify a `proposed` draft (utku-ai-trust-loop-plan.md, task D).
+ *
+ * Engineer only, same as `tierShowsAudit` above and for a related reason -- but named
+ * separately rather than reused, because the two ask different questions. `tierShowsAudit`
+ * decides what a *reader* sees on their own answer; this decides who may promote a draft into
+ * everyone else's retrieval context, which is the more consequential act and earns its own
+ * name so the two can diverge later without one masquerading as the other.
+ *
+ * Not the real boundary. `src/governed_bi/api/auth.py` is explicit that this engine has none
+ * beyond the loopback bind -- reaching the port is sufficient, and `/corpus/drafts/{id}/approve`
+ * is gated server-side on `can_curate_corpus` (session.corpus_root), never on tier. This
+ * predicate is the same kind of UI-only safeguard `tierReaches` already is: it keeps the
+ * control off a screen it does not belong on, not a security check. */
+export function tierApprovesDrafts(tier: Tier): boolean {
+  return tier === "engineer";
+}
