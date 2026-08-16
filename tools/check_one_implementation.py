@@ -49,6 +49,19 @@ SINGLETON_CONCEPTS: tuple[Singleton, ...] = (
         "which one ran changes whether a ladder step is significant.",
     ),
     Singleton(
+        "mde", "measure/stats.py",
+        "The bypass this rule had not seen: `eval/power.py` restated this formula with its own "
+        "hardcoded z-constants under the name `minimum_detectable_effect`, and the two "
+        "disagreed in the last digit at experiment 008's inputs (n=131, discordant=20). "
+        "Neither rule fired -- (a) compares *names* and the second one was spelled "
+        "differently, and (b) only knows the concepts listed here, where `mde` was absent. So "
+        "this entry closes the narrower half: a future second `mde`, in the package or in "
+        "`tools/`. It does not close the synonym, which no name-keyed gate can see; that is "
+        "what the MDE living in `measure/stats.py` and being cited rather than restated is "
+        "for. Same consequence as `mcnemar` above -- which one ran decides whether a ladder "
+        "step, or an arm, is declared detectable.",
+    ),
+    Singleton(
         "Measured", "register/quantity.py",
         "L-R1, 25 recurrences: a quantity whose absence had no representation, so 0 "
         "was used, and 0 is a measurement. A second Measured-shaped type is a second "
