@@ -126,3 +126,50 @@ def test_a_malformed_but_present_prediction_is_still_unparseable() -> None:
     row = _row("SELECT FROM WHERE", "SELECT a FROM t")
 
     assert attribute(row) is FailureCause.unparseable
+
+
+def test_the_harness_row_carries_the_cause() -> None:
+    """``error_type`` already exists on the row and was ``None`` on all 78 of 008's wrong
+    answers. Populating it here is what makes the next arm's target countable *during* the
+    run rather than in a script afterwards."""
+    from governed_bi.eval.harness import project_turn
+
+    state = {
+        "answer": {
+            "outcome": "answered",
+            "record": {"generated_sql": "SELECT a, b FROM t"},
+        }
+    }
+    question = {
+        "question_id": "q1",
+        "gold_sql": "SELECT a FROM t",
+        "gold_columns": ["a"],
+        "gold_rows": [[1]],
+    }
+    row = project_turn(state, question=question, arm="test")
+
+    assert row["correct"] is False
+    assert row["error_type"] == FailureCause.projection_extra.value
+
+
+def test_a_crashed_rows_error_type_survives_the_classifier() -> None:
+    """``_run_concurrently`` puts the exception class name in ``error_type`` on a crashed
+    row. Overwriting it with a parse-derived cause would report an engine crash as a
+    projection defect -- the collision the guard in ``project_turn`` exists to prevent."""
+    from governed_bi.eval.harness import project_turn
+
+    state = {
+        "answer": {
+            "outcome": "answered",
+            "record": {"error_type": "ValueError", "generated_sql": "SELECT a, b FROM t"},
+        }
+    }
+    question = {
+        "question_id": "q2",
+        "gold_sql": "SELECT a FROM t",
+        "gold_columns": ["a"],
+        "gold_rows": [[1]],
+    }
+    row = project_turn(state, question=question, arm="test")
+
+    assert row["error_type"] == "ValueError"

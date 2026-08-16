@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from governed_bi.eval.arms import ArmSpec, model_for_question
+from governed_bi.eval.attribution import attribute
 from governed_bi.eval.grade import grade_turn, result_fingerprint
 from governed_bi.eval.oracle import oracle_grade
 from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
@@ -694,7 +695,7 @@ def project_turn(
     if not isinstance(knobs, Mapping):
         knobs = state.get("knobs_resolved")
 
-    return {
+    projected: dict[str, Any] = {
         "question_id": str(question["question_id"]),
         "arm": arm,
         # The gold schema, from the question. Every funnel stage under ``schema_routed`` is
@@ -852,6 +853,19 @@ def project_turn(
         "refused_by": answer.get("refused_by") if isinstance(answer, Mapping) else None,
         "failed_stage": answer.get("failed_stage") if isinstance(answer, Mapping) else None,
     }
+
+    # `error_type` has existed on this row since the harness did, and was `None` on all 78
+    # answered-but-wrong rows of experiment 008 -- which is why that experiment could not say
+    # whether its treatment was aimed at anything. Populate it from the parse, but never over a
+    # value already set: `_run_concurrently` puts the exception class there on a crashed row,
+    # and overwriting it with a parse-derived cause would report an engine crash as a
+    # projection defect.
+    if projected.get("error_type") is None:
+        cause = attribute(projected)
+        if cause is not None:
+            projected["error_type"] = cause.value
+
+    return projected
 
 
 def _base_turn(question: Mapping[str, Any], *, run_id: str, arm: str) -> dict[str, Any]:
