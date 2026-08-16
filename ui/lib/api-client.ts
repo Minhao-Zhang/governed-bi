@@ -53,6 +53,7 @@ import {
   columnRelatedResponseSchema,
   conflictListSchema,
   conflictResolveResponseSchema,
+  draftApprovalSchema,
   editResponseSchema,
   elicitationGenerateResponseSchema,
   erGraphSchema,
@@ -78,6 +79,7 @@ import type {
   ColumnRelated,
   ConflictResolveResponse,
   ConflictRow,
+  DraftApproval,
   EditResponse,
   ElicitationGenerateResponse,
   ErGraph,
@@ -284,6 +286,27 @@ export const api = {
       `/corpus/conflicts/${encodeURIComponent(id)}/resolve`,
       { resolution, answered_by: "admin" },
       conflictResolveResponseSchema,
+    );
+  },
+
+  /** Certify one `proposed` draft (POST /corpus/drafts/{id}/approve; task D -- the trust
+   * loop's approval terminus). Not gated on `can_edit` -- mirrors `resolveConflict`'s and
+   * `answerClarification`'s pattern exactly: the route only requires `session.corpus_root`,
+   * which `capabilities.can_curate_corpus` reports. `by` is optional and, when set, recorded
+   * in the asset's `audit.extra` -- never required. */
+  approveDraft: (id: string, by?: string): Promise<DraftApproval> => {
+    if (USE_MOCKS) {
+      const asset = MOCK_ASSETS.find((a) => a.id === id);
+      return Promise.resolve({
+        id,
+        asset_type: asset?.asset_type ?? "term",
+        provenance_status: "certified",
+      });
+    }
+    return post(
+      `/corpus/drafts/${encodeURIComponent(id)}/approve`,
+      by ? { by } : {},
+      draftApprovalSchema,
     );
   },
 

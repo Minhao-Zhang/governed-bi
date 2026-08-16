@@ -542,6 +542,20 @@ export const conflictResolveResponseSchema = z.object({
   detail: z.string(),
 });
 
+/* ── POST /corpus/drafts/{id}/approve (task D: the trust loop's approval
+   terminus) -- gated on can_curate_corpus, not can_edit, same as the two
+   routes above ── */
+
+/** Response from certifying one `proposed` draft (`corpus/drafts.py::approve_draft`, exposed
+ * as `api/curation_routes.py::approve_draft_route`). Mirrors that route's own return shape:
+ * the asset's id, its type, and the provenance status it now carries -- always `"certified"`
+ * on success, since the route 409s rather than returning a still-`"proposed"` row. */
+export const draftApprovalSchema = z.object({
+  id: z.string(),
+  asset_type: z.string(),
+  provenance_status: z.string().nullable(),
+});
+
 /* ── GET /settings/toggles, POST /settings/toggles/{name} ─────────────────── */
 
 /** One knob an operator may flip, and **where its current value came from**.
