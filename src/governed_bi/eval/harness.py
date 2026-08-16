@@ -860,29 +860,28 @@ def project_turn(
         "failed_stage": answer.get("failed_stage") if isinstance(answer, Mapping) else None,
     }
 
-    # `error_type` has existed on this row since the harness did, and was `None` on all 78
-    # answered-but-wrong rows of experiment 008 -- which is why that experiment could not say
-    # whether its treatment was aimed at anything. Populate it from the parse, but never over a
-    # value already set.
+    # Why a wrong answer was wrong -- `None` on all 78 answered-but-wrong rows of experiment
+    # 008, which is why that experiment could not say whether its treatment was aimed at
+    # anything.
     #
-    # A pre-set value comes from the serve graph, not from `_run_concurrently` (that path builds
-    # its own row and never calls this function at all): `serve/wrap.py`'s `wrap_node` turns a
-    # node's raised exception into `state["failure"]` rather than letting it escape
-    # `compiled.invoke`, and `serve/nodes/stamp.py` copies that into `record["error_type"]` --
-    # always alongside `outcome = Outcome.crashed` (`stamp.py:360-361`). No path in this
-    # repository sets `error_type` next to `outcome == "answered"`, and `attribute()` already
-    # refuses any row whose `outcome` is not `"answered"` (`attribution.py`). So the collision
-    # this check guards against cannot happen today.
+    # **Its own field, not `error_type`.** `register/record.py` declares `error_type` as the
+    # exception CLASS of a turn that raised, and this classifier's output is a taxonomy label
+    # for a turn that completed. Writing one into the other made `error_type is not None` --
+    # which reads as "this turn crashed" against the declaration -- go from 0 to 78 on 008's
+    # baseline. It is also the change most likely to be rejected upstream: this fork stays cheap
+    # to merge because new behaviour goes in new files and new fields the upstream client
+    # discards, and redefining a field upstream declares *and writes* breaks that. The
+    # precedent is `computed_correct` a hundred lines up -- a separate field on purpose, because
+    # "one merge of the two and the artifact silently reports an engine that commits to
+    # everything".
     #
-    # Kept anyway: that exclusion is an invariant owned by a different module. Delete this
-    # `is None` check and `harness.py`'s correctness starts depending on `attribution.py` never
-    # relaxing its own outcome guard -- silently, with nothing here to catch the day it does. One
-    # line buys that decoupling, against the exact failure this whole change exists to stop: an
-    # engine crash relabelled as a projection defect.
-    if projected.get("error_type") is None:
-        cause = attribute(projected)
-        if cause is not None:
-            projected["error_type"] = cause.value
+    # `attribute()` already refuses any row whose `outcome` is not `"answered"` and any row
+    # whose `correct` is not `False`, so a crashed or ungraded turn gets `None` here without
+    # this line knowing the rule. With `failure_cause` owning its own key there is no pre-set
+    # value to protect and no collision to guard: the `is None` check the old `error_type`
+    # write needed existed only because two writers shared one key.
+    cause = attribute(projected)
+    projected["failure_cause"] = None if cause is None else cause.value
 
     return projected
 

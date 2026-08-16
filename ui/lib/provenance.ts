@@ -47,6 +47,12 @@ const GOVERNANCE_KEYS = [
   "terminal_reason",
   "failed_stage",
   "error_type",
+  // Why an answered-but-wrong turn was wrong, from the eval classifier. Null on every served
+  // turn -- only the eval harness has the answer key -- so this renders as not-applicable in
+  // the drawer, and is here because the register declares it and this list must partition the
+  // register, not because a chat turn ever carries a value. Keep comments in this array free of
+  // double-quoted text: the conformance test parses the quoted names out with a regex.
+  "failure_cause",
   "generated_sql",
   // Tier.decision, in register order — which is pipeline order: retrieve, route, budget,
   // license, connect, rewrite, guard, then how the attempt actually went.
@@ -178,6 +184,7 @@ const ABSENCE: Record<string, "never" | "not_measured" | "not_applicable"> = {
   terminal_reason: "not_applicable",
   failed_stage: "not_applicable",
   error_type: "not_applicable",
+  failure_cause: "not_applicable",
   generated_sql: "not_applicable",
   // Tier.decision
   facet_hits: "not_applicable",

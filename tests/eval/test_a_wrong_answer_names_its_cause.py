@@ -174,10 +174,9 @@ def test_a_malformed_but_present_prediction_is_still_unparseable() -> None:
     assert attribute(row) is FailureCause.unparseable
 
 
-def test_the_harness_row_carries_the_cause() -> None:
-    """``error_type`` already exists on the row and was ``None`` on all 78 of 008's wrong
-    answers. Populating it here is what makes the next arm's target countable *during* the
-    run rather than in a script afterwards."""
+def test_the_harness_row_carries_the_cause_in_its_own_field() -> None:
+    """The cause goes in ``failure_cause``, so counting the next arm's target during the run
+    does not cost the meaning of ``error_type``."""
     from governed_bi.eval.harness import project_turn
 
     state = {
@@ -195,44 +194,57 @@ def test_the_harness_row_carries_the_cause() -> None:
     row = project_turn(state, question=question, arm="test")
 
     assert row["correct"] is False
-    assert row["error_type"] == FailureCause.projection_extra.value
+    assert row["failure_cause"] == FailureCause.projection_extra.value
 
 
-def test_a_crashed_rows_error_type_survives_the_classifier() -> None:
-    """Builds a shape no production path produces today: ``error_type`` set alongside
-    ``outcome: "answered"``. The serve graph only ever pairs a pre-set ``error_type`` with
-    ``outcome: "crashed"`` (``serve/wrap.py``'s ``wrap_node`` -> ``serve/nodes/stamp.py``), and
-    ``attribute()`` already refuses any non-``"answered"`` row -- so this guard is unreached by
-    a real row. It is pinned anyway because that safety is ``attribution.py``'s invariant, not
-    ``project_turn``'s: this test is what stops the day it changes from silently relabelling an
-    engine crash as a projection defect."""
+def test_the_classifier_never_writes_error_type() -> None:
+    """``register/record.py`` declares ``error_type`` as the exception CLASS of a turn that
+    raised, so a consumer reading ``error_type is not None`` as "this turn raised" is reading the
+    declaration. Writing taxonomy labels there took that count from 0 to 78 on experiment 008's
+    baseline -- and redefining a field upstream declares and writes is also the change in this
+    fork most likely to be rejected on merge.
+
+    An answered-and-wrong row must therefore leave ``error_type`` null while naming its cause,
+    and a row that really did raise must keep the class name it arrived with."""
     from governed_bi.eval.harness import project_turn
 
-    state = {
-        "answer": {
-            "outcome": "answered",
-            "record": {"error_type": "ValueError", "generated_sql": "SELECT a, b FROM t"},
-        }
-    }
     question = {
         "question_id": "q2",
         "gold_sql": "SELECT a FROM t",
         "gold_columns": ["a"],
         "gold_rows": [[1]],
     }
-    row = project_turn(state, question=question, arm="test")
+    wrong = project_turn(
+        {"answer": {"outcome": "answered", "record": {"generated_sql": "SELECT a, b FROM t"}}},
+        question=question,
+        arm="test",
+    )
 
-    assert row["error_type"] == "ValueError"
+    assert wrong["failure_cause"] == FailureCause.projection_extra.value
+    assert wrong["error_type"] is None
+
+    raised = project_turn(
+        {
+            "answer": {
+                "outcome": "crashed",
+                "record": {"error_type": "ValueError", "generated_sql": None},
+            }
+        },
+        question=question,
+        arm="test",
+    )
+
+    assert raised["error_type"] == "ValueError"
+    assert raised["failure_cause"] is None
 
 
 def test_a_run_concurrently_crash_never_reaches_the_classifier(tmp_path: Path) -> None:
     """``_run_concurrently``'s exception handler (``harness.py``'s ``run_index``) builds its
     own minimal row dict inline -- ``error_type`` set to the exception's class name -- and
-    returns it straight from ``run_arm``. This row never calls ``project_turn`` at all, which
-    is why the classifier cannot corrupt it and why ``project_turn``'s guard is not what
-    protects it. Pinned here because ``test_the_row_names_its_configuration.py`` already
-    drives this exact branch (``workers=2``, an exploding ``compiled.invoke``) but never
-    asserts on ``error_type``."""
+    returns it straight from ``run_arm``. This row never calls ``project_turn`` at all, so it
+    carries no ``failure_cause`` key and the classifier cannot reach it. Pinned here because
+    ``test_the_row_names_its_configuration.py`` already drives this exact branch (``workers=2``,
+    an exploding ``compiled.invoke``) but never asserts on ``error_type``."""
     import sqlite3
 
     import governed_bi.eval.harness as harness
