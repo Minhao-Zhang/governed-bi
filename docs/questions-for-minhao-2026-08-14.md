@@ -1,4 +1,60 @@
-# Three questions before 21 Aug — DRAFT, not sent
+# Four questions before 21 Aug — DRAFT, not sent
+
+> **Question 0 was added 2026-08-15 and is the urgent one.** It is the only question here that
+> nobody but him can answer, because the evidence lives on his machine and nowhere else. The
+> other three are decisions; this one is a fact we cannot recover.
+
+## 0. Which 1 351 questions did `v3_fold`, `v4` and `v5` actually run?
+
+**What we observed.** `BIRD-Obfuscation@upstream/main` is 15 commits ahead of the 2026-07-19
+state this fork carries, and among them `efc655e` purges **2 739 questions with bad BIRD gold**,
+`1711248` drops 11 databases and rebuilds the 80/20 split, and `684d055`/`22fe2a6` quantify
+train/test leakage at 3.6% and cut it to 0.22%. Measured: our fork held 10 164 questions,
+upstream now holds 6 743 — **3 421 purged, 0 added.**
+
+The three published arms all report **1 351 questions**. That number is not derivable from either
+version we can see:
+
+| set | n |
+|---|---:|
+| our 7/19 `test_final` | 2 030 |
+| ...filtered to the 57 schemas `BIRD-corpus` covers | 1 848 |
+| upstream's `test_final` today | **1 351** |
+| overlap between the old filtered set and today's | **280** |
+
+So today's `test_final` has exactly the published count and shares 280 questions with the set we
+would have guessed the arms used.
+
+**Why we cannot answer it ourselves.** `arms.toml` pins the corpus twice — `corpus = "30872d3"`
+and a mandatory `corpus_content_hash` — and records **nothing** identifying the question set. A
+repo-wide search for `dataset_sha`, `question_set` or `qid_list_hash` returns nothing: no
+measurement row carries a dataset identity. And the artifacts that would settle it
+(`runs/eval/proxy_v3_fold_opus_high_corpus30872d3.jsonl` and its siblings, which `arms.toml`
+itself cites) are **not on this machine** — `runs/` is gitignored, so they exist only where they
+were produced.
+
+**Why it matters.** Every headline figure in `README.md` and `docs/failure-modes.md` — v4's
+accuracy, the 3.16× delivered-over-withheld ratio, the WrenAI contrast on "the same 1 351
+questions" — is quoted against a question set that is not recorded anywhere committed and that
+upstream has since replaced. A rerun today would produce the same `n`, a mostly different
+population, and **pass every quotability gate**, because the gates check the corpus digest and
+the knobs, both of which would match.
+
+This is the same defect `arms.toml`'s own header exists to prevent, one field over. Its comment
+reads: *"an arm that cannot be reconciled must say so, not report agreement."* It enforces that
+for the corpus completely and for the question set not at all.
+
+**What we would like:** the `question_id` list, or the dataset commit, that those three arms ran
+against. One file or one SHA settles whether the published numbers can be reproduced or whether
+they become historical and the baseline needs re-running.
+
+**What we plan to do either way:** add a mandatory dataset identity to `arms.toml` alongside
+`corpus_content_hash`, so the next arm cannot have this problem. We would rather he shaped that
+field than inherit ours.
+
+---
+
+# Three questions from 2026-08-14
 
 Written 2026-08-14, after merging `upstream/main` (102 commits) into this fork and porting the
 frontend into `ui/`. Minhao is on leave 21 Aug – 14 Sep, so these want answering before then;
