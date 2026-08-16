@@ -393,6 +393,40 @@ export const api = {
     );
   },
 
+  /** A reader who was refused submits what they meant (POST /clarifications/from-refusal,
+   * task A). Enters the same ledger an `ask_user` interrupt would -- the entrance a
+   * `no_schema_matched` refusal structurally cannot reach, since it fires before the agent
+   * (and `ask_user`) ever runs. `explanation` becomes the record's own `answer`; see the
+   * route's own docstring for why that folds immediately rather than waiting on an admin. */
+  fileClarificationFromRefusal: (
+    question: string,
+    explanation: string,
+  ): Promise<ClarificationRecord> => {
+    if (USE_MOCKS) {
+      const id = `refusal-${Date.now()}`;
+      return Promise.resolve({
+        id,
+        scope: `refusal:${id}`,
+        question,
+        status: "answered",
+        raised_by: [],
+        choices: null,
+        allow_freeform: true,
+        answer: explanation,
+        answer_choice_id: null,
+        answered_by: "user",
+        source: "refusal",
+        basis: "data_definition",
+        converted_to_corpus: true,
+      });
+    }
+    return post(
+      "/clarifications/from-refusal",
+      { question, answer: explanation },
+      clarificationRecordSchema,
+    );
+  },
+
   /** Engine switches an operator may flip, with where each current value came from
    * (GET /settings/toggles). */
   toggles: (): Promise<RuntimeToggle[]> =>

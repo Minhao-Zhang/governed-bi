@@ -62,13 +62,24 @@ export function MessageList({
 
   return (
     <div className="space-y-4 py-2">
-      {messages.map((message) =>
+      {messages.map((message, index) =>
         message.role === "user" ? (
           <UserBubble key={message.id} text={message.text ?? ""} />
         ) : (
           <div key={message.id} className="w-full">
             {message.answer ? (
-              <AnswerCard answer={message.answer} steps={message.steps} tier={tier} />
+              <AnswerCard
+                answer={message.answer}
+                steps={message.steps}
+                tier={tier}
+                // Task A-3: the refusal card's "tell us what you meant" control needs the
+                // reader's own question text, which `AnswerView` does not carry (see
+                // `answer-card.tsx`'s own docstring on the `question` prop) -- this is the
+                // preceding turn in the transcript, the only place that text still exists.
+                question={
+                  messages[index - 1]?.role === "user" ? messages[index - 1].text : undefined
+                }
+              />
             ) : (
               // Defensive: assistant turns carry an AnswerView in practice.
               <p className="text-sm text-muted-foreground">{message.text}</p>

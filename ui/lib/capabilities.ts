@@ -140,3 +140,12 @@ export function tierShowsAudit(tier: Tier): boolean {
 export function tierShowsRawTerminal(tier: Tier): boolean {
   return tier !== "business";
 }
+
+/** Whether `tier` sees the refusal card's "tell us what you meant" control
+ * (utku-ai-trust-loop-plan.md, task A-3). Business only, not a floor: an analyst/engineer
+ * refused by `no_schema_matched` can reach `/corpus` (see `REACHABLE` above) and write the
+ * definition there directly; a business reader cannot reach `/corpus` at all, so this control
+ * is their only entrance into the same ledger. */
+export function tierShowsRefusalClarificationPrompt(tier: Tier): boolean {
+  return tier === "business";
+}

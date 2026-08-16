@@ -4,6 +4,7 @@ import { AlertTriangle, Info, Lightbulb } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { ReliabilityStamp } from "@/components/answer/reliability-stamp";
+import { RefusalClarificationPrompt } from "@/components/answer/refusal-clarification-prompt";
 import { SqlBlock } from "@/components/answer/sql-block";
 import { ProvenanceDrawer } from "@/components/answer/provenance-drawer";
 import { AgentTimeline } from "@/components/chat/agent-timeline";
@@ -22,7 +23,12 @@ import {
   terminalOf,
   whyLines,
 } from "@/lib/answer-delivery";
-import { tierShowsAudit, tierShowsRawTerminal, tierShowsSql } from "@/lib/capabilities";
+import {
+  tierShowsAudit,
+  tierShowsRawTerminal,
+  tierShowsRefusalClarificationPrompt,
+  tierShowsSql,
+} from "@/lib/capabilities";
 import type { Tier } from "@/lib/display-mode";
 import { buildStepsFromLedger, type TimelineStep } from "@/lib/steps";
 import { cn } from "@/lib/utils";
@@ -46,15 +52,24 @@ import type { AnswerView } from "@/lib/types";
  * A prop and not a hook read here, on purpose: the caller decides, because `/audit` renders this
  * same card and a page named Audit must not hide its audit. Defaults to `engineer`;
  * `components/chat/message-list.tsx` is the one caller that narrows it.
+ *
+ * `question` (task A-3) is the reader's own turn text, needed only to file a refusal-originated
+ * clarification -- the record shape requires "the original question as `question`" and nothing
+ * on `AnswerView` itself carries it (the record has `question_id`, not the text). Optional
+ * because it is not this card's own data: `message-list.tsx` is the one caller that has it, from
+ * the preceding turn in the transcript, and every other caller simply omits it, which turns the
+ * new control off rather than rendering it against nothing.
  */
 export function AnswerCard({
   answer,
   steps,
   tier = "engineer",
+  question,
 }: {
   answer: AnswerView;
   steps?: TimelineStep[];
   tier?: Tier;
+  question?: string;
 }) {
   const showSql = tierShowsSql(tier);
   const showAudit = tierShowsAudit(tier);
@@ -90,6 +105,15 @@ export function AnswerCard({
         (schemaSummary.data?.items ?? []).filter((t) => !t.excluded).map((t) => t.physical_name),
       )
     : null;
+  // Task A-3: the same refusal reason `needsCatalogGlimpse` is scoped to -- `no_schema_matched`
+  // is the one shape of gap a reader's own explanation actually closes (see
+  // `refusal-clarification-prompt.tsx`'s own docstring). Needs `question`, which only
+  // `message-list.tsx` supplies; every other caller of this card simply never shows the control.
+  const showRefusalPrompt =
+    delivery === "refused" &&
+    refusedBy === "no_schema_matched" &&
+    tierShowsRefusalClarificationPrompt(tier) &&
+    !!question;
   // The governed trace, kept on the finished answer so it doesn't vanish: the
   // captured live trace if present, else rebuilt from the ledger (live == audit).
   const timeline =
@@ -143,20 +167,27 @@ export function AnswerCard({
         )}
 
         {delivery === "refused" ? (
-          <div className="flex gap-3 rounded-md border border-tier-refused/30 bg-tier-refused/5 p-3">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-tier-refused" />
-            <p className="text-sm">
-              {/* `text` is the system's own copy for this path and wins when present.
-                  `escalation` is gone: the v2 engine has no such field, and inventing a
-                  sentence here would be the interface speaking for a system that said
-                  nothing. When there is no `text` -- the common case, since `refused` is
-                  usually a bare `refused_by` token with a null `text` -- I-5's
-                  `refusalSentence` turns that token into a sentence a non-technical reader
-                  can read, per `refused_by`'s closed vocabulary in
-                  `register/stages.py::REFUSED_BY_TO_STAGE`. */}
-              {text ?? refusalSentence(refusedBy) ?? "This question can't be answered as asked."}
-              {glimpse && ` ${glimpse}`}
-            </p>
+          <div className="space-y-2">
+            <div className="flex gap-3 rounded-md border border-tier-refused/30 bg-tier-refused/5 p-3">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-tier-refused" />
+              <p className="text-sm">
+                {/* `text` is the system's own copy for this path and wins when present.
+                    `escalation` is gone: the v2 engine has no such field, and inventing a
+                    sentence here would be the interface speaking for a system that said
+                    nothing. When there is no `text` -- the common case, since `refused` is
+                    usually a bare `refused_by` token with a null `text` -- I-5's
+                    `refusalSentence` turns that token into a sentence a non-technical reader
+                    can read, per `refused_by`'s closed vocabulary in
+                    `register/stages.py::REFUSED_BY_TO_STAGE`. */}
+                {text ?? refusalSentence(refusedBy) ?? "This question can't be answered as asked."}
+                {glimpse && ` ${glimpse}`}
+              </p>
+            </div>
+            {/* Task A-3, after I-5's sentence: the reader's own entrance into the semantic
+                layer. `showRefusalPrompt` already checked the tier, the refusal reason and
+                that `question` exists -- see the module docstring on `RefusalClarificationPrompt`
+                for why it is scoped this narrowly. */}
+            {showRefusalPrompt && <RefusalClarificationPrompt question={question!} />}
           </div>
         ) : (
           <>
