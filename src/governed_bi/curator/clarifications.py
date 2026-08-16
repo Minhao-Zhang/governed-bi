@@ -129,7 +129,19 @@ class ClarificationRecord:
     answer_choice_ids: tuple[str, ...] | None = None
     answered_by: str | None = None
     converted_to_corpus: bool = False
-    source: Literal["curator", "live_chat", "elicitation_wizard"] = "curator"
+    #: Who raised this question -- **not** what kind of ambiguity it is (that is :attr:`basis`,
+    #: below, and orthogonal to this field). ``curator`` is an admin's own offline review;
+    #: ``live_chat`` is a live ``ask_user`` interrupt; ``elicitation_wizard`` is Phase 2's
+    #: proactive scan. ``refusal`` (utku-ai-trust-loop-plan.md, task A) is the fourth: a reader
+    #: who was told ``no_schema_matched`` -- the engine found no schema for the term they used --
+    #: and answered "here is what I meant" through a new, reader-initiated entrance to this same
+    #: ledger. Unlike the other three, this origin is the person who asked the *original*
+    #: question, not the agent (``live_chat``) or an admin (``curator``/``elicitation_wizard``).
+    #: A fourth ``source`` rather than a new ``basis`` value: ``basis`` already answers "what
+    #: kind of ambiguity" (here, ``data_definition`` -- the reader is defining a term), and
+    #: conflating "who raised it" with "what kind of gap it is" is the mistake already ruled out
+    #: for ``basis`` itself -- experiment 009 is a full day spent on what an ambiguous count costs.
+    source: Literal["curator", "live_chat", "elicitation_wizard", "refusal"] = "curator"
     #: ``ask_user``'s own ``basis`` argument (``"data_definition"`` | ``"ranking_ambiguity"``),
     #: carried onto the ledger row so an offline answer gates identically to a live one
     #: (``curator/clarification.py::fold_ledger_answer_into_corpus``). ``None`` for a record

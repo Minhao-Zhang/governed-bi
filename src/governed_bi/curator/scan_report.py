@@ -112,9 +112,10 @@ def diff_scan_against_ledger(
     than a rule applied twice upstream. ``settled_by_corpus`` is what the dedup removed;
     ``ledger`` is the ledger as it stood when the scan started.
 
-    Only ``source="elicitation_wizard"`` ledger records are considered. A ``live_chat`` or
-    ``curator`` row shares the file and is not this scan's to account for — and counting one as
-    "still open" would put a mid-turn clarification into an onboarding report.
+    Only ``source="elicitation_wizard"`` ledger records are considered. A ``live_chat``,
+    ``curator``, or ``refusal`` row shares the file and is not this scan's to account for — and
+    counting one as "still open" would put a mid-turn clarification, or a reader's own report of
+    a refusal, into an onboarding report.
 
     The four buckets:
 

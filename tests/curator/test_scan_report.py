@@ -133,13 +133,27 @@ def test_an_answer_given_without_its_prerequisite_is_stranded_not_settled() -> N
 
 
 def test_a_non_wizard_ledger_row_is_none_of_this_scans_business() -> None:
-    """``clarifications.jsonl`` is one file for three sources. A mid-turn ``ask_user`` record
+    """``clarifications.jsonl`` is one file for four sources. A mid-turn ``ask_user`` record
     sitting in it is not an onboarding gap, and reporting one as "still open from an earlier
     scan" would put a live-chat question into an admin's setup report."""
     from governed_bi.curator.scan_report import diff_scan_against_ledger
 
     live = _rec("live:whatever", source="live_chat", category=None)
     report = diff_scan_against_ledger([], [], [live])
+
+    assert report.still_open == () and report.settled == ()
+
+
+def test_a_refusal_sourced_ledger_row_is_also_none_of_this_scans_business() -> None:
+    """A reader's own refusal-originated clarification (task A) is not a wizard candidate
+    either -- it was never presented by a scan, so counting it as "still open" or "settled"
+    would put a reader's report into an admin's onboarding-coverage report."""
+    from governed_bi.curator.scan_report import diff_scan_against_ledger
+
+    refusal = _rec(
+        "refusal:whatever", source="refusal", basis="data_definition", category=None
+    )
+    report = diff_scan_against_ledger([], [], [refusal])
 
     assert report.still_open == () and report.settled == ()
 

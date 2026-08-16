@@ -385,6 +385,9 @@ def test_candidates_filters_to_elicitation_wizard_source_only(monkeypatch, tmp_p
             ClarificationRecord(
                 id="q_wizard", scope="s2", question="q2?", source="elicitation_wizard", category="A",
             ),
+            # A reader's own refusal-originated clarification (task A) is not a wizard
+            # candidate either -- it was never proposed by a scan.
+            ClarificationRecord(id="q_refusal", scope="s3", question="q3?", source="refusal"),
         ],
     )
     client = _client(monkeypatch, _session_with_schema(tmp_path))
