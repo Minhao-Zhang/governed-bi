@@ -1,4 +1,4 @@
-import { AlertTriangle, Info } from "lucide-react";
+import { AlertTriangle, Info, Lightbulb } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { ReliabilityStamp } from "@/components/answer/reliability-stamp";
@@ -81,6 +81,24 @@ export function AnswerCard({
           attempts={attemptsOf(answer)}
           refusedBy={answer.refused_by ?? null}
         />
+
+        {/* Gap 1 (utku-ai-deployment-targets.md): the model's self-reported assumptions,
+            shown unconditionally — outside the refused/graded/clean branch below, never
+            gated on outcome the way `why` is gated on delivery/confidence. An assumption is
+            the one piece of provenance a non-technical reader can actually evaluate, because
+            it is a sentence about their business rather than about SQL. An empty array
+            renders nothing here: a card that said "Assumptions: none" every turn would train
+            the reader to stop looking. */}
+        {answer.assumptions.length > 0 && (
+          <div className="flex gap-3 rounded-md border border-tier-lineage/30 bg-tier-lineage/5 p-3">
+            <Lightbulb className="mt-0.5 size-4 shrink-0 text-tier-lineage" />
+            <ul className="space-y-1 text-sm text-muted-foreground">
+              {answer.assumptions.map((assumption) => (
+                <li key={assumption}>{assumption}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {delivery === "refused" ? (
           <div className="flex gap-3 rounded-md border border-tier-refused/30 bg-tier-refused/5 p-3">
