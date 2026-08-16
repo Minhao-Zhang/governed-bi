@@ -195,6 +195,17 @@ export function useClarifications(status?: string) {
   });
 }
 
+/** Reader-reported wrong answers (GET /feedback; utku-ai-trust-loop-plan.md, task H), for the
+ * admin's Reports tab -- a second inbox, over a second ledger, beside `useClarifications` above
+ * (H-b: never the same record type). `status` filters on one exact value; `FeedbackPanel`
+ * always asks for `"open"`. */
+export function useFeedback(status?: string) {
+  return useQuery({
+    queryKey: ["feedback", status ?? "all"],
+    queryFn: () => api.feedback(status),
+  });
+}
+
 /** Phase 1 elicitation wizard candidates (GET /elicitation/candidates) — every
  * `source="elicitation_wizard"` ledger record, open and answered, for the
  * proactive admin onboarding flow's grouped A > C+E > B > D view. */

@@ -58,6 +58,7 @@ import {
   editResponseSchema,
   elicitationGenerateResponseSchema,
   erGraphSchema,
+  feedbackListSchema,
   feedbackRecordSchema,
   knowledgeGraphSchema,
   schemaSummaryResponseSchema,
@@ -499,6 +500,34 @@ export const api = {
       },
       feedbackRecordSchema,
     );
+  },
+
+  /** The admin's report queue (GET /feedback; task H-4). `status` filters on one exact value;
+   * `FeedbackPanel` always asks for `"open"`. No mock data ships -- nothing originates a report
+   * in mock mode either, so mock mode renders the panel's empty state (mirrors `drafts()`'s own
+   * empty mock for the same reason). */
+  feedback: (status?: string): Promise<FeedbackRecord[]> =>
+    get(`/feedback${qs({ status })}`, feedbackListSchema, []),
+
+  /** Fold an admin's correction into a `proposed` corpus draft (POST /feedback/{id}/answer;
+   * task H-4) -- the same Enhancer path `answerClarification` reaches, over the report ledger
+   * instead of the clarification one. Not available in mock mode: there is no mock ledger for
+   * it to act on. */
+  answerFeedback: (id: string, correction: string): Promise<FeedbackRecord> => {
+    if (USE_MOCKS) {
+      return Promise.reject(new ApiError(`/feedback/${id}/answer not available in mock mode.`, 404));
+    }
+    return post(`/feedback/${encodeURIComponent(id)}/answer`, { correction }, feedbackRecordSchema);
+  },
+
+  /** The admin decided this report needs no corpus change (POST /feedback/{id}/dismiss; task
+   * H-4) -- a separate route from answering it, mirroring `cancelClarification`'s own "no body,
+   * the server decides nothing but the status" shape. */
+  dismissFeedback: (id: string): Promise<FeedbackRecord> => {
+    if (USE_MOCKS) {
+      return Promise.reject(new ApiError(`/feedback/${id}/dismiss not available in mock mode.`, 404));
+    }
+    return post(`/feedback/${encodeURIComponent(id)}/dismiss`, {}, feedbackRecordSchema);
   },
 
   /** Engine switches an operator may flip, with where each current value came from

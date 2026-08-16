@@ -25,14 +25,21 @@
  * Now a hit hands off: picking one switches to **By type**, scoped to that asset by id, where
  * its full record is a click away. Search locates; the type view explains.
  *
- * **Five curation tabs after them, and reading vs curating is why they are tabs here rather
- * than a second page.** Setup Wizard / Clarifications / Drafts / Agreed Assumptions / Needs
- * Review are this fork's admin surface for the clarification-Q&A + Enhancer feature, and every
- * one of them is about the same assets the two tabs above list — an admin who finds a wrong term
- * in **By type** answers the question that fixes it two tabs over, on the same route. Drafts is
- * the one write path among them that changes what the next session's model can see: it certifies
- * a `proposed` asset (task D, utku-ai-trust-loop-plan.md), where the other four only read,
- * answer or resolve.
+ * **Six curation tabs after them, and reading vs curating is why they are tabs here rather
+ * than a second page.** Setup Wizard / Clarifications / Reports / Drafts / Agreed Assumptions /
+ * Needs Review are this fork's admin surface for the clarification-Q&A + Enhancer feature, and
+ * every one of them is about the same assets the two tabs above list — an admin who finds a
+ * wrong term in **By type** answers the question that fixes it two tabs over, on the same route.
+ * Drafts is the one write path among them that changes what the next session's model can see: it
+ * certifies a `proposed` asset (task D, utku-ai-trust-loop-plan.md), where the other five only
+ * read, answer, resolve or dismiss.
+ *
+ * **Reports (task H) is a second inbox, not the Clarifications tab reused.** H-b's own decision:
+ * a clarification is the engine asking, a report is a reader objecting to an answer already
+ * given -- different lifecycle, different meaning, and `components/corpus/feedback-panel.tsx`
+ * reads a wholly separate ledger (`feedback.jsonl`, via `GET /feedback`) from
+ * `ClarificationsPanel`'s `clarifications.jsonl`. H-c is what keeps them on the same tab bar
+ * regardless: one admin, one page, to look at either.
  *
  * They are hidden entirely when `capabilities.can_curate_corpus` is false rather than shown
  * empty: with the backend toggle off nothing is ever folded or certified that way, so an empty
@@ -55,6 +62,7 @@ import { ClarificationsPanel } from "@/components/corpus/clarifications-panel";
 import { ConflictsPanel } from "@/components/corpus/conflicts-panel";
 import { DraftsPanel } from "@/components/corpus/drafts-panel";
 import { ElicitationWizard } from "@/components/corpus/elicitation-wizard";
+import { FeedbackPanel } from "@/components/corpus/feedback-panel";
 import { canCurateCorpus } from "@/lib/capabilities";
 import { useCapabilities } from "@/hooks/queries";
 
@@ -63,6 +71,7 @@ type Mode =
   | "search"
   | "wizard"
   | "clarifications"
+  | "reports"
   | "drafts"
   | "assumptions"
   | "conflicts";
@@ -121,6 +130,7 @@ export default function CorpusPage() {
                 <>
                   <TabsTrigger value="wizard">Setup Wizard</TabsTrigger>
                   <TabsTrigger value="clarifications">Clarifications</TabsTrigger>
+                  <TabsTrigger value="reports">Reports</TabsTrigger>
                   <TabsTrigger value="drafts">Drafts</TabsTrigger>
                   <TabsTrigger value="assumptions">Agreed Assumptions</TabsTrigger>
                   <TabsTrigger value="conflicts">Needs Review</TabsTrigger>
@@ -174,6 +184,9 @@ export default function CorpusPage() {
               </TabsContent>
               <TabsContent value="clarifications">
                 <ClarificationsPanel />
+              </TabsContent>
+              <TabsContent value="reports">
+                <FeedbackPanel />
               </TabsContent>
               <TabsContent value="drafts">
                 <DraftsPanel />

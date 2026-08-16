@@ -713,6 +713,8 @@ export const feedbackRecordSchema = z.object({
   converted_to_corpus: z.boolean(),
 });
 
+export const feedbackListSchema = z.array(feedbackRecordSchema);
+
 /* ── Phase 1 elicitation wizard: POST /elicitation/generate, GET
    /elicitation/candidates (gated on can_curate_corpus, not can_edit -- see
    api/curation_routes.py's own docstring) ── */
