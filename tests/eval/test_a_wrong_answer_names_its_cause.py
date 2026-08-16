@@ -35,6 +35,22 @@ def test_a_correct_row_has_no_cause() -> None:
     assert attribute(row) is None
 
 
+def test_a_row_that_could_not_be_graded_has_no_cause() -> None:
+    """``correct: None`` means the instrument had no answer key -- ``grade_turn``'s third value,
+    which ``harness.py`` propagates rather than coercing precisely so a ``missing_gold`` row is
+    not counted as a wrong answer.
+
+    The implementation contradicted its own docstring: it promises ``None`` for a row that is
+    "not answered-and-wrong", and a truthiness test on ``correct`` treated ``None`` as wrong. So
+    a question with no gold was classified anyway -- ``unparseable``, because the empty
+    ``gold_sql`` fails to parse -- and the artifact blamed the model for a missing answer key."""
+    row = _row(
+        "SELECT a, b FROM t", "", correct=None, grade_detail="missing_gold"
+    )
+
+    assert attribute(row) is None
+
+
 def test_an_unanswered_row_has_no_cause() -> None:
     """A refusal and a clarification are outcomes, not wrong answers. Counting them as
     failures is how 008's two denominators (all-questions vs attempted-only) drifted apart."""

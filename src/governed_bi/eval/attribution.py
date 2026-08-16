@@ -60,8 +60,17 @@ class FailureCause(str, Enum):
 
 
 def attribute(row: Mapping[str, object]) -> FailureCause | None:
-    """The cause of ``row``'s failure, or ``None`` if ``row`` is not a wrong answer."""
-    if row.get("outcome") != "answered" or row.get("correct"):
+    """The cause of ``row``'s failure, or ``None`` if ``row`` is not a wrong answer.
+
+    ``correct`` is three-valued and this reads all three. ``grade_turn`` returns ``None`` for a
+    row with no gold -- the instrument had nothing to compare against -- and ``harness.py``
+    propagates it rather than coercing, with a comment saying that ``bool(grade["correct"])``
+    here would turn every ``missing_gold`` into a wrong answer. Testing ``is not False`` is what
+    honours that: a truthiness test also caught ``None`` and classified the row, so a question
+    with no answer key was published as an engine defect -- ``error_type: "unparseable"``,
+    because an empty ``gold_sql`` does not parse. ``None`` is not wrong.
+    """
+    if row.get("outcome") != "answered" or row.get("correct") is not False:
         return None
 
     if row.get("touched_decoy"):
