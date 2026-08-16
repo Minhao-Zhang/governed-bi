@@ -857,9 +857,14 @@ def project_turn(
     # `error_type` has existed on this row since the harness did, and was `None` on all 78
     # answered-but-wrong rows of experiment 008 -- which is why that experiment could not say
     # whether its treatment was aimed at anything. Populate it from the parse, but never over a
-    # value already set: `_run_concurrently` puts the exception class there on a crashed row,
-    # and overwriting it with a parse-derived cause would report an engine crash as a
-    # projection defect.
+    # value already set: the serve graph can stamp its own `error_type` here before this
+    # function ever runs -- `serve/wrap.py`'s `wrap_node` turns a node's raised exception into
+    # `state["failure"]` rather than letting it escape `compiled.invoke`, and
+    # `serve/nodes/stamp.py` copies that into `record["error_type"]` (and forces `outcome` to
+    # `crashed`). Overwriting that with a parse-derived cause would report an engine failure the
+    # graph already caught as a projection defect. (`_run_concurrently`'s own crash handler
+    # builds a separate row and returns it without ever calling this function, so it is not
+    # what this guard is for.)
     if projected.get("error_type") is None:
         cause = attribute(projected)
         if cause is not None:

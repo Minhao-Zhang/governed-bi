@@ -10,6 +10,8 @@ explains ``correct: false`` and cannot set it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from governed_bi.eval.attribution import FailureCause, attribute
 
 
@@ -153,9 +155,12 @@ def test_the_harness_row_carries_the_cause() -> None:
 
 
 def test_a_crashed_rows_error_type_survives_the_classifier() -> None:
-    """``_run_concurrently`` puts the exception class name in ``error_type`` on a crashed
-    row. Overwriting it with a parse-derived cause would report an engine crash as a
-    projection defect -- the collision the guard in ``project_turn`` exists to prevent."""
+    """The serve graph can stamp ``error_type`` onto a row before ``project_turn`` ever sees
+    it: ``serve/wrap.py``'s ``wrap_node`` turns a node's raised exception into
+    ``state["failure"]`` rather than letting it escape ``compiled.invoke``, and
+    ``serve/nodes/stamp.py`` copies that into ``record["error_type"]``. Overwriting a value
+    ``project_turn`` did not compute itself would report that engine failure as a projection
+    defect -- the collision the guard in ``project_turn`` exists to prevent."""
     from governed_bi.eval.harness import project_turn
 
     state = {
@@ -173,3 +178,44 @@ def test_a_crashed_rows_error_type_survives_the_classifier() -> None:
     row = project_turn(state, question=question, arm="test")
 
     assert row["error_type"] == "ValueError"
+
+
+def test_a_run_concurrently_crash_never_reaches_the_classifier(tmp_path: Path) -> None:
+    """``_run_concurrently``'s exception handler (``harness.py``'s ``run_index``) builds its
+    own minimal row dict inline -- ``error_type`` set to the exception's class name -- and
+    returns it straight from ``run_arm``. This row never calls ``project_turn`` at all, which
+    is why the classifier cannot corrupt it and why ``project_turn``'s guard is not what
+    protects it. Pinned here because ``test_the_row_names_its_configuration.py`` already
+    drives this exact branch (``workers=2``, an exploding ``compiled.invoke``) but never
+    asserts on ``error_type``."""
+    import sqlite3
+
+    import governed_bi.eval.harness as harness
+    from governed_bi.datasource.sqlite import SqliteConnector
+    from governed_bi.eval.arms import stub_arm
+
+    db = tmp_path / "customers.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE customers (id INTEGER)")
+    conn.commit()
+    conn.close()
+    connector = SqliteConnector(db)
+    connector._connect()  # noqa: SLF001
+
+    class _Exploding:
+        def invoke(self, *_args, **_kwargs):
+            raise RuntimeError("provider went away")
+
+    original = harness.compile_graph
+    harness.compile_graph = lambda *a, **k: _Exploding()  # type: ignore[assignment]
+    try:
+        rows = harness.run_arm(
+            [{"question_id": "q1", "question": "how many customers", "db_id": "main"}],
+            stub_arm(connector=connector),
+            workers=2,
+            connector_factory=lambda: connector,
+        )
+    finally:
+        harness.compile_graph = original  # type: ignore[assignment]
+
+    assert rows[0]["error_type"] == "RuntimeError"
