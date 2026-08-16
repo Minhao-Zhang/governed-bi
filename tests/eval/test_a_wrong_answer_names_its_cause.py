@@ -155,12 +155,13 @@ def test_the_harness_row_carries_the_cause() -> None:
 
 
 def test_a_crashed_rows_error_type_survives_the_classifier() -> None:
-    """The serve graph can stamp ``error_type`` onto a row before ``project_turn`` ever sees
-    it: ``serve/wrap.py``'s ``wrap_node`` turns a node's raised exception into
-    ``state["failure"]`` rather than letting it escape ``compiled.invoke``, and
-    ``serve/nodes/stamp.py`` copies that into ``record["error_type"]``. Overwriting a value
-    ``project_turn`` did not compute itself would report that engine failure as a projection
-    defect -- the collision the guard in ``project_turn`` exists to prevent."""
+    """Builds a shape no production path produces today: ``error_type`` set alongside
+    ``outcome: "answered"``. The serve graph only ever pairs a pre-set ``error_type`` with
+    ``outcome: "crashed"`` (``serve/wrap.py``'s ``wrap_node`` -> ``serve/nodes/stamp.py``), and
+    ``attribute()`` already refuses any non-``"answered"`` row -- so this guard is unreached by
+    a real row. It is pinned anyway because that safety is ``attribution.py``'s invariant, not
+    ``project_turn``'s: this test is what stops the day it changes from silently relabelling an
+    engine crash as a projection defect."""
     from governed_bi.eval.harness import project_turn
 
     state = {

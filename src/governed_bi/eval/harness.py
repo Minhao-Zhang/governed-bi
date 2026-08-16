@@ -857,14 +857,22 @@ def project_turn(
     # `error_type` has existed on this row since the harness did, and was `None` on all 78
     # answered-but-wrong rows of experiment 008 -- which is why that experiment could not say
     # whether its treatment was aimed at anything. Populate it from the parse, but never over a
-    # value already set: the serve graph can stamp its own `error_type` here before this
-    # function ever runs -- `serve/wrap.py`'s `wrap_node` turns a node's raised exception into
-    # `state["failure"]` rather than letting it escape `compiled.invoke`, and
-    # `serve/nodes/stamp.py` copies that into `record["error_type"]` (and forces `outcome` to
-    # `crashed`). Overwriting that with a parse-derived cause would report an engine failure the
-    # graph already caught as a projection defect. (`_run_concurrently`'s own crash handler
-    # builds a separate row and returns it without ever calling this function, so it is not
-    # what this guard is for.)
+    # value already set.
+    #
+    # A pre-set value comes from the serve graph, not from `_run_concurrently` (that path builds
+    # its own row and never calls this function at all): `serve/wrap.py`'s `wrap_node` turns a
+    # node's raised exception into `state["failure"]` rather than letting it escape
+    # `compiled.invoke`, and `serve/nodes/stamp.py` copies that into `record["error_type"]` --
+    # always alongside `outcome = Outcome.crashed` (`stamp.py:360-361`). No path in this
+    # repository sets `error_type` next to `outcome == "answered"`, and `attribute()` already
+    # refuses any row whose `outcome` is not `"answered"` (`attribution.py`). So the collision
+    # this check guards against cannot happen today.
+    #
+    # Kept anyway: that exclusion is an invariant owned by a different module. Delete this
+    # `is None` check and `harness.py`'s correctness starts depending on `attribution.py` never
+    # relaxing its own outcome guard -- silently, with nothing here to catch the day it does. One
+    # line buys that decoupling, against the exact failure this whole change exists to stop: an
+    # engine crash relabelled as a projection defect.
     if projected.get("error_type") is None:
         cause = attribute(projected)
         if cause is not None:
