@@ -82,6 +82,20 @@ export function AnswerCard({
           refusedBy={answer.refused_by ?? null}
         />
 
+        {/* `serve/nodes/stamp.py::_reliability` sets this when a clarification on this turn
+            was deferred: the agent proceeded on its own best-guess judgment for that point
+            rather than the user's answer. Shown beside the answer, not below a fold and not
+            in a tooltip -- the reader who asked the question is the one who needs it. `"ok"`
+            or absent renders nothing: a "reliability: ok" badge on every answer is the
+            configuration-reporting defect `reliability-stamp.tsx`'s own docstring was written
+            against. */}
+        {answer.reliability?.status === "suspect" && (
+          <div className="flex gap-3 rounded-md border border-tier-fenced-raw/40 bg-tier-fenced-raw/10 p-3">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-tier-fenced-raw" />
+            <p className="text-sm">{answer.reliability.note}</p>
+          </div>
+        )}
+
         {/* Gap 1 (utku-ai-deployment-targets.md): the model's self-reported assumptions,
             shown unconditionally — outside the refused/graded/clean branch below, never
             gated on outcome the way `why` is gated on delivery/confidence. An assumption is
