@@ -64,6 +64,35 @@ export function terminalOf(answer: AnswerView): string | null {
   return null;
 }
 
+/**
+ * Business-tier phrasing for the ledger's `terminal` token (utku-ai-trust-loop-plan.md, I-3).
+ *
+ * `serve/ledger.py` is explicit about what `no_sql` means -- "a turn that sampled a column
+ * and then answered from context is `no_sql` with a non-empty ledger" -- but that is ledger
+ * vocabulary, not customer vocabulary: a restaurant owner reads `no_sql` and learns nothing
+ * about whether the number in front of them came from their database.
+ *
+ * Lives here, beside `terminalOf`, so a caller reading the raw token and building its own
+ * phrase is a second copy of this rule -- the same failure `answer-card.tsx`'s own docstring
+ * names for `deriveDelivery`. An **unrecognised** terminal falls through to the raw value,
+ * the same principle `reliability-stamp.tsx` already states for an outcome it does not
+ * recognise: an unfamiliar state should be visible, not invisible.
+ */
+const TERMINAL_LABEL: Record<string, string> = {
+  answered: "ran a query against your data",
+  no_sql: "answered from a definition, without querying",
+  graded: "ran a query; the result was checked and flagged",
+  capped: "stopped after the attempt limit",
+  refused: "refused, and the rule is named",
+};
+
+/** `terminal`, in business-tier language. Analyst/engineer keep the raw token -- call this
+ * only where the tier check already decided to translate (see `answer-card.tsx`). */
+export function terminalLabel(terminal: string | null): string | null {
+  if (terminal === null) return null;
+  return TERMINAL_LABEL[terminal] ?? terminal;
+}
+
 /** The governed statement the engine actually ran, from the record. */
 export function sqlOf(answer: AnswerView): string | null {
   const sql = answer.record?.generated_sql;
