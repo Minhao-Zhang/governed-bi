@@ -97,3 +97,32 @@ def test_sql_that_does_not_parse_is_named_as_such() -> None:
     row = _row("SELECT FROM WHERE", "SELECT a FROM t")
 
     assert attribute(row) is FailureCause.unparseable
+
+
+def test_no_predicted_sql_at_all_is_named_missing_prediction() -> None:
+    """All 8 baseline rows in ``unparseable`` actually had ``generated_sql: null`` -- the
+    engine answered with no statement, not with one that fails to parse. Conflating the two
+    would hide the population that never queried anything at all."""
+    row = _row(None, "SELECT a FROM t")
+
+    assert attribute(row) is FailureCause.missing_prediction
+
+
+def test_an_empty_string_prediction_is_also_missing_not_unparseable() -> None:
+    row = _row("", "SELECT a FROM t")
+
+    assert attribute(row) is FailureCause.missing_prediction
+
+
+def test_a_whitespace_only_prediction_is_also_missing_not_unparseable() -> None:
+    row = _row("   \n\t", "SELECT a FROM t")
+
+    assert attribute(row) is FailureCause.missing_prediction
+
+
+def test_a_malformed_but_present_prediction_is_still_unparseable() -> None:
+    """The regression test for the new branch: a statement that exists but will not parse
+    must not fall into ``missing_prediction`` just because it also fails to become a tree."""
+    row = _row("SELECT FROM WHERE", "SELECT a FROM t")
+
+    assert attribute(row) is FailureCause.unparseable

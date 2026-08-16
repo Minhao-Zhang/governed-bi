@@ -13,6 +13,13 @@ the SELECT would hide exactly the population a curation arm needs to count.
 
 **Nothing here reads or writes a grade.** ``attribute`` is a pure function of a row that is
 already graded, and it returns ``None`` for any row that is not answered-and-wrong.
+
+**Missing a prediction is not the same failure as an unparseable one.** All 8 baseline rows
+that landed in ``unparseable`` had ``generated_sql: null`` and ``grade_detail:
+"missing_prediction"`` -- the engine returned ``answered`` with no statement at all, never
+having queried anything. That is a different failure from emitting a statement that will not
+parse; exactly one row across both arms was the latter. Conflating them would report "answered
+nothing" and "answered garbage" under the same name and bury the more interesting of the two.
 """
 
 from __future__ import annotations
@@ -33,6 +40,9 @@ class FailureCause(str, Enum):
 
     #: Touched a BIRD-Obfuscation decoy column or table. The semantic-layer class.
     decoy_contact = "decoy_contact"
+    #: No statement at all -- ``answered`` with nothing to parse. Ranked before
+    #: ``unparseable`` so a row with no SQL never reaches ``sqlglot.parse_one``.
+    missing_prediction = "missing_prediction"
     #: The statement does not parse. A cause, not a residual.
     unparseable = "unparseable"
     #: Reads a different set of base tables than gold.
@@ -59,6 +69,8 @@ def attribute(row: Mapping[str, object]) -> FailureCause | None:
 
     pred_sql = str(row.get("generated_sql") or "")
     gold_sql = str(row.get("gold_sql") or "")
+    if not pred_sql.strip():
+        return FailureCause.missing_prediction
     try:
         pred = sqlglot.parse_one(pred_sql)
         gold = sqlglot.parse_one(gold_sql)
