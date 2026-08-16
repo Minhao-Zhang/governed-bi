@@ -25,11 +25,14 @@
  * Now a hit hands off: picking one switches to **By type**, scoped to that asset by id, where
  * its full record is a click away. Search locates; the type view explains.
  *
- * **Four curation tabs after them, and reading vs curating is why they are tabs here rather
- * than a second page.** Setup Wizard / Clarifications / Agreed Assumptions / Needs Review are
- * this fork's admin surface for the clarification-Q&A + Enhancer feature, and every one of them
- * is about the same assets the two tabs above list — an admin who finds a wrong term in **By
- * type** answers the question that fixes it two tabs over, on the same route.
+ * **Five curation tabs after them, and reading vs curating is why they are tabs here rather
+ * than a second page.** Setup Wizard / Clarifications / Drafts / Agreed Assumptions / Needs
+ * Review are this fork's admin surface for the clarification-Q&A + Enhancer feature, and every
+ * one of them is about the same assets the two tabs above list — an admin who finds a wrong term
+ * in **By type** answers the question that fixes it two tabs over, on the same route. Drafts is
+ * the one write path among them that changes what the next session's model can see: it certifies
+ * a `proposed` asset (task D, utku-ai-trust-loop-plan.md), where the other four only read,
+ * answer or resolve.
  *
  * They are hidden entirely when `capabilities.can_curate_corpus` is false rather than shown
  * empty: with the backend toggle off nothing is ever folded or certified that way, so an empty
@@ -50,11 +53,19 @@ import { CorpusFatalNotice, CorpusStatus } from "@/components/corpus/corpus-stat
 import { AssumptionsLog } from "@/components/corpus/assumptions-log";
 import { ClarificationsPanel } from "@/components/corpus/clarifications-panel";
 import { ConflictsPanel } from "@/components/corpus/conflicts-panel";
+import { DraftsPanel } from "@/components/corpus/drafts-panel";
 import { ElicitationWizard } from "@/components/corpus/elicitation-wizard";
 import { canCurateCorpus } from "@/lib/capabilities";
 import { useCapabilities } from "@/hooks/queries";
 
-type Mode = "type" | "search" | "wizard" | "clarifications" | "assumptions" | "conflicts";
+type Mode =
+  | "type"
+  | "search"
+  | "wizard"
+  | "clarifications"
+  | "drafts"
+  | "assumptions"
+  | "conflicts";
 
 /** Only the two reading modes get a hint line; the curation tabs explain themselves inside. */
 const HINT: Partial<Record<Mode, string>> = {
@@ -110,6 +121,7 @@ export default function CorpusPage() {
                 <>
                   <TabsTrigger value="wizard">Setup Wizard</TabsTrigger>
                   <TabsTrigger value="clarifications">Clarifications</TabsTrigger>
+                  <TabsTrigger value="drafts">Drafts</TabsTrigger>
                   <TabsTrigger value="assumptions">Agreed Assumptions</TabsTrigger>
                   <TabsTrigger value="conflicts">Needs Review</TabsTrigger>
                 </>
@@ -162,6 +174,9 @@ export default function CorpusPage() {
               </TabsContent>
               <TabsContent value="clarifications">
                 <ClarificationsPanel />
+              </TabsContent>
+              <TabsContent value="drafts">
+                <DraftsPanel />
               </TabsContent>
               <TabsContent value="assumptions">
                 <AssumptionsLog />
