@@ -602,7 +602,11 @@ export const clarificationRecordSchema = z.object({
   answer_choice_id: z.string().nullable(),
   answer_choice_ids: z.array(z.string()).nullable().optional(),
   answered_by: z.string().nullable(),
-  source: z.enum(["curator", "live_chat", "elicitation_wizard"]),
+  // `refusal` (task A) is a reader who was told `no_schema_matched` and answered "here is what
+  // I meant" through `POST /clarifications/from-refusal`. Listed here for the same reason
+  // `deferred`/`cancelled` are listed on `status` above: `parse()` throws on an undeclared enum
+  // member, so one such row would blank the whole admin queue rather than just that row.
+  source: z.enum(["curator", "live_chat", "elicitation_wizard", "refusal"]),
   // Whether curator/clarification.py::fold_ledger_answer_into_corpus has already folded
   // this answer into a corpus draft (idempotency flag on the record itself). Optional
   // (no default, unlike capabilitiesSchema's similar flags) so a pre-Phase-1c backend
