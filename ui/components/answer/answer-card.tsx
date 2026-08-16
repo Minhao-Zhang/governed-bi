@@ -1,3 +1,5 @@
+"use client";
+
 import { AlertTriangle, Info, Lightbulb } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
@@ -5,12 +7,15 @@ import { ReliabilityStamp } from "@/components/answer/reliability-stamp";
 import { SqlBlock } from "@/components/answer/sql-block";
 import { ProvenanceDrawer } from "@/components/answer/provenance-drawer";
 import { AgentTimeline } from "@/components/chat/agent-timeline";
+import { useSchemaSummary } from "@/hooks/queries";
 import {
   attemptsOf,
+  catalogGlimpse,
   corpusVersionLabel,
   deriveDelivery,
   displayText,
   provenanceOf,
+  refusalSentence,
   routedSchemasLabel,
   sqlOf,
   terminalLabel,
@@ -69,6 +74,21 @@ export function AnswerCard({
   // observes uncertainty and records it.
   const sql = sqlOf(answer);
   const text = displayText(answer);
+  const refusedBy = answer.refused_by ?? null;
+  // I-5: `no_schema_matched` fires before the agent runs, so `text` is null and there is
+  // nothing else on the record to show -- the schema catalog is the only thing left that can
+  // turn the dead end into orientation. Fetched only when it will actually be used: every
+  // other card (every other refusal reason, and every card where the engine already supplied
+  // its own `text`) leaves this query disabled, so it costs nothing beyond the one turn that
+  // needs it.
+  const needsCatalogGlimpse =
+    delivery === "refused" && refusedBy === "no_schema_matched" && text === null;
+  const schemaSummary = useSchemaSummary(undefined, { enabled: needsCatalogGlimpse });
+  const glimpse = needsCatalogGlimpse
+    ? catalogGlimpse(
+        (schemaSummary.data?.items ?? []).filter((t) => !t.excluded).map((t) => t.physical_name),
+      )
+    : null;
   // The governed trace, kept on the finished answer so it doesn't vanish: the
   // captured live trace if present, else rebuilt from the ledger (live == audit).
   const timeline =
@@ -85,7 +105,7 @@ export function AnswerCard({
           outcome={answer.outcome}
           terminal={terminal}
           attempts={attemptsOf(answer)}
-          refusedBy={answer.refused_by ?? null}
+          refusedBy={refusedBy}
           tier={tier}
         />
 
@@ -125,10 +145,16 @@ export function AnswerCard({
           <div className="flex gap-3 rounded-md border border-tier-refused/30 bg-tier-refused/5 p-3">
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-tier-refused" />
             <p className="text-sm">
-              {/* `text` is the system's own copy for this path. `escalation` is gone: the v2
-                  engine has no such field, and inventing a sentence here would be the
-                  interface speaking for a system that said nothing. */}
-              {text ?? "This question can't be answered as asked."}
+              {/* `text` is the system's own copy for this path and wins when present.
+                  `escalation` is gone: the v2 engine has no such field, and inventing a
+                  sentence here would be the interface speaking for a system that said
+                  nothing. When there is no `text` -- the common case, since `refused` is
+                  usually a bare `refused_by` token with a null `text` -- I-5's
+                  `refusalSentence` turns that token into a sentence a non-technical reader
+                  can read, per `refused_by`'s closed vocabulary in
+                  `register/stages.py::REFUSED_BY_TO_STAGE`. */}
+              {text ?? refusalSentence(refusedBy) ?? "This question can't be answered as asked."}
+              {glimpse && ` ${glimpse}`}
             </p>
           </div>
         ) : (

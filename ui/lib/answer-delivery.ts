@@ -93,6 +93,76 @@ export function terminalLabel(terminal: string | null): string | null {
   return TERMINAL_LABEL[terminal] ?? terminal;
 }
 
+/**
+ * Plain-language sentence for `refused_by` (utku-ai-trust-loop-plan.md, I-5).
+ *
+ * `refused_by` is the engine's closed vocabulary for *why* it withheld an answer
+ * (`register/stages.py::REFUSED_BY_TO_STAGE`, plus the abstention reasons in
+ * `ABSTENTION_REASONS`), hand-mirrored here because Python is not importable from
+ * TypeScript -- so this map and that inventory are two declarations of one vocabulary and can
+ * drift. Every sentence is written for the person who asked the question, about *their* data
+ * and *their* question, not the engine's stages or layers: "I couldn't find anything about
+ * that in your data," never "the router returned an empty shortlist."
+ *
+ * `guardrail_error` and `model_error` read differently on purpose. `stages.py`'s own comment
+ * calls `guardrail_error` "our bug wearing a refusal stamp" -- the 2026-08-10 audit found a
+ * turn whose every attempt died inside `check()` recorded `outcome: refused` when `Outcome`
+ * requires a crash to stay separate from a refusal (`CRASH_REFUSED_BY` holds both). Both say
+ * plainly that something broke, so a reader can tell "I can't answer that" apart from
+ * "something broke here." Every other reason is the product declining on purpose, so it says
+ * so without apology or hedging -- `docs/failure-modes.md` prices declining as an outcome, not
+ * a failure.
+ *
+ * An **unrecognised** `refused_by` falls through to the raw token, the same principle
+ * `reliability-stamp.tsx` already states: an unfamiliar state should be visible, not
+ * invisible.
+ */
+const REFUSAL_REASON_LABEL: Record<string, string> = {
+  guard: "I'm not able to answer that kind of question.",
+  negative_example: "I've been specifically told not to answer this kind of question.",
+  no_schema_matched: "I couldn't find anything about that in your data.",
+  missing_join_path:
+    "I can see pieces of what you're asking about, but I don't know how they connect in your data.",
+  over_connect_bounds:
+    "Answering that would mean connecting more of your data at once than I'm allowed to.",
+  guardrail:
+    "I couldn't put together a query for that which passes the safety checks on your data.",
+  guardrail_error:
+    "Something broke on my end while checking that question — this isn't a normal refusal. Please try again or let your admin know.",
+  attempt_cap:
+    "I tried several times to answer this from your data, and none of the attempts passed my checks.",
+  model_error:
+    "Something went wrong while I was generating an answer — this isn't a normal refusal. Please try again or let your admin know.",
+  retrieval_channel_failed:
+    "I wasn't able to search all of your data just then, so I'm not going to guess at an answer.",
+  nothing_licensed: "None of your data is set up to answer that kind of question yet.",
+  empty_context: "I didn't have anything from your data to work with for that question.",
+  licensed_table_evicted:
+    "The table I'd need was too large to include for this question, so I couldn't answer it.",
+};
+
+/** `refused_by`, as a sentence a non-technical reader can act on. Falls through to the raw
+ * token for a reason this map does not recognise -- the same fall-through `terminalLabel` and
+ * `reliability-stamp.tsx` use. `null` (no refusal reason recorded) returns null, same as
+ * `terminalLabel`. */
+export function refusalSentence(refusedBy: string | null): string | null {
+  if (refusedBy === null) return null;
+  return REFUSAL_REASON_LABEL[refusedBy] ?? refusedBy;
+}
+
+/**
+ * "What I can see" line for a `no_schema_matched` refusal (I-5). `no_schema_matched` fires at
+ * `Stage.route`, before the agent ever ran -- there is no attempt ledger, no SQL, nothing else
+ * to show. Naming a handful of the tables the engine actually has turns that dead end into
+ * orientation instead of a blank. Deliberately short: `tableNames` is expected pre-filtered
+ * (e.g. excluded tables dropped) by the caller, and this still caps the count itself so a
+ * large corpus renders a glimpse, not a dump.
+ */
+export function catalogGlimpse(tableNames: string[], limit = 5): string | null {
+  if (tableNames.length === 0) return null;
+  return `What I can see: ${tableNames.slice(0, limit).join(", ")}.`;
+}
+
 /** The governed statement the engine actually ran, from the record. */
 export function sqlOf(answer: AnswerView): string | null {
   const sql = answer.record?.generated_sql;
