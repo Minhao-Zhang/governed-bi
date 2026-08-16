@@ -691,6 +691,28 @@ export const clarificationRecordSchema = z.object({
 
 export const clarificationListSchema = z.array(clarificationRecordSchema);
 
+/* ── GET/POST /feedback (utku-ai-trust-loop-plan.md, task H): reader-reported wrong answers,
+   the admin's second inbox beside the clarification ledger above. A *different* record type by
+   H-b's own decision -- never merged with clarificationRecordSchema, and never read from the
+   same route. ── */
+
+export const feedbackRecordSchema = z.object({
+  id: z.string(),
+  turn_id: z.string(),
+  question: z.string(),
+  // The answer the reader is objecting to, exactly as the card showed it -- not the model's
+  // answer today, which may have moved on by the time an admin looks at this row.
+  answer_text: z.string(),
+  status: z.enum(["open", "answered", "dismissed"]),
+  // The reader's optional one-line reason (H-3). `null` when they left it blank.
+  reason: z.string().nullable(),
+  reported_at: z.string().nullable(),
+  // The admin's corrected answer -- set by POST /feedback/{id}/answer, `null` on an open report.
+  correction: z.string().nullable(),
+  answered_by: z.string().nullable(),
+  converted_to_corpus: z.boolean(),
+});
+
 /* ── Phase 1 elicitation wizard: POST /elicitation/generate, GET
    /elicitation/candidates (gated on can_curate_corpus, not can_edit -- see
    api/curation_routes.py's own docstring) ── */

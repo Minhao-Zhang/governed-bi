@@ -64,6 +64,16 @@ export function terminalOf(answer: AnswerView): string | null {
   return null;
 }
 
+/** The engine's `record.turn_id` -- the identifier task H's "this isn't right" control needs to
+ * name which turn a report is about (`register/record.py`'s identity tier; see
+ * `lib/provenance.ts::RUN_RECORD_KEYS`). `null` when the record carries none -- a mock/fixture
+ * answer, or an engine predating the register's identity tier -- and `WrongAnswerReport` does
+ * not mount without one, the same way it does not mount without a `question`. */
+export function turnIdOf(answer: AnswerView): string | null {
+  const turnId = answer.record?.turn_id;
+  return typeof turnId === "string" ? turnId : null;
+}
+
 /**
  * Business-tier phrasing for the ledger's `terminal` token (utku-ai-trust-loop-plan.md, I-3).
  *

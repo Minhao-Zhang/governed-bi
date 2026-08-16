@@ -7,6 +7,7 @@ import { ReliabilityStamp } from "@/components/answer/reliability-stamp";
 import { RefusalClarificationPrompt } from "@/components/answer/refusal-clarification-prompt";
 import { SqlBlock } from "@/components/answer/sql-block";
 import { ProvenanceDrawer } from "@/components/answer/provenance-drawer";
+import { WrongAnswerReport } from "@/components/answer/wrong-answer-report";
 import { AgentTimeline } from "@/components/chat/agent-timeline";
 import { useSchemaSummary } from "@/hooks/queries";
 import {
@@ -21,6 +22,7 @@ import {
   sqlOf,
   terminalLabel,
   terminalOf,
+  turnIdOf,
   whyLines,
 } from "@/lib/answer-delivery";
 import {
@@ -28,6 +30,7 @@ import {
   tierShowsRawTerminal,
   tierShowsRefusalClarificationPrompt,
   tierShowsSql,
+  tierShowsWrongAnswerReport,
 } from "@/lib/capabilities";
 import type { Tier } from "@/lib/display-mode";
 import { buildStepsFromLedger, type TimelineStep } from "@/lib/steps";
@@ -114,6 +117,17 @@ export function AnswerCard({
     refusedBy === "no_schema_matched" &&
     tierShowsRefusalClarificationPrompt(tier) &&
     !!question;
+  // Task H-3: the reader's other entrance, for a *delivered* answer they know is wrong -- never
+  // on a refusal (nothing was answered, so there is nothing here to report; A's refusal prompt
+  // above already covers that case). Needs `turnId` and `question`, the same way
+  // `showRefusalPrompt` needs `question` alone -- absent either, this simply never renders.
+  const turnId = turnIdOf(answer);
+  const showWrongAnswerReport =
+    delivery !== "refused" &&
+    tierShowsWrongAnswerReport(tier) &&
+    !!question &&
+    !!turnId &&
+    !!text;
   // The governed trace, kept on the finished answer so it doesn't vanish: the
   // captured live trace if present, else rebuilt from the ledger (live == audit).
   const timeline =
@@ -233,6 +247,11 @@ export function AnswerCard({
                   <span className="font-mono text-xs text-muted-foreground">{corpusNote}</span>
                 )}
               </div>
+            )}
+            {/* Task H-3: quiet, last, and only on a delivered answer -- see the module docstring
+                on `WrongAnswerReport` for why it is scoped to `delivery !== "refused"`. */}
+            {showWrongAnswerReport && (
+              <WrongAnswerReport turnId={turnId!} question={question!} answerText={text!} />
             )}
           </>
         )}

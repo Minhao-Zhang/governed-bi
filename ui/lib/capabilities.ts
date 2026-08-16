@@ -150,6 +150,21 @@ export function tierShowsRefusalClarificationPrompt(tier: Tier): boolean {
   return tier === "business";
 }
 
+/** Whether `tier` sees the quiet "this isn't right" control on a *delivered* answer card
+ * (utku-ai-trust-loop-plan.md, task H-3). Business only, same reasoning as
+ * `tierShowsRefusalClarificationPrompt` just above: an analyst/engineer can reach `/corpus`
+ * (see `REACHABLE` above) and act on a wrong answer there directly; a business reader cannot
+ * reach `/corpus` at all, so this control is their only entrance for saying an answer is wrong.
+ *
+ * Named separately from `tierShowsRefusalClarificationPrompt` rather than reused, because the
+ * two answer different questions about the same card: that one appears on a `refused` turn
+ * (nothing was answered, so the reader explains what they meant); this one appears on a
+ * *delivered* answer (`answer-card.tsx` gates on `delivery !== "refused"`) -- a refusal is not a
+ * wrong answer, and there is nothing here to report a refusal for. */
+export function tierShowsWrongAnswerReport(tier: Tier): boolean {
+  return tier === "business";
+}
+
 /** Whether `tier` may certify a `proposed` draft (utku-ai-trust-loop-plan.md, task D).
  *
  * Engineer only, same as `tierShowsAudit` above and for a related reason -- but named

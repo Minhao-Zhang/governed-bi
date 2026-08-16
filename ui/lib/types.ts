@@ -34,6 +34,7 @@ import type {
   erGraphEdgeSchema,
   erGraphNodeSchema,
   erGraphSchema,
+  feedbackRecordSchema,
   graphEdgeSchema,
   graphMetaSchema,
   graphNodeKindSchema,
@@ -97,6 +98,9 @@ export type AnswerView = z.infer<typeof answerViewSchema>;
 export type EditResponse = z.infer<typeof editResponseSchema>;
 export type { ClarificationChoice, ClarificationRequest, ClarificationResponse } from "@/lib/clarification";
 export type ClarificationRecord = z.infer<typeof clarificationRecordSchema>;
+
+/* ── task H: reader-reported wrong answers, a different record type (H-b) ─────────────────── */
+export type FeedbackRecord = z.infer<typeof feedbackRecordSchema>;
 
 /* ── Phase 1 elicitation wizard (proactive admin onboarding) ──────────────── */
 export type ElicitationGenerateResponse = z.infer<typeof elicitationGenerateResponseSchema>;

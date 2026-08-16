@@ -58,6 +58,7 @@ import {
   editResponseSchema,
   elicitationGenerateResponseSchema,
   erGraphSchema,
+  feedbackRecordSchema,
   knowledgeGraphSchema,
   schemaSummaryResponseSchema,
   searchResponseSchema,
@@ -85,6 +86,7 @@ import type {
   EditResponse,
   ElicitationGenerateResponse,
   ErGraph,
+  FeedbackRecord,
   KnowledgeGraph,
   SchemaScope,
   SchemaSummaryResponse,
@@ -458,6 +460,44 @@ export const api = {
       "/clarifications/from-refusal",
       { question, answer: explanation },
       clarificationRecordSchema,
+    );
+  },
+
+  /** A reader says one turn's *delivered* answer is wrong (POST /feedback, task H-3) -- the
+   * reader's other entrance into the semantic layer, for the case where the engine answered and
+   * the business knows the answer is wrong. Distinct from `fileClarificationFromRefusal` above,
+   * which is for the case where the engine said nothing at all (H-b: two different record types,
+   * never merged). `reason` is the reader's optional one-line explanation. */
+  fileFeedback: (params: {
+    turnId: string;
+    question: string;
+    answerText: string;
+    reason?: string;
+  }): Promise<FeedbackRecord> => {
+    if (USE_MOCKS) {
+      const id = `feedback-${Date.now()}`;
+      return Promise.resolve({
+        id,
+        turn_id: params.turnId,
+        question: params.question,
+        answer_text: params.answerText,
+        status: "open",
+        reason: params.reason ?? null,
+        reported_at: new Date().toISOString(),
+        correction: null,
+        answered_by: null,
+        converted_to_corpus: false,
+      });
+    }
+    return post(
+      "/feedback",
+      {
+        turn_id: params.turnId,
+        question: params.question,
+        answer_text: params.answerText,
+        reason: params.reason,
+      },
+      feedbackRecordSchema,
     );
   },
 
