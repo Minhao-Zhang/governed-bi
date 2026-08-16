@@ -1,8 +1,57 @@
-# Four questions before 21 Aug — DRAFT, not sent
+# Two questions before 21 Aug — DRAFT, not sent
 
-> **Question 0 was added 2026-08-15 and is the urgent one.** It is the only question here that
-> nobody but him can answer, because the evidence lives on his machine and nowhere else. The
-> other three are decisions; this one is a fact we cannot recover.
+> **Revised 2026-08-16.** This was briefly four. Two of them turned out to be facts rather than
+> decisions, and facts can be checked. Question 0 is now **answered** — the write-up is kept
+> below because the method is reusable and the wrong version of it is what made us think we
+> needed him. Question 1 is answered by his behaviour, and asked anyway because behaviour is
+> evidence of what he *is* doing, not of what he has *decided*.
+>
+> **What is left for him is questions 2 and 3, and both are genuinely his to decide.** Neither is
+> urgent in the sense question 0 appeared to be; if they wait until 14 Sep the cost is a port
+> we might redo, not a number we can no longer reproduce.
+
+## 0. ANSWERED WITHOUT HIM — which 1 351 questions the published arms ran
+
+**The answer: `BIRD-Obfuscation@22fe2a6`** ("Dedupe before splitting: leakage 3.60% → 0.22%",
+2026-07-29).
+
+**How, in case it is needed again.** `test_final.jsonl` has only four versions in that repo's
+whole history. Filtering each against the 57 schemas `BIRD-corpus@30872d3` covers:
+
+| dataset commit | date | `test_final` | in corpus |
+|---|---|---:|---:|
+| `d178efd` initial | 07-08 | 2 030 | 1 848 |
+| `efc655e` purge 2 739 bad-gold | 07-29 | 1 441 | 1 333 |
+| `1711248` resplit after purge | 07-29 | 1 389 | 1 377 |
+| **`22fe2a6` dedupe before splitting** | **07-29** | **1 351** | **1 351** |
+
+One version matches, and it matches on both published numbers at once — `docs/failure-modes.md`
+says "1 351 questions across 57 schemas", and `22fe2a6`'s test set is 1 351 questions across
+exactly 57 schemas. An independent third check agrees: that same file's "73 questions v4
+declines" plus "the 1 278 v4 commits to" sums to 1 351. It also predates `arms.toml` (08-12) by
+two weeks, which the answer has to.
+
+**Our dataset today is that dataset.** After the 2026-08-16 sync we are at `dacf037`; the only
+commit between it and `22fe2a6` touched the Hugging Face card. The `eval_dataset` tree hash is
+`bc0246cbea33d736a2470ac655b99eb53d5b4192` at both, and all sixteen files compare identical.
+**The published figures are reproducible here, now.**
+
+**What we had wrong, and it inverts the alarm.** Before the sync this fork sat at 2026-07-19 —
+ten days *before* the dataset the arms used existed. So the problem was never "syncing moves us
+off the published baseline"; it was that we had never been on it. Syncing did not cost us the
+baseline, it is what gave us the baseline. Experiments 008 and 009 ran on the pre-purge
+`beer_factory`, so they and the published arms were never on the same fixture to begin with —
+which is worth knowing before anyone compares their numbers.
+
+**What still needs doing, and it is ours not his.** `arms.toml` pins the corpus twice
+(`corpus = "30872d3"` and a mandatory `corpus_content_hash`) and records nothing identifying the
+question set. Recovering `22fe2a6` took a schema-filtered count across four dataset versions and
+a cross-check against prose in two documents; it should have been one field. We intend to add a
+mandatory dataset identity beside `corpus_content_hash` — **that** is worth showing him, as a
+change to his file rather than a question about his memory.
+
+<details>
+<summary>The original question as drafted 2026-08-15, before it was answered</summary>
 
 ## 0. Which 1 351 questions did `v3_fold`, `v4` and `v5` actually run?
 
@@ -52,9 +101,11 @@ they become historical and the baseline needs re-running.
 `corpus_content_hash`, so the next arm cannot have this problem. We would rather he shaped that
 field than inherit ours.
 
+</details>
+
 ---
 
-# Three questions from 2026-08-14
+# The remaining questions, from 2026-08-14
 
 Written 2026-08-14, after merging `upstream/main` (102 commits) into this fork and porting the
 frontend into `ui/`. Minhao is on leave 21 Aug – 14 Sep, so these want answering before then;
@@ -77,6 +128,18 @@ of halving.
 
 **What we would like:** confirmation that `ui/` is the only frontend going forward, and that the
 standalone repo can be archived.
+
+**Checked 2026-08-16, and his behaviour answers it — which is not the same as him answering it.**
+Since the 8/11 copy, `governed-bi-ui@upstream/main` has taken **1** commit (`4fdea5f`, 8/11
+itself, recording npm's peer annotations in the lockfile — the tail of the copy, not new work).
+In the same window `upstream/main`'s `ui/` in this repo took **4**. So he is developing in `ui/`
+and not in the standalone repo, and our port went to the right tree.
+
+That lowers this from a risk to a confirmation. We are still asking, because "has not touched it
+in five days" is evidence of what he is doing and not of what he has decided — a repo can be
+dormant and still not be retired, and the difference decides whether it gets archived. If he does
+not answer before 21 Aug we will proceed on the behavioural reading and note the assumption
+rather than block on it.
 
 ## 2. Does he accept the `analyst` prompt renumbering?
 
