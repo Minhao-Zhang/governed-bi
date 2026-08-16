@@ -167,6 +167,13 @@ export function useAssumptions() {
   return useQuery({ queryKey: ["assumptions"], queryFn: api.assumptions });
 }
 
+/** The approval queue (GET /corpus/drafts; fix round, task D), for the Drafts tab -- every
+ * `proposed` asset, read fresh off disk on every call so an approval or a new draft is
+ * visible within the same server process, unlike `useAssets`'s `/corpus/assets`. */
+export function useDrafts() {
+  return useQuery({ queryKey: ["drafts"], queryFn: api.drafts });
+}
+
 /** Round C: clarifications whose Enhancer decision CONTRADICTED an existing
  * asset (GET /corpus/conflicts), for the "Needs Review" tab. `status` filters
  * (e.g. "unresolved"); omit for every conflict, resolved or not. */

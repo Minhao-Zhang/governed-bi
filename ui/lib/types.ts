@@ -28,6 +28,7 @@ import type {
   conflictResolveResponseSchema,
   conflictRowSchema,
   draftApprovalSchema,
+  draftRowSchema,
   editResponseSchema,
   elicitationGenerateResponseSchema,
   erGraphEdgeSchema,
@@ -87,6 +88,7 @@ export type AssetRow = z.infer<typeof assetRowSchema>;
 export type AssumptionRow = z.infer<typeof assumptionRowSchema>;
 export type ConflictRow = z.infer<typeof conflictRowSchema>;
 export type ConflictResolveResponse = z.infer<typeof conflictResolveResponseSchema>;
+export type DraftRow = z.infer<typeof draftRowSchema>;
 export type DraftApproval = z.infer<typeof draftApprovalSchema>;
 export type RuntimeToggle = z.infer<typeof runtimeToggleSchema>;
 export type ColumnRelated = z.infer<typeof columnRelatedResponseSchema>;

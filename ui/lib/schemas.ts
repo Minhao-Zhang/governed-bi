@@ -542,6 +542,20 @@ export const conflictResolveResponseSchema = z.object({
   detail: z.string(),
 });
 
+/* ── GET /corpus/drafts (fix round, task D): the approval queue, read fresh off disk on
+   every call -- unlike /corpus/assets, it observes a draft or an approval within the same
+   server process. Carries `body`, which /corpus/assets does not declare at all. ── */
+
+export const draftRowSchema = z.object({
+  id: z.string(),
+  asset_type: z.string(),
+  summary: z.string(),
+  body: z.string().nullable(),
+  provenance_status: z.string().nullable(),
+});
+
+export const draftListSchema = z.array(draftRowSchema);
+
 /* ── POST /corpus/drafts/{id}/approve (task D: the trust loop's approval
    terminus) -- gated on can_curate_corpus, not can_edit, same as the two
    routes above ── */

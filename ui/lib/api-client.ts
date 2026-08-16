@@ -54,6 +54,7 @@ import {
   conflictListSchema,
   conflictResolveResponseSchema,
   draftApprovalSchema,
+  draftListSchema,
   editResponseSchema,
   elicitationGenerateResponseSchema,
   erGraphSchema,
@@ -80,6 +81,7 @@ import type {
   ConflictResolveResponse,
   ConflictRow,
   DraftApproval,
+  DraftRow,
   EditResponse,
   ElicitationGenerateResponse,
   ErGraph,
@@ -288,6 +290,15 @@ export const api = {
       conflictResolveResponseSchema,
     );
   },
+
+  /** The approval queue (GET /corpus/drafts; fix round, task D) -- every `proposed` asset,
+   * read fresh off disk on every call. Not `/corpus/assets` filtered client-side (D-2's
+   * original choice): that route reads `session.assets_by_id`, a run constant frozen at
+   * session-build time, so it never observed an approval within one server process -- a hard
+   * refresh brought an approved draft back into the queue. No mock fixture carries a
+   * `proposed` row (mirrors `assets()`'s own mock data), so mock mode renders this tab's
+   * empty state, same as before this fix. */
+  drafts: (): Promise<DraftRow[]> => get("/corpus/drafts", draftListSchema, []),
 
   /** Certify one `proposed` draft (POST /corpus/drafts/{id}/approve; task D -- the trust
    * loop's approval terminus). Not gated on `can_edit` -- mirrors `resolveConflict`'s and
