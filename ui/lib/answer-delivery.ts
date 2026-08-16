@@ -72,6 +72,13 @@ export function terminalOf(answer: AnswerView): string | null {
  * vocabulary, not customer vocabulary: a restaurant owner reads `no_sql` and learns nothing
  * about whether the number in front of them came from their database.
  *
+ * `no_sql` is deliberately **not** a single entry here. `execution_from_attempts` returns it
+ * whenever there are no *answering* attempts, which covers two different turns: "sampled a
+ * column, then answered from context" (a non-empty ledger) and "never touched the data at
+ * all" (an empty ledger). I-3 originally shipped one phrase for both; the live run on
+ * 2026-08-16 found the second case is a stronger claim getting the same, softer phrasing.
+ * `terminalLabel` branches it on `attempts.length` instead -- see `NO_SQL_LABEL`.
+ *
  * Lives here, beside `terminalOf`, so a caller reading the raw token and building its own
  * phrase is a second copy of this rule -- the same failure `answer-card.tsx`'s own docstring
  * names for `deriveDelivery`. An **unrecognised** terminal falls through to the raw value,
@@ -80,16 +87,32 @@ export function terminalOf(answer: AnswerView): string | null {
  */
 const TERMINAL_LABEL: Record<string, string> = {
   answered: "ran a query against your data",
-  no_sql: "answered from a definition, without querying",
   graded: "ran a query; the result was checked and flagged",
   capped: "stopped after the attempt limit",
   refused: "refused, and the rule is named",
 };
 
+/** The two `no_sql` phrasings, split on whether the attempt ledger is empty. A non-empty
+ * ledger means the agent tried the data first (e.g. sampled a column) and then answered from
+ * a definition; an empty one means it never touched the data at all, which is the stronger
+ * claim and gets the stronger warning. */
+const NO_SQL_LABEL = {
+  sampled: "answered from a definition, without running a query",
+  untouched: "answered without consulting your data at all",
+};
+
 /** `terminal`, in business-tier language. Analyst/engineer keep the raw token -- call this
- * only where the tier check already decided to translate (see `answer-card.tsx`). */
-export function terminalLabel(terminal: string | null): string | null {
+ * only where the tier check already decided to translate (see `answer-card.tsx`). `attempts`
+ * is the same ledger `ReliabilityStamp` counts; it is only consulted to split `no_sql` (see
+ * `NO_SQL_LABEL`), so a caller translating a different terminal may omit it. */
+export function terminalLabel(
+  terminal: string | null,
+  attempts: Array<Record<string, unknown>> = [],
+): string | null {
   if (terminal === null) return null;
+  if (terminal === "no_sql") {
+    return attempts.length > 0 ? NO_SQL_LABEL.sampled : NO_SQL_LABEL.untouched;
+  }
   return TERMINAL_LABEL[terminal] ?? terminal;
 }
 

@@ -58,11 +58,12 @@ export function AnswerCard({
 }) {
   const showSql = tierShowsSql(tier);
   const showAudit = tierShowsAudit(tier);
+  const attempts = attemptsOf(answer);
   // Business tier reads the ledger's terminal in plain language; analyst/engineer keep the
   // raw token, which they can read and which is more precise (see `terminalLabel`).
   const terminal = tierShowsRawTerminal(tier)
     ? terminalOf(answer)
-    : terminalLabel(terminalOf(answer));
+    : terminalLabel(terminalOf(answer), attempts);
   const delivery = deriveDelivery(answer);
   const provenance = provenanceOf(answer);
   const why = whyLines(provenance);
@@ -104,7 +105,7 @@ export function AnswerCard({
         <ReliabilityStamp
           outcome={answer.outcome}
           terminal={terminal}
-          attempts={attemptsOf(answer)}
+          attempts={attempts}
           refusedBy={refusedBy}
           tier={tier}
         />
