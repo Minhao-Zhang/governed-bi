@@ -324,7 +324,7 @@ def _run_concurrently(
     as a shorter file.
     """
     import threading
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     local = threading.local()
 
@@ -372,7 +372,13 @@ def _run_concurrently(
 
     results: dict[int, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for index, row in pool.map(run_index, range(len(questions))):
+        # `as_completed`, not `pool.map`: `map` yields in *input* order, so one hung provider
+        # request holds back every finished row behind it and the crash-safe writer goes
+        # quiet. The returned list is still ordered -- callers index it -- but `on_row` now
+        # fires when the row is actually done.
+        futures = [pool.submit(run_index, i) for i in range(len(questions))]
+        for future in as_completed(futures):
+            index, row = future.result()
             results[index] = row
             if on_row is not None:
                 on_row(index, row)
