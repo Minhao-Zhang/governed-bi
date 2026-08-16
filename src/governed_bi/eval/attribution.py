@@ -107,15 +107,29 @@ def attribute(row: Mapping[str, object]) -> FailureCause | None:
 
 
 def _table_names(tree: exp.Expression) -> frozenset[str]:
-    """Base table names, lowercased and unqualified.
+    """Base table names, lowercased and unqualified, with CTE names removed.
 
     Unqualified because gold and prediction disagree on schema prefixes routinely and that
     disagreement is not a failure -- ``beer_factory.wurzelbier`` and ``wurzelbier`` are the
     same table, and counting them as ``table_set_differs`` would swallow the bucket.
+
+    **A CTE reference is an ``exp.Table`` in sqlglot's AST.** ``WITH ranked AS (...) SELECT ...
+    FROM ranked`` parses the ``ranked`` in the FROM clause as ``exp.Table``, indistinguishable
+    by class from a real one; the CTE *definition* is a separate ``exp.CTE`` node whose
+    ``alias_or_name`` is that same name. So ``find_all(exp.Table)`` collects a name that is not
+    a table at all, and a prediction that restructures gold's query into a CTE reads as
+    touching a table gold does not have.
+
+    Subtracting the ``exp.CTE`` alias set is therefore not redundant with the unqualifying
+    above -- these are two different filters that happen both to be about names, and a reader
+    who removes this one as a duplicate re-opens the defect. Measured on experiment 009's own
+    artifacts: 9 of 23 ``table_set_differs`` rows had base-table sets identical to gold, which
+    is enough to make ``projection_extra`` rather than ``table_set_differs`` the largest bucket
+    and to change which arm the experiment licensed.
     """
     return frozenset(
         t.name.lower() for t in tree.find_all(exp.Table) if t.name
-    )
+    ) - {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
 
 
 def _arity(tree: exp.Expression) -> int:
@@ -124,6 +138,14 @@ def _arity(tree: exp.Expression) -> int:
     ``SELECT *`` is counted as ``-1`` so it never compares equal to an explicit list: a star
     against three named columns is a real difference and reporting it as equal arity would
     push the row into ``unattributed``.
+
+    **``WITH`` does not fool this the way it fools ``_table_names``.** sqlglot hangs the CTE list
+    off the outer ``Select`` as its ``with`` argument rather than wrapping it, so the parsed root
+    of ``WITH ranked AS (...) SELECT id, n FROM ranked`` *is* that outer ``Select`` and
+    ``find(exp.Select)`` returns it, not the CTE's inner one. Checked: the query above reports
+    arity 2, gold's projection, and not the CTE body's. Recorded because the natural fear after
+    the CTE defect below is that every ``find``/``find_all`` here shares it, and this one does
+    not.
     """
     select = tree.find(exp.Select)
     if select is None:

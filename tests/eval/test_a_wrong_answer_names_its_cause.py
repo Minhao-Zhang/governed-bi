@@ -79,6 +79,34 @@ def test_a_different_table_set() -> None:
     assert attribute(row) is FailureCause.table_set_differs
 
 
+def test_a_cte_name_is_not_counted_as_a_table_gold_does_not_have() -> None:
+    """In sqlglot a CTE *reference* parses to ``exp.Table``, so ``find_all(exp.Table)`` collected
+    ``ranked`` here and the row read as querying a table gold never touches. Both statements read
+    only ``sales``; restructuring a query into a CTE is not a wrong table choice.
+
+    This mislabelled 9 of experiment 009's 23 ``table_set_differs`` rows, which was enough to
+    make that bucket look like the largest and license a `curator/` arm against it."""
+    row = _row(
+        "WITH ranked AS (SELECT id, n FROM sales) SELECT id, n FROM ranked",
+        "SELECT id, n FROM sales",
+    )
+
+    assert attribute(row) is not FailureCause.table_set_differs
+    assert attribute(row) is FailureCause.unattributed
+
+
+def test_a_cte_does_not_hide_a_table_the_prediction_really_added() -> None:
+    """The paired half: subtracting CTE names must not also subtract a real extra table. Without
+    it the fix would turn a genuine wrong-table row into `unattributed` and shrink the bucket
+    for the opposite reason."""
+    row = _row(
+        "WITH ranked AS (SELECT id FROM wrong_table) SELECT id FROM ranked",
+        "SELECT id FROM sales",
+    )
+
+    assert attribute(row) is FailureCause.table_set_differs
+
+
 def test_decoy_contact_is_read_from_the_row_not_the_sql() -> None:
     """``touched_decoy`` is computed against BIRD-Obfuscation's manifest, which the SQL text
     cannot reveal. Ranked first because a decoy column is a *semantic-layer* failure -- the
