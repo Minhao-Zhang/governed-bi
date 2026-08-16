@@ -50,7 +50,14 @@ export function RefusalClarificationPrompt({ question }: { question: string }) {
       await api.fileClarificationFromRefusal(question, trimmed);
       setSent(true);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not send that. Please try again.");
+      // Logged, never rendered. `ApiError.message` is engine/HTTP vocabulary -- a 409's "this
+      // session has no corpus_root to write back to", a schema mismatch -- fine for the
+      // admin-facing surfaces that render it directly (`ClarificationCard`, `ElicitationCard`),
+      // wrong here: this control is business-tier-only by construction, so the
+      // sibling-consistency argument those two rely on does not apply to it. One plain string
+      // for every failure instead.
+      if (err instanceof ApiError) console.error("fileClarificationFromRefusal failed:", err.message);
+      setError("Could not send that. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -58,7 +65,7 @@ export function RefusalClarificationPrompt({ question }: { question: string }) {
 
   return (
     <div className="space-y-1.5">
-      <p className="text-sm">Tell us what you meant, and we&rsquo;ll remember it next time.</p>
+      <p className="text-sm">Tell us what you meant and we&rsquo;ll pass it to your admin.</p>
       <div className="flex gap-2">
         <Input
           value={explanation}

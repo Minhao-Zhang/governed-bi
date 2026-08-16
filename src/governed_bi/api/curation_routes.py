@@ -515,13 +515,13 @@ def make_curation_router(session: Any) -> APIRouter:
 
         **Decided here: the explanation becomes the record's ``answer`` immediately, rather than
         a freeform pre-fill left on an ``open`` row for an admin to separately confirm.** Both
-        keep a human between this write and certification either way --
-        ``corpus/drafts.py::approve_draft`` certifies a ``proposed`` draft and nothing here calls
-        it -- so the choice is about the *ledger's* shape, not the corpus's safety. Landing
-        ``open`` with a pre-filled ``answer`` would be a state nothing else on this ledger uses
-        (``ClarificationAnswerForm``'s freeform input never reads a starting value), so making it
-        visible to an admin would mean changing the shared clarification-queue components three
-        other surfaces already render through. Folding immediately through
+        reach the identical certification gate either way -- ``corpus/drafts.py::approve_draft``
+        is the only function that flips ``proposed`` to ``certified``, and nothing here calls it
+        -- so the choice is about the *ledger's* shape, not about who may certify this fact.
+        Landing ``open`` with a pre-filled ``answer`` would be a state nothing else on this
+        ledger uses (``ClarificationAnswerForm``'s freeform input never reads a starting value),
+        so making it visible to an admin would mean changing the shared clarification-queue
+        components three other surfaces already render through. Folding immediately through
         :func:`~governed_bi.curator.clarification.fold_ledger_answer_into_corpus` -- the exact
         function every other answer route here already calls, with no branch added for this
         source -- needs none of that: the record is ``answered_by="user"`` the moment it exists,
@@ -529,6 +529,26 @@ def make_curation_router(session: Any) -> APIRouter:
         already uses for a live turn's *own* asking user, and it surfaces where an admin actually
         reviews unreviewed facts (the drafts queue) rather than swelling the "still owed an
         answer" queue with a row nobody owes an answer to.
+
+        **What "reaches the identical certification gate" does and does not mean, stated plainly
+        so the next reader does not have to re-derive it by tracing the session builder.**
+        Certification is gated: ``for_analyst``'s certified-only filter (``corpus/analyst.py``)
+        still stands between a ``proposed`` term and licensing a *column* in ``check()``, so a
+        reader's own words cannot make a column queryable on their say-so alone. **Retrieval
+        visibility of a ``proposed`` asset is not gated, and this is true today for every source
+        that reaches this fold, not only this one.** ``serve/session.py`` builds
+        ``assets_by_id`` -- and the retrieval index built from it -- by filtering only
+        ``governance.excluded``; it does not read ``audit.provenance`` at all. So the term this
+        route writes is retrievable, and is rendered into the model's context
+        (``serve/nodes/assemble.py`` -> ``serve/context.py::render_context``, both reading
+        ``assets_by_id`` directly, never ``for_analyst``'s certified view) on the very next turn
+        served by a session built over this corpus root -- before any admin has looked at it, let
+        alone approved it. This is pre-existing and identical for a ``curator``/``live_chat``/
+        ``elicitation_wizard``-sourced draft folded through the same function; this route adds no
+        new exposure and, per this initiative's additive-only constraint, does not add a
+        provenance filter to close it either. Whether ``_visible`` should also filter on
+        provenance is a question about the shared fold path, not about this route, and is
+        recorded rather than decided here.
 
         Request body: ``{"question": "...", "answer": "..."}`` -- both required, else 422.
         ``answer`` matches every other clarification route's own wire vocabulary for "the text a
