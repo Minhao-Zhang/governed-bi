@@ -129,6 +129,7 @@ def apply(
     namespace: str | None = None,
     write_model: str | None = None,
     status: ProvenanceStatus = ProvenanceStatus.proposed,
+    extra: dict[str, Any] | None = None,
 ) -> tuple[Path | None, EnhancerDecision]:
     """Decide, then act: duplicate skips the write, conflict writes flagged, novel writes plain.
 
@@ -141,12 +142,18 @@ def apply(
     *caller's* warrant for the fact, not about this function's judgment of it — the dedup and
     conflict decision is the same question either way, and an unwarranted answer that duplicates
     an existing fact should still not mint a second copy of it.
+
+    ``extra`` is the caller's own facts about ``candidate`` (task C-0: ``source``, who raised the
+    clarification this draft came from) — merged with this function's own ``conflict_with``,
+    never replaced by it, since a draft can be both conflicted and, say, refusal-sourced at once.
     """
     decision = decide_fold(model, candidate.summary, existing)
     if decision.duplicate_of:
         return None, decision
-    extra = {"conflict_with": decision.conflict_with} if decision.conflict_with else None
+    merged_extra = dict(extra) if extra else {}
+    if decision.conflict_with:
+        merged_extra["conflict_with"] = decision.conflict_with
     path = submit_draft(
-        root, candidate, namespace=namespace, model=write_model, extra=extra, status=status
+        root, candidate, namespace=namespace, model=write_model, extra=(merged_extra or None), status=status
     )
     return path, decision

@@ -111,5 +111,6 @@ def mine_corpus_node(state: dict, config: RunnableConfig) -> dict:
             schema=schema,
             known_assets=assets_by_id.values(),
             write_model=write_model,
+            source="live_chat",
         )
     return {"clarifications_mined": mined_ids}

@@ -194,6 +194,75 @@ def test_assumptions_excludes_a_settled_asset_later_superseded_by_a_replace_reso
     assert candidate.id not in ids  # conflict-flagged -- belongs to /corpus/conflicts, not here
 
 
+# ── source (task C-0): reported as stamped, not hardcoded ──────────────────────────────────
+#
+# Regression: this route reported every row as `"live_chat"` unconditionally, including one
+# folded from task A's `POST /clarifications/from-refusal` (`source="refusal"`) -- a claimed
+# provenance the route never observed.
+
+
+def _write_settled_draft_with_source(
+    tmp_path: Path, asset_id: str, question: str, answer: str, source: str, *, db_id: str = _DB_ID
+) -> Any:
+    from governed_bi.corpus.drafts import submit_draft
+    from governed_bi.corpus.schema import TermAsset
+
+    draft = TermAsset(
+        id=asset_id, name=question, summary=f"{question} — {answer}", body=f"Q: {question}\nA: {answer}",
+    )
+    submit_draft(tmp_path, draft, namespace=db_id, extra={"source": source})
+    return draft
+
+
+def test_assumptions_reports_a_refusal_stamped_row_as_refusal(monkeypatch, tmp_path: Path) -> None:
+    _write_settled_draft_with_source(
+        tmp_path, "clarification.olist.settled_refusal", "what does churn mean?",
+        "no orders in 6 months", "refusal",
+    )
+    client = _client(monkeypatch, tmp_path)
+    (row,) = client.get("/corpus/assumptions").json()
+    assert row["source"] == "refusal"
+
+
+def test_assumptions_reports_a_live_chat_stamped_row_as_live_chat(monkeypatch, tmp_path: Path) -> None:
+    """Distinct from the no-stamp-at-all fallback case above: a row task C-0's fold *did*
+    stamp must report exactly what it was stamped, not merely fall through to the default."""
+    _write_settled_draft_with_source(
+        tmp_path, "clarification.olist.settled_live", "what does active mean?", "90 days", "live_chat",
+    )
+    client = _client(monkeypatch, tmp_path)
+    (row,) = client.get("/corpus/assumptions").json()
+    assert row["source"] == "live_chat"
+
+
+def test_conflicts_and_assumptions_agree_on_a_row_that_is_both_conflicted_and_refusal_sourced(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Self-review: `source` is merged into the same ``extra`` dict ``conflict_with`` lives in.
+    A row that is both must still resolve through ``/corpus/conflicts`` exactly like an
+    ordinary conflict (unaffected by the extra key), and must still be excluded from
+    ``/corpus/assumptions`` -- conflict-flagged beats any source.
+    """
+    from governed_bi.corpus.drafts import submit_draft
+    from governed_bi.corpus.schema import TermAsset
+
+    existing = _write_certified_term(tmp_path, "clarification.olist.revenue9", "revenue means net_revenue")
+    draft = TermAsset(
+        id="clarification.olist.conflict9", name="what does revenue mean?",
+        summary="what does revenue mean? — gross sales", body="Q: what does revenue mean?\nA: gross sales",
+    )
+    submit_draft(tmp_path, draft, namespace=_DB_ID, extra={"conflict_with": existing.id, "source": "refusal"})
+    client = _client(monkeypatch, tmp_path)
+
+    (row,) = client.get("/corpus/conflicts").json()
+    assert row["id"] == draft.id
+    assert row["status"] == "unresolved"
+    assert row["existing_asset_id"] == existing.id  # conflict reporting is unperturbed by `source`
+    assert row["source"] == "live_chat"  # /corpus/conflicts keeps its own hardcode -- unchanged by task C-0
+
+    assert draft.id not in {r["id"] for r in client.get("/corpus/assumptions").json()}
+
+
 # ── POST /corpus/conflicts/{id}/resolve ─────────────────────────────────────────────────────
 
 

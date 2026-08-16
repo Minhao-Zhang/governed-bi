@@ -199,6 +199,100 @@ def test_fold_answered_clarification_conflict_with_a_certified_term_writes_a_fla
     assert draft.audit.extra["conflict_with"] == existing.id
 
 
+# ── source (task C-0): provenance destroyed at the fold, and its fix ────────────────────────
+#
+# Regression: `curator/enhancer.py::apply` wrote only `{"conflict_with": ...}` into `extra`,
+# so a caller's own `source` never reached disk -- every clarification-derived asset reported
+# as `live_chat` (`api/curation_routes.py`'s hardcoded literal) regardless of where it actually
+# came from. Task A's `POST /clarifications/from-refusal` (`source="refusal"`) made that a real
+# bug, not a latent one: those records fold through this exact path.
+
+
+def test_fold_answered_clarification_stamps_the_caller_s_source(tmp_path: Path) -> None:
+    from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_answered_clarification
+
+    fold_answered_clarification(
+        None, tmp_path, "what does churn mean?", "no orders in 6 months",
+        schema="olist", known_assets=(), source="refusal",
+    )
+    (draft,) = load(tmp_path)[0]
+    assert draft.audit.extra["source"] == "refusal"
+
+
+def test_fold_answered_clarification_with_no_source_argument_stamps_nothing(tmp_path: Path) -> None:
+    """No caller-supplied ``source`` writes no ``source`` key at all -- distinct from writing
+    one of the empty/falsy kind, so a reload cannot mistake "unknown" for an observed value."""
+    from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_answered_clarification
+
+    fold_answered_clarification(None, tmp_path, "q", "a", schema="olist", known_assets=())
+    (draft,) = load(tmp_path)[0]
+    assert "source" not in draft.audit.extra
+
+
+def test_fold_answered_clarification_merges_source_with_conflict_with_rather_than_replacing_it(
+    tmp_path: Path,
+) -> None:
+    """A draft can be both conflicted *and* refusal-sourced at once -- `curator/enhancer.py`'s
+    own `conflict_with` write must survive alongside the caller's `source`, not be overwritten
+    by it (or vice versa)."""
+    from governed_bi.corpus.store import load, write
+    from governed_bi.curator.clarification import fold_answered_clarification
+
+    existing = _certified_term("clarification.olist.existing_src", "customer id means kunde_id")
+    write(tmp_path, existing, namespace="olist")
+
+    fold_answered_clarification(
+        _scripted(f'{{"duplicate_of": null, "conflict_with": "{existing.id}"}}'),
+        tmp_path,
+        "what does customer id mean?",
+        "customer id means transaktions_kunde_id",
+        schema="olist",
+        known_assets=[existing],
+        source="refusal",
+    )
+    assets, problems = load(tmp_path)
+    assert not problems
+    (draft,) = [a for a in assets if a.id != existing.id]
+    assert draft.audit.extra["conflict_with"] == existing.id
+    assert draft.audit.extra["source"] == "refusal"
+
+
+def test_fold_ledger_answer_into_corpus_forwards_the_record_s_own_source(tmp_path: Path) -> None:
+    """The offline path already holds the whole ``ClarificationRecord`` -- this is the second
+    half of the same regression: forwarding it, rather than dropping it on the floor."""
+    from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
+    from governed_bi.curator.clarifications import write_clarifications
+
+    record = _record(basis="data_definition", source="refusal")
+    write_clarifications(tmp_path, [record])
+
+    fold_ledger_answer_into_corpus(
+        record, agent_model=None, corpus_root=tmp_path, schema="olist", known_assets=(),
+    )
+    (draft,) = load(tmp_path)[0]
+    assert draft.audit.extra["source"] == "refusal"
+
+
+def test_fold_ledger_answer_into_corpus_forwards_live_chat_source_unchanged(tmp_path: Path) -> None:
+    """A ``live_chat``-sourced record (the pre-task-A shape) must keep reporting ``live_chat``
+    -- additive, not a behaviour change for the population this route already served."""
+    from governed_bi.corpus.store import load
+    from governed_bi.curator.clarification import fold_ledger_answer_into_corpus
+    from governed_bi.curator.clarifications import write_clarifications
+
+    record = _record(basis="data_definition", source="live_chat")
+    write_clarifications(tmp_path, [record])
+
+    fold_ledger_answer_into_corpus(
+        record, agent_model=None, corpus_root=tmp_path, schema="olist", known_assets=(),
+    )
+    (draft,) = load(tmp_path)[0]
+    assert draft.audit.extra["source"] == "live_chat"
+
+
 def test_fold_answered_clarification_only_compares_against_certified_terms(tmp_path: Path) -> None:
     """A ``proposed`` (not yet certified) term must not enter the comparison set -- matching
     ``mine_corpus_node``'s own ``_is_certified`` filter, now shared rather than duplicated.

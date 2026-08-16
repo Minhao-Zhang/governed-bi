@@ -234,11 +234,14 @@ def make_curation_router(session: Any) -> APIRouter:
         row today: nothing in the write path (``curator/clarification.py``,
         ``curator/enhancer.py``) captures caller identity or a timestamp yet, and inventing either
         here would be exactly the "field the engine does not observe" this module's own docstring
-        rule forbids. ``source`` is always ``"live_chat"``: every row this route can produce came
-        through an answered ``ask_user`` interrupt, mined by ``serve/nodes/mine_corpus.py`` --
-        reached identically whether the resume arrived over ``POST /chat/resume`` or LangGraph
-        Server's own ``/threads/{id}/runs/stream``, since both resume by invoking the same
-        compiled graph.
+        rule forbids. ``source`` is no longer hardcoded (fixed 2026-08-16, task C-0): it is read
+        off ``audit.extra["source"]``, stamped at fold time by ``curator/clarification.py::
+        fold_answered_clarification``'s ``source`` keyword -- ``"live_chat"`` from a live turn,
+        or ``record.source`` verbatim from the offline ledger fold, which can be ``"refusal"``
+        since task A gave a reader a second, non-``ask_user`` entrance into this same queue. A
+        row with no stamp falls back to ``"live_chat"``: not a guess, because that population is
+        closed -- every unstamped row predates task A, when ``"live_chat"`` was this route's only
+        possible producer, so the fallback recovers a known fact rather than inventing one.
         """
         rows: list[dict[str, Any]] = []
         for asset in _reload_assets(session):
@@ -266,7 +269,7 @@ def make_curation_router(session: Any) -> APIRouter:
                     "answer": answer,
                     "answered_by": extra.get("answered_by"),
                     "answered_at": extra.get("answered_at"),
-                    "source": "live_chat",
+                    "source": extra.get("source", "live_chat"),
                 }
             )
         return sorted(rows, key=lambda r: r["id"])

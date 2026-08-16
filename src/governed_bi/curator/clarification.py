@@ -131,6 +131,7 @@ def fold_answered_clarification(
     known_assets: Iterable[Any],
     write_model: str | None = None,
     status: ProvenanceStatus = ProvenanceStatus.proposed,
+    source: str | None = None,
 ) -> None:
     """Build a :class:`TermAsset` draft from one answered clarification and write it through
     the Enhancer dedup/conflict path.
@@ -154,10 +155,18 @@ def fold_answered_clarification(
     ``status`` is the provenance the write lands at, forwarded to both paths so the
     Enhancer-degraded one cannot quietly write a stronger warrant than the ordinary one. It is
     ``proposed`` for every caller but :func:`fold_ledger_answer_into_corpus`'s unwarranted case.
+
+    ``source`` (task C-0) is the caller's own :attr:`~governed_bi.curator.clarifications.
+    ClarificationRecord.source` string, stamped into ``audit.extra["source"]`` on write --
+    ``None`` writes nothing, matching every call site that predates this parameter. Provenance,
+    not ambiguity kind: this is *who raised* the clarification, never merged into ``basis``
+    (*what kind* of ambiguity it was) -- the two were ruled orthogonal at task A and merging them
+    would make every count `/corpus/assumptions` and step C take ambiguous.
     """
     from governed_bi.corpus.drafts import submit_draft
     from governed_bi.curator import enhancer
 
+    extra = {"source": source} if source else None
     try:
         draft = draft_from_clarification(question, answer, schema=schema)
         existing = [
@@ -174,9 +183,10 @@ def fold_answered_clarification(
                 namespace=schema,
                 write_model=write_model,
                 status=status,
+                extra=extra,
             )
         except enhancer.EnhancerError:
-            submit_draft(corpus_root, draft, namespace=schema, status=status)
+            submit_draft(corpus_root, draft, namespace=schema, status=status, extra=extra)
     except Exception:  # noqa: BLE001 -- mining is best-effort, never fatal to the caller
         pass
 
@@ -268,6 +278,7 @@ def fold_ledger_answer_into_corpus(
         known_assets=known_assets,
         write_model=write_model,
         status=ProvenanceStatus.draft if unwarranted else ProvenanceStatus.proposed,
+        source=record.source,
     )
     return mark_converted_to_corpus(corpus_root, record.id)
 
