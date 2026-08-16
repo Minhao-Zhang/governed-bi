@@ -17,7 +17,7 @@ import {
   terminalOf,
   whyLines,
 } from "@/lib/answer-delivery";
-import { tierShowsAudit, tierShowsSql } from "@/lib/capabilities";
+import { tierShowsAudit, tierShowsRawTerminal, tierShowsSql } from "@/lib/capabilities";
 import type { Tier } from "@/lib/display-mode";
 import { buildStepsFromLedger, type TimelineStep } from "@/lib/steps";
 import { cn } from "@/lib/utils";
@@ -55,7 +55,9 @@ export function AnswerCard({
   const showAudit = tierShowsAudit(tier);
   // Business tier reads the ledger's terminal in plain language; analyst/engineer keep the
   // raw token, which they can read and which is more precise (see `terminalLabel`).
-  const terminal = tier === "business" ? terminalLabel(terminalOf(answer)) : terminalOf(answer);
+  const terminal = tierShowsRawTerminal(tier)
+    ? terminalOf(answer)
+    : terminalLabel(terminalOf(answer));
   const delivery = deriveDelivery(answer);
   const provenance = provenanceOf(answer);
   const why = whyLines(provenance);
@@ -84,6 +86,7 @@ export function AnswerCard({
           terminal={terminal}
           attempts={attemptsOf(answer)}
           refusedBy={answer.refused_by ?? null}
+          tier={tier}
         />
 
         {/* `serve/nodes/stamp.py::_reliability` sets this when a clarification on this turn

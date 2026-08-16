@@ -1,6 +1,8 @@
 import { CheckCircle2, ShieldAlert, ShieldX } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { tierShowsRawTerminal } from "@/lib/capabilities";
+import type { Tier } from "@/lib/display-mode";
 import { cn } from "@/lib/utils";
 
 /**
@@ -27,6 +29,14 @@ import { cn } from "@/lib/utils";
  * unrecognised value rendered `undefined` as a class and a blank label. That is not carried
  * forward: every lookup here falls back explicitly and shows the raw value, on the principle
  * that an unfamiliar state should be visible rather than invisible.
+ *
+ * **`tier` (added for I-3's business-tier terminal phrasing) changes presentation only, never
+ * content.** The caller already decides *which string* `terminal` holds — the raw ledger token
+ * at `analyst`/`engineer`, `lib/answer-delivery.ts::terminalLabel`'s plain-language phrase at
+ * `business` (see `answer-card.tsx`). What this component decides, via the same
+ * `tierShowsRawTerminal` predicate, is only whether that string gets the `ledger: ` prefix and
+ * the monospace styling: right for a token, wrong for a sentence. `outcome`, the attempt
+ * counts and `refusedBy` do not branch on tier at all.
  */
 
 const OUTCOME_CLASSES: Record<string, string> = {
@@ -43,15 +53,18 @@ export function ReliabilityStamp({
   attempts,
   refusedBy,
   className,
+  tier = "engineer",
 }: {
   outcome: string;
   terminal: string | null;
   attempts: Array<Record<string, unknown>>;
   refusedBy: string | null;
   className?: string;
+  tier?: Tier;
 }) {
   const passed = attempts.filter((a) => a.passed === true).length;
   const blocked = attempts.length - passed;
+  const rawTerminal = tierShowsRawTerminal(tier);
 
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)}>
@@ -67,8 +80,8 @@ export function ReliabilityStamp({
           visible. Both are computed from the same attempts and should agree — the engine's own
           contract asserts it — and this is where a reader would notice if they stopped. */}
       {terminal && (
-        <Badge variant="outline" className="font-mono text-xs">
-          ledger: {terminal}
+        <Badge variant="outline" className={cn("text-xs", rawTerminal && "font-mono")}>
+          {rawTerminal ? `ledger: ${terminal}` : terminal}
         </Badge>
       )}
 

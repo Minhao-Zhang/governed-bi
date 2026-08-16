@@ -131,3 +131,12 @@ export function tierShowsSql(tier: Tier): boolean {
 export function tierShowsAudit(tier: Tier): boolean {
   return tier === "engineer";
 }
+
+/** Whether `tier` reads the ledger's `terminal` as its raw token (`no_sql`, `capped`, ...)
+ * rather than a business-tier phrase. Named rather than inlined for the same reason as
+ * `tierShowsSql` above: two places branch on this (`answer-card.tsx`, deciding which string
+ * to pass; `reliability-stamp.tsx`, deciding whether to prefix and monospace it), and a second
+ * copy of the rule would drift the first time the split changed. */
+export function tierShowsRawTerminal(tier: Tier): boolean {
+  return tier !== "business";
+}
