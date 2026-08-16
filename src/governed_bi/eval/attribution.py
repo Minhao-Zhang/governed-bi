@@ -20,6 +20,25 @@ that landed in ``unparseable`` had ``generated_sql: null`` and ``grade_detail:
 having queried anything. That is a different failure from emitting a statement that will not
 parse; exactly one row across both arms was the latter. Conflating them would report "answered
 nothing" and "answered garbage" under the same name and bury the more interesting of the two.
+
+**This module's output has already decided one experiment's conclusion, and got it wrong once.**
+Experiment 009 published, then retracted, "``table_set_differs`` is the largest bucket at 23 of
+78, so build a ``curator/`` arm". The cause was ``_table_names`` counting CTE names as base
+tables (see its docstring): 9 rows were mislabelled, and with them corrected the distribution is
+``projection_extra`` 26, ``unattributed`` 18, ``table_set_differs`` 14, ``missing_prediction`` 8,
+``decoy_contact`` 8, ``filter_differs`` 2, ``projection_missing`` 2 -- which licenses a rule in
+``serve/structured_check.py`` instead, and no ``curator/`` arm. Two things follow for anyone
+changing the checks below.
+
+*A ranking needs a test per ordering decision, not per category.* Every test here asserted that
+some row lands in some bucket, and all of them passed while the largest bucket was wrong by 9
+rows. Nothing compared two candidate causes on one row, which is the only kind of check a
+first-match-wins ranking can be wrong about.
+
+*None of the experiment's consistency checks could see it.* ``decoy_contact == 8`` and the
+78-row total are both insensitive to which wrong-answer bucket a row lands in, and the residual
+judge only ever read ``unattributed``. A classifier whose output is a ranking has to be audited
+against the parse, not against its own totals.
 """
 
 from __future__ import annotations
@@ -47,7 +66,9 @@ class FailureCause(str, Enum):
     unparseable = "unparseable"
     #: Reads a different set of base tables than gold.
     table_set_differs = "table_set_differs"
-    #: Returns more output columns than gold. The most-reported defect in this line.
+    #: Returns more output columns than gold. The most-reported defect in this line (J-06,
+    #: G-05, H-03, K2-a, K2-c, B-09, L1-b) and, once CTE names stopped inflating
+    #: ``table_set_differs``, also the largest measured one: 26 of 008's 78 wrong rows.
     projection_extra = "projection_extra"
     #: Returns fewer output columns than gold.
     projection_missing = "projection_missing"
