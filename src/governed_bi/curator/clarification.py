@@ -62,6 +62,28 @@ def _truncated(text: str, cap: int | None = None) -> str:
     return text[: cap - 1].rstrip() + "…"
 
 
+def asset_digest(question: str) -> str:
+    """The id-forming digest for a folded draft. **The question alone, never the answer.**
+
+    Three call sites need to agree on this exactly: ``draft_from_clarification`` below mints
+    ``clarification.{schema}.{digest}``, ``curator/feedback.py::_report_draft`` mints
+    ``feedback.{schema}.{digest}``, and ``api/trust_loop_routes.py`` recomputes it to ask "did
+    what this thread raised become a certified asset?".
+
+    **Shared rather than restated, because the drift is silent.** All three held the same
+    two-line expression until 2026-08-16 (task B), whose own docstring named the cost of the
+    third copy: if one formula changed, the read side "silently stops matching and every row
+    this route reports reads ``certified: false`` forever, with no error". That is the trust
+    loop's own central failure mode -- telling a reader nothing came of what they raised, when
+    something did -- so it is worth one shared function to make it a type error instead.
+    ``tools/check_one_implementation.py`` keys on names and so would not have caught it.
+
+    The answer text plays no part: a definition revised by a second answer must land on the
+    same asset for the Enhancer's dedup/conflict pass to see it as the same fact.
+    """
+    return hashlib.sha256(question.encode("utf-8")).hexdigest()[:16]
+
+
 def _qa_summary(question: str, answer: str) -> str:
     """``question — answer``, trimmed to ``summary_max_chars`` **from the question end**.
 
@@ -101,7 +123,7 @@ def draft_from_clarification(question: str, answer: str, *, schema: str) -> Term
     this shape; what it needs is a *composed sentence* that names the object it is about, which
     is ``curator/elicitation_answers.py``'s job and not this function's.
     """
-    digest = hashlib.sha256(question.encode("utf-8")).hexdigest()[:16]
+    digest = asset_digest(question)
     return TermAsset(
         id=f"clarification.{schema}.{digest}",
         name=_truncated(question),

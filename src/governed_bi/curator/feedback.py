@@ -295,9 +295,9 @@ def _report_draft(question: str, answer: str, *, schema: str):
     certified ``TermAsset`` for retrieval. Only the one read route's categorisation changes.
     """
     from governed_bi.corpus.schema import TermAsset
-    from governed_bi.curator.clarification import _qa_summary, _truncated
+    from governed_bi.curator.clarification import _qa_summary, _truncated, asset_digest
 
-    digest = hashlib.sha256(question.encode("utf-8")).hexdigest()[:16]
+    digest = asset_digest(question)
     return TermAsset(
         id=f"feedback.{schema}.{digest}",
         name=_truncated(question),

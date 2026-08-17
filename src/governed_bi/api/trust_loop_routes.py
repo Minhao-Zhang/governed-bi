@@ -69,12 +69,12 @@ which has no timestamp field at all. Inventing either would be the exact defect
 
 from __future__ import annotations
 
-import hashlib
 from typing import Any
 
 from fastapi import APIRouter
 
 from governed_bi.api.curation_routes import _reload_assets
+from governed_bi.curator.clarification import asset_digest
 
 __all__ = ["make_raised_router"]
 
@@ -82,21 +82,21 @@ __all__ = ["make_raised_router"]
 def _expected_asset_id(prefix: str, question: str, schema: str | None) -> str:
     """The asset id the fold path would have written for ``question``, under ``prefix``.
 
-    **Must match two other formulas exactly, and does not import either.**
+    **Must match the two minting formulas exactly, and now shares one function with them.**
     ``curator/clarification.py::draft_from_clarification`` mints
     ``f"clarification.{schema}.{digest}"`` and ``curator/feedback.py::_report_draft`` mints
-    ``f"feedback.{schema}.{digest}"``, both with ``digest = sha256(question)[:16]`` -- the answer
-    text plays no part in either id, only the question. Recomputed here rather than imported
-    because the feedback-side function is private and not exported (unlike
-    ``draft_from_clarification``, which is), and duplicating one two-line hash expression is
-    cheaper and more surgical than adding a new public export to a file task H already shipped
-    and reviewed, for a caller (this route) that did not exist when it was written. **The
-    fragility this trades for that:** if either digest formula ever changes, this silently stops
-    matching and every row this route reports reads ``certified: false`` forever, with no error
-    -- worth a reader's attention if either of those two functions is touched again.
+    ``f"feedback.{schema}.{digest}"``; all three read the digest from
+    :func:`~governed_bi.curator.clarification.asset_digest`.
+
+    This originally restated the hash inline, on the reasoning that one two-line expression was
+    cheaper than a new export. The cost it accepted was the wrong one to accept: a drifted
+    formula makes this route report ``certified: false`` for everything, forever, with no error
+    -- which is *precisely* the failure the trust loop exists to prevent, a reader being told
+    nothing came of what they raised when something did. Silent false negatives in the feedback
+    channel are worse than loud breakage, so the shared function makes the drift impossible
+    rather than merely documented.
     """
-    digest = hashlib.sha256(question.encode("utf-8")).hexdigest()[:16]
-    return f"{prefix}.{schema}.{digest}"
+    return f"{prefix}.{schema}.{asset_digest(question)}"
 
 
 def make_raised_router(session: Any, turn_log: Any) -> APIRouter:
