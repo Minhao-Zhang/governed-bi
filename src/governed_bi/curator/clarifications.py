@@ -149,6 +149,17 @@ class ClarificationRecord:
     #: ``source="curator"`` row) — that gate treats a missing ``basis`` as
     #: ``data_definition``-eligible, not a third state silently skipped.
     basis: str | None = None
+    #: The turn this record was raised from, when one exists (utku-ai-trust-loop-plan.md, task
+    #: B-0). The only writer today is ``POST /clarifications/from-refusal``, forwarding the
+    #: client's own ``record.turn_id`` from the answer that was refused -- the same trace
+    #: ``curator/feedback.py::FeedbackRecord.turn_id`` already carries for a report, needed for
+    #: the identical reason: task B's read model has no other way to find *which conversation*
+    #: raised this question. ``None`` for a record that predates this field, or has no live turn
+    #: behind it at all (``source="curator"``/``"elicitation_wizard"``, both raised offline by an
+    #: admin rather than from an answered turn) -- late-added and optional, following ``basis``'s
+    #: own precedent immediately above: a missing value here is a real state (unknown thread, or
+    #: no thread), never a reason to fail to load the row.
+    turn_id: str | None = None
     category: ElicitationCategory | None = None
     ui_modality: ElicitationUiModality | None = None
     target_table: str | None = None
@@ -205,6 +216,7 @@ def _to_json(record: ClarificationRecord) -> dict[str, Any]:
         "converted_to_corpus": record.converted_to_corpus,
         "source": record.source,
         "basis": record.basis,
+        "turn_id": record.turn_id,
         "category": record.category,
         "ui_modality": record.ui_modality,
         "target_table": record.target_table,

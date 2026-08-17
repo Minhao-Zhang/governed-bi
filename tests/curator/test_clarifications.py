@@ -200,6 +200,33 @@ def test_basis_round_trips_through_the_ledger(tmp_path: Path) -> None:
     assert loaded.basis == "ranking_ambiguity"
 
 
+# ── turn_id (task B-0) ───────────────────────────────────────────────────────────────────────
+
+
+def test_turn_id_defaults_to_none() -> None:
+    assert _record().turn_id is None
+
+
+def test_turn_id_round_trips_through_the_ledger(tmp_path: Path) -> None:
+    from governed_bi.curator.clarifications import load_clarifications, write_clarifications
+
+    write_clarifications(tmp_path, [_record(turn_id="turn-abc")])
+    (loaded,) = load_clarifications(tmp_path)
+    assert loaded.turn_id == "turn-abc"
+
+
+def test_a_record_written_before_turn_id_existed_still_loads(tmp_path: Path) -> None:
+    """Additive field: a raw JSONL line with no `turn_id` key at all (every row written before
+    B-0) must keep loading, defaulting to `None` rather than raising."""
+    from governed_bi.curator.clarifications import load_clarifications
+
+    path = tmp_path / "clarifications.jsonl"
+    path.write_text('{"id": "q1", "scope": "s", "question": "q?"}\n', encoding="utf-8")
+
+    (loaded,) = load_clarifications(tmp_path)
+    assert loaded.turn_id is None
+
+
 # ── mark_converted_to_corpus ─────────────────────────────────────────────────────────────────
 
 

@@ -649,6 +649,11 @@ export const clarificationRecordSchema = z.object({
   // for a live_chat-sourced record; null for curator/elicitation_wizard rows and any record
   // that predates this field. Same enum as clarificationRequestSchema.basis above.
   basis: z.enum(["data_definition", "ranking_ambiguity"]).nullable().optional(),
+  // The turn this record was raised from (utku-ai-trust-loop-plan.md, task B-0) -- sent by
+  // POST /clarifications/from-refusal, forwarded from AnswerView.record.turn_id. Null/undefined
+  // for a record with no live turn behind it (curator/elicitation_wizard) or one written before
+  // this field existed, same optionality as `basis` immediately above.
+  turn_id: z.string().nullable().optional(),
   // Phase 1 elicitation wizard fields — null/undefined for curator/live_chat records.
   category: z.enum(["A", "B", "C", "D", "E"]).nullable().optional(),
   ui_modality: z

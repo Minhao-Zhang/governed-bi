@@ -141,6 +141,7 @@ def _clarification_row(record: Any) -> dict[str, Any]:
         "converted_to_corpus": record.converted_to_corpus,
         "source": record.source,
         "basis": record.basis,
+        "turn_id": record.turn_id,
         "category": record.category,
         "ui_modality": record.ui_modality,
         "target_table": record.target_table,
@@ -553,9 +554,22 @@ def make_curation_router(session: Any) -> APIRouter:
         provenance is a question about the shared fold path, not about this route, and is
         recorded rather than decided here.
 
-        Request body: ``{"question": "...", "answer": "..."}`` -- both required, else 422.
-        ``answer`` matches every other clarification route's own wire vocabulary for "the text a
-        person provided", not because an admin is answering anything here.
+        Request body: ``{"question": "...", "answer": "...", "turn_id"?: "..."}`` -- ``question``/
+        ``answer`` are both required, else 422; ``turn_id`` is optional. ``answer`` matches every
+        other clarification route's own wire vocabulary for "the text a person provided", not
+        because an admin is answering anything here.
+
+        **``turn_id`` (utku-ai-trust-loop-plan.md, task B-0).** The turn whose refusal this
+        explanation answers, forwarded onto :attr:`~governed_bi.curator.clarifications.
+        ClarificationRecord.turn_id` unchanged. It is not part of this route's own idempotency key
+        (the ``question``/``answer`` digest below, unaffected) -- so a second submission of the
+        identical text from a *different* turn is still absorbed as the same record, and its
+        ``turn_id`` stays whichever turn raised it first. Nothing here reads it back; it exists so
+        task B's read model can later answer "what did this thread raise", the same way
+        ``curator/feedback.py::FeedbackRecord.turn_id`` already lets it answer that for a report.
+        Omitted, it is simply ``None`` -- the client sends it when it has one
+        (``AnswerView.record.turn_id``, on every answer card), so this is additive for a caller
+        that predates it, not required for the route to keep working.
 
         **Idempotent by content, not by turn.** No graph interrupt is involved -- the turn already
         ended at ``Stage.route`` -- so there is no replay to guard against the way
@@ -588,6 +602,7 @@ def make_curation_router(session: Any) -> APIRouter:
         answer = str(body.get("answer") or "").strip()
         if not question or not answer:
             raise HTTPException(status_code=422, detail="both question and answer are required")
+        turn_id = str(body.get("turn_id") or "").strip() or None
 
         digest = hashlib.sha256(f"{question}\x1f{answer}".encode()).hexdigest()[:16]
         scope = f"refusal:{digest}"
@@ -600,6 +615,7 @@ def make_curation_router(session: Any) -> APIRouter:
             answered_by="user",
             source="refusal",
             basis="data_definition",
+            turn_id=turn_id,
         )
         appended = append_if_new_scope(session.corpus_root, record)
         stored = appended or next(

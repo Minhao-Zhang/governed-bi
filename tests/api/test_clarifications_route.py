@@ -418,6 +418,40 @@ def test_filing_the_same_question_and_explanation_twice_does_not_duplicate_the_l
     assert len(load_clarifications(tmp_path)) == 1
 
 
+def test_filing_a_refusal_clarification_forwards_the_turn_id(monkeypatch, tmp_path: Path) -> None:
+    """task B-0: an optional `turn_id` in the request lands on the record unchanged, so task B's
+    read model can later trace this row back to the thread that raised it."""
+    from governed_bi.curator.clarifications import load_clarifications
+
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+    response = client.post(
+        "/clarifications/from-refusal",
+        json={
+            "question": "Which apps are popular?",
+            "answer": "Highest download count.",
+            "turn_id": "turn-123",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["turn_id"] == "turn-123"
+
+    (on_disk,) = load_clarifications(tmp_path)
+    assert on_disk.turn_id == "turn-123"
+
+
+def test_filing_a_refusal_clarification_with_no_turn_id_leaves_it_none(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Additive: a caller that predates B-0 (or simply has no turn id yet) keeps working."""
+    client = _client(monkeypatch, _session_with_corpus_root(tmp_path))
+    response = client.post(
+        "/clarifications/from-refusal",
+        json={"question": "Which apps are popular?", "answer": "Highest download count."},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["turn_id"] is None
+
+
 def test_filing_two_different_explanations_for_the_same_question_keeps_both(
     monkeypatch, tmp_path: Path
 ) -> None:

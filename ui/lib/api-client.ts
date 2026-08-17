@@ -434,10 +434,14 @@ export const api = {
    * task A). Enters the same ledger an `ask_user` interrupt would -- the entrance a
    * `no_schema_matched` refusal structurally cannot reach, since it fires before the agent
    * (and `ask_user`) ever runs. `explanation` becomes the record's own `answer`; see the
-   * route's own docstring for why that folds immediately rather than waiting on an admin. */
+   * route's own docstring for why that folds immediately rather than waiting on an admin.
+   * `turnId` (task B-0) is optional and traces the record back to the turn that raised it --
+   * task B's read model over `GET /threads/{id}/raised` needs it; omitted, the route simply
+   * writes no `turn_id`, the same as any record filed before B-0 existed. */
   fileClarificationFromRefusal: (
     question: string,
     explanation: string,
+    turnId?: string,
   ): Promise<ClarificationRecord> => {
     if (USE_MOCKS) {
       const id = `refusal-${Date.now()}`;
@@ -454,12 +458,13 @@ export const api = {
         answered_by: "user",
         source: "refusal",
         basis: "data_definition",
+        turn_id: turnId ?? null,
         converted_to_corpus: true,
       });
     }
     return post(
       "/clarifications/from-refusal",
-      { question, answer: explanation },
+      { question, answer: explanation, turn_id: turnId },
       clarificationRecordSchema,
     );
   },

@@ -121,6 +121,9 @@ export function AnswerCard({
   // on a refusal (nothing was answered, so there is nothing here to report; A's refusal prompt
   // above already covers that case). Needs `turnId` and `question`, the same way
   // `showRefusalPrompt` needs `question` alone -- absent either, this simply never renders.
+  // Also handed to `RefusalClarificationPrompt` above (task B-0): that control never gates on
+  // it -- `showRefusalPrompt` is unchanged -- it is passed through only so the resulting record
+  // can be traced back to this turn, same as it already traces `WrongAnswerReport`'s own report.
   const turnId = turnIdOf(answer);
   const showWrongAnswerReport =
     delivery !== "refused" &&
@@ -201,7 +204,9 @@ export function AnswerCard({
                 layer. `showRefusalPrompt` already checked the tier, the refusal reason and
                 that `question` exists -- see the module docstring on `RefusalClarificationPrompt`
                 for why it is scoped this narrowly. */}
-            {showRefusalPrompt && <RefusalClarificationPrompt question={question!} />}
+            {showRefusalPrompt && (
+              <RefusalClarificationPrompt question={question!} turnId={turnId ?? undefined} />
+            )}
           </div>
         ) : (
           <>

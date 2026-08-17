@@ -17,6 +17,11 @@
  * a short confirmation rather than a toast that vanishes: this sits inside a permanent answer
  * card, the same reasoning `elicitation-wizard.tsx`'s `ScanReportLine` already gives for staying
  * on screen rather than fading after a few seconds.
+ *
+ * `turnId` (task B-0) is optional and forwarded unchanged to `fileClarificationFromRefusal` --
+ * see that function's own docstring. `answer-card.tsx` supplies it from the same `turnIdOf`
+ * read `WrongAnswerReport` already uses; a caller with no turn id simply files a record B's
+ * read model cannot trace back to a thread, the same as any record filed before B-0 existed.
  */
 
 import { useState } from "react";
@@ -26,7 +31,13 @@ import { api, ApiError } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-export function RefusalClarificationPrompt({ question }: { question: string }) {
+export function RefusalClarificationPrompt({
+  question,
+  turnId,
+}: {
+  question: string;
+  turnId?: string;
+}) {
   const [explanation, setExplanation] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState(false);
@@ -47,7 +58,7 @@ export function RefusalClarificationPrompt({ question }: { question: string }) {
     setSubmitting(true);
     setError(null);
     try {
-      await api.fileClarificationFromRefusal(question, trimmed);
+      await api.fileClarificationFromRefusal(question, trimmed, turnId);
       setSent(true);
     } catch (err) {
       // Logged, never rendered. `ApiError.message` is engine/HTTP vocabulary -- a 409's "this
