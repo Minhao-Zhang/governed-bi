@@ -206,6 +206,21 @@ export function useFeedback(status?: string) {
   });
 }
 
+/** Given a thread, what did it raise, and what became of it (GET /threads/{id}/raised;
+ * utku-ai-trust-loop-plan.md, task B-1), for `raised-history.tsx` (task B-2). `options.enabled`
+ * mirrors `useSchemaSummary`'s own shape: the caller additionally gates on tier
+ * (`tierShowsRaisedHistory`), and a query this route's own render never uses should not run
+ * either -- the same reasoning `answer-card.tsx`'s `needsCatalogGlimpse` gate already applies to
+ * its own conditional fetch. Always disabled with no thread id, regardless of `options.enabled`:
+ * a fresh conversation has raised nothing yet. */
+export function useRaisedByThread(threadId: string | null, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["raised", threadId ?? "none"],
+    queryFn: () => api.raisedByThread(threadId!),
+    enabled: threadId !== null && (options?.enabled ?? true),
+  });
+}
+
 /** Phase 1 elicitation wizard candidates (GET /elicitation/candidates) — every
  * `source="elicitation_wizard"` ledger record, open and answered, for the
  * proactive admin onboarding flow's grouped A > C+E > B > D view. */

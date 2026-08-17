@@ -165,6 +165,19 @@ export function tierShowsWrongAnswerReport(tier: Tier): boolean {
   return tier === "business";
 }
 
+/** Whether `tier` sees "what you've raised" (utku-ai-trust-loop-plan.md, task B-2) -- the quiet,
+ * thread-scoped list of a reader's own reports/refusal-clarifications and whether each became a
+ * certified rule. Business only, same reasoning as `tierShowsRefusalClarificationPrompt`/
+ * `tierShowsWrongAnswerReport` above: an analyst/engineer can already see this directly on
+ * `/corpus` (the Reports/Drafts/Assumptions tabs), so this is the business reader's own,
+ * narrower substitute for a surface they cannot reach. Named separately rather than reused --
+ * same argument those two make for staying apart: this answers a different question ("what
+ * became of what I raised") than either of them, and it should be free to diverge later without
+ * one masquerading as the other. */
+export function tierShowsRaisedHistory(tier: Tier): boolean {
+  return tier === "business";
+}
+
 /** Whether `tier` may certify a `proposed` draft (utku-ai-trust-loop-plan.md, task D).
  *
  * Engineer only, same as `tierShowsAudit` above and for a related reason -- but named

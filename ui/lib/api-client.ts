@@ -61,6 +61,7 @@ import {
   feedbackListSchema,
   feedbackRecordSchema,
   knowledgeGraphSchema,
+  raisedListSchema,
   schemaSummaryResponseSchema,
   searchResponseSchema,
   tableViewSchema,
@@ -89,6 +90,7 @@ import type {
   ErGraph,
   FeedbackRecord,
   KnowledgeGraph,
+  RaisedItem,
   SchemaScope,
   SchemaSummaryResponse,
   SearchResponse,
@@ -534,6 +536,14 @@ export const api = {
     }
     return post(`/feedback/${encodeURIComponent(id)}/dismiss`, {}, feedbackRecordSchema);
   },
+
+  /** Given a thread, what did it raise, and what became of it (GET /threads/{id}/raised;
+   * utku-ai-trust-loop-plan.md, task B-1) -- the read model `raised-history.tsx` (task B-2)
+   * renders. No mock data ships, same reason `drafts()`/`feedback()` ship none: nothing
+   * originates a report or a refusal-clarification in mock mode, so mock mode renders the
+   * empty-list state (the panel simply never mounts -- see that component's own docstring). */
+  raisedByThread: (threadId: string): Promise<RaisedItem[]> =>
+    get(`/threads/${encodeURIComponent(threadId)}/raised`, raisedListSchema, []),
 
   /** Engine switches an operator may flip, with where each current value came from
    * (GET /settings/toggles). */

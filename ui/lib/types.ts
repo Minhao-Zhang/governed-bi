@@ -41,6 +41,7 @@ import type {
   graphNodeSchema,
   knowledgeGraphSchema,
   leanColumnSchema,
+  raisedItemSchema,
   resultTableSchema,
   scanReportSchema,
   schemaSummaryResponseSchema,
@@ -101,6 +102,9 @@ export type ClarificationRecord = z.infer<typeof clarificationRecordSchema>;
 
 /* ── task H: reader-reported wrong answers, a different record type (H-b) ─────────────────── */
 export type FeedbackRecord = z.infer<typeof feedbackRecordSchema>;
+
+/* ── task B-1: given a thread, what did it raise, and what became of it ───────────────────── */
+export type RaisedItem = z.infer<typeof raisedItemSchema>;
 
 /* ── Phase 1 elicitation wizard (proactive admin onboarding) ──────────────── */
 export type ElicitationGenerateResponse = z.infer<typeof elicitationGenerateResponseSchema>;

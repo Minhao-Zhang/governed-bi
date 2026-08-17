@@ -720,6 +720,31 @@ export const feedbackRecordSchema = z.object({
 
 export const feedbackListSchema = z.array(feedbackRecordSchema);
 
+/* ── GET /threads/{id}/raised (utku-ai-trust-loop-plan.md, task B-1): given a thread, what did
+   it raise, and what became of it. Over both ledgers above, correlated to a thread through the
+   turn log -- see api/trust_loop_routes.py's own docstring for the full argument. ── */
+
+export const raisedItemSchema = z.object({
+  kind: z.enum(["feedback", "clarification"]),
+  id: z.string(),
+  question: z.string(),
+  // A plain string, not a closed enum: this feed spans two ledgers with different status
+  // vocabularies (feedback's open/answered/dismissed vs. a refusal-clarification's always-
+  // answered), and B-2 only ever branches on `certified` below, never on this value -- so there
+  // is nothing here an unrecognised member could break, and no reason to risk the "one bad row
+  // blanks the whole array" failure `clarificationRecordSchema.source`'s own comment warns about.
+  status: z.string(),
+  // FeedbackRecord.reported_at for a report; always null for a clarification, which carries no
+  // timestamp field at all. Never a certification date -- the engine stamps none (see the
+  // backend route's own docstring), so this schema does not invent one either.
+  raised_at: z.string().nullable(),
+  // Whether the resulting corpus draft is certified *right now* -- never `proposed`. B-2 renders
+  // only the `true` case; see raised-history.tsx for the argument.
+  certified: z.boolean(),
+});
+
+export const raisedListSchema = z.array(raisedItemSchema);
+
 /* ── Phase 1 elicitation wizard: POST /elicitation/generate, GET
    /elicitation/candidates (gated on can_curate_corpus, not can_edit -- see
    api/curation_routes.py's own docstring) ── */
