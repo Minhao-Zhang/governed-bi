@@ -194,3 +194,17 @@ export function tierShowsRaisedHistory(tier: Tier): boolean {
 export function tierApprovesDrafts(tier: Tier): boolean {
   return tier === "engineer";
 }
+
+/** Whether `tier` sees the trust-loop metrics view (utku-ai-trust-loop-plan.md, task C) -- the
+ * refusals → reader entrances → approved rules → retrieved-again funnel.
+ *
+ * Engineer only, same reasoning as `tierShowsAudit`/`tierApprovesDrafts` above: this is an
+ * admin/engineer instrument, not a reader-facing one -- a reader's own narrower substitute is
+ * already `tierShowsRaisedHistory` ("what became of what I raised"), which answers a different
+ * question (one thread's own history) than this one (whether the whole mechanism is moving
+ * anyone). Named separately rather than reused for the same reason every predicate in this file
+ * is: the two may diverge later, and reusing one for the other is how this fork built controls
+ * that could never render. */
+export function tierShowsTrustLoopMetrics(tier: Tier): boolean {
+  return tier === "engineer";
+}

@@ -50,6 +50,7 @@ import type {
   serveOutcomeSchema,
   tableSummarySchema,
   tableViewSchema,
+  trustLoopMetricsSchema,
 } from "./schemas";
 
 export type ServeOutcome = z.infer<typeof serveOutcomeSchema>;
@@ -105,6 +106,9 @@ export type FeedbackRecord = z.infer<typeof feedbackRecordSchema>;
 
 /* ── task B-1: given a thread, what did it raise, and what became of it ───────────────────── */
 export type RaisedItem = z.infer<typeof raisedItemSchema>;
+
+/* ── task C: does the loop turn, and where does it stop ────────────────────────────────────── */
+export type TrustLoopMetrics = z.infer<typeof trustLoopMetricsSchema>;
 
 /* ── Phase 1 elicitation wizard (proactive admin onboarding) ──────────────── */
 export type ElicitationGenerateResponse = z.infer<typeof elicitationGenerateResponseSchema>;

@@ -29,6 +29,7 @@ import {
   MOCK_REFUSAL,
   MOCK_SCHEMA,
   MOCK_SCHEMA_SUMMARY,
+  MOCK_TRUST_LOOP_METRICS,
   mockColumnRelated,
 } from "@/lib/mock/fixtures";
 import {
@@ -65,6 +66,7 @@ import {
   schemaSummaryResponseSchema,
   searchResponseSchema,
   tableViewSchema,
+  trustLoopMetricsSchema,
 } from "@/lib/schemas";
 import type {
   AnswerView,
@@ -95,6 +97,7 @@ import type {
   SchemaSummaryResponse,
   SearchResponse,
   TableView,
+  TrustLoopMetrics,
 } from "@/lib/types";
 
 /** Questions routed to a refusal in mock mode (mirrors the engine's fail-closed
@@ -544,6 +547,14 @@ export const api = {
    * empty-list state (the panel simply never mounts -- see that component's own docstring). */
   raisedByThread: (threadId: string): Promise<RaisedItem[]> =>
     get(`/threads/${encodeURIComponent(threadId)}/raised`, raisedListSchema, []),
+
+  /** Does the loop turn, and where does it stop (GET /trust-loop/metrics;
+   * utku-ai-trust-loop-plan.md, task C) -- refusals → reader entrances → approved rules →
+   * retrieved again. Ungated like the audit routes below, not `raisedByThread` above: this is a
+   * projection of the same turn log plus corpus, but scoped to the whole session rather than one
+   * thread, which is why it sits with `/audit/*` rather than the thread-scoped read model. */
+  trustLoopMetrics: (): Promise<TrustLoopMetrics> =>
+    get("/trust-loop/metrics", trustLoopMetricsSchema, MOCK_TRUST_LOOP_METRICS),
 
   /** Engine switches an operator may flip, with where each current value came from
    * (GET /settings/toggles). */

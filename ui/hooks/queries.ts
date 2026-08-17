@@ -281,6 +281,15 @@ export function useAuditCorpus() {
   return useQuery({ queryKey: ["audit-corpus"] as const, queryFn: api.auditCorpus });
 }
 
+/** Does the loop turn, and where does it stop (utku-ai-trust-loop-plan.md, task C) -- the
+ * refusals → reader entrances → approved rules → retrieved-again funnel, for the admin/engineer
+ * metrics view (`components/corpus/trust-loop-metrics.tsx`). Ungated like the audit queries
+ * above: a projection of the same turn log and corpus, gated on tier alone at the render site
+ * (`tierShowsTrustLoopMetrics`), never on a capability flag this route does not itself require. */
+export function useTrustLoopMetrics() {
+  return useQuery({ queryKey: ["trust-loop-metrics"] as const, queryFn: api.trustLoopMetrics });
+}
+
 /* ── filtering (ADR 0009) ──────────────────────────────────────────────────── */
 
 /** The filterable columns of one asset type. Cached per type; the filter row is built

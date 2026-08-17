@@ -745,6 +745,52 @@ export const raisedItemSchema = z.object({
 
 export const raisedListSchema = z.array(raisedItemSchema);
 
+/* ── GET /trust-loop/metrics (utku-ai-trust-loop-plan.md, task C): does the loop -- refusal/
+   wrong-answer → reader entrance → approved rule → retrieved again -- actually turn, and where
+   does it stop. See api/trust_loop_routes.py::make_trust_loop_metrics_router's own docstring for
+   the full argument, including why `retrieved` is a weaker claim than its name suggests and why
+   `licensed` could not be used for it at all. ── */
+
+const refusalCountsSchema = z.object({
+  total: z.number(),
+  by_reason: z.record(z.string(), z.number()),
+  turns_scanned: z.number(),
+  scan_bound: z.number(),
+  possibly_truncated: z.boolean(),
+});
+
+const entranceCountsSchema = z.object({
+  refusal_clarifications: z.number(),
+  reports: z.number(),
+  total: z.number(),
+});
+
+const approvedRuleCountsSchema = z.object({
+  by_source: z.record(z.string(), z.number()),
+  reader_initiated_total: z.number(),
+  reader_initiated_ids: z.array(z.string()),
+});
+
+const retrievalCountsSchema = z.object({
+  n_retrieved: z.number(),
+  retrieved_rule_ids: z.array(z.string()),
+  method: z.string(),
+  turns_scanned: z.number(),
+  scan_bound: z.number(),
+  possibly_truncated: z.boolean(),
+});
+
+export const trustLoopMetricsSchema = z.object({
+  refusals: refusalCountsSchema,
+  // `null`, never a fabricated `0`, when this session has no corpus_root to read a ledger from
+  // -- the distinction between "unmeasured" and "measured, and zero" is the point of this task.
+  entrances: entranceCountsSchema.nullable(),
+  approved_rules: approvedRuleCountsSchema.nullable(),
+  retrieved: retrievalCountsSchema.nullable(),
+  funnel: z.tuple([z.number(), z.number().nullable(), z.number().nullable(), z.number().nullable()]),
+  notes: z.array(z.string()),
+});
+
 /* ── Phase 1 elicitation wizard: POST /elicitation/generate, GET
    /elicitation/candidates (gated on can_curate_corpus, not can_edit -- see
    api/curation_routes.py's own docstring) ── */

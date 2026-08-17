@@ -29,6 +29,7 @@ import type {
   KnowledgeGraph,
   SchemaSummaryResponse,
   TableView,
+  TrustLoopMetrics,
 } from "@/lib/types";
 
 // Two namespaces so the schema rail and cross-schema boundary are exercised
@@ -1332,4 +1333,16 @@ export const MOCK_AUDIT_CORPUS: AuditCorpus = {
   },
   problems: { fatal: [], degradations: [], n_fatal: 0, n_degradations: 0 },
   servable: false,
+};
+
+// `entrances`/`approved_rules`/`retrieved` are `null` here, matching what the real route
+// reports with no `corpus_root` attached -- mock mode has no corpus, so "unmeasured" is the
+// honest mock, not a fabricated zero for three of the four counters.
+export const MOCK_TRUST_LOOP_METRICS: TrustLoopMetrics = {
+  refusals: { total: 0, by_reason: {}, turns_scanned: 0, scan_bound: 0, possibly_truncated: false },
+  entrances: null,
+  approved_rules: null,
+  retrieved: null,
+  funnel: [0, null, null, null],
+  notes: ["Mock transport: no engine attached."],
 };

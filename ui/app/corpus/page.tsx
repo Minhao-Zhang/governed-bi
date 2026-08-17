@@ -34,6 +34,15 @@
  * certifies a `proposed` asset (task D, utku-ai-trust-loop-plan.md), where the other five only
  * read, answer, resolve or dismiss.
  *
+ * **A seventh tab, Trust Loop (task C), is `engineer`-tier on top of `can_curate_corpus`, not
+ * instead of it.** Every curation tab above answers "does this row check out"; this one answers
+ * "is the whole mechanism moving anyone" -- a different, coarser question that a curator does
+ * not need to answer per-row, and the plan's own brief calls an admin/engineer instrument rather
+ * than a reader-facing one. Gated on `tierShowsTrustLoopMetrics` (named predicate, per
+ * `ui/lib/capabilities.ts`'s own convention) *and* `curationFeatureOn`: without a writable corpus
+ * three of its four counters have nothing to read, the same precondition every sibling tab here
+ * already requires.
+ *
  * **Reports (task H) is a second inbox, not the Clarifications tab reused.** H-b's own decision:
  * a clarification is the engine asking, a report is a reader objecting to an answer already
  * given -- different lifecycle, different meaning, and `components/corpus/feedback-panel.tsx`
@@ -63,7 +72,9 @@ import { ConflictsPanel } from "@/components/corpus/conflicts-panel";
 import { DraftsPanel } from "@/components/corpus/drafts-panel";
 import { ElicitationWizard } from "@/components/corpus/elicitation-wizard";
 import { FeedbackPanel } from "@/components/corpus/feedback-panel";
-import { canCurateCorpus } from "@/lib/capabilities";
+import { TrustLoopMetricsView } from "@/components/corpus/trust-loop-metrics";
+import { canCurateCorpus, resolveTier, tierShowsTrustLoopMetrics } from "@/lib/capabilities";
+import { useDisplayModeOverride } from "@/lib/display-mode";
 import { useCapabilities } from "@/hooks/queries";
 
 type Mode =
@@ -74,7 +85,8 @@ type Mode =
   | "reports"
   | "drafts"
   | "assumptions"
-  | "conflicts";
+  | "conflicts"
+  | "trust-loop";
 
 /** Only the two reading modes get a hint line; the curation tabs explain themselves inside. */
 const HINT: Partial<Record<Mode, string>> = {
@@ -85,6 +97,8 @@ const HINT: Partial<Record<Mode, string>> = {
 export default function CorpusPage() {
   const { data: caps } = useCapabilities();
   const curationFeatureOn = canCurateCorpus(caps);
+  const tier = resolveTier(caps, useDisplayModeOverride());
+  const trustLoopTabOn = curationFeatureOn && tierShowsTrustLoopMetrics(tier);
   const [mode, setMode] = useState<Mode>("type");
   //: A located asset, and the counter that makes locating it *again* an event. The table below
   //: takes this as its initial state and is keyed on it, so a hand-off is a deliberate reset of
@@ -136,6 +150,7 @@ export default function CorpusPage() {
                   <TabsTrigger value="conflicts">Needs Review</TabsTrigger>
                 </>
               )}
+              {trustLoopTabOn && <TabsTrigger value="trust-loop">Trust Loop</TabsTrigger>}
             </TabsList>
             {HINT[mode] && <p className="max-w-prose text-xs text-muted-foreground">{HINT[mode]}</p>}
           </div>
@@ -198,6 +213,12 @@ export default function CorpusPage() {
                 <ConflictsPanel />
               </TabsContent>
             </>
+          )}
+
+          {trustLoopTabOn && (
+            <TabsContent value="trust-loop">
+              <TrustLoopMetricsView />
+            </TabsContent>
           )}
         </Tabs>
       </div>

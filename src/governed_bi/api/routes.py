@@ -51,7 +51,7 @@ from governed_bi.api.browse_routes import make_router
 from governed_bi.api.curation_routes import make_curation_router
 from governed_bi.api.drafts_routes import make_drafts_router
 from governed_bi.api.feedback_routes import make_feedback_router
-from governed_bi.api.trust_loop_routes import make_raised_router
+from governed_bi.api.trust_loop_routes import make_raised_router, make_trust_loop_metrics_router
 from governed_bi.api.visibility import visible
 from governed_bi.register.assets import ASSET_REGISTER
 from governed_bi.serve.messages import surface_answer_text
@@ -295,6 +295,10 @@ def _build_app(
     # its own docstring for why that is a new shape rather than the single-session pattern the
     # other three routers here use). Mounted last for the same reason as the three above.
     app.include_router(make_raised_router(_DeferredSession(get_session), turn_log))
+    # Task C: "count whether the loop turns" -- the same file, same dependency set (both
+    # ledgers, the corpus, the turn log) as the router just above, so it is mounted the same way
+    # for the same reason. Mounted last for the same reason as every router above.
+    app.include_router(make_trust_loop_metrics_router(_DeferredSession(get_session), turn_log))
     return app
 
 
