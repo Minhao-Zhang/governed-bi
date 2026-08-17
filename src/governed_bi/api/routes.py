@@ -51,6 +51,7 @@ from governed_bi.api.browse_routes import make_router
 from governed_bi.api.curation_routes import make_curation_router
 from governed_bi.api.drafts_routes import make_drafts_router
 from governed_bi.api.feedback_routes import make_feedback_router
+from governed_bi.api.trust_loop_routes import make_raised_router
 from governed_bi.api.visibility import visible
 from governed_bi.register.assets import ASSET_REGISTER
 from governed_bi.serve.messages import surface_answer_text
@@ -289,6 +290,11 @@ def _build_app(
     # see feedback_routes.py's module docstring. Same factory shape, deferred session, mounted
     # last for the same reason as the two routers above.
     app.include_router(make_feedback_router(_DeferredSession(get_session)))
+    # Task B-1's read model: "given a thread, what did it raise, and what became of it" -- over
+    # both ledgers above plus the turn log, which is why this factory takes `turn_log` too (see
+    # its own docstring for why that is a new shape rather than the single-session pattern the
+    # other three routers here use). Mounted last for the same reason as the three above.
+    app.include_router(make_raised_router(_DeferredSession(get_session), turn_log))
     return app
 
 
