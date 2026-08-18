@@ -240,8 +240,21 @@ def prompt_variants(config: Mapping[str, Any] | None) -> dict[str, str]:
 
 
 def model_id(model: Any) -> str | None:
-    """Provider model id, or ``None``. Prefer ``model_name`` / ``model`` over ``_llm_type``."""
-    for attr in ("model_name", "model", "deployment_name"):
+    """Provider model id, or ``None``. Prefer ``model_name`` / ``model`` over ``_llm_type``.
+
+    ``model_id`` is in the tuple because ``ChatBedrockConverse`` spells it that way and spells
+    none of the others, so every Bedrock turn fell through to ``_model_name``'s ``_llm_type``
+    branch and recorded the **class** name ``amazon_bedrock_converse_chat`` as its model. That
+    is not a display bug: ``chat_model`` and ``llm_utility_model`` are ``Role.comparability``
+    knobs, so two Bedrock arms serving *different* Anthropic models published the same value
+    and ``measure/gates.py``'s drift gate compared them equal. Measured on
+    ``runs/serve/2026-08-18.jsonl``: both turns recorded ``amazon_bedrock_converse_chat`` while
+    actually running ``us.anthropic.claude-sonnet-5``.
+
+    Last in the tuple, not first: it is the fallback spelling, and a client that offers both
+    ``model_name`` and ``model_id`` should keep the meaning the earlier arms recorded.
+    """
+    for attr in ("model_name", "model", "deployment_name", "model_id"):
         value = getattr(model, attr, None)
         if isinstance(value, str) and value:
             return value

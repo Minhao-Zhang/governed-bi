@@ -15,6 +15,21 @@ import { z } from "zod";
 
 /* ── /capabilities ───────────────────────────────────────────────────────── */
 
+/** One chat surface's resolved identity. Every field nullable: the engine reports what it
+ *  resolved, and an offline profile with no model wired resolves none of it. */
+const modelSurfaceSchema = z.object({
+  id: z.string().nullable(),
+  provider: z.string().nullable(),
+  effort: z.string().nullable(),
+});
+
+/** The embedding surface. `dimensions` is the served width, probed rather than declared. */
+const embeddingSurfaceSchema = z.object({
+  id: z.string().nullable(),
+  provider: z.string().nullable(),
+  dimensions: z.number().nullable(),
+});
+
 export const capabilitiesSchema = z.object({
   environment: z.string(), // "dev" | "prod"
   dialect: z.string(), // "sqlite" | "postgres" | "redshift"
@@ -32,6 +47,31 @@ export const capabilitiesSchema = z.object({
   // server built without HITL (or the offline/REST profile) degrades cleanly —
   // the interrupt-prompt UI only mounts when this is true (contract §8).
   can_clarify: z.boolean().optional().default(false),
+  // The three model surfaces, for /settings. Optional so an engine built before this
+  // field still parses — the settings page renders "not reported" rather than breaking.
+  //
+  // `embedding.id` is **provider-qualified** on the wire (`bedrock:amazon.titan-embed-text-v2:0`)
+  // and must be shown as-is: the qualifier is part of the vector cache-key identity, and the id
+  // itself can contain a colon (Titan's `…-v2:0`), so splitting it would corrupt the one field
+  // that keeps two gateways' vectors apart. `provider` arrives beside it.
+  models: z
+    .object({
+      agent: modelSurfaceSchema,
+      utility: modelSurfaceSchema,
+      embedding: embeddingSurfaceSchema,
+    })
+    .optional(),
+  // Which warehouse the engine is pointed at, for /settings. Credential-free by construction:
+  // the connector redacts, and `user`/`password` are never parsed out of the DSN at all — so
+  // there is no field here to accidentally render. `host`/`port` are absent for SQLite (a file).
+  connection: z
+    .object({
+      dialect: z.string(),
+      host: z.string().optional(),
+      port: z.string().optional(),
+      database: z.string().optional(),
+    })
+    .optional(),
 });
 
 /* ── /health — deleted ────────────────────────────────────────────────────

@@ -81,6 +81,33 @@ class PostgresConnector:
     def dialect(self) -> str:
         return "postgres"
 
+    @property
+    def endpoint(self) -> dict[str, Any]:
+        """Which database this is, with the credential removed. Safe to serve.
+
+        **The redaction lives here, in the object that owns the DSN, rather than in the caller
+        that wants to display it.** A route reaching for ``connector._dsn`` and stripping the
+        password itself is one forgotten regex away from serving the credential, and the next
+        surface that wants an endpoint would write that regex again. This returns the three
+        fields that identify a warehouse and never parses out ``user`` or ``password`` at all,
+        so there is nothing for a caller to leak.
+
+        Returns ``{}`` when the DSN cannot be parsed — an unparseable DSN is not a reason to
+        raise on a page that is only trying to say where it is pointed.
+        """
+        try:
+            from psycopg.conninfo import conninfo_to_dict  # noqa: PLC0415 (lazy: heavy import)
+
+            parsed = conninfo_to_dict(self._dsn)
+        except Exception:
+            return {}
+        out: dict[str, Any] = {}
+        for wire, key in (("host", "host"), ("port", "port"), ("dbname", "database")):
+            value = parsed.get(wire)
+            if value not in (None, ""):
+                out[key] = str(value)
+        return out
+
     def _connect(self) -> Any:
         if self._conn is not None:
             return self._conn

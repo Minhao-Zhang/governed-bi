@@ -26,7 +26,8 @@
       ],
       "port": 3100,
       "env": {
-        "NEXT_DIST_DIR": ".next-verify"
+        "NEXT_DIST_DIR": ".next-verify",
+        "NEXT_PUBLIC_LANGGRAPH_URL": "http://localhost:2124"
       }
     },
     {

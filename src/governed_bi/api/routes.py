@@ -40,7 +40,7 @@ the state-write denials that are *not* authentication.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from fastapi import FastAPI
@@ -49,6 +49,7 @@ from governed_bi.api import trace_store
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import make_router
 from governed_bi.api.visibility import visible
+from governed_bi.model.provider import reasoning_effort_of
 from governed_bi.register.assets import ASSET_REGISTER
 from governed_bi.serve.messages import surface_answer_text
 
@@ -304,6 +305,67 @@ class _DeferredSession:
 # ── projections: a function of the session, testable without an app ──────────
 
 
+def models_for(session: Any) -> dict[str, Any]:
+    """The three model surfaces this run resolved, for the settings page.
+
+    **Read from ``knobs_resolved``, not off the client objects.** That mapping is what every
+    measurement row publishes, so a settings page built from it shows the identity a run is
+    actually recorded under — and a disagreement between screen and artifact becomes
+    impossible rather than merely unlikely. ``serve/runtime.py::model_id`` is where that
+    identity is derived, and its own note records what a wrong derivation cost.
+
+    ``embedding.id`` is **provider-qualified** (``bedrock:amazon.titan-embed-text-v2:0``) and is
+    reported verbatim rather than split on ``:``. The qualifier is part of the cache-key
+    identity (``retrieve.semantic.cache_key`` is ``model|dimensions|text``), and the id itself
+    can contain a colon — Titan's ``…-v2:0`` does — so parsing it would corrupt the one field
+    that keeps two gateways' vectors apart. ``provider`` is carried beside it instead.
+
+    ``utility.effort`` is observed off the live client because no knob records it: the register
+    declares ``llm_reasoning_effort`` for the agent surface only. Adding a second knob is not
+    this function's call to make (``register/knobs.py`` is the one home for a knob), so the
+    field is honest about being an observation and is ``None`` when there is no live model.
+    """
+    knobs = session.knobs_resolved
+    # `getattr`, matching how this module reads `connector.dialect`: these projections are
+    # documented as "a function of the session, testable without an app", and a hard attribute
+    # read here would make every existing test fake grow a field to keep passing — which is a
+    # test-maintenance tax for no assertion. A session without the handle reports no effort.
+    utility = getattr(session, "utility_model", None)
+    return {
+        "agent": {
+            "id": knobs.get("chat_model"),
+            "provider": knobs.get("llm_provider"),
+            "effort": knobs.get("llm_reasoning_effort"),
+        },
+        "utility": {
+            "id": knobs.get("llm_utility_model"),
+            "provider": knobs.get("llm_utility_provider"),
+            "effort": reasoning_effort_of(utility) if utility is not None else None,
+        },
+        "embedding": {
+            "id": knobs.get("embedding_model"),
+            "provider": knobs.get("embedding_provider"),
+            "dimensions": knobs.get("embedding_dimensions"),
+        },
+    }
+
+
+def connection_for(session: Any) -> dict[str, Any]:
+    """Which warehouse this engine is pointed at. **Credential-free by construction.**
+
+    The redaction is the connector's (``datasource/postgres.py::endpoint``), not this
+    function's — see that property for why it lives there. Here the only job is to be robust
+    about *shape*: a partial session or a test double may have no ``endpoint``, or one that is
+    not a mapping, and a settings page is not worth a 500. ``dialect`` is always present because
+    every connector declares it.
+    """
+    out: dict[str, Any] = {"dialect": getattr(session.connector, "dialect", "postgres")}
+    endpoint = getattr(session.connector, "endpoint", None)
+    if isinstance(endpoint, Mapping):
+        out.update({str(k): v for k, v in endpoint.items()})
+    return out
+
+
 def capabilities_for(session: Any) -> dict[str, Any]:
     """``/capabilities``' body. Every field is an observation (ADR 0007 §7)."""
     #: Bound once so ``can_clarify`` cannot drift from ``can_stream``.
@@ -315,7 +377,14 @@ def capabilities_for(session: Any) -> dict[str, Any]:
         "edit_mode": "none",
         "can_stream": can_stream,
         "has_live_model": session.agent_model is not None,
+        # Kept: the existing header chip reads it, and it is the agent surface's id. The
+        # per-surface detail is under `models`, which is what the settings page renders.
         "model": session.knobs_resolved.get("chat_model"),
+        "models": models_for(session),
+        # Which warehouse this engine is pointed at, credential-free — the connector redacts
+        # (`datasource/postgres.py::endpoint`). `getattr` for the same reason as `dialect`
+        # above: these projections must stay callable with a partial session.
+        "connection": connection_for(session),
         "can_scope": True,
         "can_search": False,
         # Clarification UI mounts only on the streaming transport.
