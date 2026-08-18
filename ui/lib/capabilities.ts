@@ -4,6 +4,7 @@
  * rather than assuming.
  */
 
+import type { CorpusTabGroup } from "@/lib/corpus-tab-groups";
 import type { Tier } from "@/lib/display-mode";
 import type { Capabilities } from "@/lib/types";
 
@@ -207,4 +208,36 @@ export function tierApprovesDrafts(tier: Tier): boolean {
  * that could never render. */
 export function tierShowsTrustLoopMetrics(tier: Tier): boolean {
   return tier === "engineer";
+}
+
+/** Whether `group`'s tab(s) on `/corpus` *may* render at all — the capability gate a reader's
+ * own preference (`lib/corpus-tab-groups.ts`) sits on top of, never the other way round.
+ * Everything but Trust Loop shares `canCurateCorpus`; Trust Loop additionally needs
+ * `tierShowsTrustLoopMetrics`, same as the page already required before it had per-group
+ * preferences. Named and exported on its own so a Settings row can say a group is hidden
+ * *because of the capability* rather than the switch it renders beside doing nothing. */
+export function corpusTabGroupCapable(
+  group: CorpusTabGroup,
+  caps: Capabilities | undefined,
+  tier: Tier,
+): boolean {
+  if (group === "trust-loop") return canCurateCorpus(caps) && tierShowsTrustLoopMetrics(tier);
+  return canCurateCorpus(caps);
+}
+
+/** Whether `group`'s tab(s) actually render on `/corpus`: the reader's own on/off preference,
+ * intersected with `corpusTabGroupCapable` above.
+ *
+ * This is the one place the two combine — per `curation_routes.py::list_toggles`'s own warning
+ * about controls that render but have no backend half behind them
+ * (`/settings/allow-user-clarification`, `can_edit`, `ui_display_mode`), a toggle here must
+ * never *appear* to enable what the capability forbids. Turning a group on can only ever show a
+ * tab the capability already allows; it can never show one the capability hides. */
+export function corpusTabGroupVisible(
+  group: CorpusTabGroup,
+  preferences: Record<CorpusTabGroup, boolean>,
+  caps: Capabilities | undefined,
+  tier: Tier,
+): boolean {
+  return preferences[group] && corpusTabGroupCapable(group, caps, tier);
 }

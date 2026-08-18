@@ -22,9 +22,16 @@
  * method and a rendered component in this fork and **no route on either branch** — the name is not
  * in the engine's knob register at all. What is listed now is what
  * `serve/runtime_overrides.py::TOGGLEABLE` actually allows.
+ *
+ * **A third section, Corpus tabs, is engineer-only for the same reason as Engine behaviour** —
+ * not because the preference itself needs guarding, but because `/corpus` (what it controls) is
+ * only ever reachable at this tier (`lib/capabilities.ts::REACHABLE`). Unlike Engine behaviour,
+ * these five switches are per-browser view preferences (`lib/corpus-tab-groups.ts`), not engine
+ * knobs — they never touch `/settings/toggles`.
  */
 
 import { PageShell } from "@/components/layout/page-shell";
+import { CorpusTabToggles } from "@/components/settings/corpus-tab-toggles";
 import { EngineToggles } from "@/components/settings/engine-toggles";
 import { RoleSwitcher } from "@/components/settings/role-switcher";
 import { resolveTier } from "@/lib/capabilities";
@@ -65,6 +72,21 @@ export default function SettingsPage() {
               </p>
             </div>
             <EngineToggles />
+          </section>
+        )}
+
+        {tier === "engineer" && (
+          <section className="space-y-3">
+            <div className="space-y-1">
+              <h2 className="text-sm font-medium">Corpus tabs</h2>
+              <p className="max-w-prose text-xs text-muted-foreground">
+                Which curation tabs show on <code>/corpus</code>, grouped by what they&apos;re
+                for. Saved in this browser only. Turning a group on here never shows a tab this
+                session&apos;s corpus capability already hides — it only ever narrows what the
+                capability already allows.
+              </p>
+            </div>
+            <CorpusTabToggles />
           </section>
         )}
       </div>

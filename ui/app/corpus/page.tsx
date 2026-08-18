@@ -57,7 +57,16 @@
  * which is orthogonal to whether these admin routes exist.
  *
  * No "Skills" tab: the backend's `skill` asset type was removed upstream (ADR 0003 generalised
- * it into `NoteAsset`, visible under the Note filter), so `GET /skills` would only ever 404. */
+ * it into `NoteAsset`, visible under the Note filter), so `GET /skills` would only ever 404.
+ *
+ * **The seven curation tabs are grouped and user-toggleable (`/settings`), on top of the
+ * capability gates above, not instead of them.** Setup Wizard / Clarifications+Agreed
+ * Assumptions+Needs Review / Reports / Drafts / Trust Loop are five groups a reader turns off
+ * once they stop needing them; `lib/corpus-tab-groups.ts` persists the preference per browser and
+ * `lib/capabilities.ts::corpusTabGroupVisible` is the only place that preference and
+ * `canCurateCorpus`/`tierShowsTrustLoopMetrics` are combined — never inlined here. Every group
+ * defaults on, so a reader who has never opened Settings sees exactly what rendered before this
+ * existed. */
 
 import { useState } from "react";
 
@@ -73,7 +82,8 @@ import { DraftsPanel } from "@/components/corpus/drafts-panel";
 import { ElicitationWizard } from "@/components/corpus/elicitation-wizard";
 import { FeedbackPanel } from "@/components/corpus/feedback-panel";
 import { TrustLoopMetricsView } from "@/components/corpus/trust-loop-metrics";
-import { canCurateCorpus, resolveTier, tierShowsTrustLoopMetrics } from "@/lib/capabilities";
+import { corpusTabGroupVisible, resolveTier } from "@/lib/capabilities";
+import { useCorpusTabGroups } from "@/lib/corpus-tab-groups";
 import { useDisplayModeOverride } from "@/lib/display-mode";
 import { useCapabilities } from "@/hooks/queries";
 
@@ -96,9 +106,13 @@ const HINT: Partial<Record<Mode, string>> = {
 
 export default function CorpusPage() {
   const { data: caps } = useCapabilities();
-  const curationFeatureOn = canCurateCorpus(caps);
   const tier = resolveTier(caps, useDisplayModeOverride());
-  const trustLoopTabOn = curationFeatureOn && tierShowsTrustLoopMetrics(tier);
+  const tabGroups = useCorpusTabGroups();
+  const wizardTabOn = corpusTabGroupVisible("wizard", tabGroups, caps, tier);
+  const clarificationsTabOn = corpusTabGroupVisible("clarifications", tabGroups, caps, tier);
+  const reportsTabOn = corpusTabGroupVisible("reports", tabGroups, caps, tier);
+  const approvalsTabOn = corpusTabGroupVisible("approvals", tabGroups, caps, tier);
+  const trustLoopTabOn = corpusTabGroupVisible("trust-loop", tabGroups, caps, tier);
   const [mode, setMode] = useState<Mode>("type");
   //: A located asset, and the counter that makes locating it *again* an event. The table below
   //: takes this as its initial state and is keyed on it, so a hand-off is a deliberate reset of
@@ -140,16 +154,16 @@ export default function CorpusPage() {
             <TabsList>
               <TabsTrigger value="type">By type</TabsTrigger>
               <TabsTrigger value="search">Search</TabsTrigger>
-              {curationFeatureOn && (
+              {wizardTabOn && <TabsTrigger value="wizard">Setup Wizard</TabsTrigger>}
+              {clarificationsTabOn && (
                 <>
-                  <TabsTrigger value="wizard">Setup Wizard</TabsTrigger>
                   <TabsTrigger value="clarifications">Clarifications</TabsTrigger>
-                  <TabsTrigger value="reports">Reports</TabsTrigger>
-                  <TabsTrigger value="drafts">Drafts</TabsTrigger>
                   <TabsTrigger value="assumptions">Agreed Assumptions</TabsTrigger>
                   <TabsTrigger value="conflicts">Needs Review</TabsTrigger>
                 </>
               )}
+              {reportsTabOn && <TabsTrigger value="reports">Reports</TabsTrigger>}
+              {approvalsTabOn && <TabsTrigger value="drafts">Drafts</TabsTrigger>}
               {trustLoopTabOn && <TabsTrigger value="trust-loop">Trust Loop</TabsTrigger>}
             </TabsList>
             {HINT[mode] && <p className="max-w-prose text-xs text-muted-foreground">{HINT[mode]}</p>}
@@ -192,19 +206,16 @@ export default function CorpusPage() {
             />
           </TabsContent>
 
-          {curationFeatureOn && (
+          {wizardTabOn && (
+            <TabsContent value="wizard">
+              <ElicitationWizard />
+            </TabsContent>
+          )}
+
+          {clarificationsTabOn && (
             <>
-              <TabsContent value="wizard">
-                <ElicitationWizard />
-              </TabsContent>
               <TabsContent value="clarifications">
                 <ClarificationsPanel />
-              </TabsContent>
-              <TabsContent value="reports">
-                <FeedbackPanel />
-              </TabsContent>
-              <TabsContent value="drafts">
-                <DraftsPanel />
               </TabsContent>
               <TabsContent value="assumptions">
                 <AssumptionsLog />
@@ -213,6 +224,18 @@ export default function CorpusPage() {
                 <ConflictsPanel />
               </TabsContent>
             </>
+          )}
+
+          {reportsTabOn && (
+            <TabsContent value="reports">
+              <FeedbackPanel />
+            </TabsContent>
+          )}
+
+          {approvalsTabOn && (
+            <TabsContent value="drafts">
+              <DraftsPanel />
+            </TabsContent>
           )}
 
           {trustLoopTabOn && (
