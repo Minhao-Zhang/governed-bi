@@ -38,6 +38,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  HelpCircle,
   ListChecks,
   Lock,
   Sparkles,
@@ -62,6 +63,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /** Within-tier sort only — see the module docstring. */
 const CATEGORY_ORDER: ElicitationCategory[] = ["A", "C", "E", "B", "D"];
@@ -130,6 +132,35 @@ const SEVERITY_BLURB: Record<ElicitationSeverity, string> = {
   T2: "A wrong answer is possible here, but it stays inside one term, column or metric. Some of these are findings we are only half sure of — where that is so, the question says what made us unsure.",
   T3: "Left unanswered, the worst case is that we decline to answer or ask you mid-question. Never a wrong number.",
   T4: "Nothing here can make an answer wrong. Answering improves how well we find the right data and how the answers read. There are usually a lot of these, because nothing in a freshly-loaded database describes itself.",
+};
+
+/** What the bare `T1`–`T4` badge means, for the "?" beside it in `TierSection`. Readers who have
+ * not memorised the tiering see only the code, not `SEVERITY_LABEL`/`SEVERITY_BLURB`'s framing
+ * (which claims exactly what the detectors measured — see the block comment above them), so this
+ * exists to answer a plainer question in the words `utku-ai-setup-wizard-gap-model.md` §
+ * "Tier structure" uses to define the tiers at all: not how much accuracy a category bought, but
+ * what happens if the gap is left unanswered.
+ *
+ * T1 and T2's copy both say "silently wrong" on purpose — the doc's own point is that the tiers
+ * split on how far the damage spreads, not on how bad it is, and letting T1 sound like the
+ * "dangerous" one and T2 the "safe" one would misstate the doc it is quoting. */
+const SEVERITY_EXPLANATION: Record<ElicitationSeverity, { name: string; body: string }> = {
+  T1: {
+    name: "Poison",
+    body: "If you leave this unanswered, the answer looks right but is silently wrong — and because it sits on a name or ID used to match rows between tables, the mistake spreads to every question about this table. You would not be able to tell. (T2 is just as silently wrong; the only difference is how far it spreads.)",
+  },
+  T2: {
+    name: "Silent-wrong, local",
+    body: "If you leave this unanswered, the answer can also look right but be silently wrong — but the damage stays inside the one term, metric or column this question is about. It does not spread to anything else.",
+  },
+  T3: {
+    name: "Safe failure",
+    body: "If you leave this unanswered, you will never get a wrong number. Instead the system may say it can't answer, ask you a follow-up question mid-conversation, or give a narrower answer than you wanted.",
+  },
+  T4: {
+    name: "Polish",
+    body: "If you leave this unanswered, nothing can come out wrong. Answers just may be a little harder to find or more clumsily worded.",
+  },
 };
 
 /** T4 opens collapsed. It is the only tier that is routinely large — a freshly-seeded
@@ -337,6 +368,7 @@ function TierSection({
       <div className="space-y-1">
         <div className="flex items-center gap-2">
           <Badge variant={tier === "T1" ? "destructive" : "secondary"}>{tier ?? "?"}</Badge>
+          {tier && <SeverityHelp tier={tier} />}
           <h3 className="text-sm font-medium">{tier ? SEVERITY_LABEL[tier] : "Unclassified"}</h3>
           <span className="text-xs text-muted-foreground">
             {unanswered === records.length
@@ -366,6 +398,32 @@ function TierSection({
           <ElicitationCard key={rec.id} record={rec} byId={byId} editable={editable} />
         ))}
     </div>
+  );
+}
+
+/** The "?" beside a tier badge. A button rather than a bare icon so it is a real focus target —
+ * Radix's tooltip trigger opens on keyboard focus as well as hover, which a `<span>` cannot
+ * receive at all: a hover-only affordance would be invisible to anyone not using a mouse. */
+function SeverityHelp({ tier }: { tier: ElicitationSeverity }) {
+  const { name, body } = SEVERITY_EXPLANATION[tier];
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+          aria-label={`What ${tier} means`}
+        >
+          <HelpCircle className="size-3.5" aria-hidden />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="flex-col items-start gap-1 py-2 text-left" sideOffset={4}>
+        <p className="font-medium">
+          {tier} — {name}
+        </p>
+        <p className="font-normal">{body}</p>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
