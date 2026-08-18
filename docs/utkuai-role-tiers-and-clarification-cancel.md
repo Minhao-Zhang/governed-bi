@@ -1,7 +1,7 @@
 # Role tiers, a Settings surface, and cancelling a clarification
 
 **Status:** implemented and verified live, 2026-08-15. This fork's design, not upstream's.
-**Branch:** `ryan/merge-upstream-0814`.
+**Branch:** `main` (was `ryan/merge-upstream-0814`, force-pushed onto `main` and deleted 2026-08-15).
 **Why this file is here and not in `docs/adr/`:** the ADR sequence is numbered and upstream owns
 it. A fork-local `0014` would collide the first time upstream adds one — the same defect the
 2026-08-14 merge found in `register/prompts.py`, where `v3`, `v4` and `v5` had each come to name

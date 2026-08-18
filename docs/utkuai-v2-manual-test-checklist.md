@@ -163,10 +163,23 @@ that porting work is scoped and started.
   `corpus/drafts.py`'s `submit_draft`/`approve_draft` — grep for any direct
   `corpus.store.write` call outside that module before merging a change to
   any of the four phases.
-- [ ] **Local dev env**: `.claude/launch.json`'s backend config sets
-  `GOVERNED_BI_EMBEDDING_MODEL`/`GOVERNED_BI_EMBEDDING_PROVIDER` — without
-  these, the semantic retrieval channel silently reports `failed` on every
-  facet and the corpus (German-language `beer_factory` schema) becomes
-  effectively unsearchable against English questions, producing a wall of
-  `no_schema_matched` refusals that look like a serving bug but are a missing
-  local env var.
+- [ ] **Local dev env**: `.env` sets `GOVERNED_BI_EMBEDDING_MODEL`. Confirm it
+  by asking one question and reading `record.facet_hits[*].channels.semantic`
+  on the turn — `"ran"` is configured, **`"not_configured"` means the semantic
+  channel is off**. Without it, retrieval is lexical-only: whether a question
+  routes at all depends on whether the model happens to emit a query string
+  that literally matches a column name, so the same question answers once and
+  refuses the next time, and the symptom is a wall of `no_schema_matched`
+  refusals that reads as a serving bug.
+
+  **This item used to say `.claude/launch.json`'s backend config sets it, and
+  that was wrong in a way that cost half a day on 2026-08-18.** Two reasons,
+  either of which is fatal: the entry actually used for verification
+  (`merge-api`) sets no env at all, and even the entry that does export them
+  cannot deliver them — `langgraph.json` declares `"env": ".env"`, which
+  overrides the process environment, a fact `launch.json`'s own
+  `_why_merge_entries` note records. So the setting has to live in `.env`.
+
+  Consequence for the record, not just for setup: this engine had **never**
+  had the variable set, so anything measured on this configuration measured a
+  degraded system. See `docs/handoff-claim-audit-2026-08-18.md` finding 3.

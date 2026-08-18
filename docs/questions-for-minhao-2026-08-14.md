@@ -111,7 +111,10 @@ Written 2026-08-14, after merging `upstream/main` (102 commits) into this fork a
 frontend into `ui/`. Minhao is on leave 21 Aug – 14 Sep, so these want answering before then;
 each one is a decision that costs us something to guess at, and all three are cheap for him.
 
-Branch: `ryan/merge-upstream-0814`. Nothing here needs him to review our code — these are about
+Branch: **`main`**. (This said `ryan/merge-upstream-0814`, which was force-pushed onto `main`
+and deleted on 2026-08-15 — see the branch table in `docs/README.md`. Corrected 2026-08-18 so
+the one document addressed to Minhao does not point him at a branch that no longer exists.)
+Nothing here needs him to review our code — these are about
 where the boundary between the two repos should sit.
 
 ---
