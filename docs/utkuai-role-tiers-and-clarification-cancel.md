@@ -6,7 +6,7 @@
 it. A fork-local `0014` would collide the first time upstream adds one — the same defect the
 2026-08-14 merge found in `register/prompts.py`, where `v3`, `v4` and `v5` had each come to name
 two different prompts. Fork-specific docs live flat in `docs/`, beside
-`questions-for-minhao-2026-08-14.md`.
+`utkuai-fork-handoff.md`.
 
 ---
 

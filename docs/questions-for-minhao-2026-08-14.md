@@ -1,5 +1,15 @@
 # Two questions before 21 Aug — DRAFT, not sent
 
+> **SUPERSEDED 2026-08-18 by [`utkuai-fork-handoff.md`](utkuai-fork-handoff.md), and never sent.**
+> Nothing here is waiting on a reply. The two items that were genuinely upstream's to decide are
+> restated there as decisions with their evidence and cost-of-delay, without the question framing —
+> the fork does not need an answer to proceed, and asking implies otherwise.
+>
+> **Kept, not deleted, for section 0.** That section is the reusable part: it records how the
+> dataset behind the published arms was identified from the artifacts alone, after the first,
+> wrong version of that method was what made us think we needed to ask at all. The method
+> outlives the question.
+
 > **Revised 2026-08-16.** This was briefly four. Two of them turned out to be facts rather than
 > decisions, and facts can be checked. Question 0 is now **answered** — the write-up is kept
 > below because the method is reusable and the wrong version of it is what made us think we
