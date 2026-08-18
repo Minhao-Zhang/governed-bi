@@ -206,40 +206,49 @@ export default function CorpusPage() {
             />
           </TabsContent>
 
+          {/* `min-h-0 overflow-y-auto` on every curation panel, and the reason is not
+              cosmetic: an ancestor carries `overflow-hidden`, so a panel taller than the
+              viewport is *clipped with no scrollbar anywhere* rather than scrolled. Measured
+              2026-08-18 on the Setup Wizard: the panel was 1889px inside a 795px box and
+              1196px of findings were unreachable by any means.
+
+              `type`/`search` do not need this because they delegate scrolling to
+              `AssetTable`/`AssetBrowser`, which own their own scroll container. These seven
+              render ordinary stacked content, so the panel has to own it. */}
           {wizardTabOn && (
-            <TabsContent value="wizard">
+            <TabsContent value="wizard" className="min-h-0 overflow-y-auto">
               <ElicitationWizard />
             </TabsContent>
           )}
 
           {clarificationsTabOn && (
             <>
-              <TabsContent value="clarifications">
+              <TabsContent value="clarifications" className="min-h-0 overflow-y-auto">
                 <ClarificationsPanel />
               </TabsContent>
-              <TabsContent value="assumptions">
+              <TabsContent value="assumptions" className="min-h-0 overflow-y-auto">
                 <AssumptionsLog />
               </TabsContent>
-              <TabsContent value="conflicts">
+              <TabsContent value="conflicts" className="min-h-0 overflow-y-auto">
                 <ConflictsPanel />
               </TabsContent>
             </>
           )}
 
           {reportsTabOn && (
-            <TabsContent value="reports">
+            <TabsContent value="reports" className="min-h-0 overflow-y-auto">
               <FeedbackPanel />
             </TabsContent>
           )}
 
           {approvalsTabOn && (
-            <TabsContent value="drafts">
+            <TabsContent value="drafts" className="min-h-0 overflow-y-auto">
               <DraftsPanel />
             </TabsContent>
           )}
 
           {trustLoopTabOn && (
-            <TabsContent value="trust-loop">
+            <TabsContent value="trust-loop" className="min-h-0 overflow-y-auto">
               <TrustLoopMetricsView />
             </TabsContent>
           )}
