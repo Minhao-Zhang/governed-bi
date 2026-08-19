@@ -195,7 +195,7 @@ export function useClarifications(status?: string) {
   });
 }
 
-/** Reader-reported wrong answers (GET /feedback; utku-ai-trust-loop-plan.md, task H), for the
+/** Reader-reported wrong answers (GET /feedback; detent-ai-trust-loop-plan.md, task H), for the
  * admin's Reports tab -- a second inbox, over a second ledger, beside `useClarifications` above
  * (H-b: never the same record type). `status` filters on one exact value; `FeedbackPanel`
  * always asks for `"open"`. */
@@ -207,7 +207,7 @@ export function useFeedback(status?: string) {
 }
 
 /** Given a thread, what did it raise, and what became of it (GET /threads/{id}/raised;
- * utku-ai-trust-loop-plan.md, task B-1), for `raised-history.tsx` (task B-2). `options.enabled`
+ * detent-ai-trust-loop-plan.md, task B-1), for `raised-history.tsx` (task B-2). `options.enabled`
  * mirrors `useSchemaSummary`'s own shape: the caller additionally gates on tier
  * (`tierShowsRaisedHistory`), and a query this route's own render never uses should not run
  * either -- the same reasoning `answer-card.tsx`'s `needsCatalogGlimpse` gate already applies to
@@ -281,7 +281,7 @@ export function useAuditCorpus() {
   return useQuery({ queryKey: ["audit-corpus"] as const, queryFn: api.auditCorpus });
 }
 
-/** Does the loop turn, and where does it stop (utku-ai-trust-loop-plan.md, task C) -- the
+/** Does the loop turn, and where does it stop (detent-ai-trust-loop-plan.md, task C) -- the
  * refusals → reader entrances → approved rules → retrieved-again funnel, for the admin/engineer
  * metrics view (`components/corpus/trust-loop-metrics.tsx`). Ungated like the audit queries
  * above: a projection of the same turn log and corpus, gated on tier alone at the render site

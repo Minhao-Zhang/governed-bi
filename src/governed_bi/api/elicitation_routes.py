@@ -63,7 +63,7 @@ def make_elicitation_router(session: Any) -> APIRouter:
         Order is forced, not chosen. ``detect_structural_gaps`` runs first because its near-duplicate
         output is what ``apply_cluster_dependencies`` gates the keyword candidates *with*: certifying
         a value mapping on a decoy column makes the wrong column authoritative and nobody shown a
-        value checklist can tell (``utku-ai-setup-wizard-gap-model.md`` § "Presentation
+        value checklist can tell (``detent-ai-setup-wizard-gap-model.md`` § "Presentation
         consequences"). ``blocked_by`` is stamped on the new records before they are written, so the
         dependency is persisted on the record rather than recomputed per read — which is what lets
         ``GET /elicitation/candidates`` derive ``blocked`` from the ledger alone.
@@ -79,7 +79,7 @@ def make_elicitation_router(session: Any) -> APIRouter:
         here for the structural half, which is two implementations of one rule over one ledger.
 
         **``report`` is the account a re-run owes, and it is why the filter moved.** The owner's third
-        standing decision (``utku-ai-setup-wizard-gap-model.md`` § "Three owner decisions") is that a
+        standing decision (``detent-ai-setup-wizard-gap-model.md`` § "Three owner decisions") is that a
         re-run diffs against already-confirmed content and *says so in words when nothing is new*.
         ``n_generated: 0`` does not say that: it is the same number a structurally blind detector
         returns, which is the defect ``coverage`` already answers for the other half of the sentence.
@@ -259,7 +259,7 @@ def make_elicitation_router(session: Any) -> APIRouter:
 
         Computed here and not on ``_clarification_row``/``GET /clarifications`` because the
         dependency order is a constraint on the *wizard's* sequencing
-        (``utku-ai-setup-wizard-gap-model.md`` § "Presentation consequences", point 2): no A/B/E
+        (``detent-ai-setup-wizard-gap-model.md`` § "Presentation consequences", point 2): no A/B/E
         question may be presented before the near-duplicate-cluster question that decides which of
         two look-alike columns is authoritative, or the admin is invited to certify a value mapping
         onto a decoy. ``/clarifications`` is the raw ledger view and has no ordered flow to gate.

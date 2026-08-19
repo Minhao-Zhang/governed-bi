@@ -388,7 +388,7 @@ def test_a_checker_that_raises_is_recorded_rather_than_returned_as_a_string() ->
 
 
 def test_ask_user_rejects_a_schema_term_leak_before_pausing() -> None:
-    """Gap 2 (utku-ai-deployment-targets.md): a dotted `table.column` reference
+    """Gap 2 (detent-ai-deployment-targets.md): a dotted `table.column` reference
     in `question`/`why` is rejected before `ask_user` ever calls `interrupt` --
     checked via direct tool invocation (`_call`), which would surface an
     unhandled `GraphInterrupt` if the rejection didn't short-circuit before it.
@@ -439,7 +439,7 @@ def test_ask_user_requires_a_basis_of_exactly_two_kinds() -> None:
 
 
 def test_state_assumption_records_plain_language_text() -> None:
-    """Gap 1 (utku-ai-deployment-targets.md): the model's own self-reported
+    """Gap 1 (detent-ai-deployment-targets.md): the model's own self-reported
     assumption, distinct from `ask_user` (no interrupt, never pauses the turn)."""
     tools = _tools()
     text, update = _call(

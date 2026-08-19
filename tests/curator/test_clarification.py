@@ -462,7 +462,7 @@ def test_fold_ledger_answer_with_no_answer_text_is_a_no_op(tmp_path: Path) -> No
 # ── the answer's warrant: what an unmet prerequisite costs the fact it produced ─────────────
 #
 # ``703a442`` made ``unmet_prerequisites_at_answer`` expressible and deliberately left it
-# unenforced. ``utku-ai-setup-wizard-gap-model.md`` § "Which gap types produce two
+# unenforced. ``detent-ai-setup-wizard-gap-model.md`` § "Which gap types produce two
 # audience-specific questions" says what it must cost: an A-eng answer with no business
 # definition behind it "must not land ``certified`` … it should land ``draft``". Power Kiosk has
 # a DBA and no business-domain expert, so that is the ordinary case there and not an edge one —
@@ -529,7 +529,7 @@ def test_an_unwarranted_draft_cannot_be_certified_by_clicking_approve(tmp_path: 
     **The consequence is a one-way door and is deliberate**: nothing promotes a ``draft`` back to
     ``proposed``, so an answer given without its business half stays uncertifiable until the
     wizard is re-run against a corpus that has one. Re-running is Part 4's subject; the wizard
-    has no re-answer path at all today (``utku-ai-design-gaps`` #4).
+    has no re-answer path at all today (``detent-ai-design-gaps`` #4).
     """
     import pytest
 

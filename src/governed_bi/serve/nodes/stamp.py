@@ -112,7 +112,7 @@ def _attempts(execution: Mapping[str, Any] | Any) -> list[Any]:
 def _reliability(state: Mapping[str, Any]) -> dict[str, Any] | None:
     """This turn's reliability caveat, or ``None`` on a clean turn.
 
-    UtkuAI, ported (Phase 1b, this initiative): a deferred ``ask_user`` clarification means the
+    DetentAI, ported (Phase 1b, this initiative): a deferred ``ask_user`` clarification means the
     answer rests on the agent's own unconfirmed guess for that point, not a guardrail failure --
     this reuses ``corpus/schema.py``'s ``Reliability``/``ReliabilityStatus`` shape (a per-
     *column* caveat there) at the turn level rather than inventing a parallel vocabulary,
@@ -447,7 +447,7 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
         # that asymmetry. Read from state and never recomputed — a second derivation here is how
         # the audit list and the answer card came to disagree about `answer_text`.
         "answer_text": state.get("answer_text"),
-        # **The model's own self-reported assumptions (Gap 1, utku-ai-deployment-targets.md),
+        # **The model's own self-reported assumptions (Gap 1, detent-ai-deployment-targets.md),
         # unconditionally — never gated on delivery/confidence the way `uncertainty_flags` is.**
         # Same class as `result_table`/`answer_text` above and for the same reason: this is what
         # the turn's answer *says*, not a durable measured field, so it lives on the live answer
@@ -455,7 +455,7 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
         # assumptions stated" as a real (and itself informative) empty state rather than an
         # absent field it has to null-check.
         "assumptions": list(state.get("assumptions") or []),
-        # UtkuAI, ported (Phase 1b): a deferred clarification's downgrade caveat, or ``None``
+        # DetentAI, ported (Phase 1b): a deferred clarification's downgrade caveat, or ``None``
         # on a clean turn. Same class as ``assumptions`` above (what the turn's answer *says*,
         # not a durable measured field) and for the same reason -- lives on the live answer,
         # stays out of ``record``.

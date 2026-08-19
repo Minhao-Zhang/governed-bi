@@ -38,7 +38,7 @@ ADR_TOOLS = {
     "sample_rows",
     "run_query",
     "ask_user",
-    # Added 2026-08-07 (Gap 1, utku-ai-deployment-targets.md): reaches nothing new, unlike
+    # Added 2026-08-07 (Gap 1, detent-ai-deployment-targets.md): reaches nothing new, unlike
     # the five above — see ADR 0005 §3.5's amendment for why this one is exempt from the
     # "no extra tool" boundary the rest of this test enforces.
     "state_assumption",

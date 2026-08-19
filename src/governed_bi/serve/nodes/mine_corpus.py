@@ -4,7 +4,7 @@ See also ``serve/nodes/mine_mistakes.py``, wired in right after this node on the
 reasoning: a self-corrected ``run_query`` ledger is a second class of "durable fact extraction
 after a turn" fact and needed the same relocation from an offline-only script.
 
-**Relocated from ``api/routes.py``'s ``_mine_clarification_draft`` (UtkuAI, ported).** That
+**Relocated from ``api/routes.py``'s ``_mine_clarification_draft`` (DetentAI, ported).** That
 function's only call site was ``POST /chat/resume``, whose own docstring calls it a
 "degradation path -- streaming is the primary transport". The real ``governed-bi-ui`` never
 calls it: it resumes a paused ``ask_user`` interrupt through LangGraph Server's own

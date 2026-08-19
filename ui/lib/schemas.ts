@@ -29,7 +29,7 @@ import { clarificationChoiceSchema } from "./clarification.ts";
 /** Mirrors ``governed_bi.register.stages.Outcome`` exactly (v2 engine).
  *
  * Replaces v1's two-axis ``tier``/``safety_clearance``/``semantic_assurance``
- * stamp (utku-ai-deployment-targets.md, UI-retarget prerequisite for Gap 1):
+ * stamp (detent-ai-deployment-targets.md, UI-retarget prerequisite for Gap 1):
  * v2's ``/chat`` response has no equivalent measured field for either axis —
  * it stamps one five-way outcome and nothing finer-grained about *how*
  * grounded an ``answered`` turn was. This is a real capability difference,
@@ -493,7 +493,7 @@ export const answerViewSchema = z.object({
   failed_stage: z.string().nullable().optional(),
   error_type: z.string().nullable().optional(),
   refused_by: z.string().nullable().optional(),
-  /** Gap 1 (utku-ai-deployment-targets.md): the model's self-reported
+  /** Gap 1 (detent-ai-deployment-targets.md): the model's self-reported
    * assumptions, shown unconditionally — never gated on outcome the way v1's
    * `why` lines were gated on delivery/confidence. */
   assumptions: z.array(z.string()).optional().default([]),
@@ -695,7 +695,7 @@ export const clarificationRecordSchema = z.object({
   // for a live_chat-sourced record; null for curator/elicitation_wizard rows and any record
   // that predates this field. Same enum as clarificationRequestSchema.basis above.
   basis: z.enum(["data_definition", "ranking_ambiguity"]).nullable().optional(),
-  // The turn this record was raised from (utku-ai-trust-loop-plan.md, task B-0) -- sent by
+  // The turn this record was raised from (detent-ai-trust-loop-plan.md, task B-0) -- sent by
   // POST /clarifications/from-refusal, forwarded from AnswerView.record.turn_id. Null/undefined
   // for a record with no live turn behind it (curator/elicitation_wizard) or one written before
   // this field existed, same optionality as `basis` immediately above.
@@ -708,7 +708,7 @@ export const clarificationRecordSchema = z.object({
     .optional(),
   target_table: z.string().nullable().optional(),
   target_column: z.string().nullable().optional(),
-  // Gap-model fields (utku-ai-setup-wizard-gap-model.md), set by the backend at generation
+  // Gap-model fields (detent-ai-setup-wizard-gap-model.md), set by the backend at generation
   // time. `severity` is what an UNANSWERED gap costs, not how valuable the category is:
   // T1 poison (silently wrong AND on an identity/join key, so it contaminates the schema),
   // T2 silently wrong but local to one term, T3 worst case is a refusal, T4 retrieval polish.
@@ -742,7 +742,7 @@ export const clarificationRecordSchema = z.object({
 
 export const clarificationListSchema = z.array(clarificationRecordSchema);
 
-/* ── GET/POST /feedback (utku-ai-trust-loop-plan.md, task H): reader-reported wrong answers,
+/* ── GET/POST /feedback (detent-ai-trust-loop-plan.md, task H): reader-reported wrong answers,
    the admin's second inbox beside the clarification ledger above. A *different* record type by
    H-b's own decision -- never merged with clarificationRecordSchema, and never read from the
    same route. ── */
@@ -766,7 +766,7 @@ export const feedbackRecordSchema = z.object({
 
 export const feedbackListSchema = z.array(feedbackRecordSchema);
 
-/* ── GET /threads/{id}/raised (utku-ai-trust-loop-plan.md, task B-1): given a thread, what did
+/* ── GET /threads/{id}/raised (detent-ai-trust-loop-plan.md, task B-1): given a thread, what did
    it raise, and what became of it. Over both ledgers above, correlated to a thread through the
    turn log -- see api/trust_loop_routes.py's own docstring for the full argument. ── */
 
@@ -791,7 +791,7 @@ export const raisedItemSchema = z.object({
 
 export const raisedListSchema = z.array(raisedItemSchema);
 
-/* ── GET /trust-loop/metrics (utku-ai-trust-loop-plan.md, task C): does the loop -- refusal/
+/* ── GET /trust-loop/metrics (detent-ai-trust-loop-plan.md, task C): does the loop -- refusal/
    wrong-answer → reader entrance → approved rule → retrieved again -- actually turn, and where
    does it stop. See api/trust_loop_routes.py::make_trust_loop_metrics_router's own docstring for
    the full argument, including why `retrieved` is a weaker claim than its name suggests and why
@@ -852,7 +852,7 @@ const scanBucketSchema = z.object({
  *
  * `summary` is composed on the **backend**, deliberately, and this client renders it verbatim.
  * The wording is the deliverable of the owner's "re-runnable, with honest reporting" decision
- * (utku-ai-setup-wizard-gap-model.md § "Three owner decisions"), and a second copy of it in
+ * (detent-ai-setup-wizard-gap-model.md § "Three owner decisions"), and a second copy of it in
  * TypeScript would be a second thing that has to stay true. Whoever reads the route with `curl`
  * reads the same words the wizard prints.
  *

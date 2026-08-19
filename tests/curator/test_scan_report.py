@@ -1,6 +1,6 @@
 """curator/scan_report.py: what a re-run tells an admin changed since the last one.
 
-The owner's third standing decision (``utku-ai-setup-wizard-gap-model.md`` § "Three owner
+The owner's third standing decision (``detent-ai-setup-wizard-gap-model.md`` § "Three owner
 decisions"): a re-run diffs against already-confirmed content and, when nothing is new, **says
 so**. These tests assert the *account*, not the counts — the summary sentence is the deliverable
 and is pinned verbatim, because a status line an admin misreads is worse than no status line.
@@ -119,7 +119,7 @@ def test_an_answer_given_without_its_prerequisite_is_stranded_not_settled() -> N
     """``f718365`` made that answer fold at ``draft``; ``approve_draft`` accepts ``proposed``
     only and nothing promotes a ``draft`` back. Counting it as settled would tell an admin a
     question is closed when what actually happened is that it is stuck, uncertifiable, and — per
-    ``utku-ai-design-gaps`` #4 — unreachable by any edit path this wizard has."""
+    ``detent-ai-design-gaps`` #4 — unreachable by any edit path this wizard has."""
     from governed_bi.curator.scan_report import diff_scan_against_ledger
 
     ledger = [

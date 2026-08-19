@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Admin drafts queue (task D, utku-ai-trust-loop-plan.md) -- every corpus asset still
+ * Admin drafts queue (task D, detent-ai-trust-loop-plan.md) -- every corpus asset still
  * `proposed`, waiting on `POST /corpus/drafts/{id}/approve`. The loop's missing terminus:
  * that route is the only function that ever flips `proposed` to `certified`, and until this
  * panel nothing in the UI called it -- every draft this project has certified so far went

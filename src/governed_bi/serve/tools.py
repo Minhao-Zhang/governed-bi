@@ -264,7 +264,7 @@ def _log_live_clarification(
     basis: str,
 ) -> None:
     """Durably log an unanswered ``ask_user`` question, before ``interrupt`` pauses the turn
-    (UtkuAI, ported from v1's ``analyst/tools.py::_log_live_clarification``).
+    (DetentAI, ported from v1's ``analyst/tools.py::_log_live_clarification``).
 
     So the question survives even if the live turn is abandoned and nobody ever resumes it --
     it still shows up in the admin's ``/clarifications`` ledger as homework, regardless of what
@@ -356,7 +356,7 @@ def build_tools(
     # wiring failure and ``fetch.run_query`` raises on it, where coercing it to ``None`` would
     # let a default stand in for it (G1).
     corpus = cfg.get("corpus")
-    # UtkuAI, ported (Phase 1b): the offline Clarifications ledger's own precondition --
+    # DetentAI, ported (Phase 1b): the offline Clarifications ledger's own precondition --
     # ``session.corpus_root is not None`` -- matching every write route in ``api/routes.py``.
     corpus_root = cfg.get("corpus_root")
     read_cap = fetch.read_body_cap(state, cfg)
@@ -647,7 +647,7 @@ def build_tools(
         }
         if choices:
             interrupt_payload["choices"] = choices
-        # UtkuAI, ported (Phase 1b): survives an abandoned turn nobody ever resumes -- the
+        # DetentAI, ported (Phase 1b): survives an abandoned turn nobody ever resumes -- the
         # question becomes admin homework regardless. Must run before ``interrupt`` and is
         # itself idempotent, because ``interrupt`` re-runs this function from the top on every
         # resume (see the helper's own docstring).
@@ -754,7 +754,7 @@ def build_tools(
                     "answer": text,
                     "turn_id": turn_id,
                     "basis": basis,
-                    # UtkuAI, ported: whether the human declined rather than answered.
+                    # DetentAI, ported: whether the human declined rather than answered.
                     # `answer` above is `text` -- always a sentence, even on decline
                     # ("The user declined to answer this clarification.") -- so a reader of
                     # `ServeState.clarifications` (e.g. `serve/nodes/mine_corpus.py`) cannot
@@ -810,7 +810,7 @@ def build_tools(
 #: emergent behavior is the product decision left untouched here).
 _CLARIFY_DECLINED_TEXT = "The user declined to answer this clarification."
 
-#: UtkuAI, ported from v1's ``CLARIFY_DEFERRED`` sentinel (``analyst/tools.py``): unlike the
+#: DetentAI, ported from v1's ``CLARIFY_DEFERRED`` sentinel (``analyst/tools.py``): unlike the
 #: decline sentence above, this is the actual instruction the model is meant to act on, not a
 #: defensive fallback -- it is what makes the turn continue on the agent's own judgment instead
 #: of stopping (Phase 1b, this initiative).

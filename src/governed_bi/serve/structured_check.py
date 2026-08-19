@@ -5,7 +5,7 @@ statement may run at all, before it runs. This module runs *after* a statement h
 passed every layer and executed — it looks at whether the answer it produced actually matches
 what the question asked for, which ``govern/`` has no vocabulary for.
 
-Ported from UtkuAI's v1 line (``analyst/middleware.py::_structured_percentage_check``,
+Ported from DetentAI's v1 line (``analyst/middleware.py::_structured_percentage_check``,
 Experiment 007 Round H) rather than redesigned, because the check itself — a real,
 previously-diagnosed failure mode, not a hypothesis — transfers unchanged: v2 deleted the data
 model underneath it, not the finding.

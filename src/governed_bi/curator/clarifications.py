@@ -1,9 +1,9 @@
-"""The offline clarifications ledger (UtkuAI, ported): ``clarifications.jsonl``.
+"""The offline clarifications ledger (DetentAI, ported): ``clarifications.jsonl``.
 
 **Phases 1a-1c of restoring v1's offline Clarifications queue + Setup Wizard onto v2.** v1's
 ``curator/clarifications.py`` persists one admin-facing question per line in
 ``clarifications.jsonl`` and lets an admin answer it outside any live chat turn — see
-``utku-ai-v2-porting-spec.md``. This module is that ledger's model and storage, ported.
+``detent-ai-v2-porting-spec.md``. This module is that ledger's model and storage, ported.
 
 **What this module is, and is not.** This is pure CRUD + persistence: a record's shape, a
 full-file JSONL load/write, and functions to answer a record and mark it converted, each
@@ -75,7 +75,7 @@ ElicitationCategory = Literal["A", "B", "C", "D", "E"]
 #: Phase 2 Setup Wizard UI widget for a category-tagged candidate. Declared only, same reason.
 ElicitationUiModality = Literal["column_picker", "numeric", "checkbox", "checklist"]
 
-#: Severity tier of the gap a candidate asks about — ``utku-ai-setup-wizard-gap-model.md``
+#: Severity tier of the gap a candidate asks about — ``detent-ai-setup-wizard-gap-model.md``
 #: § "Tier structure". The discriminator is **what happens if the question goes unanswered**,
 #: not how much accuracy the category bought on a benchmark:
 #:
@@ -95,7 +95,7 @@ ElicitationUiModality = Literal["column_picker", "numeric", "checkbox", "checkli
 #: Python format string and a TypeScript template with nothing keeping the two in agreement.
 ElicitationSeverity = Literal["T1", "T2", "T3", "T4"]
 
-#: Who can answer this candidate — ``utku-ai-setup-wizard-gap-model.md`` § decision 2. Orthogonal
+#: Who can answer this candidate — ``detent-ai-setup-wizard-gap-model.md`` § decision 2. Orthogonal
 #: to :data:`ElicitationCategory`: ``business`` is a non-technical domain owner (Kindling's
 #: restaurant owner, who can say what "active customer" means but has never seen a column name);
 #: ``data`` is a DBA (Power Kiosk's Peruz, who can say how two tables join but must guess at
@@ -132,7 +132,7 @@ class ClarificationRecord:
     #: Who raised this question -- **not** what kind of ambiguity it is (that is :attr:`basis`,
     #: below, and orthogonal to this field). ``curator`` is an admin's own offline review;
     #: ``live_chat`` is a live ``ask_user`` interrupt; ``elicitation_wizard`` is Phase 2's
-    #: proactive scan. ``refusal`` (utku-ai-trust-loop-plan.md, task A) is the fourth: a reader
+    #: proactive scan. ``refusal`` (detent-ai-trust-loop-plan.md, task A) is the fourth: a reader
     #: who was told ``no_schema_matched`` -- the engine found no schema for the term they used --
     #: and answered "here is what I meant" through a new, reader-initiated entrance to this same
     #: ledger. Unlike the other three, this origin is the person who asked the *original*
@@ -149,7 +149,7 @@ class ClarificationRecord:
     #: ``source="curator"`` row) — that gate treats a missing ``basis`` as
     #: ``data_definition``-eligible, not a third state silently skipped.
     basis: str | None = None
-    #: The turn this record was raised from, when one exists (utku-ai-trust-loop-plan.md, task
+    #: The turn this record was raised from, when one exists (detent-ai-trust-loop-plan.md, task
     #: B-0). The only writer today is ``POST /clarifications/from-refusal``, forwarding the
     #: client's own ``record.turn_id`` from the answer that was refused -- the same trace
     #: ``curator/feedback.py::FeedbackRecord.turn_id`` already carries for a report, needed for
@@ -407,7 +407,7 @@ def answer_clarification(
 
     **Also stamps the answer's warrant** (``unmet_prerequisites_at_answer``): whichever of the
     record's ``blocked_by`` prerequisites were still open right now. Answering anyway is not
-    refused, deliberately — ``utku-ai-setup-wizard-gap-model.md`` requires a DBA with no business
+    refused, deliberately — ``detent-ai-setup-wizard-gap-model.md`` requires a DBA with no business
     counterpart to be able to answer the engineering half of a hybrid gap standalone (Power Kiosk
     has no business-domain expert; Kindling has no DBA, and neither pilot can fill both tabs). It
     is the *warrant* that differs, not the availability, and the stamp is what now makes that

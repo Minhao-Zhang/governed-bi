@@ -1,6 +1,6 @@
 """Offline: mine fail-then-pass turns out of the logged trace, write drafts, print what was found.
 
-Admin-run, not wired into any live serve path — mirrors UtkuAI v1's Round I miner
+Admin-run, not wired into any live serve path — mirrors DetentAI v1's Round I miner
 (``scripts/mine_structured_check_drafts.py``) and the same reasoning applies: mining is cheap
 and safe to run anytime, writing is gated behind draft status, and only
 ``POST /corpus/drafts/{id}/approve`` (or a human editing the YAML) makes a mined note live.

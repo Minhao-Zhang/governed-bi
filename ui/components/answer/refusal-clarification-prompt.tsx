@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The reader's own entrance into the semantic layer (utku-ai-trust-loop-plan.md, task A-3).
+ * The reader's own entrance into the semantic layer (detent-ai-trust-loop-plan.md, task A-3).
  *
  * Renders directly under I-5's refusal sentence, and only for the one refusal reason its own
  * design decision is about: `no_schema_matched` -- the engine found no schema for the term the

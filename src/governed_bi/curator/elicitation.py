@@ -1,4 +1,4 @@
-"""Phase 2 Setup Wizard: proactive admin onboarding elicitation (UtkuAI v1, ported).
+"""Phase 2 Setup Wizard: proactive admin onboarding elicitation (DetentAI v1, ported).
 
 Unlike the reactive ``ask_user`` live-chat clarification (``serve/tools.py`` — fires mid-turn
 when the live agent is uncertain), this scans an already-known schema **before** any business
@@ -98,7 +98,7 @@ _SENTINEL_VALUES: frozenset[str] = frozenset(
 CATEGORY_PRIORITY: list[str] = ["A", "C", "E", "B", "D"]
 
 #: ``(severity, audience)`` for each category this generator can actually emit, read off
-#: ``utku-ai-setup-wizard-gap-model.md`` § "Gap-type × severity × audience table".
+#: ``detent-ai-setup-wizard-gap-model.md`` § "Gap-type × severity × audience table".
 #:
 #: Declared once and unpacked by each ``_propose_*`` rather than written five times inline, so
 #: "what tier is a B question" has one answer. Severity is a property of a gap *instance*, not of
@@ -599,7 +599,7 @@ def _propose_s6(
 ) -> list[ClarificationRecord]:
     """S6: a sentinel value in a grouping or averaging column, found with **no name gate at all**.
 
-    ``utku-ai-setup-wizard-gap-model.md``'s S6 row, and its own summary of why E is not enough:
+    ``detent-ai-setup-wizard-gap-model.md``'s S6 row, and its own summary of why E is not enough:
     "E requires the column *name* to match ``_STATUS_HINTS`` AND a sentinel value; ``region``
     fails the name test. E's real signal is the value, not the name; ANDing the two destroys
     recall." So this is E with that conjunct removed and a measured one put in its place — the

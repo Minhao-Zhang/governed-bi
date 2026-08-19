@@ -1,5 +1,5 @@
 """The Setup Wizard's severity / audience / dependency gating, on the wire
-(utku-ai-setup-wizard-gap-model.md), plus the A-pair end-to-end scenario that exercises it.
+(detent-ai-setup-wizard-gap-model.md), plus the A-pair end-to-end scenario that exercises it.
 
 Split out of ``test_elicitation_routes.py`` by the 1000-line cap (ADR 0005 §6), which was
 forcing the timing rather than the seam: that file's tests are the route surface itself
@@ -35,7 +35,7 @@ from elicitation_fixtures import (  # noqa: E402
 pytestmark = needs("D")
 
 
-# ── severity / audience / dependency gating on the wire (utku-ai-setup-wizard-gap-model.md) ──
+# ── severity / audience / dependency gating on the wire (detent-ai-setup-wizard-gap-model.md) ──
 
 
 def _blocked_pair() -> list[Any]:
@@ -298,7 +298,7 @@ def test_the_engineering_half_answered_alone_lands_a_draft_nobody_can_certify(
 def test_the_two_halves_say_only_what_this_scan_measured(monkeypatch, tmp_path: Path) -> None:
     """The grounding rule, pinned as text an admin actually sees.
 
-    ``utku-ai-setup-wizard-gap-model.md``'s A-biz example offers "after discounts" and "after
+    ``detent-ai-setup-wizard-gap-model.md``'s A-biz example offers "after discounts" and "after
     refunds and card fees". Neither is derivable from a column name, a type, a value sample or a
     row count — they are facts about a company's commercial arrangements — so neither is
     generated. What is left is where the value is recorded and how it varies, both read off this

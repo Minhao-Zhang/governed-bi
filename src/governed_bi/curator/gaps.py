@@ -1,6 +1,6 @@
 """Structural gap detectors for the Setup Wizard: corpus shape and real data, never a word list.
 
-``utku-ai-setup-wizard-gap-model.md`` § "Recall against the real gap surface" is what this module
+``detent-ai-setup-wizard-gap-model.md`` § "Recall against the real gap surface" is what this module
 answers. Measured across four schemas and 264 columns, the shipped keyword generator
 (``curator/elicitation.py``) produces **six** candidates, of which two are genuinely data-derived
 and both are on English schemas. On the German ``beer_factory`` corpus the running backend
@@ -114,7 +114,7 @@ CARDINALITY_COMPARABILITY = 0.5
 #: truncation degrade recall gracefully instead of arbitrarily.
 MAX_PAIR_COMPARISONS = 200
 
-#: Severity tiers worst-first, so ``index()`` is a sort key. ``utku-ai-setup-wizard-gap-model.md``
+#: Severity tiers worst-first, so ``index()`` is a sort key. ``detent-ai-setup-wizard-gap-model.md``
 #: § "Tier structure"; the strings are ``ElicitationSeverity``'s own vocabulary.
 SEVERITY_ORDER: tuple[str, ...] = ("T1", "T2", "T3", "T4")
 
@@ -127,7 +127,7 @@ def _excluded(asset: Any) -> bool:
 class DetectorCoverage:
     """One detector's "ran / skipped, and why" line.
 
-    ``utku-ai-setup-wizard-gap-model.md`` § "The honest-report contract": an empty result is
+    ``detent-ai-setup-wizard-gap-model.md`` § "The honest-report contract": an empty result is
     indistinguishable from a structurally blind detector, and on ``beer_factory`` and
     ``restaurant`` an empty result is precisely what the shipped generator returned. Silence
     about a blind detector reads as a clean bill of health, so a detector reports what it looked
@@ -660,7 +660,7 @@ def _reliability_records(
 # ── dependency ordering ─────────────────────────────────────────────────────────────────────
 
 #: Categories whose answer certifies something *about a column*, and which a contested column
-#: therefore has to wait on. ``utku-ai-setup-wizard-gap-model.md`` § "Presentation consequences",
+#: therefore has to wait on. ``detent-ai-setup-wizard-gap-model.md`` § "Presentation consequences",
 #: point 2, names exactly these: an A mapping, a B value list and an E/S6 exclusion all become
 #: authoritative statements about whichever column they name, and a decoy is invisible from
 #: inside any of them. ``D`` is absent because the cluster question *is* a D question.

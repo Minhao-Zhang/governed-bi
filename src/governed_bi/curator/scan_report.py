@@ -1,6 +1,6 @@
 """What changed since the last scan: the account a re-run owes an admin, in words.
 
-The owner's third standing decision (2026-08-12, ``utku-ai-setup-wizard-gap-model.md`` § "Three
+The owner's third standing decision (2026-08-12, ``detent-ai-setup-wizard-gap-model.md`` § "Three
 owner decisions"): *re-runnable, with honest reporting — a re-run diffs against already-confirmed
 content and, when nothing is new, says so explicitly.* The suppression half of that has existed
 since ``b587358``; this module is the missing half. ``POST /elicitation/generate`` returned
@@ -136,7 +136,7 @@ def diff_scan_against_ledger(
       ``proposed`` only, and nothing promotes a ``draft`` back — so calling it settled would tell
       an admin a question is closed when what actually happened is that it is stuck. It is also
       not re-proposed, because its scope is on the ledger; without this bucket a re-run would
-      account for it nowhere at all, which is ``utku-ai-design-gaps`` #4 ("no clear edit path")
+      account for it nowhere at all, which is ``detent-ai-design-gaps`` #4 ("no clear edit path")
       arriving as silence.
     """
     wizard = [r for r in ledger if r.source == ELICITATION_SOURCE]
@@ -223,7 +223,7 @@ def _stranded_clause(report: ScanReport) -> str:
     Says what the state actually is and stops there. It does not promise that re-running or
     answering the prerequisite fixes it, because neither does: ``approve_draft`` accepts
     ``proposed`` only, nothing promotes a ``draft``, and this wizard has no re-answer path
-    (``utku-ai-design-gaps`` #4). Telling an admin a stuck answer will resolve itself would be
+    (``detent-ai-design-gaps`` #4). Telling an admin a stuck answer will resolve itself would be
     worse than the silence this replaces — the point of the clause is that they can see it is
     stuck at all.
     """

@@ -165,7 +165,7 @@ export function AnswerCard({
           </div>
         )}
 
-        {/* Gap 1 (utku-ai-deployment-targets.md): the model's self-reported assumptions,
+        {/* Gap 1 (detent-ai-deployment-targets.md): the model's self-reported assumptions,
             shown unconditionally — outside the refused/graded/clean branch below, never
             gated on outcome the way `why` is gated on delivery/confidence. An assumption is
             the one piece of provenance a non-technical reader can actually evaluate, because

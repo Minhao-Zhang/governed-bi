@@ -336,7 +336,7 @@ def test_append_if_new_scope_is_a_no_op_when_the_scope_already_exists(tmp_path: 
     assert records[0].id == "q001"
 
 
-# ── severity / audience / dependency gating (utku-ai-setup-wizard-gap-model.md) ──────────────
+# ── severity / audience / dependency gating (detent-ai-setup-wizard-gap-model.md) ──────────────
 #
 # Three fields and one predicate: the tier a gap sits in, who can answer it, which questions
 # must be answered first, and — recorded at answer time, because it is unrecoverable

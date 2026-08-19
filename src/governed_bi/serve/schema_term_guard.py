@@ -1,7 +1,7 @@
 """Detect a raw schema identifier leaking into human-facing clarification text.
 
 Power Kiosk's and Kindling's action plans both require this by name (Kindling's,
-verbatim: "in plain business language, never schema terms" — utku-ai-deployment-
+verbatim: "in plain business language, never schema terms" — detent-ai-deployment-
 targets.md). ``ask_user``'s own instructions used to be the only guard against
 this, and its own worked example demonstrated the opposite (``choices=
 ["payments.amount", "line_items.unit_price"]``) — a prompt instruction is not a

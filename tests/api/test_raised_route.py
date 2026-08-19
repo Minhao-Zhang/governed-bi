@@ -1,4 +1,4 @@
-"""GET /threads/{thread_id}/raised (utku-ai-trust-loop-plan.md, task B-1) -- given a thread,
+"""GET /threads/{thread_id}/raised (detent-ai-trust-loop-plan.md, task B-1) -- given a thread,
 what did it raise, and what became of it. Reads both ``feedback.jsonl`` (task H) and the
 refusal-sourced slice of ``clarifications.jsonl`` (task A), correlated to a thread through the
 turn log (``api/thread_turns.ThreadTurnLog`` since ADR 0014; ``api/trace_store.py`` is deleted).

@@ -1,5 +1,5 @@
 """``correct / clarified / refused`` — the three-bucket report Power Kiosk's and
-Kindling's action plans both ask for by name (utku-ai-deployment-targets.md).
+Kindling's action plans both ask for by name (detent-ai-deployment-targets.md).
 
 ``project_turn`` already derives a five-way ``outcome`` (answered / refused /
 clarification / capped / crashed) and grades every non-answered outcome

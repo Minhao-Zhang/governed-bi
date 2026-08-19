@@ -1,5 +1,5 @@
 """POST /feedback, GET /feedback, POST /feedback/{id}/answer, POST /feedback/{id}/dismiss
-(utku-ai-trust-loop-plan.md, task H) -- the reader-reported-wrong-answer inbox, over its own
+(detent-ai-trust-loop-plan.md, task H) -- the reader-reported-wrong-answer inbox, over its own
 ``feedback.jsonl`` ledger, mounted by ``api/feedback_routes.py::make_feedback_router``.
 
 Modeled directly on ``tests/api/test_clarifications_route.py``: same session fixture shape, same

@@ -2,7 +2,7 @@
 
 **Why this exists, and why it is not upstream.** v2 deletes the HTTP corpus-write surface
 (ADR 0005 §1.6: "the corpus is trusted, the incoming question is not") and has no ``curator/``
-layer yet — see ``utku-ai-v2-porting-spec.md``. UtkuAI's mistake-memory and Enhancer features
+layer yet — see ``detent-ai-v2-porting-spec.md``. DetentAI's mistake-memory and Enhancer features
 both need *some* write path, so this module builds the minimal safe one, reusing v2's own
 security-critical primitives rather than reimplementing them:
 

@@ -1,5 +1,5 @@
 """``mine_mistakes`` -- a self-corrected turn's ledger becomes a mistake-memory draft
-(UtkuAI, ported).
+(DetentAI, ported).
 
 **Relocated from ``scripts/mine_mistakes_v2.py``, on the same reasoning as
 ``mine_corpus.py``'s own relocation (commit ``d20832a``) -- read its module docstring first.**

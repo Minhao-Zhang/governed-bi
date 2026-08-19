@@ -1,7 +1,7 @@
 """Power Kiosk MCP — OAuth (Cognito) connectivity probe.
 
 **Not a production connector.** This is Phase 0 item #4 of the deployment-targets
-roadmap (Obsidian: utku-ai-deployment-targets.md): the smallest thing that proves
+roadmap (Obsidian: detent-ai-deployment-targets.md): the smallest thing that proves
 we can reach Peruz's MCP server at all, before designing the real MCP-client
 `Connector`. It does the full Authorization Code + PKCE dance against their
 Cognito user pool and, on success, calls the MCP endpoint's `initialize` +

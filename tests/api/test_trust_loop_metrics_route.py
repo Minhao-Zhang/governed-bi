@@ -1,4 +1,4 @@
-"""GET /trust-loop/metrics (utku-ai-trust-loop-plan.md, task C) -- does the loop turn, and where
+"""GET /trust-loop/metrics (detent-ai-trust-loop-plan.md, task C) -- does the loop turn, and where
 does it stop. Same fixture shapes as ``test_raised_route.py``, including its in-memory
 ``_FakeTurnLog`` double for ``api/thread_turns.ThreadTurnLog`` (ADR 0014 deleted
 ``api/trace_store.py``), since this route shares that router's dependency on the turn log.

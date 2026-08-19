@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Admin report queue (utku-ai-trust-loop-plan.md, task H-4) -- every `open` `FeedbackRecord` a
+ * Admin report queue (detent-ai-trust-loop-plan.md, task H-4) -- every `open` `FeedbackRecord` a
  * reader filed through `components/answer/wrong-answer-report.tsx`. Lists `GET
  * /feedback?status=open` and lets the admin either answer it (`POST /feedback/{id}/answer`,
  * which folds the correction into a `proposed` corpus draft through the same Enhancer path

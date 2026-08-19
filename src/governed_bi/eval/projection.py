@@ -430,7 +430,7 @@ def project_turn(
         # ``missing_gold`` into a wrong answer (see ``grade.grade_turn``).
         "correct": grade["correct"],
         # Which non-answered reason this row was, as a field `Population.rate()` can
-        # aggregate (utku-ai-deployment-targets.md's `correct/clarified/refused`
+        # aggregate (detent-ai-deployment-targets.md's `correct/clarified/refused`
         # scorecard) -- `outcome` already distinguishes these, but nothing stored it as
         # a rate-able boolean, so a run's summary could not tell "needed a live
         # clarification" apart from "refused" apart from "wrong answer".

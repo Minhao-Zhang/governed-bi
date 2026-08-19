@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`governed_bi.serve.structured_check` (ported from UtkuAI v1,
+"""Unit tests for :mod:`governed_bi.serve.structured_check` (ported from DetentAI v1,
 Experiment 007 Round H)."""
 
 from __future__ import annotations

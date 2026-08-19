@@ -8,7 +8,7 @@ This function is.
 paragraph (audit §10): it had zero callers there, so "built, never called" made it an
 uncalled control rather than a real one. That premise does not hold on ``ryan/dev-v2``:
 ``corpus/drafts.py::submit_draft`` calls it as the phase-boundary guarantee behind the
-whole draft-write foundation (UtkuAI, ported). Upstream's replacement control
+whole draft-write foundation (DetentAI, ported). Upstream's replacement control
 (``tools/graft_corpus_fields.py`` refusing the whole ``governance``/``reliability``/
 ``summary`` fields) guards a different write path — the curator's model-authored-corpus
 grafting tool, not this HTTP draft/approve flow — so the two are not redundant with each

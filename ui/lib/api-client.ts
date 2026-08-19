@@ -398,7 +398,7 @@ export const api = {
    * ledger, and what it writes depends on the record's own `basis` — a `ranking_ambiguity`
    * question lands `cancelled` and leaves the admin queue, anything else stays `open`. The server
    * decides, which is why there is no body: see
-   * `docs/utkuai-role-tiers-and-clarification-cancel.md`.
+   * `docs/detentai-role-tiers-and-clarification-cancel.md`.
    *
    * Returns the resulting row, so a caller can say which of the two happened without refetching. */
   cancelClarification: (id: string): Promise<ClarificationRecord> => {
@@ -523,7 +523,7 @@ export const api = {
   },
 
   /** Given a thread, what did it raise, and what became of it (GET /threads/{id}/raised;
-   * utku-ai-trust-loop-plan.md, task B-1) -- the read model `raised-history.tsx` (task B-2)
+   * detent-ai-trust-loop-plan.md, task B-1) -- the read model `raised-history.tsx` (task B-2)
    * renders. No mock data ships, same reason `drafts()`/`feedback()` ship none: nothing
    * originates a report or a refusal-clarification in mock mode, so mock mode renders the
    * empty-list state (the panel simply never mounts -- see that component's own docstring). */
@@ -531,7 +531,7 @@ export const api = {
     get(`/threads/${encodeURIComponent(threadId)}/raised`, raisedListSchema, []),
 
   /** Does the loop turn, and where does it stop (GET /trust-loop/metrics;
-   * utku-ai-trust-loop-plan.md, task C) -- refusals → reader entrances → approved rules →
+   * detent-ai-trust-loop-plan.md, task C) -- refusals → reader entrances → approved rules →
    * retrieved again. Ungated like the audit routes below, not `raisedByThread` above: this is a
    * projection of the same turn log plus corpus, but scoped to the whole session rather than one
    * thread, which is why it sits with `/audit/*` rather than the thread-scoped read model. */

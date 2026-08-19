@@ -1,4 +1,4 @@
-"""The reader-reported-wrong-answer ledger (UtkuAI trust loop, task H): ``feedback.jsonl``.
+"""The reader-reported-wrong-answer ledger (DetentAI trust loop, task H): ``feedback.jsonl``.
 
 **H-b, restated for this module.** A clarification (``curator/clarifications.py``) is the
 *engine* asking a question it cannot answer on its own; a report is the *reader* objecting to an

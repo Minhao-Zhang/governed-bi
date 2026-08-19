@@ -2,7 +2,7 @@
 
 Before this, a knob resolved from its declared default and then from an environment variable, and
 there was no third path — which is why three UI controls existed for settings nothing could
-actually change (see ``docs/utkuai-role-tiers-and-clarification-cancel.md`` on client-only halves).
+actually change (see ``docs/detentai-role-tiers-and-clarification-cancel.md`` on client-only halves).
 This adds the write path, and almost all of this file is about keeping it narrow.
 
 **The allowlist is not "operational knobs".** That was the first idea and it is wrong: the

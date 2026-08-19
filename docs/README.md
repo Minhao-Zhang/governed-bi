@@ -18,7 +18,7 @@ SQLite is the offline test/CI substrate.
 8. [Open work](open-work.md) — what is unfinished, and the evidence for each.
 9. [Enterprise fork](enterprise-fork.md) — what an enterprise deployment must implement for
    PII / RLS / RBAC, in what order, and what this repository deliberately does not do for it.
-10. [UtkuAI fork handoff](utkuai-fork-handoff.md) — **start here for the fork.** Why it exists,
+10. [DetentAI fork handoff](detentai-fork-handoff.md) — **start here for the fork.** Why it exists,
     its spec, which files are its own and which upstream ones it touched, the five seams where it
     attaches, the one architectural debt it carries, and the two decisions that are upstream's.
 11. [Claim audit, 2026-08-18](handoff-claim-audit-2026-08-18.md) — the fork's own claims checked

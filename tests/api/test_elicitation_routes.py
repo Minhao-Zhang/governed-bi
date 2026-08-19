@@ -1,5 +1,5 @@
 """POST /elicitation/generate, GET /elicitation/candidates — the Setup Wizard's HTTP surface
-(UtkuAI v1, ported), plus the category-aware composition + D join-path auto-follow-up wired
+(DetentAI v1, ported), plus the category-aware composition + D join-path auto-follow-up wired
 into the pre-existing ``POST /clarifications/{id}/answer`` (no new answer route -- every
 category-tagged candidate is answered through the same route Phase 1a/1c already built).
 

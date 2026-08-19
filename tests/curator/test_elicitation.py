@@ -1,4 +1,4 @@
-"""curator/elicitation.py: the Phase 1 Setup Wizard heuristic candidate generator (UtkuAI v1,
+"""curator/elicitation.py: the Phase 1 Setup Wizard heuristic candidate generator (DetentAI v1,
 ported) and the D join-path auto-follow-up. Answer composition moved with its module to
 ``tests/curator/test_elicitation_answers.py``.
 
@@ -549,7 +549,7 @@ def test_category_priority_order() -> None:
     assert CATEGORY_PRIORITY == ["A", "C", "E", "B", "D"]
 
 
-# ── severity / audience classification (utku-ai-setup-wizard-gap-model.md § "Gap-type ×
+# ── severity / audience classification (detent-ai-setup-wizard-gap-model.md § "Gap-type ×
 # severity × audience table") ────────────────────────────────────────────────────────────────
 
 
@@ -654,7 +654,7 @@ def test_the_keyword_generator_emits_unblocked_records_and_the_gate_is_applied_a
     assert by_scope["elicitation:exclusion:orders.review_status"].blocked_by == ()
 
 
-# ── S6: sentinel detection with no name gate (utku-ai-setup-wizard-gap-model.md § S6) ────────
+# ── S6: sentinel detection with no name gate (detent-ai-setup-wizard-gap-model.md § S6) ────────
 
 
 def test_s6_finds_a_sentinel_in_a_column_no_keyword_list_names() -> None:

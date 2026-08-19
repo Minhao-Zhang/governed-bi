@@ -69,7 +69,7 @@ def _schema() -> tuple[list[Any], dict[str, Any]]:
 
 
 def test_an_ambiguous_term_becomes_an_ordered_pair_of_audience_specific_questions() -> None:
-    """``utku-ai-setup-wizard-gap-model.md`` § "Which gap types produce two audience-specific
+    """``detent-ai-setup-wizard-gap-model.md`` § "Which gap types produce two audience-specific
     questions", point 1. One gap, two records, one dependency: the business owner says which
     meaning, the DBA binds it to a column, and the second waits on the first.
 

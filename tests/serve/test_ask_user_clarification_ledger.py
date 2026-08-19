@@ -1,4 +1,4 @@
-"""``ask_user`` writes an open ledger record before ``interrupt()`` pauses (Phase 1b, UtkuAI).
+"""``ask_user`` writes an open ledger record before ``interrupt()`` pauses (Phase 1b, DetentAI).
 
 Split out from ``test_agent_tools_hitl.py`` (ADR 0005 §6 file-length cap), same pattern as
 ``test_ask_user_choices_and_defer.py``: a real ``compile_graph()`` + ``ScriptedChatModel``

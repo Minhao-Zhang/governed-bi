@@ -120,7 +120,7 @@ and with it off, answering a clarification records the answer and produces **no 
 error**. It reads as broken when it is only switched off. Two persistence paths exist and
 neither works for this knob (`governed_bi.local.toml` "is read by nothing"; only three
 float/int knobs declare an env var — no bool knob has one). Tracked; interim mitigation is
-`UtkuAI/demo/preflight.sh`, which sets it and prints READY / NOT READY.
+`DetentAI/demo/preflight.sh`, which sets it and prints READY / NOT READY.
 
 ## Finding 5 — two counters and one path are weaker than their names
 

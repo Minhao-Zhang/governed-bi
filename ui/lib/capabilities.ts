@@ -78,7 +78,7 @@ export function canCurateCorpus(caps: Capabilities | undefined): boolean {
  * The server half is **not wired**: the engine never populates `ui_display_mode`
  * (`grep -r ui_display_mode src/` is empty). The read stays here so a future multi-tenant server
  * can set it per tenant with no change to any screen — see
- * `docs/utkuai-role-tiers-and-clarification-cancel.md`.
+ * `docs/detentai-role-tiers-and-clarification-cancel.md`.
  */
 export function resolveTier(
   caps: Capabilities | undefined,
@@ -143,7 +143,7 @@ export function tierShowsRawTerminal(tier: Tier): boolean {
 }
 
 /** Whether `tier` sees the refusal card's "tell us what you meant" control
- * (utku-ai-trust-loop-plan.md, task A-3). Business only, not a floor: an analyst/engineer
+ * (detent-ai-trust-loop-plan.md, task A-3). Business only, not a floor: an analyst/engineer
  * refused by `no_schema_matched` can reach `/corpus` (see `REACHABLE` above) and write the
  * definition there directly; a business reader cannot reach `/corpus` at all, so this control
  * is their only entrance into the same ledger. */
@@ -152,7 +152,7 @@ export function tierShowsRefusalClarificationPrompt(tier: Tier): boolean {
 }
 
 /** Whether `tier` sees the quiet "this isn't right" control on a *delivered* answer card
- * (utku-ai-trust-loop-plan.md, task H-3). Business only, same reasoning as
+ * (detent-ai-trust-loop-plan.md, task H-3). Business only, same reasoning as
  * `tierShowsRefusalClarificationPrompt` just above: an analyst/engineer can reach `/corpus`
  * (see `REACHABLE` above) and act on a wrong answer there directly; a business reader cannot
  * reach `/corpus` at all, so this control is their only entrance for saying an answer is wrong.
@@ -166,7 +166,7 @@ export function tierShowsWrongAnswerReport(tier: Tier): boolean {
   return tier === "business";
 }
 
-/** Whether `tier` sees "what you've raised" (utku-ai-trust-loop-plan.md, task B-2) -- the quiet,
+/** Whether `tier` sees "what you've raised" (detent-ai-trust-loop-plan.md, task B-2) -- the quiet,
  * thread-scoped list of a reader's own reports/refusal-clarifications and whether each became a
  * certified rule. Business only, same reasoning as `tierShowsRefusalClarificationPrompt`/
  * `tierShowsWrongAnswerReport` above: an analyst/engineer can already see this directly on
@@ -179,7 +179,7 @@ export function tierShowsRaisedHistory(tier: Tier): boolean {
   return tier === "business";
 }
 
-/** Whether `tier` may certify a `proposed` draft (utku-ai-trust-loop-plan.md, task D).
+/** Whether `tier` may certify a `proposed` draft (detent-ai-trust-loop-plan.md, task D).
  *
  * Engineer only, same as `tierShowsAudit` above and for a related reason -- but named
  * separately rather than reused, because the two ask different questions. `tierShowsAudit`
@@ -196,7 +196,7 @@ export function tierApprovesDrafts(tier: Tier): boolean {
   return tier === "engineer";
 }
 
-/** Whether `tier` sees the trust-loop metrics view (utku-ai-trust-loop-plan.md, task C) -- the
+/** Whether `tier` sees the trust-loop metrics view (detent-ai-trust-loop-plan.md, task C) -- the
  * refusals → reader entrances → approved rules → retrieved-again funnel.
  *
  * Engineer only, same reasoning as `tierShowsAudit`/`tierApprovesDrafts` above: this is an

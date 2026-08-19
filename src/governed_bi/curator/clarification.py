@@ -1,15 +1,15 @@
-"""Turn an answered clarification into a corpus candidate (UtkuAI, ported).
+"""Turn an answered clarification into a corpus candidate (DetentAI, ported).
 
 **What v2 already has, and what it does not.** ``serve/tools.py``'s ``ask_user`` +
 ``serve/resume.py``'s identity-bound resume + ``POST /chat/resume`` are the full
 pause/resume mechanics, built and tested on this branch already — see
-``utku-ai-v2-porting-spec.md``. What has no home yet is the other half: turning an answered
+``detent-ai-v2-porting-spec.md``. What has no home yet is the other half: turning an answered
 question into a corpus fact, so the next question that hits the same ambiguity does not have
 to ask again. This module is exactly that missing half, and nothing else — it does not touch
 how a turn is served, paused, or declined.
 
 **Decline/defer behavior is deliberately untouched.** v2 fails closed on a decline (the turn
-refuses rather than guessing); UtkuAI v1 fell back to a heuristic-tagged guess. That is a
+refuses rather than guessing); DetentAI v1 fell back to a heuristic-tagged guess. That is a
 serve-behavior product decision the v2 authors already made on purpose, not a gap this port is
 scoped to fill — :func:`resolved_answer_text` returns ``None`` on a decline so a caller mines
 nothing, and the turn's own refusal is untouched.
@@ -256,7 +256,7 @@ def fold_ledger_answer_into_corpus(
     records which of a record's ``blocked_by`` questions were still unanswered at the moment it
     was answered (``curator/clarifications.py::answer_clarification``). ``703a442`` made that
     expressible and left it unenforced; this is where it costs something.
-    ``utku-ai-setup-wizard-gap-model.md`` § "Which gap types produce two audience-specific
+    ``detent-ai-setup-wizard-gap-model.md`` § "Which gap types produce two audience-specific
     questions" requires it: A-eng answered with no A-biz behind it "must not land ``certified``
     … it should land ``draft`` … noting 'picked without a business definition'". Power Kiosk has
     a DBA and no business-domain expert, so this is the ordinary case there, not an edge one --

@@ -1,4 +1,4 @@
-# UtkuAI fork — design rationale, spec, and how it attaches
+# DetentAI fork — design rationale, spec, and how it attaches
 
 **What this is.** A handoff, not a request. It records why this fork exists, what it was built
 against, exactly which parts of the engine it touches and why, and the one piece of debt it owes
@@ -6,7 +6,7 @@ you. Nothing in this document needs an answer from you — where this fork had t
 two legitimate designs, the choice made and its evidence are stated below rather than asked about.
 
 **Why this file lives flat in `docs/`, not `docs/adr/`.** Same reason as
-[`docs/utkuai-role-tiers-and-clarification-cancel.md`](utkuai-role-tiers-and-clarification-cancel.md):
+[`docs/detentai-role-tiers-and-clarification-cancel.md`](detentai-role-tiers-and-clarification-cancel.md):
 the ADR sequence (`0001`–`0013`) is numbered and you own it. A fork-local `0014` would collide the
 first time you add one — the same defect this fork's own `register/prompts.py` merge found, where
 `v3`, `v4` and `v5` had each come to name two different prompts across the two histories. Fork docs
@@ -431,7 +431,7 @@ arm before this fork spends one measuring it.
 `curator/` is the largest thing this fork carries that you do not: the clarifications ledger, the
 Setup Wizard's gap detectors, the Enhancer's dedup/conflict handling, and the UI tabs that drive
 them. It reads your corpus through your own asset schema and writes drafts through your
-`corpus/store.py`; none of its logic is UtkuAI-specific business logic.
+`corpus/store.py`; none of its logic is DetentAI-specific business logic.
 
 **Decision:** not offered upstream as-is. The honest version of that offer requires lifting the
 governed-read helpers below both `curator/` and `serve/` first (§5) — handing over `curator/`

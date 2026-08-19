@@ -134,7 +134,7 @@ export function MobileNav() {
 // The Simple/Audit eye button used to sit in this header. It is gone, replaced by `/settings`:
 // it was a two-state control with no label, next to the theme toggle, changing what an entire
 // application shows — and there was no way for it to say what either state meant. A role is not a
-// display preference. See `docs/utkuai-role-tiers-and-clarification-cancel.md`.
+// display preference. See `docs/detentai-role-tiers-and-clarification-cancel.md`.
 
 function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();

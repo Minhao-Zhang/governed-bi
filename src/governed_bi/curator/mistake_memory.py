@@ -1,4 +1,4 @@
-"""Mine a mistake -> fix pair out of one turn's execution ledger (UtkuAI Round 6/8, ported).
+"""Mine a mistake -> fix pair out of one turn's execution ledger (DetentAI Round 6/8, ported).
 
 **What "mistake" means here.** Not every retry is a mistake worth remembering — a turn whose
 first attempt already passed has nothing to teach. This mines only the pattern that generalizes:

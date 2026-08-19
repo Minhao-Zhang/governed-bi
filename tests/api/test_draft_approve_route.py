@@ -1,4 +1,4 @@
-"""POST /corpus/drafts/{id}/approve — the admin half of UtkuAI's draft write path on v2."""
+"""POST /corpus/drafts/{id}/approve — the admin half of DetentAI's draft write path on v2."""
 
 from __future__ import annotations
 

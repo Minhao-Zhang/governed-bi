@@ -5,7 +5,7 @@ than a line count: A is the only keyword category that resolves into **two** rec
 dependency between them, and the only one that pays for a governed *count* rather than a value
 read. Everything else that module proposes is one record, one audience, one payload.
 
-``utku-ai-setup-wizard-gap-model.md`` § "Which gap types produce two audience-specific
+``detent-ai-setup-wizard-gap-model.md`` § "Which gap types produce two audience-specific
 questions", point 1: the shipped single question
 
     "When you say 'revenue', which table/column does that map to?"

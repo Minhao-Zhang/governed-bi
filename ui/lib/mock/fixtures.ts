@@ -796,7 +796,7 @@ export const MOCK_ANSWER: AnswerView = {
   failed_stage: null,
   error_type: null,
   refused_by: null,
-  // Gap 1 (utku-ai-deployment-targets.md): a sample self-reported assumption, and a result
+  // Gap 1 (detent-ai-deployment-targets.md): a sample self-reported assumption, and a result
   // table, so the mock transport still exercises the two panels the engine-faithful upstream
   // fixture dropped. Both are real fields on `answerViewSchema`; leaving them out of every
   // mock meant the only way to see either panel was to attach a backend.
@@ -1061,7 +1061,7 @@ export const MOCK_AGENT_ANSWER: AnswerView = {
   failed_stage: null,
   error_type: null,
   refused_by: null,
-  // Gap 1 (utku-ai-deployment-targets.md): a sample self-reported assumption, and a result
+  // Gap 1 (detent-ai-deployment-targets.md): a sample self-reported assumption, and a result
   // table, so the mock transport still exercises the two panels the engine-faithful upstream
   // fixture dropped. Both are real fields on `answerViewSchema`; leaving them out of every
   // mock meant the only way to see either panel was to attach a backend.

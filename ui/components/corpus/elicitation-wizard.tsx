@@ -6,7 +6,7 @@
  * `ask_user` interrupts), this walks the admin through AI-proposed candidate
  * questions BEFORE any business user asks a live query.
  *
- * Grouped **audience tab → severity tier**, per utku-ai-setup-wizard-gap-model.md
+ * Grouped **audience tab → severity tier**, per detent-ai-setup-wizard-gap-model.md
  * — replacing the fixed A > C > E > B > D category order this used to group by.
  * Two reasons the axes swapped:
  *
@@ -118,7 +118,7 @@ const SEVERITY_ORDER: (ElicitationSeverity | null)[] = ["T1", "T2", "T3", "T4", 
  * either column is a decoy at all.
  *
  * T3's claim is definitional rather than measured — the tier *is* "unanswered means a refusal"
- * (utku-ai-setup-wizard-gap-model.md § "Tier structure") — so it keeps its absolute. T4 is the
+ * (detent-ai-setup-wizard-gap-model.md § "Tier structure") — so it keeps its absolute. T4 is the
  * same, and its copy now also says why so many of them are here at once. */
 const SEVERITY_LABEL: Record<ElicitationSeverity, string> = {
   T1: "Wrong answers, spreading",
@@ -137,7 +137,7 @@ const SEVERITY_BLURB: Record<ElicitationSeverity, string> = {
 /** What the bare `T1`–`T4` badge means, for the "?" beside it in `TierSection`. Readers who have
  * not memorised the tiering see only the code, not `SEVERITY_LABEL`/`SEVERITY_BLURB`'s framing
  * (which claims exactly what the detectors measured — see the block comment above them), so this
- * exists to answer a plainer question in the words `utku-ai-setup-wizard-gap-model.md` §
+ * exists to answer a plainer question in the words `detent-ai-setup-wizard-gap-model.md` §
  * "Tier structure" uses to define the tiers at all: not how much accuracy a category bought, but
  * what happens if the gap is left unanswered.
  *
@@ -226,7 +226,7 @@ export function ElicitationWizard() {
 
 /** What the last re-run changed, in words. A status line, not a dashboard.
  *
- * The owner's third standing decision (utku-ai-setup-wizard-gap-model.md § "Three owner
+ * The owner's third standing decision (detent-ai-setup-wizard-gap-model.md § "Three owner
  * decisions") is that a re-run diffs against already-confirmed content and **says so** when
  * nothing is new. What this replaces was a toast reading "No new questions to propose — the
  * schema is already covered", which was wrong twice over: it vanished after four seconds, and
@@ -540,7 +540,7 @@ function ElicitationCard({
             {stranded && (
               // Stated on the card and not only in the scan report, because this is where an
               // admin looks to find out what happened to a question they answered. It says what
-              // is true and stops: there is no revise path in this wizard (utku-ai-design-gaps
+              // is true and stops: there is no revise path in this wizard (detent-ai-design-gaps
               // #4), so promising that answering the prerequisite now would fix it would be a
               // second wrong claim on top of the one this line exists to correct.
               <p className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">

@@ -8,7 +8,7 @@ a second answer to "what does the wizard find on this schema", which is the thin
 below is relative to.
 
 The assertions are about the **account**, not the totals. The owner's third standing decision
-(``utku-ai-setup-wizard-gap-model.md`` § "Three owner decisions") is that a re-run diffs against
+(``detent-ai-setup-wizard-gap-model.md`` § "Three owner decisions") is that a re-run diffs against
 already-confirmed content and says so in words when nothing is new — so "``n_generated == 0``"
 is precisely the answer that is *not* good enough here, and none of these tests accept it alone.
 """
@@ -183,7 +183,7 @@ def test_an_answer_given_without_its_prerequisite_is_stranded_not_settled(
 ) -> None:
     """``f718365`` lands that answer at ``draft``; ``approve_draft`` accepts ``proposed`` only and
     nothing promotes a ``draft`` back, so the fact is permanently uncertifiable and the wizard has
-    no re-answer path (``utku-ai-design-gaps`` #4). Before this bucket existed a re-run counted it
+    no re-answer path (``detent-ai-design-gaps`` #4). Before this bucket existed a re-run counted it
     as settled, which told an admin a question was closed when it was stuck."""
     client = _client(monkeypatch, _session_with_schema(tmp_path))
     client.post("/elicitation/generate")

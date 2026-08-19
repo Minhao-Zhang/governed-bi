@@ -1,4 +1,4 @@
-"""Reader-reported wrong answers (utku-ai-trust-loop-plan.md, task H): a second admin inbox,
+"""Reader-reported wrong answers (detent-ai-trust-loop-plan.md, task H): a second admin inbox,
 beside the offline clarifications ledger, over its own ``feedback.jsonl``.
 
 **Why this is a new file and not a fourth section of ``curation_routes.py``.** That file is

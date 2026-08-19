@@ -1,7 +1,7 @@
-# UtkuAI-on-v2 Manual Test Checklist
+# DetentAI-on-v2 Manual Test Checklist
 
-Regression checklist for the UtkuAI features ported onto `governed-bi`'s `v2`
-branch (`ryan/dev-v2`) — see `utku-ai-v2-porting-spec.md` (Obsidian) for why
+Regression checklist for the DetentAI features ported onto `governed-bi`'s `v2`
+branch (`ryan/dev-v2`) — see `detent-ai-v2-porting-spec.md` (Obsidian) for why
 this exists as a fork addition rather than an upstream feature. Run this
 after any change touching `src/governed_bi/curator/`,
 `src/governed_bi/corpus/drafts.py`, `src/governed_bi/serve/structured_check.py`,
@@ -159,7 +159,7 @@ that porting work is scoped and started.
   (`uv run python tools/check_imports.py`,
   `check_citations.py`, `check_file_length.py`,
   `check_one_implementation.py`, `check_measurement_locality.py`).
-- [ ] No UtkuAI feature above writes to the corpus except through
+- [ ] No DetentAI feature above writes to the corpus except through
   `corpus/drafts.py`'s `submit_draft`/`approve_draft` — grep for any direct
   `corpus.store.write` call outside that module before merging a change to
   any of the four phases.

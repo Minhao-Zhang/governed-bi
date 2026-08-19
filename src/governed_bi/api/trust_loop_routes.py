@@ -1,4 +1,4 @@
-"""``GET /threads/{thread_id}/raised`` and ``GET /trust-loop/metrics`` (utku-ai-trust-loop-plan.md,
+"""``GET /threads/{thread_id}/raised`` and ``GET /trust-loop/metrics`` (detent-ai-trust-loop-plan.md,
 tasks B-1 and C).
 
 Two read models, one file. C's own count -- "how many became approved rules" -- is computed the

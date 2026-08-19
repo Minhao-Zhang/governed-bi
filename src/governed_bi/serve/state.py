@@ -615,7 +615,7 @@ class ServeState(TypedDict, total=False):
     usage: Annotated[list[UsageRecord], operator.add]
     clarifications: Annotated[list[dict[str, Any]], operator.add]
     clarification_requested: bool
-    #: ``clarification_id``s ``mine_corpus`` has already processed. UtkuAI, ported: without
+    #: ``clarification_id``s ``mine_corpus`` has already processed. DetentAI, ported: without
     #: this, a node reading the thread-accumulated ``clarifications`` list would re-mine every
     #: clarification ever answered on this thread on every later turn -- `corpus/store.py`'s
     #: `write()` overwrites the same asset id cleanly, so a re-mine raises nothing, but it
@@ -654,7 +654,7 @@ class ServeState(TypedDict, total=False):
     result_table: dict[str, Any] | None
     #: Prose answer from ``narrate``. Live only; distinct from system ``answer["text"]``.
     answer_text: str | None
-    #: Model-self-reported assumptions from ``state_assumption`` (Gap 1, utku-ai-deployment-
+    #: Model-self-reported assumptions from ``state_assumption`` (Gap 1, detent-ai-deployment-
     #: targets.md). Live only, same class as ``result_table``/``answer_text`` above — per-turn,
     #: never accumulated, so turn two's answer cannot show turn one's assumptions.
     assumptions: list[str] | None

@@ -76,7 +76,7 @@ class GovernedAgentState(AgentState):
     clarifications_by_call: Annotated[dict[str, Any], merge_by_call]
 
     #: ``tool_call_id -> plain-language assumption text``. One row per
-    #: ``state_assumption`` call (Gap 1, utku-ai-deployment-targets.md) — the
+    #: ``state_assumption`` call (Gap 1, detent-ai-deployment-targets.md) — the
     #: model's own self-reported "here is what I assumed answering this",
     #: distinct from ``clarifications_by_call`` (a question the model asked and
     #: a human answered) and from anything derivable from ``pulled_in``/

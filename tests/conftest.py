@@ -57,7 +57,7 @@ def _isolate_runtime_overrides(tmp_path_factory, monkeypatch):
 
     ``serve/runtime_overrides.py`` persists to ``runs/runtime-overrides.json``, and every session
     layers it on. Without this, a switch someone flipped in a browser changes what the suite
-    asserts — which is exactly how it was found: ``test_capabilities_reports_the_ported_utkuai
+    asserts — which is exactly how it was found: ``test_capabilities_reports_the_ported_detentai
     _toggles`` failed on a machine where ``enable_clarification_to_draft`` had just been turned on
     from the UI. Autouse and repository-wide rather than per-file, because the failure mode is a
     test that never thought about the file at all.

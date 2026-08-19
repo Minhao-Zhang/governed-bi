@@ -1,4 +1,4 @@
-"""Dedup/conflict decision for a candidate draft against existing certified assets (UtkuAI
+"""Dedup/conflict decision for a candidate draft against existing certified assets (DetentAI
 Enhancer, ported).
 
 **Ported design, not a new one.** v1's Enhancer asked the model to compare one answered

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * "What you've raised" (utku-ai-trust-loop-plan.md, task B-2) -- the reader's own history of
+ * "What you've raised" (detent-ai-trust-loop-plan.md, task B-2) -- the reader's own history of
  * what this thread raised, and what became of it. The plan's minimum: "the reader's own history
  * shows 'you asked about X; an admin defined it on <date>', and re-asking now works."
  *

@@ -1,5 +1,5 @@
 """Corpus curation admin routes: drafts, conflicts, assumptions, the offline clarifications
-ledger (UtkuAI, ported; ADR 0005 §6 file-length cap).
+ledger (DetentAI, ported; ADR 0005 §6 file-length cap).
 
 Split out of ``api/routes.py`` once that file reached 997/1000 lines (the commit that added
 ``POST /clarifications/{id}/answer``'s corpus fold flagged this as its own follow-up). Pure
@@ -8,7 +8,7 @@ module only relocates *where the code lives*, mirroring ``browse_routes.py``'s o
 ``APIRouter``-mounted-via-``include_router`` pattern (not a parallel ``FastAPI`` app).
 
 HTTP shell over ``corpus/drafts.py``, ``curator/clarification.py``, and
-``curator/clarifications.py``. See ``utku-ai-v2-porting-spec.md`` for why this admin-facing
+``curator/clarifications.py``. See ``detent-ai-v2-porting-spec.md`` for why this admin-facing
 write surface exists on v2 at all (v2 otherwise deletes the HTTP corpus-write surface).
 """
 
@@ -182,12 +182,12 @@ def make_curation_router(session: Any) -> APIRouter:
 
     @router.post("/corpus/drafts/{asset_id}/approve")
     def approve_draft_route(asset_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Certify one ``proposed`` draft (UtkuAI mistake-memory / Enhancer, ported onto v2).
+        """Certify one ``proposed`` draft (DetentAI mistake-memory / Enhancer, ported onto v2).
 
         **Not an upstream route.** v2 deletes the HTTP corpus-write surface entirely (ADR 0005
         §1.6: "the corpus is trusted, the incoming question is not") and has no ``curator/`` layer
         yet to review a draft through. This is the minimal admin-facing half of
-        ``corpus/drafts.py`` — see ``utku-ai-v2-porting-spec.md`` for why it lives here rather
+        ``corpus/drafts.py`` — see ``detent-ai-v2-porting-spec.md`` for why it lives here rather
         than waiting on upstream.
 
         Request body: ``{"by": "admin@example.com"}`` (optional — recorded in ``audit.extra``,
@@ -376,7 +376,7 @@ def make_curation_router(session: Any) -> APIRouter:
 
     @router.get("/clarifications")
     def clarifications(status: str | None = None) -> list[dict[str, Any]]:
-        """The offline clarifications ledger (UtkuAI, ported). ``status`` filters by exact value
+        """The offline clarifications ledger (DetentAI, ported). ``status`` filters by exact value
         (e.g. ``"open"``); omitted returns every source/status.
 
         ``session.corpus_root is None`` returns an empty list rather than raising, matching
@@ -505,7 +505,7 @@ def make_curation_router(session: Any) -> APIRouter:
 
     @router.post("/clarifications/from-refusal")
     def clarification_from_refusal_route(body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """A reader who was refused submits what they meant (utku-ai-trust-loop-plan.md, task A).
+        """A reader who was refused submits what they meant (detent-ai-trust-loop-plan.md, task A).
 
         **The one reader-initiated entrance to this ledger.** Every other write route here is an
         admin acting on a record that already exists; this route is a record's *origin*. It
@@ -559,7 +559,7 @@ def make_curation_router(session: Any) -> APIRouter:
         other clarification route's own wire vocabulary for "the text a person provided", not
         because an admin is answering anything here.
 
-        **``turn_id`` (utku-ai-trust-loop-plan.md, task B-0).** The turn whose refusal this
+        **``turn_id`` (detent-ai-trust-loop-plan.md, task B-0).** The turn whose refusal this
         explanation answers, forwarded onto :attr:`~governed_bi.curator.clarifications.
         ClarificationRecord.turn_id` unchanged. It is not part of this route's own idempotency key
         (the ``question``/``answer`` digest below, unaffected) -- so a second submission of the

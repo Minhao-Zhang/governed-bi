@@ -84,7 +84,7 @@ export function turnIdOf(answer: AnswerView): string | null {
 }
 
 /**
- * Business-tier phrasing for the ledger's `terminal` token (utku-ai-trust-loop-plan.md, I-3).
+ * Business-tier phrasing for the ledger's `terminal` token (detent-ai-trust-loop-plan.md, I-3).
  *
  * `serve/ledger.py` is explicit about what `no_sql` means -- "a turn that sampled a column
  * and then answered from context is `no_sql` with a non-empty ledger" -- but that is ledger
@@ -136,7 +136,7 @@ export function terminalLabel(
 }
 
 /**
- * Plain-language sentence for `refused_by` (utku-ai-trust-loop-plan.md, I-5).
+ * Plain-language sentence for `refused_by` (detent-ai-trust-loop-plan.md, I-5).
  *
  * `refused_by` is the engine's closed vocabulary for *why* it withheld an answer
  * (`register/stages.py::REFUSED_BY_TO_STAGE`, plus the abstention reasons in
@@ -193,7 +193,7 @@ export function refusalSentence(refusedBy: string | null): string | null {
 }
 
 /**
- * Business-tier phrasing for `outcome` (utku-ai-trust-loop-plan.md, task A-0).
+ * Business-tier phrasing for `outcome` (detent-ai-trust-loop-plan.md, task A-0).
  *
  * `terminal` and `refused_by` got their own plain-language treatment in I-3/I-5; `outcome` did
  * not, even though it is the *first* badge on the card (`reliability-stamp.tsx` renders it

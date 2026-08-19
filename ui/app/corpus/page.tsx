@@ -31,7 +31,7 @@
  * every one of them is about the same assets the two tabs above list — an admin who finds a
  * wrong term in **By type** answers the question that fixes it two tabs over, on the same route.
  * Drafts is the one write path among them that changes what the next session's model can see: it
- * certifies a `proposed` asset (task D, utku-ai-trust-loop-plan.md), where the other five only
+ * certifies a `proposed` asset (task D, detent-ai-trust-loop-plan.md), where the other five only
  * read, answer, resolve or dismiss.
  *
  * **A seventh tab, Trust Loop (task C), is `engineer`-tier on top of `can_curate_corpus`, not

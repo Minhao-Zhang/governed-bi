@@ -6,7 +6,7 @@
  * populate that field yet** — `grep -r ui_display_mode src/` on the engine is empty — so today
  * this store is the only thing that decides. That is stated rather than hidden: a future
  * multi-tenant server fills the field and every screen already honours it, with no interface
- * change. See `docs/utkuai-role-tiers-and-clarification-cancel.md`.
+ * change. See `docs/detentai-role-tiers-and-clarification-cancel.md`.
  *
  * Persisted to localStorage and shared across every mounted component via a tiny external store
  * (mirrors how `next-themes` keeps its toggle and the rendered page in sync) — no Context

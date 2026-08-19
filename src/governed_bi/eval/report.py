@@ -98,7 +98,7 @@ def headline_ex(arm: Population) -> Measured[float]:
 
 def outcome_rates(arm: Population) -> dict[str, Measured[float]]:
     """The ``correct / clarified / refused`` scorecard a benchmark report needs
-    (utku-ai-deployment-targets.md) — three named rates over the same population
+    (detent-ai-deployment-targets.md) — three named rates over the same population
     ``headline_ex`` reads, so they are directly comparable and always sum to the
     same denominator. Each is independently ``unmeasured`` if its own field is
     absent from any row, matching ``Population.rate``'s own absence handling —

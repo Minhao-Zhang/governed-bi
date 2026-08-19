@@ -1,5 +1,5 @@
 """``find_schema_leak`` — shape-based detection of a raw identifier in
-human-facing clarification text (Gap 2, utku-ai-deployment-targets.md)."""
+human-facing clarification text (Gap 2, detent-ai-deployment-targets.md)."""
 
 from __future__ import annotations
 

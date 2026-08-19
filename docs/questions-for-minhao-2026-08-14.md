@@ -1,6 +1,6 @@
 # Two questions before 21 Aug — DRAFT, not sent
 
-> **SUPERSEDED 2026-08-18 by [`utkuai-fork-handoff.md`](utkuai-fork-handoff.md), and never sent.**
+> **SUPERSEDED 2026-08-18 by [`detentai-fork-handoff.md`](detentai-fork-handoff.md), and never sent.**
 > Nothing here is waiting on a reply. The two items that were genuinely upstream's to decide are
 > restated there as decisions with their evidence and cost-of-delay, without the question framing —
 > the fork does not need an answer to proceed, and asking implies otherwise.
@@ -182,7 +182,7 @@ that drive them. It is the largest thing we carry that he does not, and it is wh
 upstream merge a real merge rather than a fast-forward.
 
 **Why it might belong upstream.** It reads the corpus through his own asset schema and writes
-drafts through his `corpus/store.py`; nothing in it is UtkuAI-specific. If it lived upstream we
+drafts through his `corpus/store.py`; nothing in it is DetentAI-specific. If it lived upstream we
 would stop carrying the merge surface, and his own users would get the admin path.
 
 **Why it might not.** It is opinionated about a workflow he may not want in the core, and it is the

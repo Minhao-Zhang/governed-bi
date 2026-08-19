@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The reader's other entrance into the semantic layer (utku-ai-trust-loop-plan.md, task H-3) --
+ * The reader's other entrance into the semantic layer (detent-ai-trust-loop-plan.md, task H-3) --
  * distinct from `RefusalClarificationPrompt`, which fires when the engine said nothing back.
  * This one fires when the engine *did* answer and the reader, who knows the business, knows the
  * answer is wrong -- H-a's own argument for why this control exists at all: "this answer is

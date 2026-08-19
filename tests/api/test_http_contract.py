@@ -521,9 +521,9 @@ def test_the_pages_that_do_not_need_a_model_work_without_one() -> None:
     )
 
 
-def test_capabilities_reports_the_ported_utkuai_toggles(monkeypatch) -> None:
-    """enable_structured_percentage_check / enable_clarification_to_draft are UtkuAI additions
-    (utku-ai-v2-porting-spec.md), not part of upstream's own capabilities contract above --
+def test_capabilities_reports_the_ported_detentai_toggles(monkeypatch) -> None:
+    """enable_structured_percentage_check / enable_clarification_to_draft are DetentAI additions
+    (detent-ai-v2-porting-spec.md), not part of upstream's own capabilities contract above --
     read off session.knobs_resolved the same way `model`/`llm_model` already is, so a
     deployment override is reflected here rather than a second hard-coded default."""
     from fastapi.testclient import TestClient

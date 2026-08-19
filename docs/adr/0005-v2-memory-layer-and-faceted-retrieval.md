@@ -1569,7 +1569,7 @@ Identifiers cannot be bound as query parameters, so a model-supplied column
 surface. Taking a corpus-resolved id means no model string reaches SQL. It is
 still one of ADR 0006's four enumerated executors and still passes `check()`.
 
-**Amended 2026-08-07 (utku-ai-deployment-targets.md, Gap 1).** `state_assumption`
+**Amended 2026-08-07 (detent-ai-deployment-targets.md, Gap 1).** `state_assumption`
 is the one entry in this table that reaches nothing — every other tool exists
 because it lets the model reach something the delivered context cannot
 (a body, a full column list, real values, execution, a human). This one has no

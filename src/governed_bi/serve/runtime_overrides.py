@@ -4,7 +4,7 @@ A knob resolved from its declared default and then from an environment variable,
 way for a running engine to be told otherwise. That absence is why this fork carried three UI
 controls for settings nothing could change — a schema field, an `api-client` method and a rendered
 component, over a route that did not exist and a knob that could not be written
-(``docs/utkuai-role-tiers-and-clarification-cancel.md`` § client-only halves). This is the write
+(``docs/detentai-role-tiers-and-clarification-cancel.md`` § client-only halves). This is the write
 path those controls needed.
 
 **Almost everything here is about keeping it narrow, because the danger is not the writing.**
