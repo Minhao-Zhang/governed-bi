@@ -54,7 +54,9 @@ from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import make_router
 from governed_bi.api.curation_routes import make_curation_router
 from governed_bi.api.drafts_routes import make_drafts_router
+from governed_bi.api.elicitation_routes import make_elicitation_router
 from governed_bi.api.feedback_routes import make_feedback_router
+from governed_bi.api.settings_routes import make_settings_router
 from governed_bi.api.trust_loop_routes import make_raised_router, make_trust_loop_metrics_router
 from governed_bi.api.visibility import visible
 from governed_bi.model.provider import reasoning_effort_of
@@ -186,6 +188,11 @@ def _build_app(get_session: Callable[[], Any], turn_log: Any) -> FastAPI:
     # Split out of curation_routes.py to stay under the file-length cap (drafts_routes.py's own
     # docstring); same factory shape and deferred session, mounted last for the same reason.
     app.include_router(make_drafts_router(_DeferredSession(get_session)))
+    # Also split out of curation_routes.py to stay under the file-length cap -- these two never
+    # were a curation concern (settings_routes.py's own docstring). Same factory shape and
+    # deferred session, mounted last for the same reason.
+    app.include_router(make_settings_router(_DeferredSession(get_session)))
+    app.include_router(make_elicitation_router(_DeferredSession(get_session)))
     # Task H's own ledger + inbox (feedback.jsonl), never merged into the clarification one --
     # see feedback_routes.py's module docstring. Same factory shape, deferred session, mounted
     # last for the same reason as the two routers above.
