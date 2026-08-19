@@ -21,6 +21,8 @@ from governed_bi.serve.nodes.facets import (
     facet_term_node,
 )
 from governed_bi.serve.nodes.guard import guard_node
+from governed_bi.serve.nodes.mine_corpus import mine_corpus_node
+from governed_bi.serve.nodes.mine_mistakes import mine_mistakes_node
 from governed_bi.serve.nodes.narrate import narrate_node
 from governed_bi.serve.nodes.negative import negative_node
 from governed_bi.serve.nodes.reflect import reflect_node
@@ -209,6 +211,18 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     # **observer** fail a turn that had already answered. The model call is bounded by its own
     # `request_timeout` (`llm_utility_timeout_s`) and any exception is recorded as unmeasured.
     graph.add_node("reflect", wrap_node("reflect", reflect_node, stream=False))
+    # `stream=False`: mining runs on every turn (not just a resume, since it has to see the
+    # whole thread-accumulated `clarifications` list to find the unmined ones) and has nothing
+    # to show a live viewer on the turns where it finds none -- the same reasoning `fanout`
+    # applies below. Still gets `wrap_node`'s crash safety; the node's own broad
+    # `except Exception` around the mining logic already swallows every failure that matters,
+    # so this is belt and braces rather than the thing standing between a bug here and a lost
+    # turn.
+    rail("mine_corpus", mine_corpus_node, stream=False)
+    # Same `stream=False` reasoning as `mine_corpus` immediately above: mining runs on every
+    # answered turn (not conditioned on anything a live viewer would want to watch), and has
+    # nothing to show on the turns -- most of them -- where the ledger shows no correction.
+    rail("mine_mistakes", mine_mistakes_node, stream=False)
     # Through `rail` like every other wrapped node, and it gets no timeout because it is absent
     # from `_CANCELLABLE` — which is the single place that decision is written down. Registering
     # it with a bare `add_node` said the same thing twice and made `_CANCELLABLE` a liar: adding
@@ -282,11 +296,21 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         _after_abstain,
         {"decline": "decline", "agent_core": "agent_core", "stamp": "stamp"},
     )
-    # Terminals skip narrate: refusal/decline wording is system copy. `reflect` is a plain edge
-    # and not a conditional one, because an edge reading its verdict is exactly the control flow
-    # the observer must not have.
+    # Terminals skip narrate (and reflect/mine_corpus/mine_mistakes): refusal/decline wording is
+    # system copy, and `assemble`'s conditional edge sends a terminal turn straight to `stamp`
+    # without ever reaching `agent_core`. `reflect` is a plain edge and not a conditional one,
+    # because an edge reading its verdict is exactly the control flow the observer must not have.
+    #
+    # Four nodes in a line between `agent_core` and `narrate`, and the order is a wiring choice
+    # rather than a correctness one: all three read state the others do not write (`reflect` and
+    # `mine_mistakes` read `execution`, `mine_corpus` reads `clarifications`, `narrate` reads
+    # `messages`/`result_table`), so none can observe another's output. Sequential over a fan-out
+    # because neither a corpus write nor an observer's judgement is the latency-sensitive half of
+    # the turn. `reflect` goes first only to keep the observer adjacent to the work it judges.
     graph.add_edge("agent_core", "reflect")
-    graph.add_edge("reflect", "narrate")
+    graph.add_edge("reflect", "mine_corpus")
+    graph.add_edge("mine_corpus", "mine_mistakes")
+    graph.add_edge("mine_mistakes", "narrate")
     graph.add_edge("narrate", "stamp")
     graph.add_edge("refuse", "stamp")
     graph.add_edge("decline", "stamp")

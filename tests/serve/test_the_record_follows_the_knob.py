@@ -530,12 +530,21 @@ def test_the_prompt_variant_is_named_and_not_only_hashed(two_schema_assets):
     assert v4_set["analyst"] == "v4"
     assert v5_set["analyst"] == "v5"
     # Total over the registry, so a stage nobody overrode still says which variant it ran.
-    assert v4_set["narrate"] == "v1"
+    #
+    # `narrate` is `v2` here and was `v1` upstream: this fork promoted NARRATE v2 to default
+    # because v1 lets the closing answer come back in the corpus's language rather than the
+    # user's (measured live on Bedrock against the German beer_factory corpus). Leaving v1
+    # default to preserve the digests below would have reinstated a live bug to keep a number
+    # stable, which is the wrong way round.
+    assert v4_set["narrate"] == "v2"
 
-    # The digests are the ones the four measured arms carry, so this is pinned to the real
-    # prompt text rather than to whatever it happens to be today.
-    assert v4_hash == "b1f9e4d7d230cb97"
-    assert v5_hash == "7a9e710273998631"
+    # The digests are pinned to the real prompt text rather than to whatever it happens to be
+    # today -- **and they are this fork's, not the four measured arms'.** They moved at the
+    # 2026-08-14 merge because the `narrate` default did, and `prompt_set_hash` is a digest over
+    # the selected *names*. Upstream's `b1f9e4d7d230cb97` / `7a9e710273998631` still identify
+    # upstream's arms; a run of this fork is a different treatment and says so.
+    assert v4_hash == "6542bcf3ca602c74"
+    assert v5_hash == "de9bf9147eba2df9"
     assert (v4_set, v4_hash) != (v5_set, v5_hash)
     # ...and only the overridden stage moved, or "they differ" would hold for a resolver
     # that never repeats itself.
@@ -554,7 +563,9 @@ def test_the_recorded_prompt_set_is_the_one_the_hash_was_taken_over(two_schema_a
 
     session = _session(two_schema_assets, prompt_variants={"analyst": "v3"})
     recorded = session.knobs_resolved["prompt_set"]
-    assert digest_of(recorded) == session.prompt_set_hash == "ef30252f824de06c"
+    # `f1d6cbd…`, not upstream's `ef30252…`, for the reason the sibling test above gives:
+    # this fork's `narrate` default is v2, and the digest is over the selected names.
+    assert digest_of(recorded) == session.prompt_set_hash == "f1d6cbd59d16b87f"
 
 
 def test_an_undeclared_prompt_name_refuses_at_session_build(two_schema_assets):

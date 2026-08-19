@@ -35,19 +35,30 @@ export const clarificationRequestSchema = z.object({
   choices: z.array(clarificationChoiceSchema).optional(),
   allow_freeform: z.boolean().optional(),
   tier: z.string().optional(), // provenance tier of the question (D12); "audit" today
+  // Which of two reasons `ask_user` paused the turn for. "data_definition" (objective
+  // schema/business-rule facts) may be handed to an admin; "ranking_ambiguity" (a subjective,
+  // per-user judgment call) must never offer that -- see `clarification-prompt.tsx`, which is
+  // the one place that decision is enforced. Optional so an older payload still parses.
+  basis: z.enum(["data_definition", "ranking_ambiguity"]).optional(),
 });
 
 /* ── Client → server: the `resume` value (contract §4) ───────────────────── */
 
 /**
- * Exactly one of `answer` / `choice_id` / `declined:true` is set. Decline fails
- * closed server-side (the agent does not guess) — the safe v1 default is a
- * refusal stamped `clarification_declined`.
+ * Exactly one of `answer` / `choice_id` / `declined:true` / `defer:true` is set.
+ *
+ * `declined` fails the turn closed server-side: the agent does not guess, and the turn is
+ * stamped a refusal. `defer` does not — it means "I cannot answer this, ask an admin", and the
+ * agent proceeds on its own best judgment with the answer's reliability downgraded and the
+ * question left on the admin's ledger as `deferred`
+ * (`curator/clarifications.py::close_live_clarification`). They were one flag once, and
+ * collapsing them made every defer read as a refusal.
  */
 export type ClarificationResponse =
   | { clarification_id: string; answer: string }
   | { clarification_id: string; choice_id: string }
-  | { clarification_id: string; declined: true };
+  | { clarification_id: string; declined: true }
+  | { clarification_id: string; defer: true };
 
 export type ClarificationChoice = z.infer<typeof clarificationChoiceSchema>;
 export type ClarificationRequest = z.infer<typeof clarificationRequestSchema>;

@@ -4,10 +4,22 @@ import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
-import { Boxes, History, MenuIcon, MessagesSquare, MoonStar, Network, ScrollText, Settings, Sun } from "lucide-react";
+import {
+  Boxes,
+  History,
+  MenuIcon,
+  MessagesSquare,
+  MoonStar,
+  Network,
+  ScrollText,
+  Settings2,
+  Sun,
+} from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useCapabilities } from "@/hooks/queries";
+import { resolveTier, tierReaches } from "@/lib/capabilities";
+import { useDisplayModeOverride } from "@/lib/display-mode";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
@@ -18,26 +30,34 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 // `/history` sits directly under Chat because that is the pair: it lists conversations and its
 // rows lead straight back into one. It was a popover on the chat page, which put an unbounded
 // list inside a menu-sized panel — seventeen rows covered the answer and the composer both.
+//
+// **Which of these a visitor sees depends on their tier**, and `lib/capabilities.ts::tierReaches`
+// owns that rule — not this file. The list here is data; the filter is one expression over it, so
+// an upstream change to the rail's markup and a change to who sees what cannot conflict.
+//
+// `/settings` is last and reachable at every tier: a tier that could not get back out of itself
+// would be a trap.
 const LINKS = [
   { href: "/", label: "Chat", icon: MessagesSquare },
   { href: "/history", label: "History", icon: History },
   { href: "/schema", label: "Schema", icon: Network },
   { href: "/corpus", label: "Corpus", icon: Boxes },
   { href: "/audit", label: "Audit", icon: ScrollText },
-  // Last, and read-only: it answers "what is this engine running on", which is a question you
-  // ask about a run you are already looking at, not a place you start.
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/settings", label: "Settings", icon: Settings2 },
 ] as const;
 
 function isActive(pathname: string, href: string): boolean {
   return href === "/" ? pathname === "/" : pathname.startsWith(href);
 }
 
-/** The shared link list, reused by the desktop rail and the mobile sheet. */
+/** The shared link list, reused by the desktop rail and the mobile sheet, filtered to the tier. */
 function NavLinks({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+  const { data: caps } = useCapabilities();
+  const tier = resolveTier(caps, useDisplayModeOverride());
+
   return (
     <>
-      {LINKS.map(({ href, label, icon: Icon }) => (
+      {LINKS.filter(({ href }) => tierReaches(tier, href)).map(({ href, label, icon: Icon }) => (
         <Link
           key={href}
           href={href}
@@ -111,6 +131,11 @@ export function MobileNav() {
   );
 }
 
+// The Simple/Audit eye button used to sit in this header. It is gone, replaced by `/settings`:
+// it was a two-state control with no label, next to the theme toggle, changing what an entire
+// application shows — and there was no way for it to say what either state meant. A role is not a
+// display preference. See `docs/detentai-role-tiers-and-clarification-cancel.md`.
+
 function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
   // Client-only: avoid hydration mismatch on the theme icon without an effect.
@@ -149,11 +174,20 @@ function ThemeToggle() {
  * `isError` means it did not; neither is a claim about the model.
  */
 function CapabilitiesStrip() {
-  const { isSuccess, isError } = useCapabilities();
+  const { data: caps, isSuccess, isError } = useCapabilities();
+  const tier = resolveTier(caps, useDisplayModeOverride());
   const state = isSuccess ? "connected" : isError ? "disconnected" : "connecting…";
 
   return (
     <div className="border-t p-3 text-xs text-muted-foreground">
+      {/* The tier is named here because the rail above it is filtered by it. A visitor who cannot
+          find Corpus should be able to see why without opening Settings to find out. */}
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="font-medium capitalize text-foreground">{tier}</span>
+        <Link href="/settings" className="underline underline-offset-2 hover:text-foreground">
+          change
+        </Link>
+      </div>
       <div className="flex items-center gap-2">
         <span
           className={cn(

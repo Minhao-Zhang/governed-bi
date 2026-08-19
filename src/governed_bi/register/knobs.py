@@ -317,6 +317,28 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "security register. session._resolved_knobs reads it off GovernancePolicy.access_grant, "
        "so a null here means no policy was threaded, never that the grant was open"),
 
+    # ── structured checks (serve-level result sanity, not ADR 0006 governance) ──
+    _k("enable_structured_percentage_check", False, Role.comparability,
+       "flags a 'percentage' question whose run_query SQL never scales by 100 "
+       "(ported from v1's DetentAI-line finding: Experiment 006 K2-c, a percentage "
+       "question answered as a 0-1 ratio). Off by default because it changes what "
+       "the model sees, so a run with it on is not comparable to one without"),
+    _k("enable_clarification_to_draft", False, Role.operational,
+       "an answered (not declined) live clarification is mined into a TermAsset draft "
+       "(curator/clarification.py), written proposed and invisible until an admin "
+       "approves it. Operational, not comparability: unlike the check above, this "
+       "changes the corpus on disk between two turns of the SAME run, never what a "
+       "given turn's own answer looks like — the next turn only sees the draft if "
+       "someone certified it first, so two runs with this on/off still answer every "
+       "question identically until a human acts"),
+    _k("enable_mistake_memory_mining", False, Role.operational,
+       "a turn whose run_query ledger shows a governance/execution failure followed by a "
+       "passing attempt in the SAME turn is mined into a FewShotAsset draft "
+       "(curator/mistake_memory.py), written proposed and invisible until an admin approves "
+       "it. Operational, not comparability, for the identical reason "
+       "enable_clarification_to_draft is: this changes the corpus on disk between two turns "
+       "of the SAME run, never what a given turn's own answer looks like"),
+
     # ── measurement ─────────────────────────────────────────────────────────
     _k("cache_cost_reduction_target", 0.30, Role.comparability,
        "the acceptance criterion for message placement and cache breakpoints, measured "

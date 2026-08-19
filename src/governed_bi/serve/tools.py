@@ -14,7 +14,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, Literal
 
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
@@ -40,7 +40,9 @@ from governed_bi.serve.ledger import (
     pipeline_error_attempt,
 )
 from governed_bi.serve.resume import ResumeRejected, authorise_resume
-from governed_bi.serve.runtime import configurable, prompt_variants
+from governed_bi.serve.runtime import bool_knob, configurable, prompt_variants
+from governed_bi.serve.schema_term_guard import find_schema_leak
+from governed_bi.serve.structured_check import percentage_scale_suffix
 
 __all__ = [
     "analyst_prompt",
@@ -252,6 +254,92 @@ def _delivered(runtime: Any, payload: str) -> dict[str, Any]:
     return {"tool_delivered": {_call_id(runtime): payload_digest(payload)}}
 
 
+def _log_live_clarification(
+    corpus_root: Any,
+    *,
+    clarification_id: str,
+    question: str,
+    choices: list[dict[str, str]] | None,
+    allow_freeform: bool,
+    basis: str,
+) -> None:
+    """Durably log an unanswered ``ask_user`` question, before ``interrupt`` pauses the turn
+    (DetentAI, ported from v1's ``analyst/tools.py::_log_live_clarification``).
+
+    So the question survives even if the live turn is abandoned and nobody ever resumes it --
+    it still shows up in the admin's ``/clarifications`` ledger as homework, regardless of what
+    happens to the live turn. No-op when this session has no ``corpus_root`` (eval/offline
+    callers), the same precondition ``api/routes.py``'s own ``/clarifications`` write route
+    already gates on.
+
+    **Idempotent on ``clarification_id``.** ``interrupt()`` re-runs this function from the top
+    on every resume within one turn (LangGraph replays the task that was suspended on the
+    pending interrupt), so this runs again on every resume of the same question -- a record
+    already logged for this id is left alone rather than duplicated.
+
+    ``basis`` is ``ask_user``'s own ``basis`` argument, carried onto the ledger row (gap fix,
+    this initiative) so an offline answer through ``POST /clarifications/{id}/answer`` can
+    gate identically to a live one (``curator/clarification.py::fold_ledger_answer_into_corpus``)
+    -- the original Phase 1b cut of this function left the record's ``basis`` field unset.
+    """
+    if corpus_root is None:
+        return
+    from governed_bi.curator.clarifications import (
+        ClarificationRecord,
+        load_clarifications,
+        write_clarifications,
+    )
+
+    records = load_clarifications(corpus_root)
+    if any(r.id == clarification_id for r in records):
+        return
+    records.append(
+        ClarificationRecord(
+            id=clarification_id,
+            scope=f"live_chat:{clarification_id}",
+            question=question,
+            source="live_chat",
+            choices=tuple(choices) if choices else None,
+            allow_freeform=allow_freeform,
+            basis=basis,
+        )
+    )
+    write_clarifications(corpus_root, records)
+
+
+def _close_live_clarification(
+    corpus_root: Any,
+    *,
+    clarification_id: str,
+    answer: str | None,
+    choice_id: str | None,
+    deferred: bool,
+) -> None:
+    """Record what became of the question :func:`_log_live_clarification` opened.
+
+    That function logged the row ``open`` before ``interrupt``; nothing closed it, so the
+    admin's queue reported "never seen", "answered in chat" and "deferred to you" as one state
+    for the corpus's whole life. Runs after ``interrupt`` returns, which is the first moment the
+    outcome exists.
+
+    Same no-op-without-a-``corpus_root`` precondition as its opening half, for the same
+    eval/offline callers. Swallows nothing else: the ledger function it calls returns ``None``
+    on a missing row rather than raising, because a bookkeeping miss must not kill a turn that
+    has already produced its answer.
+    """
+    if corpus_root is None:
+        return
+    from governed_bi.curator.clarifications import close_live_clarification
+
+    close_live_clarification(
+        corpus_root,
+        clarification_id,
+        answer=answer,
+        choice_id=choice_id,
+        deferred=deferred,
+    )
+
+
 def build_tools(
     state: Mapping[str, Any],
     config: Mapping[str, Any] | None,
@@ -268,6 +356,9 @@ def build_tools(
     # wiring failure and ``fetch.run_query`` raises on it, where coercing it to ``None`` would
     # let a default stand in for it (G1).
     corpus = cfg.get("corpus")
+    # DetentAI, ported (Phase 1b): the offline Clarifications ledger's own precondition --
+    # ``session.corpus_root is not None`` -- matching every write route in ``api/routes.py``.
+    corpus_root = cfg.get("corpus_root")
     read_cap = fetch.read_body_cap(state, cfg)
     book = AttemptBook(policy.run_query_attempt_cap)
     turn_id = str(state.get("turn_id") or "")
@@ -385,9 +476,13 @@ def build_tools(
             )
         _emit_attempt(runtime, attempt, number=attempt_number, payload=payload)
         table = _result_table(payload)
+        suffix = ""
+        if bool_knob(state, "enable_structured_percentage_check"):
+            # G4 (ADR 0006): check what was executed, not what the model asked for.
+            suffix = percentage_scale_suffix(state.get("question"), attempt_field(attempt, "executed_sql"))
         return _reply(
             runtime,
-            payload,
+            payload + suffix,
             attempts_by_call={call_id: attempt},
             **({"result_table": table} if table is not None else {}),
         )
@@ -416,18 +511,91 @@ def build_tools(
     pending_clarification: list[str] = []
 
     @tool
-    async def ask_user(question: str, runtime: ToolRuntime, why: str = "") -> Command:
-        """Pause and ask the human a clarifying question (HITL interrupt)."""
+    async def ask_user(
+        question: str,
+        runtime: ToolRuntime,
+        basis: Literal["data_definition", "ranking_ambiguity"],
+        why: str = "",
+        choices: list[dict[str, str]] | None = None,
+        allow_freeform: bool = True,
+    ) -> Command:
+        """Pause and ask the human a clarifying question (HITL interrupt).
+
+        ``question``/``why`` reach a business user, never an engineer — write them in
+        plain language, with no table/column names, no dotted `table.column` paths, and
+        no snake_case or camelCase identifiers. A leaked identifier is rejected before
+        this pauses the turn; rephrase and call ``ask_user`` again. Write both in the same
+        language the user's own question was asked in, never the corpus's or schema's
+        language.
+
+        ``basis`` states which of two reasons made you call this tool, so the answer can
+        be routed correctly afterwards:
+
+        - ``"data_definition"`` — a missing fact about the schema or a business rule that
+          has one right answer for everyone (e.g. how a column encodes a value, what
+          counts toward a metric). The answer is a durable fact worth remembering for
+          every future question, not just this one.
+        - ``"ranking_ambiguity"`` — the question turns on a ranking or superlative
+          ("best", "top", "most valuable") that more than one metric could reasonably
+          mean. The answer is a choice for this turn only; a different user, or the same
+          user on another day, may mean something else by the same word.
+
+        ``choices`` offers 2-4 concrete, clickable candidate answers, each shaped
+        ``{"id": ..., "label": ...}``. Pass it only when you can name candidates you have
+        actually **grounded** — in columns or values you inspected via ``inspect_schema``
+        or ``sample_rows``, or in the schema's own structure — never invented ones. Leave
+        it ``None`` when nothing is genuinely grounded; free text alone is correct then.
+        A malformed entry (missing or empty ``id``/``label``) is rejected the same way a
+        schema-identifier leak is, before this pauses the turn.
+
+        ``allow_freeform`` defaults to ``True`` and should almost always stay ``True`` even
+        when ``choices`` is given, so a real answer outside the offered list still reaches
+        you rather than being boxed out.
+
+        Only one question may be outstanding per turn; a second call is refused with a reply
+        rather than queued.
+        """
         if pending_clarification:
             # Refused, not queued, and no interrupt: the model gets a tool reply it can act on
             # while the first question is still outstanding. Checked and set with no `await`
             # between, so two concurrent `Send`s cannot both pass.
+            #
+            # Ahead of this fork's own validation below, because "a question is already
+            # outstanding" is true of the turn regardless of how well-formed this second
+            # question is -- validating first would tell the model to fix wording on a call
+            # that was never going to pause the turn.
             return _reply(
                 runtime,
                 "Only one clarifying question may be outstanding at a time, and this turn "
                 "already has one. Ask the single question whose answer most changes the SQL; "
                 "if more are needed, ask them after this one is answered.",
             )
+        leak = find_schema_leak(question, why)
+        if leak is not None:
+            return _reply(
+                runtime,
+                f"ask_user rejected: {leak!r} looks like a raw schema identifier, not "
+                "plain business language. Rephrase question/why without table.column "
+                "paths, snake_case, or camelCase identifiers, then call ask_user again.",
+            )
+        if choices:
+            bad_choice = next(
+                (
+                    c
+                    for c in choices
+                    if not isinstance(c, Mapping)
+                    or not str(c.get("id") or "").strip()
+                    or not str(c.get("label") or "").strip()
+                ),
+                None,
+            )
+            if bad_choice is not None:
+                return _reply(
+                    runtime,
+                    f"ask_user rejected: choices entry {bad_choice!r} needs a non-empty "
+                    "'id' and 'label'. Fix it -- or drop choices entirely for a "
+                    "free-text-only question -- then call ask_user again.",
+                )
         digest = hashlib.sha256(f"{turn_id}\x1f{question}".encode()).hexdigest()[:12]
         clarification_id = f"clar-{turn_id}-{digest}"
         pending_clarification.append(clarification_id)
@@ -457,14 +625,48 @@ def build_tools(
             event_id=tool_event_id("ask_user", _call_id(runtime)),
             detail=started,
         )
-        answer = interrupt(
-            {
-                "kind": "clarification",
-                "clarification_id": clarification_id,
-                "question": question,
-                "why": why or "The question is ambiguous and the answer depends on which reading is meant.",
-            }
+        interrupt_payload: dict[str, Any] = {
+            "kind": "clarification",
+            "clarification_id": clarification_id,
+            "question": question,
+            # Empty when the model gave no reason, rather than a filler sentence. The substitute
+            # here used to be "The question is ambiguous and the answer depends on which reading
+            # is meant." -- which restates the situation the reader is already looking at, and was
+            # a measurable share of the wall of text the product owner objected to on 2026-08-15.
+            # The UI renders no `why` line when this is empty (`clarification-prompt.tsx`).
+            "why": why,
+            # Phase 6 of this initiative (governed-bi-analysis): withheld from this payload
+            # deliberately in Phase 1 as "a backend-only routing signal" -- that reasoning held
+            # while nothing downstream of the UI needed it. It no longer holds: the product
+            # owner wants ranking_ambiguity questions (per-user judgment calls) to never offer a
+            # "defer to admin" button, which data_definition questions (objective schema/rule
+            # facts) may. Enforcing that is a UI button-visibility decision, and the UI cannot
+            # make it without knowing basis.
+            "basis": basis,
+            "allow_freeform": allow_freeform,
+        }
+        if choices:
+            interrupt_payload["choices"] = choices
+        # DetentAI, ported (Phase 1b): survives an abandoned turn nobody ever resumes -- the
+        # question becomes admin homework regardless. Must run before ``interrupt`` and is
+        # itself idempotent, because ``interrupt`` re-runs this function from the top on every
+        # resume (see the helper's own docstring).
+        #
+        # ``asyncio.to_thread``, not a direct call: this is disk I/O inside an *async* tool
+        # body, on the event loop -- the same class of pitfall ``serve/events.py``'s own
+        # "function-level import trips blockbuster's os.getcwd" comment already flags -- and
+        # matches every other disk/network-touching call in this module (``_fetch``,
+        # ``run_query``), none of which call their blocking work directly either.
+        await asyncio.to_thread(
+            _log_live_clarification,
+            corpus_root,
+            clarification_id=clarification_id,
+            question=question,
+            choices=choices,
+            allow_freeform=allow_freeform,
+            basis=basis,
         )
+        answer = interrupt(interrupt_payload)
         # **The resume identity gate (ADR 0006 B9), on the first instruction that can hold it.**
         # ``interrupt()`` raises on the initial pass, so everything below runs only on a resume —
         # and only here do both halves exist in one frame: ``state`` is the *paused* turn's
@@ -502,11 +704,42 @@ def build_tools(
         # ``await``s, so no other frame can have taken it.
         pending_clarification.remove(clarification_id)
         text = _clarification_answer(answer)
-        declined = bool(answer.get("declined")) if isinstance(answer, Mapping) else False
+        resume_reply = answer if isinstance(answer, Mapping) else {}
+        # Phase 1b (this initiative): `declined` and `deferred` used to collapse onto one
+        # `declined` flag (`defer` was an alias -- see `_clarification_answer`'s prior
+        # docstring). They no longer do: a decline still fails the turn closed exactly as
+        # before (unchanged), but a defer now lets the turn continue on the agent's own best
+        # judgment with a downgraded-reliability caveat (`serve/nodes/stamp.py::_reliability`),
+        # which needs its own, distinct signal on the ledger row rather than reusing `declined`.
+        declined = bool(resume_reply.get("declined"))
+        deferred = bool(resume_reply.get("defer"))
+        # The closing half of the log above. Skipped on a decline, deliberately: a declined
+        # question is still unanswered homework, so `open` states it correctly and there is no
+        # `declined` status to write (see `ClarificationRecordStatus.deferred`'s own note).
+        # `answer` is the user's own text and nothing else -- a bare-string resume is that
+        # string, a `{"choice_id": ...}` reply carries no text at all and stores the id instead
+        # (matching how the offline route stores a choice answer), and a defer's `text` is an
+        # instruction addressed to the model, which must never appear in the column an admin
+        # reads as "what the user said".
+        if not declined:
+            await asyncio.to_thread(
+                _close_live_clarification,
+                corpus_root,
+                clarification_id=clarification_id,
+                answer=(
+                    str(resume_reply["answer"])
+                    if resume_reply.get("answer")
+                    else (text or None if not isinstance(answer, Mapping) else None)
+                ),
+                choice_id=(
+                    str(resume_reply["choice_id"]) if resume_reply.get("choice_id") else None
+                ),
+                deferred=deferred,
+            )
         emit(
             kind="tool",
             step="ask_user",
-            status="declined" if declined else "ok",
+            status="declined" if declined else "deferred" if deferred else "ok",
             event_id=tool_event_id("ask_user", _call_id(runtime)),
             detail=started,
         )
@@ -520,18 +753,88 @@ def build_tools(
                     "why": why,
                     "answer": text,
                     "turn_id": turn_id,
+                    "basis": basis,
+                    # DetentAI, ported: whether the human declined rather than answered.
+                    # `answer` above is `text` -- always a sentence, even on decline
+                    # ("The user declined to answer this clarification.") -- so a reader of
+                    # `ServeState.clarifications` (e.g. `serve/nodes/mine_corpus.py`) cannot
+                    # tell a decline from a real answer by inspecting `answer` alone. This is
+                    # the same `declined` value already computed above for the emitted
+                    # status; plumbing it through is cheaper than re-deriving it from prose.
+                    "declined": declined,
+                    # Phase 1b: distinct from `declined` -- a defer, unlike a decline, does not
+                    # skip mining (`mine_corpus.py`'s own gate checks both flags) and does feed
+                    # `stamp.py`'s per-turn reliability downgrade.
+                    "deferred": deferred,
                 }
             },
         )
 
-    return [read_body, inspect_schema, sample_rows, run_query, ask_user]
+    @tool
+    async def state_assumption(text: str, runtime: ToolRuntime) -> Command:
+        """Record one plain-language assumption you made answering this question.
+
+        Call this — never as a substitute for ``ask_user`` when a question is genuinely
+        ambiguous — whenever you resolved an ambiguity, applied a filter, or picked one
+        of several plausible readings **without** asking, so the person reading the
+        answer sees what you decided rather than an unexplained number. Examples:
+        "Excluded cancelled orders from the total." / "Assumed 'active' means a purchase
+        in the last 30 days." One call per assumption; call it as many times as you have
+        assumptions to state. Never a substitute for asking when you are genuinely
+        unsure — state an assumption only when you judged the question answerable without
+        asking.
+
+        Same plain-language requirement as ``ask_user``: no table/column names, no
+        dotted paths, no snake_case or camelCase identifiers. A leaked identifier is
+        rejected; rephrase and call again.
+        """
+        leak = find_schema_leak(text)
+        if leak is not None:
+            return _reply(
+                runtime,
+                f"state_assumption rejected: {leak!r} looks like a raw schema identifier, "
+                "not plain business language. Rephrase without table.column paths, "
+                "snake_case, or camelCase identifiers, then call state_assumption again.",
+            )
+        return _reply(
+            runtime,
+            "noted",
+            assumptions_by_call={_call_id(runtime): text},
+        )
+
+    return [read_body, inspect_schema, sample_rows, run_query, ask_user, state_assumption]
+
+
+#: Unchanged from before Phase 1b -- decline keeps failing the turn closed on this exact
+#: sentence (no code forces a refusal on it; the model reads it and stops on its own, and that
+#: emergent behavior is the product decision left untouched here).
+_CLARIFY_DECLINED_TEXT = "The user declined to answer this clarification."
+
+#: DetentAI, ported from v1's ``CLARIFY_DEFERRED`` sentinel (``analyst/tools.py``): unlike the
+#: decline sentence above, this is the actual instruction the model is meant to act on, not a
+#: defensive fallback -- it is what makes the turn continue on the agent's own judgment instead
+#: of stopping (Phase 1b, this initiative).
+_CLARIFY_DEFERRED_TEXT = (
+    "The user could not answer this now and deferred it to admin review. Proceed using your "
+    "own best judgment for this specific point, and explicitly say in your final answer that "
+    "this assumption is unconfirmed and pending admin review."
+)
 
 
 def _clarification_answer(resume: Any) -> str:
-    """Human answer from a bare string or structured ``{answer|choice_id|declined}`` reply."""
+    """Human answer from a bare string or structured ``{answer|choice_id|declined|defer}`` reply.
+
+    ``declined`` and ``defer`` no longer collapse onto one sentinel (Phase 1b, this
+    initiative): a decline still stops the turn on the same sentence as before, unchanged --
+    but a defer now hands the model an instruction to keep going on its own best judgment,
+    flagged unconfirmed, rather than a second spelling of "stop." See ``ask_user``'s own
+    ``deferred`` flag for the ledger-facing half of this distinction.
+    """
     if isinstance(resume, Mapping):
         if resume.get("declined"):
-            return "The user declined to answer this clarification."
+            return _CLARIFY_DECLINED_TEXT
+        if resume.get("defer"):
+            return _CLARIFY_DEFERRED_TEXT
         for key in ("answer", "choice_id", "text"):
             value = resume.get(key)
             if value:

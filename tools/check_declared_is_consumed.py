@@ -61,10 +61,18 @@ KNOBS_MODULE = "src/governed_bi/register/knobs.py"
 RECORD_MODULE = "src/governed_bi/register/record.py"
 STATE_MODULE = "src/governed_bi/serve/state.py"
 
-#: The one projector that turns a served turn into a measurement row. R1 is a claim about
-#: *this* file: a field the register declares and this function does not name is a field no
-#: artifact carries, whatever ``stamp`` did with it.
-ARTIFACT_PROJECTOR = "src/governed_bi/eval/harness.py"
+#: The projector that turns a served turn into a measurement row. R1 is a claim about *these*
+#: files: a field the register declares and neither one names is a field no artifact carries,
+#: whatever ``stamp`` did with it.
+#:
+#: Two files, not one, since the 1000-line cap split ``eval/harness.py``: ``project_turn`` --
+#: the pure row-shaper most fields are named in -- moved to ``eval/projection.py``, but
+#: ``run_id``, ``turn_id``, ``thread_id`` and ``attempt_id`` are set by the orchestration that
+#: stayed behind (``_run_one``'s ``row["run_id"] = run_id`` and ``_base_turn``'s turn dict), and
+#: still reach every row this harness produces.
+ARTIFACT_PROJECTOR: frozenset[str] = frozenset(
+    {"src/governed_bi/eval/harness.py", "src/governed_bi/eval/projection.py"}
+)
 
 #: Prefix whose contents are the declaration side and therefore cannot be their own consumer.
 REGISTER_PREFIX = "src/governed_bi/register/"
@@ -411,14 +419,15 @@ def rule_r1(root: Path, ev: Evidence) -> tuple[list[str], set[str]]:
     hit: set[str] = set()
     for name, tier, owner in declared_record_fields(root):
         sites = ev.mentions.get(name) or set()
-        if ARTIFACT_PROJECTOR in sites:
+        if sites & ARTIFACT_PROJECTOR:
             continue
         if name in waived:
             hit.add(name)
             continue
         problems.append(
             f"{RECORD_MODULE}: record field {name!r} (tier={tier or '?'}, owner="
-            f"{owner or '?'}) is never named in {ARTIFACT_PROJECTOR}. `stamp` projects it "
+            f"{owner or '?'}) is never named in {' or '.join(sorted(ARTIFACT_PROJECTOR))}. "
+            "`stamp` projects it "
             "into the turn record and the measurement row drops it, which is exactly how "
             "`reflect_verdict` came to be unscoreable. Carry it in `project_turn`, or add it "
             "to WAIVED_RECORD_FIELDS with a reason."

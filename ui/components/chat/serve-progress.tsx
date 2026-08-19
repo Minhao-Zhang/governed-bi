@@ -3,6 +3,8 @@
 import { Loader2 } from "lucide-react";
 
 import { AgentTimeline } from "@/components/chat/agent-timeline";
+import { tierShowsAudit } from "@/lib/capabilities";
+import type { Tier } from "@/lib/display-mode";
 import type { TimelineStep } from "@/lib/steps";
 
 /**
@@ -16,14 +18,32 @@ import type { TimelineStep } from "@/lib/steps";
  * Nothing here keys on a step name. Every stage-name assumption lives in
  * `lib/steps.ts` (the vocabulary) and <AgentTimeline/> (the phases), so a stage
  * the engine renames or adds cannot reach this file.
+ *
+ * **Below `engineer` this collapses to one line.** The pipeline is the thing the business-facing
+ * tiers exist not to show, and a stage list is the most audit-shaped surface in the app. The
+ * spinner still says something is happening, because a view with no progress indicator at all
+ * reads as a hung page.
+ *
+ * Defaults to `engineer` so a caller that does not care gets everything; `message-list.tsx` is the
+ * one that narrows it.
  */
 export function ServeProgress({
   isRunning,
   steps,
+  tier = "engineer",
 }: {
   isRunning: boolean;
   steps?: TimelineStep[];
+  tier?: Tier;
 }) {
+  if (!tierShowsAudit(tier)) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+        <span>Working on your answer…</span>
+      </div>
+    );
+  }
   if (steps && steps.length > 0) {
     return (
       <AgentTimeline

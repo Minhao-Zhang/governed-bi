@@ -52,10 +52,17 @@ from fastapi import FastAPI
 
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import make_router
+from governed_bi.api.curation_routes import make_curation_router
+from governed_bi.api.drafts_routes import make_drafts_router
+from governed_bi.api.elicitation_routes import make_elicitation_router
+from governed_bi.api.feedback_routes import make_feedback_router
+from governed_bi.api.settings_routes import make_settings_router
+from governed_bi.api.trust_loop_routes import make_raised_router, make_trust_loop_metrics_router
 from governed_bi.api.visibility import visible
 from governed_bi.model.provider import reasoning_effort_of
 from governed_bi.paths import REPO_ROOT
 from governed_bi.register.assets import ASSET_REGISTER
+from governed_bi.serve.runtime import bool_knob
 
 __all__ = ["make_app", "app_from_environment", "app"]
 
@@ -175,6 +182,30 @@ def _build_app(get_session: Callable[[], Any], turn_log: Any) -> FastAPI:
     # Mounted last so the app's own paths are declared first; the router's own ordering
     # (`/schema/summary` before `/schema/{table_id}`) is stated in `make_router`.
     app.include_router(make_router(_DeferredSession(get_session)))
+    # Same factory shape and the same deferred session as the browse router above. Mounted
+    # after it, so a curation route can never shadow a browse one by registration order.
+    app.include_router(make_curation_router(_DeferredSession(get_session)))
+    # Split out of curation_routes.py to stay under the file-length cap (drafts_routes.py's own
+    # docstring); same factory shape and deferred session, mounted last for the same reason.
+    app.include_router(make_drafts_router(_DeferredSession(get_session)))
+    # Also split out of curation_routes.py to stay under the file-length cap -- these two never
+    # were a curation concern (settings_routes.py's own docstring). Same factory shape and
+    # deferred session, mounted last for the same reason.
+    app.include_router(make_settings_router(_DeferredSession(get_session)))
+    app.include_router(make_elicitation_router(_DeferredSession(get_session)))
+    # Task H's own ledger + inbox (feedback.jsonl), never merged into the clarification one --
+    # see feedback_routes.py's module docstring. Same factory shape, deferred session, mounted
+    # last for the same reason as the two routers above.
+    app.include_router(make_feedback_router(_DeferredSession(get_session)))
+    # Task B-1's read model: "given a thread, what did it raise, and what became of it" -- over
+    # both ledgers above plus the turn log, which is why this factory takes `turn_log` too (see
+    # its own docstring for why that is a new shape rather than the single-session pattern the
+    # other three routers here use). Mounted last for the same reason as the three above.
+    app.include_router(make_raised_router(_DeferredSession(get_session), turn_log))
+    # Task C: "count whether the loop turns" -- the same file, same dependency set (both
+    # ledgers, the corpus, the turn log) as the router just above, so it is mounted the same way
+    # for the same reason. Mounted last for the same reason as every router above.
+    app.include_router(make_trust_loop_metrics_router(_DeferredSession(get_session), turn_log))
     return app
 
 
@@ -320,6 +351,9 @@ def capabilities_for(session: Any) -> dict[str, Any]:
     # observation is one too (ADR 0009 D4).
     can_stream = served_graph_declared()
     durable = durable_checkpointer_configured()
+    from governed_bi.serve.runtime_overrides import overrides as _live_overrides
+
+    live_knobs = {**session.knobs_resolved, **_live_overrides()}
     return {
         "environment": "local",
         "dialect": getattr(session.connector, "dialect", "postgres"),
@@ -354,6 +388,28 @@ def capabilities_for(session: Any) -> dict[str, Any]:
         # as a separate belief. What ADR 0014 verified is thread state surviving a hard kill and
         # a restart; a clarification answered *after* one has not been watched end to end.
         "hitl_survives_process_restart": durable,
+        # Corpus curation (the Agreed Assumptions / Needs Review admin tabs) is a different
+        # question from `can_clarify` above -- that one is "does a live ask_user interrupt
+        # fire", this one is "would /corpus/conflicts*, /corpus/assumptions and
+        # /corpus/drafts/{id}/approve actually work for this session". Mirrors those routes'
+        # own precondition exactly (`corpus_root is None` -> 409), so the UI can gate on this
+        # instead of reusing `can_clarify` for a thing it says nothing about.
+        "can_curate_corpus": getattr(session, "corpus_root", None) is not None,
+        # Read the same way every other knob is: `knobs_resolved` is the flat resolved mapping
+        # `bool_knob`'s first precedence tier already checks, so these are the register's
+        # declared values unless a deployment overrode them -- never a second literal that
+        # could drift from what a turn actually used.
+        #
+        # Layered with the operator's live switches for the same reason `Session.turn` is:
+        # `session.knobs_resolved` was resolved once, at construction, so a switch flipped since
+        # then would be reported here as still off while every new turn ran with it on. This
+        # endpoint is a live claim about what the engine will do next, not a record of a past run,
+        # so it reads the current value -- and `Session.turn` is what puts that same value into the
+        # record, so the two cannot disagree.
+        "enable_structured_percentage_check": bool_knob(
+            live_knobs, "enable_structured_percentage_check"
+        ),
+        "enable_clarification_to_draft": bool_knob(live_knobs, "enable_clarification_to_draft"),
     }
 
 

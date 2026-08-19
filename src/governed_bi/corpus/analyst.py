@@ -12,7 +12,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from .identity import slug
-from .schema import Asset, ColumnAsset, Governance, Reliability, ReliabilityStatus
+from .schema import Asset, ColumnAsset, Governance, ProvenanceStatus, Reliability, ReliabilityStatus
 from .validate import _bare
 
 __all__ = [
@@ -78,7 +78,20 @@ class AnalystCorpus:
 
 
 def for_analyst(assets: Sequence[Asset]) -> AnalystCorpus:
-    """Drop ``governance.excluded`` assets; record their column keys for ``check()``."""
+    """Drop ``governance.excluded`` assets and any not yet ``certified``; record excluded
+    column keys for ``check()``.
+
+    **Provenance-status filtering is not in ADR 0005 §1.5 — it is required by our own draft
+    write path** (``corpus/drafts.py``), and it belongs here for the same reason exclusion
+    does: this is the one function every retrieval/authorisation caller is required to route
+    through. Without it, ``restamp_model_authored()`` stamping a fresh write ``proposed``
+    would be a state nothing reads — the asset would index and serve exactly like a
+    ``certified`` one, and the draft/approve split would be theatre.
+
+    A seeded or hand-written asset with no ``audit``/``provenance`` at all is visible: absence
+    of provenance is not evidence of an unreviewed draft, and treating it as one would hide
+    every asset this project has ever shipped.
+    """
     visible: dict[str, Asset] = {}
     excluded_cols: set[str] = set()
     allowed_cols: set[str] = set()
@@ -88,6 +101,9 @@ def for_analyst(assets: Sequence[Asset]) -> AnalystCorpus:
         if asset.governance.excluded:
             if isinstance(asset, ColumnAsset):
                 excluded_cols.add(column_key_for(asset))
+            continue
+        provenance = getattr(asset.audit, "provenance", None) if asset.audit is not None else None
+        if provenance is not None and provenance.status is not ProvenanceStatus.certified:
             continue
         visible[asset.id] = asset
         if isinstance(asset, ColumnAsset):

@@ -26,6 +26,7 @@ const TOOL_JSON_2 =
 const channelAnswer = {
   outcome: "answered",
   text: null,
+  assumptions: [],
   answer_text: "No city population data for 2020 is available in the governed context.",
   record: {
     generated_sql: 'SELECT … FROM "shipping"."expedition"',

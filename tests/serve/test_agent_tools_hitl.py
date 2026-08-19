@@ -1,4 +1,14 @@
-"""F3: tools bounds, delivery_hash, ask_user HITL + identity-bound resume."""
+"""F3: tools bounds, delivery_hash, ask_user HITL + identity-bound resume.
+
+The outstanding-clarification latch's own tests (only one question paused at a time, and the
+latch given back across a resume) moved to ``test_ask_user_outstanding_clarification_latch.py``
+once this file passed the ADR 0005 §6 hard cap at 1,000 lines.
+
+**Split again, 2026-08-18**, for the same reason: the ``sample_rows`` governed-executor cluster,
+plus the two short generic checks nearest it (``test_delivery_hash_stable_for_same_tool_payload``,
+``test_tool_bounds_from_state_includes_pulled_in``), moved to
+``test_sample_rows_governed_executor.py``.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +20,6 @@ from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
-from langgraph.types import Command
 
 from governed_bi.corpus.analyst import for_analyst
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
@@ -19,11 +28,10 @@ from governed_bi.govern.layers import GUARDRAIL_ERROR
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.agent_state import CAP_LEDGER_KEY
 from governed_bi.serve.delivery import delivery_hash_for, payload_digest
-from governed_bi.serve.events import tool_event_id
 from governed_bi.serve.graph import compile_graph
-from governed_bi.serve.resume import CALLER_KEY, ResumeRejected, resume_clarification
+from governed_bi.serve.resume import ResumeRejected, resume_clarification
 from governed_bi.serve.scripted_model import ScriptedChatModel
-from governed_bi.serve.tools import build_tools, tool_bounds_from_state
+from governed_bi.serve.tools import build_tools
 
 
 def _assets() -> dict[str, Any]:
@@ -304,8 +312,6 @@ class _Answering:
 
     def execute(self, sql: str, **_: Any) -> tuple[list[str], list[tuple[Any, ...]], bool]:
         return (["id"], [(1,)], False)
-
-
 def test_tool_exception_is_not_refuse() -> None:
     class Boom:
         dialect = "sqlite"
@@ -381,6 +387,80 @@ def test_a_checker_that_raises_is_recorded_rather_than_returned_as_a_string() ->
     )
 
 
+def test_ask_user_rejects_a_schema_term_leak_before_pausing() -> None:
+    """Gap 2 (detent-ai-deployment-targets.md): a dotted `table.column` reference
+    in `question`/`why` is rejected before `ask_user` ever calls `interrupt` --
+    checked via direct tool invocation (`_call`), which would surface an
+    unhandled `GraphInterrupt` if the rejection didn't short-circuit before it.
+    """
+    tools = _tools()
+    text, update = _call(
+        tools["ask_user"],
+        question="does revenue mean payments.amount or line_items.unit_price?",
+        basis="data_definition",
+    )
+    assert "rejected" in text
+    assert "payments.amount" in text or "line_items.unit_price" in text
+    assert "clarifications_by_call" not in update
+
+
+def test_ask_user_rejects_a_leak_in_why_too() -> None:
+    tools = _tools()
+    text, _update = _call(
+        tools["ask_user"],
+        question="How should we handle cancelled orders?",
+        why="the amount could come from pct_delivered",
+        basis="data_definition",
+    )
+    assert "rejected" in text
+    assert "pct_delivered" in text
+
+
+def test_ask_user_requires_a_basis_of_exactly_two_kinds() -> None:
+    """Phase 1 (this initiative): the model must self-report which of two ambiguity
+    kinds triggered ``ask_user``, so a later phase can route a data-definition answer
+    into the shared corpus while keeping a ranking/superlative answer turn-scoped only.
+
+    ``basis`` has no default, so its absence must be visible in the tool's own schema
+    (``required``) rather than discovered only when a call omits it and something downstream
+    silently guesses. ``.args`` is ``StructuredTool``'s public view of its argument schema
+    (``tool_call_schema.model_json_schema()`` under the hood); no test in this repo already
+    asserts a tool's arg schema, so this is the standard LangChain property rather than a
+    codebase-specific idiom.
+    """
+    tools = _tools()
+    schema = tools["ask_user"].args
+    assert schema["basis"]["enum"] == ["data_definition", "ranking_ambiguity"], schema
+    assert "default" not in schema["basis"], (
+        "basis must have no default -- the model has to state one every time"
+    )
+    required = tools["ask_user"].tool_call_schema.model_json_schema().get("required", [])
+    assert "basis" in required, "basis must be required, not optional"
+
+
+def test_state_assumption_records_plain_language_text() -> None:
+    """Gap 1 (detent-ai-deployment-targets.md): the model's own self-reported
+    assumption, distinct from `ask_user` (no interrupt, never pauses the turn)."""
+    tools = _tools()
+    text, update = _call(
+        tools["state_assumption"], text="Excluded cancelled orders from the total."
+    )
+    assert text == "noted"
+    assert list(update["assumptions_by_call"].values()) == [
+        "Excluded cancelled orders from the total."
+    ]
+
+
+def test_state_assumption_rejects_a_schema_term_leak() -> None:
+    tools = _tools()
+    text, update = _call(
+        tools["state_assumption"], text="Used payments.amount for the total."
+    )
+    assert "rejected" in text
+    assert "payments.amount" in text
+    assert "assumptions_by_call" not in update
+
+
 def test_ask_user_interrupt_and_identity_resume() -> None:
     model = ScriptedChatModel(
         responses=[
@@ -389,7 +469,7 @@ def test_ask_user_interrupt_and_identity_resume() -> None:
                 tool_calls=[
                     {
                         "name": "ask_user",
-                        "args": {"question": "which year?"},
+                        "args": {"question": "which year?", "basis": "data_definition"},
                         "id": "c1",
                         "type": "tool_call",
                     }
@@ -448,6 +528,88 @@ def test_ask_user_interrupt_and_identity_resume() -> None:
     assert done["answer"]["outcome"] in {"answered", "clarification", "no_sql"}
 
 
+def test_state_assumption_reaches_the_final_answer_unconditionally() -> None:
+    """Gap 1 end to end: a self-reported assumption survives agent_core -> stamp and
+    lands on `answer["assumptions"]` — the exact field the UI must render
+    unconditionally, not gated behind `graded`/`heuristic` the way `why` is."""
+    model = ScriptedChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "state_assumption",
+                        "args": {"text": "Excluded cancelled orders from the total."},
+                        "id": "c1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="Total revenue is $18,496."),
+        ]
+    )
+    graph = compile_graph()
+    config = {
+        "configurable": {
+            "thread_id": "t-assumption",
+            "policy": GovernancePolicy(guard_rules_enabled={}),
+            "agent_model": model,
+        }
+    }
+    turn = {
+        "question": "revenue?",
+        "thread_id": "t-assumption",
+        "turn_index": 1,
+        "turn_id": "turn-assumption",
+        "run_id": "r",
+        "question_id": "q",
+        "db_id": "sales",
+        "attempt_id": "a",
+        "corpus_content_hash": "c",
+        "prompt_set_hash": "p",
+        "knobs_resolved": {},
+        "n_re_served": 0,
+        "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "messages": [],
+        "usage": [],
+        "clarifications": [],
+    }
+    out = graph.invoke(turn, config)
+    assert out["answer"]["assumptions"] == ["Excluded cancelled orders from the total."]
+
+
+def test_no_assumption_stated_is_a_real_empty_list_not_a_missing_field() -> None:
+    model = ScriptedChatModel(responses=[AIMessage(content="Total revenue is $18,496.")])
+    graph = compile_graph()
+    config = {
+        "configurable": {
+            "thread_id": "t-no-assumption",
+            "policy": GovernancePolicy(guard_rules_enabled={}),
+            "agent_model": model,
+        }
+    }
+    turn = {
+        "question": "revenue?",
+        "thread_id": "t-no-assumption",
+        "turn_index": 1,
+        "turn_id": "turn-no-assumption",
+        "run_id": "r",
+        "question_id": "q",
+        "db_id": "sales",
+        "attempt_id": "a",
+        "corpus_content_hash": "c",
+        "prompt_set_hash": "p",
+        "knobs_resolved": {},
+        "n_re_served": 0,
+        "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "messages": [],
+        "usage": [],
+        "clarifications": [],
+    }
+    out = graph.invoke(turn, config)
+    assert out["answer"]["assumptions"] == []
+
+
 def test_the_ledger_survives_the_interrupt() -> None:
     """A governed statement made **before** ``ask_user`` must still be in the record after.
 
@@ -478,8 +640,8 @@ def test_the_ledger_survives_the_interrupt() -> None:
         responses=[
             AIMessage(content="", tool_calls=[{**call, "id": "rq-1"}]),
             AIMessage(content="", tool_calls=[
-                {"name": "ask_user", "args": {"question": "which year?"}, "id": "c1",
-                 "type": "tool_call"},
+                {"name": "ask_user", "args": {"question": "which year?", "basis": "data_definition"},
+                 "id": "c1", "type": "tool_call"},
             ]),
             AIMessage(content="ok: 2020"),
         ]
@@ -534,462 +696,3 @@ def test_the_ledger_survives_the_interrupt() -> None:
         "rows -- and the recovered one carried the current turn_id rather than its own."
     )
 
-
-def test_delivery_hash_stable_for_same_tool_payload() -> None:
-    delivered = {"c1": payload_digest("hello")}
-    assert delivery_hash_for("ctx", delivered) == delivery_hash_for("ctx", delivered)
-    assert delivery_hash_for("ctx", delivered) != delivery_hash_for(
-        "ctx", {"c1": payload_digest("hello!")}
-    )
-
-
-def test_tool_bounds_from_state_includes_pulled_in() -> None:
-    bounds = tool_bounds_from_state(
-        {
-            "licensed": ["s.t"],
-            "retrieved": {
-                "selected": {},
-                "pulled_in": {"s.t.extra": "resolve"},
-                "attributions": {},
-            },
-        },
-        {},
-    )
-    assert bounds.may_read_body("s.t.extra")
-    assert bounds.may_inspect_schema("s.t")
-
-
-def test_sample_rows_asks_for_the_engines_spelling_in_the_right_schema() -> None:
-    """The tool that could tell the analyst a column's value vocabulary never returned a row.
-
-    Two independent halves, and it needed both to stay invisible. ``parent_table`` is a
-    corpus **key**, so ``.split(".")[-1]`` yielded the slug ``Air_Carriers_66c534`` for a
-    table whose engine spelling is ``Air Carriers`` (ADR 0008 D1). And the column's
-    ``schema`` was read into a local and then dropped, so ``PostgresConnector`` fell back to
-    its private ``schema="public"`` default. On a pooled 57-schema lake the result is
-    ``FROM "public"."Air_Carriers_66c534"`` — 42P01 every time, surfaced as a tool error
-    that no metric counted.
-    """
-    from governed_bi.serve.fetch import sample_rows
-    from governed_bi.serve.tools import tool_bounds_from_state
-
-    table = TableAsset(
-        id="airline.Air_Carriers_66c534",
-        schema="airline",
-        physical_name="Air Carriers",
-        summary="air carriers (Air Carriers): Code, Description",
-        columns=("airline.Air_Carriers_66c534.Code",),
-    )
-    column = ColumnAsset(
-        id="airline.Air_Carriers_66c534.Code",
-        schema="airline",
-        parent_table="airline.Air_Carriers_66c534",
-        physical_name="Code",
-        summary="Code — Air_Carriers_66c534.Code",
-        physical_type="TEXT",
-    )
-    assets = {a.id: a for a in (table, column)}
-    statements: list[str] = []
-
-    class Recorder:
-        dialect = "postgres"
-
-        def execute(self, sql, **kwargs):
-            statements.append(sql)
-            return (["Code"], [("AA",), ("DL",)], False)
-
-    state = _state(licensed=["airline.Air_Carriers_66c534"])
-    state["retrieved"]["by_type"]["table"] = ["airline.Air_Carriers_66c534"]
-    state["retrieved"]["selected"] = {
-        "airline.Air_Carriers_66c534.Code": {
-            "asset_id": "airline.Air_Carriers_66c534.Code",
-            "asset_type": "column",
-            "score": 1.0,
-        }
-    }
-    payload, ok, attempt = sample_rows(
-        "airline.Air_Carriers_66c534.Code",
-        limit=5,
-        bounds=tool_bounds_from_state(state, {}),
-        assets=assets,
-        connector=Recorder(),
-        corpus=for_analyst([table, column]),
-        policy=GovernancePolicy(),
-    )
-
-    assert ok, payload
-    assert statements, "nothing reached the connector"
-    sent = statements[0]
-    assert '"airline"."Air Carriers"' in sent, (
-        f"asked the engine for {sent!r}; the corpus key is not a relation"
-    )
-    assert '"Air Carriers"."Code"' in sent, sent
-    assert '"AA"' in payload
-    # The half the old test could not see: this is a governed executor path now.
-    assert attempt is not None and attempt["path"] == "sample" and attempt["passed"]
-    assert attempt["executed_sql"] == sent
-
-
-def test_sample_rows_is_a_governed_executor_path() -> None:
-    """``sample`` clears the layer stack and writes a ledger row, or it does not run.
-
-    The path used to reach ``PostgresConnector.execute`` through
-    ``connector.sample_values`` — the method ``ports.Connector`` reserves for
-    ``govern.pipeline`` — with no PARSE, NO_WRITE, FUNCTIONS, BINDING, COLUMNS or TABLES
-    layer and no ``attempt_record``. Two things followed, and this test pins both.
-
-    **The bypass.** ``reliability.status is suspect`` columns stay in ``by_id``, and
-    ``hard_block_suspect`` is enforced only inside ``check()``. So under one identical
-    policy ``run_query`` refused a suspect column and ``sample_rows`` returned its real
-    values. No attacker and no unusual configuration required.
-
-    **The vacuous count.** With no ledger row on the path, ``guardrail_errors == 0`` and an
-    empty attempt list were true of every value the tool ever showed the model.
-    """
-    from governed_bi.corpus.schema import Reliability, ReliabilityStatus
-    from governed_bi.serve.fetch import sample_rows
-
-    table = TableAsset(
-        id="sales.customers",
-        schema="sales",
-        physical_name="customers",
-        summary="customers table",
-        columns=("sales.customers.ssn",),
-    )
-    suspect = ColumnAsset(
-        id="sales.customers.ssn",
-        schema="sales",
-        parent_table="customers",
-        physical_name="ssn",
-        summary="national id — known unreliable",
-        physical_type="TEXT",
-        reliability=Reliability(status=ReliabilityStatus.suspect),
-    )
-    assets = {a.id: a for a in (table, suspect)}
-    executed: list[str] = []
-
-    class Recorder:
-        dialect = "postgres"
-
-        def execute(self, sql, **kwargs):
-            executed.append(sql)
-            return (["ssn"], [("123-45-6789",)], False)
-
-    state = _state(licensed=["sales.customers"])
-    state["retrieved"]["selected"] = {
-        "sales.customers.ssn": {
-            "asset_id": "sales.customers.ssn",
-            "asset_type": "column",
-            "score": 1.0,
-        }
-    }
-    payload, ok, attempt = sample_rows(
-        "sales.customers.ssn",
-        limit=5,
-        bounds=tool_bounds_from_state(state, {}),
-        assets=assets,
-        connector=Recorder(),
-        corpus=for_analyst([table, suspect]),
-        policy=GovernancePolicy(hard_block_suspect=True),
-    )
-
-    assert not ok
-    assert not executed, f"a suspect column's values reached the engine: {executed}"
-    assert "123-45-6789" not in payload
-    assert attempt is not None
-    assert attempt["path"] == "sample"
-    assert attempt["passed"] is False
-    assert attempt["reason_code"] == "r_column_suspect", attempt
-    assert attempt["executed_sql"] is None
-
-
-def test_the_sample_tool_writes_its_ledger_row_and_does_not_answer_the_turn() -> None:
-    """Through the real tool adapter: the row is durable, and ``terminal`` stays ``no_sql``.
-
-    Two halves that have to hold together. ``attempts_by_call`` is the channel the record is
-    built from, so a governed statement missing from it is a statement the audit trail does not
-    have. And ``terminal`` must not read a passing ``sample`` row as an answer: a turn that
-    sampled a column and then answered from context produced no SQL, and both facts are true of
-    it at once.
-    """
-    from governed_bi.serve.ledger import execution_from_attempts
-
-    class Recorder:
-        dialect = "postgres"
-
-        def execute(self, sql, **kwargs):
-            return (["name"], [("Ada",), ("Grace",)], False)
-
-    tools = _tools(config=_config(connector=Recorder()))
-    payload, update = _call(
-        tools["sample_rows"], call_id="s-1", column_id="sales.customers.name", limit=3
-    )
-
-    assert '"Ada"' in payload, payload
-    rows = list((update.get("attempts_by_call") or {}).values())
-    assert len(rows) == 1, update
-    assert rows[0]["path"] == "sample"
-    assert rows[0]["passed"] is True
-    assert rows[0]["executed_sql"]
-
-    execution = execution_from_attempts(rows)
-    assert execution["attempts"] == rows, "the row must stay in the ledger"
-    assert execution["terminal"] == "no_sql", (
-        "a passing sample row made the turn look answered; that is the "
-        "crash-counted-as-refusal inversion arriving through a second executor path"
-    )
-    assert execution["guardrail_errors"] == 0
-
-
-def test_the_model_cannot_widen_the_sample_row_bound() -> None:
-    """``limit`` is a model-supplied argument and it is clamped from both ends.
-
-    It used to be ``max(1, int(limit))`` — a ceiling-free row bound on a tool that grants
-    privilege, which is the shape ``ToolBounds`` exists to prevent (ADR 0006 §8).
-    """
-    from governed_bi.serve.fetch import SAMPLE_ROWS_MAX_VALUES, distinct_values_statement
-
-    class Recorder:
-        dialect = "postgres"
-
-        def __init__(self) -> None:
-            self.sql: list[str] = []
-
-        def execute(self, sql, **kwargs):
-            self.sql.append(sql)
-            return (["name"], [], False)
-
-    connector = Recorder()
-    tools = _tools(config=_config(connector=connector))
-    _call(tools["sample_rows"], call_id="s-2", column_id="sales.customers.name", limit=10_000)
-
-    ceiling = distinct_values_statement(
-        schema="sales",
-        table="customers",
-        column="name",
-        limit=SAMPLE_ROWS_MAX_VALUES,
-        dialect="postgres",
-    )
-    assert connector.sql and connector.sql[0] == ceiling, connector.sql
-
-
-def test_sample_rows_cannot_escape_its_identifier() -> None:
-    """A ``physical_name`` holding a double quote names a column, not more SQL.
-
-    ``physical_name`` is deliberately unconstrained in content — ``corpus/identity.slug``
-    says it holds the engine's identifier "verbatim: any character, any case, any script",
-    and ``corpus/validate.py`` validates only ``slug(physical_name)``, so ``problems_with()``
-    raises no objection to the asset below. The old Postgres adapter interpolated it into
-    ``f'SELECT DISTINCT "{column}" FROM …'`` with no quote-doubling, and the statement escaped
-    its intended relation. No test covered identifier quoting on either adapter.
-    """
-    from governed_bi.serve.fetch import distinct_values_statement
-
-    evil = 'x" FROM "pg_catalog"."pg_shadow" -- '
-    sql = distinct_values_statement(
-        schema="sales", table="customers", column=evil, limit=5, dialect="postgres"
-    )
-    assert "pg_shadow" in sql, "the fixture stopped exercising the escape"
-    assert '"sales"."customers"' in sql
-    # Every occurrence of the payload is inside one quoted identifier, so the only relation
-    # named is the intended one.
-    import sqlglot
-
-    tree = sqlglot.parse_one(sql, dialect="postgres")
-    tables = {t.sql(dialect="postgres") for t in tree.find_all(sqlglot.exp.Table)}
-    assert tables == {'"sales"."customers"'}, tables
-    columns = {c.name for c in tree.find_all(sqlglot.exp.Column)}
-    assert columns == {evil}, columns
-
-
-def test_only_one_clarification_may_be_outstanding_per_turn() -> None:
-    """A second ``ask_user`` in one assistant message is refused, not queued.
-
-    **The bug it closes.** LangGraph dispatches one ``Send`` per pending tool call, so two
-    ``ask_user`` calls in one message both interrupt. The surfacing order is a race,
-    ``_clarification`` returns the first interrupt, and ``Command(resume=...)`` always lands on
-    the first tool call — so the user is shown "which region?", answers it, and the answer is
-    recorded against, and handed to the model as, "which year?". The resume surface carries no
-    way to say *which* question is being answered, so the fix has to be that only one is ever
-    outstanding.
-
-    Both calls share one ``build_tools`` closure, which is what makes a latch work. The check
-    and the set have no ``await`` between them, so two concurrent ``Send``s cannot both pass.
-    """
-    import asyncio
-
-    ask = _tools()["ask_user"]
-
-    async def _both() -> tuple[Any, Any]:
-        first = asyncio.create_task(
-            ask.coroutine(question="which region?", runtime=_runtime("c1"))
-        )
-        second = asyncio.create_task(
-            ask.coroutine(question="which year?", runtime=_runtime("c2"))
-        )
-        done, pending = await asyncio.wait({first, second}, timeout=5)
-        for task in pending:
-            task.cancel()
-        return done, {first: "first", second: "second"}
-
-    done, _ = asyncio.run(_both())
-
-    # Exactly one of the two returned. The other raised `GraphInterrupt` (it paused) or is still
-    # pending; either way it did not produce a second question for the user to answer.
-    replies = []
-    for task in done:
-        try:
-            replies.append(task.result())
-        except BaseException:  # noqa: BLE001 — GraphInterrupt is the paused call, not a failure
-            pass
-    assert len(replies) == 1, "exactly one ask_user should return a refusal without pausing"
-    text = replies[0].update["messages"][0].content
-    assert "one clarifying question" in text.lower()
-    assert "already has one" in text.lower()
-
-
-def _clarify_turn(*, thread: str, turn: str, token: str) -> dict[str, Any]:
-    """A turn shaped for the ``ask_user`` path — the keys ``test_ask_user_interrupt_and_identity_resume`` uses."""
-    return {
-        "question": "revenue?", "thread_id": thread, "turn_index": 1, "turn_id": turn,
-        "run_id": "r", "question_id": "q", "db_id": "sales", "attempt_id": "a",
-        "corpus_content_hash": "c", "prompt_set_hash": "p", "knobs_resolved": {},
-        "n_re_served": 0, "facet_route_hits": [("facet_schema", "sales", 1.0)],
-        "messages": [], "usage": [], "identity": {"token": token}, "clarifications": [],
-    }
-
-
-def test_a_second_question_after_a_resume_is_not_refused_as_still_outstanding() -> None:
-    """The one-outstanding-question latch has to be **given back** when the question is answered.
-
-    ``pending_clarification`` is rebuilt by every ``build_tools`` — once per ``agent_core``
-    execution — so it never accumulated across passes. It stayed *occupied*, which is a different
-    bug and the one that reached the model. The call being resumed has no ``ToolMessage`` yet —
-    that is exactly why its ``Send`` re-runs on the resume pass — so it re-appends its own
-    ``clarification_id``, and nothing released it once ``interrupt()`` returned an answer.
-
-    Measured before the fix, on this script: "which year?" is asked, answered "2020", and the
-    model's next ``ask_user`` is refused with *"Only one clarifying question may be outstanding at
-    a time, and this turn already has one"* — with the ``ToolMessage`` carrying "2020" sitting
-    directly above the refusal in the transcript. That refusal also tells the model to ask "after
-    this one is answered", which is what it had just done, so the advice is unfollowable.
-
-    The assertion is that the second question **pauses** rather than returning a string: a real
-    interrupt, on its own ``clarification_id``, answerable by the same identity.
-    """
-    graph = compile_graph()
-    token = "identity-two-questions"
-    config = {
-        "configurable": {
-            "thread_id": "t-two-q",
-            "policy": GovernancePolicy(guard_rules_enabled={}),
-            "agent_model": ScriptedChatModel(
-                responses=[
-                    AIMessage(content="", tool_calls=[{"name": "ask_user",
-                                                       "args": {"question": "which year?"},
-                                                       "id": "c1", "type": "tool_call"}]),
-                    AIMessage(content="", tool_calls=[{"name": "ask_user",
-                                                       "args": {"question": "which region?"},
-                                                       "id": "c2", "type": "tool_call"}]),
-                    AIMessage(content="ok: 2020 EMEA"),
-                ]
-            ),
-        }
-    }
-
-    paused = graph.invoke(_clarify_turn(thread="t-two-q", turn="turn-two-q", token=token), config)
-    first = [i.value for i in (paused.get("__interrupt__") or ())]
-    assert [v.get("question") for v in first] == ["which year?"], (
-        f"precondition: the turn must pause on the first question, got {first}"
-    )
-
-    after = resume_clarification(graph, config=config, identity={"token": token}, answer="2020")
-
-    texts = [str(getattr(m, "content", "")) for m in (after.get("messages") or ())]
-    assert not [t for t in texts if "already has one" in t.lower()], (
-        "the second question was refused as still outstanding, though the first was answered in "
-        f"the same pass. transcript: {texts}"
-    )
-    second = [i.value for i in (after.get("__interrupt__") or ())]
-    assert [v.get("question") for v in second] == ["which region?"], (
-        f"the second question did not pause the turn; interrupts={second}, transcript={texts}"
-    )
-    assert second[0]["clarification_id"] != first[0]["clarification_id"], (
-        "the two questions must not share a clarification_id, or a resume cannot say which one "
-        "it answers"
-    )
-
-    done = resume_clarification(graph, config=config, identity={"token": token}, answer="EMEA")
-    answers = [c.get("answer") for c in (done.get("clarifications") or ())]
-    assert answers == ["2020", "EMEA"], (
-        f"both answered clarifications must reach the record, got {answers}"
-    )
-
-
-def test_the_replayed_ask_user_start_reuses_the_row_id_rather_than_opening_a_second() -> None:
-    """The resume replay re-emits ``start``. That is ADR 0010's contract, and this pins it.
-
-    ``interrupt()`` cannot be reached without re-running everything above it, so the ``start``
-    emitted before it is emitted again on the resume pass. Moving it after ``interrupt()`` would
-    stop the repeat and delete the open row for the whole interval a human spends reading the
-    question — the only interval it exists to describe — and would leave the ``refused`` resolve
-    with no ``start`` on its own stream. ADR 0010 chose the repeat and paid for it with a stable
-    ``id``: "the ``tools`` node re-executes on resume, so ``start`` is emitted twice, and a
-    seq-derived id would have shown the same step twice".
-
-    So the property is not "one start" but **"one row"**: every event for one ``ask_user`` call
-    shares ``tool_event_id("ask_user", tool_call_id)`` and the resolve arrives last, so
-    ``ui/lib/steps.ts::reduceSteps`` — which merges on ``id`` — folds all three into a single row
-    that settles resolved. A repeat carrying a fresh id would show the user their clarification
-    twice; a resolve arriving before a replayed ``start`` would show it spinning after it was
-    answered.
-
-    Measured through the real graph rather than reasoned: the emitter is not what decides how many
-    times the node re-executes.
-    """
-    graph = compile_graph()
-    token = "identity-replay"
-    conf = {
-        "thread_id": "t-replay",
-        "policy": GovernancePolicy(guard_rules_enabled={}),
-        "agent_model": ScriptedChatModel(
-            responses=[
-                AIMessage(content="", tool_calls=[{"name": "ask_user",
-                                                   "args": {"question": "which year?"},
-                                                   "id": "c1", "type": "tool_call"}]),
-                AIMessage(content="ok: 2020"),
-            ]
-        ),
-    }
-
-    def ask_user_events(payload: Any, configurable: dict[str, Any]) -> list[dict[str, Any]]:
-        # ``subgraphs=True`` is not optional: the tools run inside the nested ``create_agent``
-        # graph, and LangGraph does not propagate a nested writer to the parent stream without it.
-        out: list[dict[str, Any]] = []
-        for chunk in graph.stream(
-            payload, {"configurable": configurable}, stream_mode="custom", subgraphs=True
-        ):
-            while isinstance(chunk, tuple) and chunk:
-                chunk = chunk[-1]
-            if isinstance(chunk, dict) and chunk.get("step") == "ask_user":
-                out.append(chunk)
-        return out
-
-    paused = ask_user_events(
-        _clarify_turn(thread="t-replay", turn="turn-replay", token=token), conf
-    )
-    resumed = ask_user_events(Command(resume="2020"), {**conf, CALLER_KEY: token})
-    events = paused + resumed
-
-    assert [e["status"] for e in events] == ["start", "start", "ok"], (
-        "the ask_user row is start (pause), start (replay), then one resolve; got "
-        f"{[(e['status'], e['seq']) for e in events]}"
-    )
-    assert {e["id"] for e in events} == {tool_event_id("ask_user", "c1")}, (
-        f"the replayed start opened a second row: {sorted({e['id'] for e in events})}"
-    )
-    assert len({e["detail"]["clarification_id"] for e in events}) == 1, (
-        "the replay must re-derive the same clarification_id, or the client's side table cannot "
-        f"join onto the row: {[e['detail'] for e in events]}"
-    )
-    assert events[-1]["status"] != "start", "the resolve must arrive last, or the row spins"

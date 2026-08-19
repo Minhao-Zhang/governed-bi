@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from governed_bi.serve.runtime import int_knob
+from governed_bi.serve.runtime import bool_knob, int_knob
 
 
 def test_state_wins_then_knobs_resolved_then_the_register() -> None:
@@ -53,6 +53,39 @@ def test_a_knob_that_cannot_be_read_raises_rather_than_substituting_a_value() ->
     # comparability hash entirely.
     with pytest.raises(KeyError):
         int_knob({}, "route_top_nn")
+
+
+def test_bool_knob_same_precedence_as_int_knob() -> None:
+    """`enable_structured_percentage_check` off by default, state wins over knobs_resolved."""
+    assert bool_knob({}, "enable_structured_percentage_check") is False
+    assert bool_knob({"knobs_resolved": {"enable_structured_percentage_check": True}},
+                      "enable_structured_percentage_check") is True
+    assert bool_knob({"enable_structured_percentage_check": True,
+                       "knobs_resolved": {"enable_structured_percentage_check": False}},
+                      "enable_structured_percentage_check") is True
+
+
+def test_bool_knob_reads_the_two_json_spellings_and_refuses_anything_else() -> None:
+    """The danger is ``bool("false") is True``, not strings as such.
+
+    This asserted that any string raises, because this fork's own ``bool_knob`` was written that
+    way. Upstream's — which the 2026-08-14 merge kept, after finding *both* had independently
+    added a ``bool_knob`` and git had silently stacked them so this fork's shadowed it — accepts
+    the two JSON spellings with the right semantics and refuses the rest. That is the better
+    contract: a knob that arrived over HTTP as ``"false"`` is a value someone set, and reading it
+    as ``True`` is the exact bug both versions were written against.
+    """
+    assert bool_knob({"enable_structured_percentage_check": "true"},
+                     "enable_structured_percentage_check") is True
+    assert bool_knob({"enable_structured_percentage_check": "false"},
+                     "enable_structured_percentage_check") is False
+    assert bool_knob({"enable_structured_percentage_check": " FALSE "},
+                     "enable_structured_percentage_check") is False
+    with pytest.raises(ValueError, match="not a boolean"):
+        bool_knob({"enable_structured_percentage_check": "yes"},
+                  "enable_structured_percentage_check")
+    with pytest.raises(ValueError, match="not a boolean"):
+        bool_knob({"enable_structured_percentage_check": 1}, "enable_structured_percentage_check")
 
 
 def test_route_top_n_from_knobs_resolved_changes_the_turn(

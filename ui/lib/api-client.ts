@@ -14,14 +14,19 @@ import { z } from "zod";
 import { LANGGRAPH_URL, USE_MOCKS } from "@/lib/env";
 import {
   MOCK_ASSETS,
+  MOCK_ASSUMPTIONS,
   MOCK_AUDIT_CORPUS,
   MOCK_AUDIT_TRACE,
   MOCK_AUDIT_TURNS,
   MOCK_CAPABILITIES,
+  MOCK_CLARIFICATIONS,
+  MOCK_CONFLICTS,
+  MOCK_ELICITATION_CANDIDATES,
   MOCK_ER_GRAPH,
   MOCK_GRAPH,
   MOCK_SCHEMA,
   MOCK_SCHEMA_SUMMARY,
+  MOCK_TRUST_LOOP_METRICS,
   mockColumnRelated,
 } from "@/lib/mock/fixtures";
 import {
@@ -31,22 +36,37 @@ import {
 } from "@/lib/graph-scope";
 import {
   assetListSchema,
+  assumptionListSchema,
   auditCorpusSchema,
   auditTraceSchema,
   auditTurnsSchema,
   corpusFieldsSchema,
   corpusRowsSchema,
   capabilitiesSchema,
+  clarificationListSchema,
+  clarificationRecordSchema,
+  runtimeToggleListSchema,
+  runtimeToggleSchema,
   columnRelatedResponseSchema,
+  conflictListSchema,
+  conflictResolveResponseSchema,
+  draftApprovalSchema,
+  draftListSchema,
   editResponseSchema,
+  elicitationGenerateResponseSchema,
   erGraphSchema,
+  feedbackListSchema,
+  feedbackRecordSchema,
   knowledgeGraphSchema,
+  raisedListSchema,
   schemaSummaryResponseSchema,
   searchResponseSchema,
   tableViewSchema,
+  trustLoopMetricsSchema,
 } from "@/lib/schemas";
 import type {
   AssetRow,
+  AssumptionRow,
   AuditCorpus,
   AuditTrace,
   AuditTurns,
@@ -54,15 +74,28 @@ import type {
   CorpusFields,
   CorpusRows,
   CorpusWhere,
+  ClarificationRecord,
+  RuntimeToggle,
   ColumnRelated,
+  ConflictResolveResponse,
+  ConflictRow,
+  DraftApproval,
+  DraftRow,
   EditResponse,
+  ElicitationGenerateResponse,
   ErGraph,
+  FeedbackRecord,
   KnowledgeGraph,
+  RaisedItem,
   SchemaScope,
   SchemaSummaryResponse,
   SearchResponse,
   TableView,
+  TrustLoopMetrics,
 } from "@/lib/types";
+
+/** An empty bucket of a scan report's diff, for the mock generate response. */
+const EMPTY_SCAN_BUCKET = { count: 0, by_severity: {}, scopes: [] };
 
 export class ApiError extends Error {
   constructor(
@@ -218,6 +251,74 @@ export const api = {
       type ? MOCK_ASSETS.filter((a) => a.asset_type === type) : MOCK_ASSETS,
     ),
 
+  /** Admin-answered clarifications folded into the corpus (GET /corpus/assumptions;
+   * round 9) — the "agreed assumptions" log, distinct from the raw asset editor. */
+  assumptions: (): Promise<AssumptionRow[]> =>
+    get("/corpus/assumptions", assumptionListSchema, MOCK_ASSUMPTIONS),
+
+  /** Round C: clarifications whose Enhancer decision CONTRADICTED an existing
+   * asset (GET /corpus/conflicts), distinct from the settled assumptions log.
+   * Param-less returns both unresolved and resolved conflicts. */
+  conflicts: (status?: string): Promise<ConflictRow[]> =>
+    get(
+      `/corpus/conflicts${qs({ status })}`,
+      conflictListSchema,
+      status ? MOCK_CONFLICTS.filter((c) => c.status === status) : MOCK_CONFLICTS,
+    ),
+
+  /** Resolve one conflict (POST /corpus/conflicts/{id}/resolve; dev, gated on
+   * can_edit). `resolution` is "keep_existing" (discard the new answer) or
+   * "replace" (overwrite the existing asset's definition with it). */
+  resolveConflict: (
+    id: string,
+    resolution: "keep_existing" | "replace",
+  ): Promise<ConflictResolveResponse> => {
+    if (USE_MOCKS) {
+      const status = resolution === "replace" ? "resolved_replaced" : "resolved_kept_existing";
+      return Promise.resolve({
+        resolved: true,
+        conflict_id: id,
+        status,
+        detail: `ok: resolved ${id} (${resolution})`,
+      });
+    }
+    return post(
+      `/corpus/conflicts/${encodeURIComponent(id)}/resolve`,
+      { resolution, answered_by: "admin" },
+      conflictResolveResponseSchema,
+    );
+  },
+
+  /** The approval queue (GET /corpus/drafts; fix round, task D) -- every `proposed` asset,
+   * read fresh off disk on every call. Not `/corpus/assets` filtered client-side (D-2's
+   * original choice): that route reads `session.assets_by_id`, a run constant frozen at
+   * session-build time, so it never observed an approval within one server process -- a hard
+   * refresh brought an approved draft back into the queue. No mock fixture carries a
+   * `proposed` row (mirrors `assets()`'s own mock data), so mock mode renders this tab's
+   * empty state, same as before this fix. */
+  drafts: (): Promise<DraftRow[]> => get("/corpus/drafts", draftListSchema, []),
+
+  /** Certify one `proposed` draft (POST /corpus/drafts/{id}/approve; task D -- the trust
+   * loop's approval terminus). Not gated on `can_edit` -- mirrors `resolveConflict`'s and
+   * `answerClarification`'s pattern exactly: the route only requires `session.corpus_root`,
+   * which `capabilities.can_curate_corpus` reports. `by` is optional and, when set, recorded
+   * in the asset's `audit.extra` -- never required. */
+  approveDraft: (id: string, by?: string): Promise<DraftApproval> => {
+    if (USE_MOCKS) {
+      const asset = MOCK_ASSETS.find((a) => a.id === id);
+      return Promise.resolve({
+        id,
+        asset_type: asset?.asset_type ?? "term",
+        provenance_status: "certified",
+      });
+    }
+    return post(
+      `/corpus/drafts/${encodeURIComponent(id)}/approve`,
+      by ? { by } : {},
+      draftApprovalSchema,
+    );
+  },
+
   /** Every semantic-layer item touching one physical column (GET
    * /columns/{column_id}/related; handoff §14). `columnId` is the derived id from
    * the engine's column asset id, READ from a column payload — never derived client-side
@@ -250,6 +351,240 @@ export const api = {
     }
     return post("/corpus/edit", { asset }, editResponseSchema);
   },
+
+  /** SME clarification ledger (GET /clarifications) for the admin to answer.
+   * `status` matches one exact value; param-less returns every record. */
+  clarifications: (status?: string): Promise<ClarificationRecord[]> =>
+    get(
+      `/clarifications${qs({ status })}`,
+      clarificationListSchema,
+      status
+        ? MOCK_CLARIFICATIONS.filter((c) => c.status === status)
+        : MOCK_CLARIFICATIONS,
+    ),
+
+  /** Answer one clarification (POST /clarifications/{id}/answer; dev, gated on
+   * can_edit). One of `choiceId`/`choiceIds`/`answer` must be set — `choiceIds`
+   * is the elicitation wizard's category-B multi-select checklist; every other
+   * category/source uses `choiceId` and/or `answer`, unchanged. */
+  answerClarification: (
+    id: string,
+    body: { choiceId?: string; choiceIds?: string[]; answer?: string },
+  ): Promise<ClarificationRecord> => {
+    if (USE_MOCKS) {
+      const record =
+        MOCK_CLARIFICATIONS.find((c) => c.id === id) ??
+        MOCK_ELICITATION_CANDIDATES.find((c) => c.id === id);
+      if (!record) return Promise.reject(new ApiError(`/clarifications/${id}/answer not found.`, 404));
+      return Promise.resolve({
+        ...record,
+        status: "answered",
+        answer: body.answer ?? null,
+        answer_choice_id: body.choiceId ?? null,
+        answer_choice_ids: body.choiceIds ?? null,
+        answered_by: "admin",
+      });
+    }
+    return post(
+      `/clarifications/${encodeURIComponent(id)}/answer`,
+      { choice_id: body.choiceId, choice_ids: body.choiceIds, answer: body.answer },
+      clarificationRecordSchema,
+    );
+  },
+
+  /** Abandon a pending clarification (POST /clarifications/{id}/cancel).
+   *
+   * **Not a resume.** The graph thread stays paused and is never answered; this only writes the
+   * ledger, and what it writes depends on the record's own `basis` — a `ranking_ambiguity`
+   * question lands `cancelled` and leaves the admin queue, anything else stays `open`. The server
+   * decides, which is why there is no body: see
+   * `docs/detentai-role-tiers-and-clarification-cancel.md`.
+   *
+   * Returns the resulting row, so a caller can say which of the two happened without refetching. */
+  cancelClarification: (id: string): Promise<ClarificationRecord> => {
+    if (USE_MOCKS) {
+      const record = MOCK_CLARIFICATIONS.find((c) => c.id === id);
+      if (!record) return Promise.reject(new ApiError(`/clarifications/${id}/cancel not found.`, 404));
+      return Promise.resolve({
+        ...record,
+        status: record.basis === "ranking_ambiguity" ? "cancelled" : "open",
+      });
+    }
+    return post(
+      `/clarifications/${encodeURIComponent(id)}/cancel`,
+      {},
+      clarificationRecordSchema,
+    );
+  },
+
+  /** A reader who was refused submits what they meant (POST /clarifications/from-refusal,
+   * task A). Enters the same ledger an `ask_user` interrupt would -- the entrance a
+   * `no_schema_matched` refusal structurally cannot reach, since it fires before the agent
+   * (and `ask_user`) ever runs. `explanation` becomes the record's own `answer`; see the
+   * route's own docstring for why that folds immediately rather than waiting on an admin.
+   * `turnId` (task B-0) is optional and traces the record back to the turn that raised it --
+   * task B's read model over `GET /threads/{id}/raised` needs it; omitted, the route simply
+   * writes no `turn_id`, the same as any record filed before B-0 existed. */
+  fileClarificationFromRefusal: (
+    question: string,
+    explanation: string,
+    turnId?: string,
+  ): Promise<ClarificationRecord> => {
+    if (USE_MOCKS) {
+      const id = `refusal-${Date.now()}`;
+      return Promise.resolve({
+        id,
+        scope: `refusal:${id}`,
+        question,
+        status: "answered",
+        raised_by: [],
+        choices: null,
+        allow_freeform: true,
+        answer: explanation,
+        answer_choice_id: null,
+        answered_by: "user",
+        source: "refusal",
+        basis: "data_definition",
+        turn_id: turnId ?? null,
+        converted_to_corpus: true,
+      });
+    }
+    return post(
+      "/clarifications/from-refusal",
+      { question, answer: explanation, turn_id: turnId },
+      clarificationRecordSchema,
+    );
+  },
+
+  /** A reader says one turn's *delivered* answer is wrong (POST /feedback, task H-3) -- the
+   * reader's other entrance into the semantic layer, for the case where the engine answered and
+   * the business knows the answer is wrong. Distinct from `fileClarificationFromRefusal` above,
+   * which is for the case where the engine said nothing at all (H-b: two different record types,
+   * never merged). `reason` is the reader's optional one-line explanation. */
+  fileFeedback: (params: {
+    turnId: string;
+    question: string;
+    answerText: string;
+    reason?: string;
+  }): Promise<FeedbackRecord> => {
+    if (USE_MOCKS) {
+      const id = `feedback-${Date.now()}`;
+      return Promise.resolve({
+        id,
+        turn_id: params.turnId,
+        question: params.question,
+        answer_text: params.answerText,
+        status: "open",
+        reason: params.reason ?? null,
+        reported_at: new Date().toISOString(),
+        correction: null,
+        answered_by: null,
+        converted_to_corpus: false,
+      });
+    }
+    return post(
+      "/feedback",
+      {
+        turn_id: params.turnId,
+        question: params.question,
+        answer_text: params.answerText,
+        reason: params.reason,
+      },
+      feedbackRecordSchema,
+    );
+  },
+
+  /** The admin's report queue (GET /feedback; task H-4). `status` filters on one exact value;
+   * `FeedbackPanel` always asks for `"open"`. No mock data ships -- nothing originates a report
+   * in mock mode either, so mock mode renders the panel's empty state (mirrors `drafts()`'s own
+   * empty mock for the same reason). */
+  feedback: (status?: string): Promise<FeedbackRecord[]> =>
+    get(`/feedback${qs({ status })}`, feedbackListSchema, []),
+
+  /** Fold an admin's correction into a `proposed` corpus draft (POST /feedback/{id}/answer;
+   * task H-4) -- the same Enhancer path `answerClarification` reaches, over the report ledger
+   * instead of the clarification one. Not available in mock mode: there is no mock ledger for
+   * it to act on. */
+  answerFeedback: (id: string, correction: string): Promise<FeedbackRecord> => {
+    if (USE_MOCKS) {
+      return Promise.reject(new ApiError(`/feedback/${id}/answer not available in mock mode.`, 404));
+    }
+    return post(`/feedback/${encodeURIComponent(id)}/answer`, { correction }, feedbackRecordSchema);
+  },
+
+  /** The admin decided this report needs no corpus change (POST /feedback/{id}/dismiss; task
+   * H-4) -- a separate route from answering it, mirroring `cancelClarification`'s own "no body,
+   * the server decides nothing but the status" shape. */
+  dismissFeedback: (id: string): Promise<FeedbackRecord> => {
+    if (USE_MOCKS) {
+      return Promise.reject(new ApiError(`/feedback/${id}/dismiss not available in mock mode.`, 404));
+    }
+    return post(`/feedback/${encodeURIComponent(id)}/dismiss`, {}, feedbackRecordSchema);
+  },
+
+  /** Given a thread, what did it raise, and what became of it (GET /threads/{id}/raised;
+   * detent-ai-trust-loop-plan.md, task B-1) -- the read model `raised-history.tsx` (task B-2)
+   * renders. No mock data ships, same reason `drafts()`/`feedback()` ship none: nothing
+   * originates a report or a refusal-clarification in mock mode, so mock mode renders the
+   * empty-list state (the panel simply never mounts -- see that component's own docstring). */
+  raisedByThread: (threadId: string): Promise<RaisedItem[]> =>
+    get(`/threads/${encodeURIComponent(threadId)}/raised`, raisedListSchema, []),
+
+  /** Does the loop turn, and where does it stop (GET /trust-loop/metrics;
+   * detent-ai-trust-loop-plan.md, task C) -- refusals → reader entrances → approved rules →
+   * retrieved again. Ungated like the audit routes below, not `raisedByThread` above: this is a
+   * projection of the same turn log plus corpus, but scoped to the whole session rather than one
+   * thread, which is why it sits with `/audit/*` rather than the thread-scoped read model. */
+  trustLoopMetrics: (): Promise<TrustLoopMetrics> =>
+    get("/trust-loop/metrics", trustLoopMetricsSchema, MOCK_TRUST_LOOP_METRICS),
+
+  /** Engine switches an operator may flip, with where each current value came from
+   * (GET /settings/toggles). */
+  toggles: (): Promise<RuntimeToggle[]> =>
+    get("/settings/toggles", runtimeToggleListSchema, []),
+
+  /** Set one switch, or clear it back to its default with `null`
+   * (POST /settings/toggles/{name}). Returns the resulting row, so the caller renders what the
+   * engine actually resolved rather than what it asked for — the two differ when the environment
+   * pins the knob, which is a 409. */
+  setToggle: (name: string, value: boolean | null): Promise<RuntimeToggle> => {
+    if (USE_MOCKS) {
+      return Promise.resolve({
+        name, value, source: value === null ? "default" : "override",
+        default: false, why: "Mock transport: no engine attached.", editable: true, env_var: null,
+      });
+    }
+    return post(`/settings/toggles/${encodeURIComponent(name)}`, { value }, runtimeToggleSchema);
+  },
+
+  /** Phase 1 elicitation wizard candidates — open AND answered
+   * ``source="elicitation_wizard"`` ledger records (GET /elicitation/candidates).
+   * Answer the same way as any other clarification, via `answerClarification`. */
+  elicitationCandidates: (): Promise<ClarificationRecord[]> =>
+    get("/elicitation/candidates", clarificationListSchema, MOCK_ELICITATION_CANDIDATES),
+
+  /** Trigger candidate-question generation from the served schema (POST
+   * /elicitation/generate; gated on can_curate_corpus, not can_edit -- see
+   * api/curation_routes.py's own docstring). Idempotent on the backend —
+   * safe to call again; returns only newly proposed candidates, plus `report`,
+   * the diff against what the ledger and the corpus already knew. */
+  elicitationGenerate: (): Promise<ElicitationGenerateResponse> => {
+    if (USE_MOCKS)
+      return Promise.resolve({
+        generated: [],
+        n_generated: 0,
+        report: {
+          nothing_new: true,
+          summary: "No new gaps found.",
+          new: EMPTY_SCAN_BUCKET,
+          still_open: EMPTY_SCAN_BUCKET,
+          settled: EMPTY_SCAN_BUCKET,
+          stranded: EMPTY_SCAN_BUCKET,
+        },
+      });
+    return post("/elicitation/generate", {}, elicitationGenerateResponseSchema);
+  },
+
 
   /* ── the audit surface ─────────────────────────────────────────────────── */
   //

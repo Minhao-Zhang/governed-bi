@@ -323,14 +323,99 @@ def test_the_analyst_prompt_names_the_id_convention_and_every_tool() -> None:
     v1 named two of the five bound tools and then said *"Prefer run_query"*, which is advice
     against calling the three that could have told it a column's value vocabulary — the
     information the corpus does not carry (0 of 5 947 columns have ``sample_values``).
+
+    ``state_assumption`` is the sixth bound tool (Gap 1, 2026-08-07 Power Kiosk audit) and was
+    never named here — nothing told the model when to prefer it over ``ask_user``, which is
+    exactly why "Who are our best customers?" landed on either one non-deterministically across
+    runs instead of reliably asking which metric "best" means.
+
+    v4 adds ``ask_user``'s new required ``basis`` argument — the prompt must name it and both
+    of its literal values, or the model has no guidance on which one to pass for either of the
+    two triggers this docstring already describes.
     """
     from governed_bi.register.prompts import PROMPT_REGISTRY, prompt_text
 
     text = prompt_text("analyst")
     assert "id=" in text, "the id convention is rendered but never explained"
-    for tool in ("read_body", "inspect_schema", "sample_rows", "run_query", "ask_user"):
+    for tool in (
+        "read_body",
+        "inspect_schema",
+        "sample_rows",
+        "run_query",
+        "ask_user",
+        "state_assumption",
+    ):
         assert tool in text, f"{tool} is bound on every turn and never mentioned"
     assert "v1" in PROMPT_REGISTRY["analyst"].variants, (
+        "v1 is the baseline v2 has to beat; deleting it deletes the comparison"
+    )
+    assert "basis" in text, "ask_user's basis argument is required but never explained"
+    assert "data_definition" in text, "no guidance on when to pass basis=\"data_definition\""
+    assert "ranking_ambiguity" in text, "no guidance on when to pass basis=\"ranking_ambiguity\""
+
+
+def test_the_analyst_prompt_tells_the_model_to_answer_in_the_users_language() -> None:
+    """v5: a live-observed bug -- "Who are our best customers?" asked in English against the
+    German-language beer_factory corpus got back a German ask_user question. Nothing in any
+    variant up to v4 says anything about response language, so the model mirrored the corpus's
+    language instead of the user's. v5 must say to match the user's question language, not the
+    corpus's/schema's, for both ask_user and state_assumption.
+    """
+    from governed_bi.register.prompts import prompt_text
+
+    text = prompt_text("analyst")
+    assert "same language" in text and "user" in text, (
+        "v5 must instruct the model to answer in the user's own language, not the corpus's"
+    )
+    assert "state_assumption" in text and "language" in text
+
+
+def test_the_analyst_prompt_scopes_the_language_rule_to_the_final_answer_too() -> None:
+    """v6: a live-observed residual of the v5 bug -- v5's rule names only ask_user's
+    question/why and state_assumption's text, never the model's own closing prose. A live
+    multi-tool-call turn (ask_user -> English answer -> inspect_schema -> sample_rows ->
+    run_query -> final answer) reverted to German exactly at that last, unnamed step, even
+    though every ask_user/state_assumption call in the same turn stayed in English -- the
+    rule was never violated, because it never applied there. v6 must say the rule covers the
+    turn's own final/closing answer as well, not just the two tools.
+    """
+    from governed_bi.register.prompts import prompt_text
+
+    text = prompt_text("analyst")
+    assert "final answer" in text or "closing answer" in text, (
+        "v6 must extend the language rule to the model's own final answer, not just "
+        "ask_user/state_assumption"
+    )
+    assert "tool call" in text, (
+        "v6 must say the rule survives the tool calls in between, since that is exactly "
+        "where the live-observed drift happened"
+    )
+
+
+def test_the_analyst_prompt_guides_grounded_multiple_choice() -> None:
+    """v5: ask_user's new ``choices`` argument is real but unused unless the prompt tells the
+    model when it is appropriate to pass it -- grounded in something actually inspected, never
+    invented, and never at the cost of also accepting free text.
+    """
+    from governed_bi.register.prompts import prompt_text
+
+    text = prompt_text("analyst")
+    assert "choices" in text
+    assert "grounded" in text or "actually" in text, (
+        "the prompt must distinguish grounded candidates from invented ones"
+    )
+    assert "allow_freeform" in text, "the prompt must say to keep free text available"
+
+
+def test_the_narrate_prompt_tells_the_model_to_answer_in_the_users_language() -> None:
+    """v2: the same root cause as ANALYST v5 -- NARRATE (the fallback generation path when the
+    agent finished on a tool call with no prose of its own) was silent on response language too.
+    """
+    from governed_bi.register.prompts import PROMPT_REGISTRY, prompt_text
+
+    text = prompt_text("narrate")
+    assert "same language" in text and "question" in text
+    assert "v1" in PROMPT_REGISTRY["narrate"].variants, (
         "v1 is the baseline v2 has to beat; deleting it deletes the comparison"
     )
 

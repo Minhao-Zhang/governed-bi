@@ -161,6 +161,76 @@ export function useColumnRelated(columnId: string | null) {
   });
 }
 
+/** Admin-answered clarifications folded into the corpus (GET /corpus/assumptions;
+ * round 9), for the "agreed assumptions" log tab. */
+export function useAssumptions() {
+  return useQuery({ queryKey: ["assumptions"], queryFn: api.assumptions });
+}
+
+/** The approval queue (GET /corpus/drafts; fix round, task D), for the Drafts tab -- every
+ * `proposed` asset, read fresh off disk on every call so an approval or a new draft is
+ * visible within the same server process, unlike `useAssets`'s `/corpus/assets`. */
+export function useDrafts() {
+  return useQuery({ queryKey: ["drafts"], queryFn: api.drafts });
+}
+
+/** Round C: clarifications whose Enhancer decision CONTRADICTED an existing
+ * asset (GET /corpus/conflicts), for the "Needs Review" tab. `status` filters
+ * (e.g. "unresolved"); omit for every conflict, resolved or not. */
+export function useConflicts(status?: string) {
+  return useQuery({
+    queryKey: ["conflicts", status ?? "all"],
+    queryFn: () => api.conflicts(status),
+  });
+}
+
+/** SME clarification ledger (GET /clarifications), for the admin clarification
+ * panel. `status` filters on one exact value; omit for every record, which is
+ * what that panel does — it needs two statuses (`open` and `deferred`) and the
+ * route matches one. */
+export function useClarifications(status?: string) {
+  return useQuery({
+    queryKey: ["clarifications", status ?? "all"],
+    queryFn: () => api.clarifications(status),
+  });
+}
+
+/** Reader-reported wrong answers (GET /feedback; detent-ai-trust-loop-plan.md, task H), for the
+ * admin's Reports tab -- a second inbox, over a second ledger, beside `useClarifications` above
+ * (H-b: never the same record type). `status` filters on one exact value; `FeedbackPanel`
+ * always asks for `"open"`. */
+export function useFeedback(status?: string) {
+  return useQuery({
+    queryKey: ["feedback", status ?? "all"],
+    queryFn: () => api.feedback(status),
+  });
+}
+
+/** Given a thread, what did it raise, and what became of it (GET /threads/{id}/raised;
+ * detent-ai-trust-loop-plan.md, task B-1), for `raised-history.tsx` (task B-2). `options.enabled`
+ * mirrors `useSchemaSummary`'s own shape: the caller additionally gates on tier
+ * (`tierShowsRaisedHistory`), and a query this route's own render never uses should not run
+ * either -- the same reasoning `answer-card.tsx`'s `needsCatalogGlimpse` gate already applies to
+ * its own conditional fetch. Always disabled with no thread id, regardless of `options.enabled`:
+ * a fresh conversation has raised nothing yet. */
+export function useRaisedByThread(threadId: string | null, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["raised", threadId ?? "none"],
+    queryFn: () => api.raisedByThread(threadId!),
+    enabled: threadId !== null && (options?.enabled ?? true),
+  });
+}
+
+/** Phase 1 elicitation wizard candidates (GET /elicitation/candidates) — every
+ * `source="elicitation_wizard"` ledger record, open and answered, for the
+ * proactive admin onboarding flow's grouped A > C+E > B > D view. */
+export function useElicitationCandidates() {
+  return useQuery({
+    queryKey: ["elicitation-candidates"],
+    queryFn: api.elicitationCandidates,
+  });
+}
+
 /* ── conversations ─────────────────────────────────────────────────────────── */
 
 /**
@@ -209,6 +279,15 @@ export function useAuditTrace(turnId: string | null) {
 /** Corpus shape plus its problems, split fatal vs degradation. */
 export function useAuditCorpus() {
   return useQuery({ queryKey: ["audit-corpus"] as const, queryFn: api.auditCorpus });
+}
+
+/** Does the loop turn, and where does it stop (detent-ai-trust-loop-plan.md, task C) -- the
+ * refusals → reader entrances → approved rules → retrieved-again funnel, for the admin/engineer
+ * metrics view (`components/corpus/trust-loop-metrics.tsx`). Ungated like the audit queries
+ * above: a projection of the same turn log and corpus, gated on tier alone at the render site
+ * (`tierShowsTrustLoopMetrics`), never on a capability flag this route does not itself require. */
+export function useTrustLoopMetrics() {
+  return useQuery({ queryKey: ["trust-loop-metrics"] as const, queryFn: api.trustLoopMetrics });
 }
 
 /* ── filtering (ADR 0009) ──────────────────────────────────────────────────── */

@@ -32,7 +32,17 @@ SYSTEM_PROMPT = analyst_prompt()
 #: The five tools ADR 0005 §3.5 declares. Named here rather than derived from ``build_tools``
 #: on purpose: deriving the expectation from the thing under test is how "the tool set could
 #: have been emptied" passed in the first place.
-ADR_TOOLS = {"read_body", "inspect_schema", "sample_rows", "run_query", "ask_user"}
+ADR_TOOLS = {
+    "read_body",
+    "inspect_schema",
+    "sample_rows",
+    "run_query",
+    "ask_user",
+    # Added 2026-08-07 (Gap 1, detent-ai-deployment-targets.md): reaches nothing new, unlike
+    # the five above — see ADR 0005 §3.5's amendment for why this one is exempt from the
+    # "no extra tool" boundary the rest of this test enforces.
+    "state_assumption",
+}
 
 
 def _session(
@@ -144,12 +154,14 @@ def test_the_system_prompt_reaches_the_model(two_schema_index, two_schema_assets
 
 
 def test_all_five_declared_tools_are_bound(two_schema_index, two_schema_assets, guard_off_policy):
-    """ADR 0005 §3.5's five, and no sixth.
+    """ADR 0005 §3.5's tools, and no undeclared extra.
 
     The upper bound matters as much as the lower one: ADR 0006's governance boundary is
     enforced by the *absence* of a tool, so an extra bound tool is a hole in it, not a
     feature. This is the assertion that would have caught a generic ``write_file`` arriving
-    from a middleware.
+    from a middleware. ``state_assumption`` (Gap 1) is declared here deliberately, not an
+    exception to this test — see the ADR amendment for why a tool that reaches nothing new
+    does not widen the boundary this guards.
     """
     model, _ = _served(two_schema_index, two_schema_assets, guard_off_policy)
     assert model.tools_seen, "bind_tools was never called: the model was handed no tools"

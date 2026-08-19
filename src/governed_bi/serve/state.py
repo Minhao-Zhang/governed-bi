@@ -615,6 +615,13 @@ class ServeState(TypedDict, total=False):
     usage: Annotated[list[UsageRecord], operator.add]
     clarifications: Annotated[list[dict[str, Any]], operator.add]
     clarification_requested: bool
+    #: ``clarification_id``s ``mine_corpus`` has already processed. DetentAI, ported: without
+    #: this, a node reading the thread-accumulated ``clarifications`` list would re-mine every
+    #: clarification ever answered on this thread on every later turn -- `corpus/store.py`'s
+    #: `write()` overwrites the same asset id cleanly, so a re-mine raises nothing, but it
+    #: would silently revert a since-approved/-certified draft back to `proposed`.
+    clarifications_mined: Annotated[list[str], operator.add]
+
     #: Every finished turn of this thread, appended by ``api/graph_app.record_node``. This is the
     #: channel that makes a checkpoint hold the **whole conversation's** audit trail rather than
     #: only the newest turn: ``answer``, ``execution`` and ``generated_sql`` are all in
@@ -647,6 +654,11 @@ class ServeState(TypedDict, total=False):
     result_table: dict[str, Any] | None
     #: Prose answer from ``narrate``. Live only; distinct from system ``answer["text"]``.
     answer_text: str | None
+    #: Model-self-reported assumptions from ``state_assumption`` (Gap 1, detent-ai-deployment-
+    #: targets.md). Live only, same class as ``result_table``/``answer_text`` above — per-turn,
+    #: never accumulated, so turn two's answer cannot show turn one's assumptions.
+    assumptions: list[str] | None
+
     #: The post-hoc observer's judgement (``serve/nodes/reflect.py``). Nothing routes on it:
     #: no conditional edge reads it and ``stamp`` only copies it to the record.
     reflect_verdict: dict[str, Any] | None
@@ -686,6 +698,7 @@ PER_TURN_RESET: dict[str, Any] = {
     "generated_sql": None,
     "result_table": None,
     "answer_text": None,
+    "assumptions": None,
     "reflect_verdict": None,
     "query_vector": None,
     # Cleared per turn, or turn two's `latency_sec` spans everything the user did in between.
@@ -701,7 +714,9 @@ PER_TURN_RESET: dict[str, Any] = {
 }
 
 #: Channels that accumulate across turns (each row carries turn identity).
-ACCUMULATING: frozenset[str] = frozenset({"messages", "usage", "clarifications", "turns"})
+ACCUMULATING: frozenset[str] = frozenset(
+    {"messages", "usage", "clarifications", "clarifications_mined", "turns"}
+)
 
 #: Written by ``turn()`` itself — turn identity and run claims.
 TURN_IDENTITY: frozenset[str] = frozenset({

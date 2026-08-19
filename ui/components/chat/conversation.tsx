@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { MessageSquareText } from "lucide-react";
 
 import { ClarificationPrompt } from "@/components/chat/clarification-prompt";
@@ -7,6 +8,7 @@ import { Composer } from "@/components/chat/composer";
 import { MessageList } from "@/components/chat/message-list";
 import { useAssets } from "@/hooks/queries";
 import type { ChatTransport } from "@/hooks/use-chat";
+import { api } from "@/lib/api-client";
 
 /**
  * The chat cockpit's shared view: a full-height column where the transcript
@@ -28,11 +30,61 @@ export function Conversation({
   respondClarification,
   banner,
   header,
-}: ChatTransport & { banner?: React.ReactNode; header?: React.ReactNode }) {
+  onAbandonThread,
+}: ChatTransport & {
+  banner?: React.ReactNode;
+  header?: React.ReactNode;
+  /** Leave the conversation this turn is stuck in. See `cancelPending`: a LangGraph thread paused
+   * at an `interrupt()` cannot accept a new turn, so cancelling has to give up the thread, not
+   * just the prompt. Only the streaming transport has threads, so this is optional. */
+  onAbandonThread?: () => void;
+}) {
   const isEmpty = messages.length === 0 && !isRunning;
-  // While the agent is waiting on a clarification the turn is paused; the user
-  // answers the question, not sends a new turn, so lock the composer.
-  const pendingClarification = clarification != null && respondClarification != null;
+  //: Questions this user has abandoned. Held here rather than in the transport because cancelling
+  //: is not a transport event: the graph thread stays paused and is simply never resumed (the LRU
+  //: evicts it), so there is nothing for `useStream` to be told. Keeping it local also means the
+  //: `ChatTransport` interface — which upstream owns — does not move.
+  const [cancelled, setCancelled] = useState<ReadonlySet<string>>(() => new Set());
+
+  // While the agent is waiting on a clarification the turn is paused; the user answers the
+  // question, not sends a new turn, so lock the composer. A cancelled question stops counting as
+  // pending, which is what unlocks it again.
+  const pendingClarification =
+    clarification != null &&
+    respondClarification != null &&
+    !cancelled.has(clarification.clarification_id);
+
+  /**
+   * Abandon a pending question. Three steps, and the third one is the one that actually works.
+   *
+   * The first cut did only the first two and **silently ate the next question the user typed**.
+   * `use-stream-chat.ts`'s `send` refuses while `awaitingClarification`, which it derives from
+   * `stream.interrupt` — the *thread's* pending interrupt, which no amount of client-side state
+   * clears. `stop()` aborts the HTTP stream, not the interrupt. So the Composer cleared its input,
+   * `send` returned early, and nothing left the browser: no error, no console line, no row.
+   *
+   * That guard is right, and its own comment says why — a thread waiting on an answer to its first
+   * turn cannot start a second. Which means cancelling has to **give up the thread**. It is also
+   * the honest reading: the turn is abandoned, and so is the conversation it was stuck in. The
+   * transcript is still readable under History and Audit, so nothing is lost but the on-screen
+   * scrollback.
+   *
+   * `setCancelled` stays anyway, and not as belt-and-braces: the mock and REST transports render
+   * this same component and have no threads, so it is the only thing that closes the prompt for
+   * them. Two mechanisms because there are two situations, not two attempts at one.
+   */
+  async function cancelPending(id: string) {
+    setCancelled((prev) => new Set(prev).add(id));
+    stop?.();
+    onAbandonThread?.();
+    try {
+      await api.cancelClarification(id);
+    } catch (err) {
+      // Not a toast: the question is gone from the user's screen either way, and an error about a
+      // ledger they cannot see is noise. The admin queue is where a missed write shows up.
+      console.warn(`could not record the cancellation of ${id}`, err);
+    }
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -65,14 +117,21 @@ export function Conversation({
       <div className="border-t pt-4">
         <div className="mx-auto w-full max-w-5xl">
           {pendingClarification && (
-            <ClarificationPrompt request={clarification} onRespond={respondClarification} />
+            <ClarificationPrompt
+              request={clarification}
+              onRespond={respondClarification}
+              onCancel={() => void cancelPending(clarification.clarification_id)}
+            />
           )}
           {banner}
-          {/* A pending clarification locks the composer the same way a running
-              turn does — the user answers the question rather than starting a new
-              turn. But it withholds Stop: Decline is the governed way out (it
-              fails the turn closed, stamped `clarification_declined`), whereas
-              aborting mid-interrupt abandons it with nothing recorded. */}
+          {/* A pending clarification locks the composer the same way a running turn does — the
+              user answers the question rather than starting a new turn — and withholds Stop,
+              because aborting mid-interrupt abandons the turn with nothing recorded.
+              *
+              This used to say Decline was the governed way out. It is not offered: this fork
+              replaced it with Defer and hides Defer for `ranking_ambiguity`, which left that
+              basis with no exit at all. The prompt's own Cancel button is the exit now, and it
+              records what happened. */}
           <Composer
             onSend={send}
             isRunning={isRunning || pendingClarification}

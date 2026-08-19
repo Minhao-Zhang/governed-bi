@@ -29,6 +29,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 
 
@@ -47,3 +49,28 @@ def _load_dotenv_into_environ() -> int:
 #: Run at import, which pytest does before collecting any test — so a module-scoped fixture
 #: that reads a credential at collection time already sees it.
 _FILLED = _load_dotenv_into_environ()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_overrides(tmp_path_factory, monkeypatch):
+    """No test reads the operator's real switches.
+
+    ``serve/runtime_overrides.py`` persists to ``runs/runtime-overrides.json``, and every session
+    layers it on. Without this, a switch someone flipped in a browser changes what the suite
+    asserts — which is exactly how it was found: ``test_capabilities_reports_the_ported_detentai
+    _toggles`` failed on a machine where ``enable_clarification_to_draft`` had just been turned on
+    from the UI. Autouse and repository-wide rather than per-file, because the failure mode is a
+    test that never thought about the file at all.
+
+    Same precaution ``api/trace_store.py``'s ``TURN_LOG_DIR`` takes, for the same reason.
+    """
+    from governed_bi.serve import runtime_overrides
+
+    monkeypatch.setattr(
+        runtime_overrides,
+        "OVERRIDE_PATH",
+        tmp_path_factory.mktemp("overrides") / "runtime-overrides.json",
+    )
+    runtime_overrides.reload()
+    yield
+    runtime_overrides.reload()

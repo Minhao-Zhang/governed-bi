@@ -6,8 +6,10 @@
 
 import type { z } from "zod";
 import type {
+  runtimeToggleSchema,
   answerViewSchema,
   assetRowSchema,
+  assumptionRowSchema,
   auditCorpusSchema,
   auditLedgerRowSchema,
   auditTraceFieldSchema,
@@ -20,25 +22,38 @@ import type {
   corpusRowsSchema,
   boundaryEdgeSchema,
   capabilitiesSchema,
+  clarificationRecordSchema,
   columnRelatedResponseSchema,
   columnViewSchema,
+  conflictResolveResponseSchema,
+  conflictRowSchema,
+  draftApprovalSchema,
+  draftRowSchema,
   editResponseSchema,
+  elicitationGenerateResponseSchema,
   erGraphEdgeSchema,
   erGraphNodeSchema,
   erGraphSchema,
+  feedbackRecordSchema,
   graphEdgeSchema,
   graphMetaSchema,
   graphNodeKindSchema,
   graphNodeSchema,
   knowledgeGraphSchema,
   leanColumnSchema,
+  raisedItemSchema,
   resultTableSchema,
+  scanReportSchema,
   schemaSummaryResponseSchema,
   searchHitSchema,
   searchResponseSchema,
+  serveOutcomeSchema,
   tableSummarySchema,
   tableViewSchema,
+  trustLoopMetricsSchema,
 } from "./schemas";
+
+export type ServeOutcome = z.infer<typeof serveOutcomeSchema>;
 
 /* ── the audit surface (GET /audit/*) ────────────────────────────────────── */
 
@@ -73,10 +88,39 @@ export type ErGraphNode = z.infer<typeof erGraphNodeSchema>;
 export type ErGraphEdge = z.infer<typeof erGraphEdgeSchema>;
 export type ErGraph = z.infer<typeof erGraphSchema>;
 export type AssetRow = z.infer<typeof assetRowSchema>;
+export type AssumptionRow = z.infer<typeof assumptionRowSchema>;
+export type ConflictRow = z.infer<typeof conflictRowSchema>;
+export type ConflictResolveResponse = z.infer<typeof conflictResolveResponseSchema>;
+export type DraftRow = z.infer<typeof draftRowSchema>;
+export type DraftApproval = z.infer<typeof draftApprovalSchema>;
+export type RuntimeToggle = z.infer<typeof runtimeToggleSchema>;
 export type ColumnRelated = z.infer<typeof columnRelatedResponseSchema>;
 export type ResultTable = z.infer<typeof resultTableSchema>;
 export type AnswerView = z.infer<typeof answerViewSchema>;
 export type EditResponse = z.infer<typeof editResponseSchema>;
+export type { ClarificationChoice, ClarificationRequest, ClarificationResponse } from "@/lib/clarification";
+export type ClarificationRecord = z.infer<typeof clarificationRecordSchema>;
+
+/* ── task H: reader-reported wrong answers, a different record type (H-b) ─────────────────── */
+export type FeedbackRecord = z.infer<typeof feedbackRecordSchema>;
+
+/* ── task B-1: given a thread, what did it raise, and what became of it ───────────────────── */
+export type RaisedItem = z.infer<typeof raisedItemSchema>;
+
+/* ── task C: does the loop turn, and where does it stop ────────────────────────────────────── */
+export type TrustLoopMetrics = z.infer<typeof trustLoopMetricsSchema>;
+
+/* ── Phase 1 elicitation wizard (proactive admin onboarding) ──────────────── */
+export type ElicitationGenerateResponse = z.infer<typeof elicitationGenerateResponseSchema>;
+export type ScanReport = z.infer<typeof scanReportSchema>;
+export type ElicitationCategory = NonNullable<ClarificationRecord["category"]>;
+export type ElicitationUiModality = NonNullable<ClarificationRecord["ui_modality"]>;
+export type ElicitationSeverity = NonNullable<ClarificationRecord["severity"]>;
+export type ElicitationAudience = NonNullable<ClarificationRecord["audience"]>;
+
+/* ── serve-time HITL (hitl-clarification-contract.md §3/§4/§9) ────────────── */
+
+/** The `interrupt()` value the `ask_user` tool raises; `stream.interrupt.value`. */
 
 /* ── D15 scope-on-demand (gated on capabilities.can_scope / can_search) ───── */
 export type LeanColumn = z.infer<typeof leanColumnSchema>;

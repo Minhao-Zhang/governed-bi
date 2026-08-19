@@ -1,0 +1,380 @@
+"""What the identifiers and the corpus shape say: every gap signal that costs no database read.
+
+Split out of ``curator/gaps.py`` at 929/1000 lines (ADR 0005 §6). **Not a line-count split.**
+``gaps.py``'s own docstring states that every signal it computes comes from one of exactly two
+sources — the character structure of identifiers, or rows in the database — and those two sources
+have completely different dependencies:
+
+* This module is the **first** source. Pure functions of names and of the corpus's declared
+  shape. No connector, no ``prepare()``, no ledger row, no ``ClarificationRecord``, no severity
+  tier: nothing here can refuse, cost a round trip, or decide what to ask. That is why it is
+  testable by passing two strings, and why the sweep that chose
+  :data:`NEAR_DUPLICATE_SIMILARITY` could be run offline over a decoy manifest.
+* ``gaps.py`` is the **second** source, and everything that depends on it: the governed
+  comparison, the severity/audience classification, the records, the dependency ordering.
+
+The boundary is "does this need the database", and the cheap gates below are on this side of it
+precisely because they decide *which* pairs are worth paying for. Enumerating candidates and
+measuring them are separate steps for that reason (:data:`MAX_PAIR_COMPARISONS` truncates
+between them), so the seam already existed in the call graph — this file only gives it a name.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Mapping, Sequence
+
+__all__ = [
+    "EVIDENCE_Z",
+    "NEAR_DUPLICATE_SIMILARITY",
+    "name_similarity",
+    "shared_name_run",
+    "evidence_strength",
+    "type_class",
+    "comparable_type",
+    "values_overlap",
+    "comparison_candidates",
+    "frame_siblings",
+    "unjoined_pairs",
+    "name_matched_keys",
+]
+
+#: How alike two identifiers must read before their values are worth comparing.
+#:
+#: **Chosen by measurement, not by feel.** Swept against BIRD-Obfuscation's
+#: ``trap_manifest.json`` — which names, for each injected decoy column, the ``source_column`` it
+#: mimics — over ``beer_factory`` (21 pairs), ``restaurant`` (9) and ``app_store`` (6). At 0.6 the
+#: detector reports 26 of the 34 manifest pairs with 4 non-manifest pairs; at 0.5 it gains 2 more
+#: manifest pairs and 8 more non-manifest ones. 0.6 is where the trade stops being worth it.
+#:
+#: The same constant gates two readings of "these two identifiers name the same thing", which is
+#: why it is one constant: two columns of one table (a duplicate), and a column of one table
+#: against a column of another (a join key). It gated a third — a column against its own table's
+#: name, standing in for "does this column identify a row" — until that convention was measured
+#: and found to hold for nothing on ``restaurant`` and to fire on a coincidence on
+#: ``beer_factory``. That question is now answered by counting rows, in ``gaps.py``.
+NEAR_DUPLICATE_SIMILARITY = 0.6
+
+#: Coarse physical-type classes, matched as substrings of the raw engine type.
+#:
+#: Two purposes, and the first is **correctness rather than precision**: Postgres raises
+#: ``operator does not exist: bigint = text`` for a cross-class comparison, so an ungated pair
+#: spends a governed round trip to learn nothing. Substrings because the engine's spelling varies
+#: (``bigint``, ``integer``, ``double precision``, ``character varying``, ``timestamp with time
+#: zone``) and enumerating dialect spellings is the kind of list that goes stale silently. Order
+#: matters: ``timestamp with time zone`` must reach ``time`` before anything else claims it.
+_TYPE_CLASS_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("bool",), "boolean"),
+    (("date", "time", "interval"), "temporal"),
+    (("int", "numeric", "decimal", "real", "double", "float", "money", "serial"), "numeric"),
+    (("char", "text", "string", "clob", "uuid", "enum"), "text"),
+)
+
+
+def _alphanumeric_run(name: str) -> str:
+    """``name`` case-folded with every separator dropped: ``"Content Rating"`` -> ``contentrating``.
+
+    Deliberately *not* a tokenisation. Splitting on ``_`` is what made the design phase's
+    throwaway detector miss ``region``/``regionname`` and ``stadt``/``stadtname``, and a
+    word-boundary rule is a claim about a language.
+    """
+    return "".join(ch for ch in name.casefold() if ch.isalnum())
+
+
+def _trigram_dice(left: str, right: str) -> float:
+    """Dice coefficient over character trigrams. Sees **reordering**.
+
+    ``aktueller_einzelhandelspreis`` and ``einzelhandel_preis_aktuell`` are the same words in a
+    different arrangement, which no containment measure notices and this one scores 0.78.
+    """
+    a, b = _trigrams(_alphanumeric_run(left)), _trigrams(_alphanumeric_run(right))
+    if not a or not b:
+        return 0.0
+    return 2 * len(a & b) / (len(a) + len(b))
+
+
+def _trigrams(text: str) -> frozenset[str]:
+    if len(text) < 3:
+        return frozenset({text}) if text else frozenset()
+    return frozenset(text[i : i + 3] for i in range(len(text) - 2))
+
+
+def shared_name_run(left: str, right: str) -> str:
+    """The longest character run the two names share, case-folded and separator-free.
+
+    The **frame** two look-alike identifiers wear: ``kunde_id``/``transaktions_kunde_id`` share
+    ``kundeid``, and ``transaktions_id``/``transaktions_wurzelbier_id`` share ``transaktions``.
+    Which of those two shapes a pair has is what :func:`frame_siblings` reads, and it is a
+    property of the run itself rather than of its length — the first has nothing else in its
+    table wearing it, the second has three.
+    """
+    a, b = _alphanumeric_run(left), _alphanumeric_run(right)
+    best = end = 0
+    previous = [0] * (len(b) + 1)
+    for i in range(1, len(a) + 1):
+        current = [0] * (len(b) + 1)
+        for j in range(1, len(b) + 1):
+            if a[i - 1] == b[j - 1]:
+                current[j] = previous[j - 1] + 1
+                if current[j] > best:
+                    best, end = current[j], i
+        previous = current
+    return a[end - best : end]
+
+
+def _longest_common_run(left: str, right: str) -> int:
+    """Length of the longest character run the two names share."""
+    return len(shared_name_run(left, right))
+
+
+def _longest_common_run_ratio(left: str, right: str) -> float:
+    """Longest shared character run, over the shorter name's length. Sees **containment**.
+
+    ``email`` inside ``email_adresse`` scores 1.0 where trigram overlap scores 0.46, because the
+    longer name is mostly *other* characters. This is the affixing shape a migration produces —
+    a column added beside another with a qualifier bolted on.
+
+    Normalising by the *shorter* name is what buys that, and it is also this measure's weakness:
+    any short name contained in a long one scores 1.0, so ``app`` inside ``app_name`` (a real
+    decoy pair) and ``ort`` inside ``betriebsstandorte`` (a coincidence) are indistinguishable
+    here. Telling them apart needs context this function does not have, so it is not attempted
+    here — :func:`values_overlap` is where the coincidence is caught, on evidence, in the one
+    caller where it was measured doing damage (``wurzelbiermarke.maissirup`` matched
+    ``kunden.email`` on the three characters ``mai`` and shares not one value with it).
+    """
+    a, b = _alphanumeric_run(left), _alphanumeric_run(right)
+    if not a or not b:
+        return 0.0
+    return _longest_common_run(left, right) / min(len(a), len(b))
+
+
+def name_similarity(left: str, right: str) -> float:
+    """How alike two identifiers read, in ``[0, 1]``. Language-independent by construction.
+
+    The **maximum** of two measures because they see different shapes and neither subsumes the
+    other: containment (:func:`_longest_common_run_ratio`) reaches ``email``/``email_adresse``
+    and misses reordering; trigram overlap (:func:`_trigram_dice`) reaches
+    ``aktueller_einzelhandelspreis``/``einzelhandel_preis_aktuell`` and misses containment. Each
+    was measured against the decoy manifest below :data:`NEAR_DUPLICATE_SIMILARITY`'s threshold
+    and each recovers pairs the other does not.
+
+    A third candidate — shared ``_``-delimited tokens — was measured and **dropped**: it reached
+    nothing the other two missed and it alone flagged ``in_dosen_erh_ltlich`` against
+    ``in_flaschen_erh_ltlich`` (available in cans vs in bottles), because a shared naming frame
+    is exactly what a family of parallel columns has.
+    """
+    return max(_trigram_dice(left, right), _longest_common_run_ratio(left, right))
+
+
+#: Standard-normal z for :func:`evidence_strength`'s lower bound. 1.96 is the 95% convention.
+#:
+#: The one knob in that function, and it only moves *how hard* small denominators are discounted,
+#: never the direction. At 1.96 a 3-of-3 disagreement scores 0.44 and a 6 305-of-6 312 one scores
+#: 1.00; the ordering of the ``beer_factory`` T1 tier is unchanged anywhere between 1.0 and 3.0,
+#: which is the sense in which it is not tuned.
+EVIDENCE_Z = 1.96
+
+
+def evidence_strength(differing: int, rows: int) -> float:
+    """How strongly ``differing of rows`` says "these two columns disagree", in ``[0, 1]``.
+
+    **The share alone is the wrong quantity, and it was measured being wrong.** Ranking T1 by
+    ``differing / rows`` put the three top cards on ``beer_factory``'s ``geoposition`` — a table
+    with *three rows*, where "3 of 3" scores a perfect 1.0 — and sorted the design doc's headline
+    case, ``transaktion.kunde_id`` against ``transaktions_kunde_id`` at 6 305 of 6 312, to #13.
+    "Answer the most severe first" is the whole premise of the tiering, so a ranking that a
+    three-row lookup table can dominate is a broken ranking.
+
+    This is the Wilson score lower bound of that share: the same statistic that stops three
+    five-star reviews from outranking six thousand. It reads as *the share, discounted by how
+    little evidence supports it* — 3 of 3 lands at 0.44, 24 of 24 at 0.86, 6 305 of 6 312 at
+    1.00 — and the discount vanishes as the denominator grows, so it agrees with the raw share
+    exactly where the raw share was already trustworthy.
+
+    **A shrinkage estimator, not a claim about sampling.** The counts come from a census
+    (``COUNT(*)`` over the whole table), so there is no sampling error to bound and calling this
+    a 95% confidence interval would be wrong. What it corrects for is different and real: on
+    three rows, two columns that are genuinely unrelated disagree on all three too, so the
+    measurement barely discriminates. The denominator is how much the disagreement is worth as
+    evidence, and this is the standard way to say so.
+
+    Blast radius — *how many rows get the wrong value* — is a second, independent question, and
+    it is not folded in here. ``gaps.py``'s sort key carries it as the next term, because
+    multiplying a confidence by a row count produces a number that answers neither.
+    """
+    if rows <= 0 or differing <= 0:
+        return 0.0
+    from math import sqrt
+
+    share = differing / rows
+    z2 = EVIDENCE_Z * EVIDENCE_Z
+    centre = share + z2 / (2 * rows)
+    spread = EVIDENCE_Z * sqrt(share * (1 - share) / rows + z2 / (4 * rows * rows))
+    return max(0.0, (centre - spread) / (1 + z2 / rows))
+
+
+def type_class(column: Any) -> str:
+    """Which coarse class of :data:`_TYPE_CLASS_MARKERS` a column's engine type falls in.
+
+    Also read for the column checklist's labels (``gaps.py``'s S1 detector), which is why it is
+    a public name rather than the comparison gate's private helper: a reader deciding whether a
+    cryptic column is worth describing wants the same coarse class the gate uses, not a second
+    rendering of the raw engine spelling.
+    """
+    physical = str(getattr(column, "physical_type", None) or "").casefold()
+    for markers, name in _TYPE_CLASS_MARKERS:
+        if any(marker in physical for marker in markers):
+            return name
+    return physical or "unknown"
+
+
+def comparable_type(left: Any, right: Any) -> bool:
+    """Whether a row-wise comparison of these two columns can even execute."""
+    return type_class(left) == type_class(right)
+
+
+def values_overlap(left: Sequence[str], right: Sequence[str]) -> bool:
+    """Whether two capped value reads have any value in common.
+
+    **A foreign key's values live in the referenced key's domain**, and that is the half of "is
+    this a join" that names cannot supply. Both sides come from the same
+    ``SELECT DISTINCT … ORDER BY … LIMIT`` shape, so for two columns over one domain these are
+    the same twenty smallest values and they coincide; for two columns over different domains
+    they cannot.
+
+    A **single** shared value, not a containment ratio, because the read is capped: a genuine
+    foreign key covering a sparse subset of a 9 539-row key shares only some of the twenty
+    smallest, and demanding a proportion would turn the cap into a recall ceiling. What this has
+    to separate is "the same domain" from "no relationship at all", and on all three measured
+    schemas that gap is total — every real pair overlaps and every junk pair
+    (``wurzelbiermarke.maissirup`` against ``kunden.email``, matched on the three characters
+    ``mai``) shares nothing.
+    """
+    return bool(set(left) & set(right))
+
+
+def comparison_candidates(
+    live: Sequence[Any], columns_by_table: Mapping[str, list[Any]]
+) -> list[tuple[Any, Any, Any, float]]:
+    """``(table, left, right, similarity)`` for every pair worth a governed comparison.
+
+    **The name gate is the only way in, and both detectors read the same measurements.** Two
+    competing candidate join keys are two columns of one table, so their disagreement is this
+    same comparison seen from the join side — which is why the join detector reads
+    ``agreements`` rather than issuing its own statements, and why nothing bypasses this gate to
+    get a pair measured.
+
+    That invariant has a cost worth naming: the join detector can only report a T1 ambiguity
+    whose competing keys are themselves name-alike. In practice they are, because both had to
+    match the *same* target column's name to become candidates — but two candidates with no
+    shared run between them (``acct_id`` and ``customer_ref`` for one target) would be reported
+    as two T3s rather than one T1. Letting them in was tried and measured: it put a pair with
+    *zero* name similarity into the comparison budget, because one three-character coincidence
+    upstream is enough to make an arbitrary column a candidate.
+
+    Sorted by similarity descending, which is what makes ``gaps.MAX_PAIR_COMPARISONS`` degrade
+    recall gracefully.
+    """
+    out: list[tuple[Any, Any, Any, float]] = []
+    for table in live:
+        columns = columns_by_table.get(table.id) or []
+        for index, left in enumerate(columns):
+            for right in columns[index + 1 :]:
+                if not comparable_type(left, right):
+                    continue
+                similarity = name_similarity(left.physical_name, right.physical_name)
+                if similarity < NEAR_DUPLICATE_SIMILARITY:
+                    continue
+                out.append((table, left, right, similarity))
+    return sorted(out, key=lambda row: (-row[3], row[0].id, row[1].id, row[2].id))
+
+
+def frame_siblings(
+    columns: Sequence[Any], left: Any, right: Any, similarity: float
+) -> list[Any]:
+    """Other columns of this table wearing the same naming frame as the pair ``(left, right)``.
+
+    **The class this exists for is named in :func:`name_similarity`'s own docstring as unsolved,
+    and it was 5 of the 6 wrong T1 cards an admin saw on real ``beer_factory``**:
+    ``in_dosen_erh_ltlich`` / ``in_flaschen_erh_ltlich`` / ``in_f_ssern_erh_ltlich`` (available
+    in cans / in bottles / in kegs), ``breitengrad`` / ``l_ngengrad`` / ``laengengrad``
+    (latitude / longitude), ``transaktions_id`` beside three ``transaktions_*_id`` foreign keys.
+    Two columns sharing a frame with *different* discriminators are a family of parallel facts;
+    a duplicate and its copy are a family of two. The size of the family is the signal, and it
+    is one a pairwise measure cannot see by construction.
+
+    A sibling has to match the frame **at least as well as the pair matches each other**, and
+    that comparison rather than a fixed floor is what makes the rule safe. ``l_ngengrad`` and
+    ``laengengrad`` are a real decoy pair scoring 0.89, and ``breitengrad`` matches their shared
+    ``ngengrad`` at only 0.75 — so it is not admitted as their sibling, while the same
+    ``breitengrad`` *is* admitted as a sibling of the ``breitengrad``/``l_ngengrad`` pair, which
+    scores 0.67. A fixed threshold cannot separate those two readings of the same three columns.
+
+    Type-compatible, because ``standort`` is the case that kills the naive version:
+    ``standort_id``, ``standortname``, ``standort_nummer`` and ``standort_bezeichnung`` all wear
+    ``standort``, so by names alone ``standort_id``/``standort_nummer`` — a manifest decoy pair —
+    looks exactly like a parallel frame. Two of the four are text and two are ``bigint``, and a
+    comparison that cannot execute is not a family member.
+
+    Names only, and deliberately not enough on its own: ``playstore.app_category`` wears the same
+    ``app`` frame as the ``App``/``app_name`` decoy pair, and only its values say it is a
+    different fact. ``gaps.py`` confirms every sibling against a measured vocabulary before
+    acting on it.
+    """
+    frame = shared_name_run(left.physical_name, right.physical_name)
+    if not frame:
+        return []
+    return [
+        column
+        for column in columns
+        if column.id not in (left.id, right.id)
+        and comparable_type(column, left)
+        and name_similarity(column.physical_name, frame) >= similarity
+    ]
+
+
+def unjoined_pairs(
+    live: Sequence[Any], join_edges: frozenset[tuple[str, str]]
+) -> list[tuple[Any, Any]]:
+    """Table pairs with no declared join, in a fixed order."""
+    out: list[tuple[Any, Any]] = []
+    for index, left in enumerate(live):
+        for right in live[index + 1 :]:
+            if tuple(sorted((left.id, right.id))) in join_edges:
+                continue
+            out.append((left, right))
+    return out
+
+
+def name_matched_keys(
+    source_table: Any, target_table: Any, columns_by_table: Mapping[str, list[Any]]
+) -> dict[str, list[Any]]:
+    """``{target column: source columns that read like it}`` — the *name* half of a join guess.
+
+    Deliberately only that half. The predicate this replaced also decided whether the target
+    identified anything, by asking whether it was *named after its own table* (``kunde_id`` for
+    ``kunden``) — a convention, and one that on real ``restaurant`` holds for nothing: 5 tables,
+    0 declared joins, and **0** questions emitted, a complete miss on the schema with the worst
+    join gap in the fixture set. The same convention fired on a coincidence in the other
+    direction, reading the four characters ``unde`` shared by ``bundesland`` and ``kunden`` as
+    "``bundesland`` identifies a customer" and producing a T1 about competing keys that were two
+    German state columns.
+
+    So "does this column identify a row" is now measured rather than read off a name, and it is
+    measured in ``gaps.py`` because it costs a governed statement. What is left here is what
+    names can honestly say: which columns of ``source_table`` read like which column of
+    ``target_table``, at the same threshold and with the same type gate every other pairing in
+    this module uses. Two or more sources for one target is the ambiguity the doc's T1 ``D`` row
+    is about — after the evidence gates, not before them.
+    """
+    out: dict[str, list[Any]] = {}
+    for target in columns_by_table.get(target_table.id) or []:
+        matches = [
+            source
+            for source in columns_by_table.get(source_table.id) or []
+            if comparable_type(source, target)
+            and name_similarity(source.physical_name, target.physical_name)
+            >= NEAR_DUPLICATE_SIMILARITY
+        ]
+        if matches:
+            out[target.id] = matches
+    return out

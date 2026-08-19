@@ -73,6 +73,168 @@ export function terminalOf(answer: AnswerView): string | null {
   return null;
 }
 
+/** The engine's `record.turn_id` -- the identifier task H's "this isn't right" control needs to
+ * name which turn a report is about (`register/record.py`'s identity tier; see
+ * `lib/provenance.ts::RUN_RECORD_KEYS`). `null` when the record carries none -- a mock/fixture
+ * answer, or an engine predating the register's identity tier -- and `WrongAnswerReport` does
+ * not mount without one, the same way it does not mount without a `question`. */
+export function turnIdOf(answer: AnswerView): string | null {
+  const turnId = answer.record?.turn_id;
+  return typeof turnId === "string" ? turnId : null;
+}
+
+/**
+ * Business-tier phrasing for the ledger's `terminal` token (detent-ai-trust-loop-plan.md, I-3).
+ *
+ * `serve/ledger.py` is explicit about what `no_sql` means -- "a turn that sampled a column
+ * and then answered from context is `no_sql` with a non-empty ledger" -- but that is ledger
+ * vocabulary, not customer vocabulary: a restaurant owner reads `no_sql` and learns nothing
+ * about whether the number in front of them came from their database.
+ *
+ * `no_sql` is deliberately **not** a single entry here. `execution_from_attempts` returns it
+ * whenever there are no *answering* attempts, which covers two different turns: "sampled a
+ * column, then answered from context" (a non-empty ledger) and "never touched the data at
+ * all" (an empty ledger). I-3 originally shipped one phrase for both; the live run on
+ * 2026-08-16 found the second case is a stronger claim getting the same, softer phrasing.
+ * `terminalLabel` branches it on `attempts.length` instead -- see `NO_SQL_LABEL`.
+ *
+ * Lives here, beside `terminalOf`, so a caller reading the raw token and building its own
+ * phrase is a second copy of this rule -- the same failure `answer-card.tsx`'s own docstring
+ * names for `deriveDelivery`. An **unrecognised** terminal falls through to the raw value,
+ * the same principle `reliability-stamp.tsx` already states for an outcome it does not
+ * recognise: an unfamiliar state should be visible, not invisible.
+ */
+const TERMINAL_LABEL: Record<string, string> = {
+  answered: "ran a query against your data",
+  graded: "ran a query; the result was checked and flagged",
+  capped: "stopped after the attempt limit",
+  refused: "refused, and the rule is named",
+};
+
+/** The two `no_sql` phrasings, split on whether the attempt ledger is empty. A non-empty
+ * ledger means the agent tried the data first (e.g. sampled a column) and then answered from
+ * a definition; an empty one means it never touched the data at all, which is the stronger
+ * claim and gets the stronger warning. */
+const NO_SQL_LABEL = {
+  sampled: "answered from a definition, without running a query",
+  untouched: "answered without consulting your data at all",
+};
+
+/** `terminal`, in business-tier language. Analyst/engineer keep the raw token -- call this
+ * only where the tier check already decided to translate (see `answer-card.tsx`). `attempts`
+ * is the same ledger `ReliabilityStamp` counts; it is only consulted to split `no_sql` (see
+ * `NO_SQL_LABEL`), so a caller translating a different terminal may omit it. */
+export function terminalLabel(
+  terminal: string | null,
+  attempts: Array<Record<string, unknown>> = [],
+): string | null {
+  if (terminal === null) return null;
+  if (terminal === "no_sql") {
+    return attempts.length > 0 ? NO_SQL_LABEL.sampled : NO_SQL_LABEL.untouched;
+  }
+  return TERMINAL_LABEL[terminal] ?? terminal;
+}
+
+/**
+ * Plain-language sentence for `refused_by` (detent-ai-trust-loop-plan.md, I-5).
+ *
+ * `refused_by` is the engine's closed vocabulary for *why* it withheld an answer
+ * (`register/stages.py::REFUSED_BY_TO_STAGE`, plus the abstention reasons in
+ * `ABSTENTION_REASONS`), hand-mirrored here because Python is not importable from
+ * TypeScript -- so this map and that inventory are two declarations of one vocabulary and can
+ * drift. Every sentence is written for the person who asked the question, about *their* data
+ * and *their* question, not the engine's stages or layers: "I couldn't find anything about
+ * that in your data," never "the router returned an empty shortlist."
+ *
+ * `guardrail_error` and `model_error` read differently on purpose. `stages.py`'s own comment
+ * calls `guardrail_error` "our bug wearing a refusal stamp" -- the 2026-08-10 audit found a
+ * turn whose every attempt died inside `check()` recorded `outcome: refused` when `Outcome`
+ * requires a crash to stay separate from a refusal (`CRASH_REFUSED_BY` holds both). Both say
+ * plainly that something broke, so a reader can tell "I can't answer that" apart from
+ * "something broke here." Every other reason is the product declining on purpose, so it says
+ * so without apology or hedging -- `docs/failure-modes.md` prices declining as an outcome, not
+ * a failure.
+ *
+ * An **unrecognised** `refused_by` falls through to the raw token, the same principle
+ * `reliability-stamp.tsx` already states: an unfamiliar state should be visible, not
+ * invisible.
+ */
+const REFUSAL_REASON_LABEL: Record<string, string> = {
+  guard: "I'm not able to answer that kind of question.",
+  negative_example: "I've been specifically told not to answer this kind of question.",
+  no_schema_matched: "I couldn't find anything about that in your data.",
+  missing_join_path:
+    "I can see pieces of what you're asking about, but I don't know how they connect in your data.",
+  over_connect_bounds:
+    "Answering that would mean connecting more of your data at once than I'm allowed to.",
+  guardrail:
+    "I couldn't put together a query for that which passes the safety checks on your data.",
+  guardrail_error:
+    "Something broke on my end while checking that question — this isn't a normal refusal. Please try again or let your admin know.",
+  attempt_cap:
+    "I tried several times to answer this from your data, and none of the attempts passed my checks.",
+  model_error:
+    "Something went wrong while I was generating an answer — this isn't a normal refusal. Please try again or let your admin know.",
+  retrieval_channel_failed:
+    "I wasn't able to search all of your data just then, so I'm not going to guess at an answer.",
+  nothing_licensed: "None of your data is set up to answer that kind of question yet.",
+  empty_context: "I didn't have anything from your data to work with for that question.",
+  licensed_table_evicted:
+    "The table I'd need was too large to include for this question, so I couldn't answer it.",
+};
+
+/** `refused_by`, as a sentence a non-technical reader can act on. Falls through to the raw
+ * token for a reason this map does not recognise -- the same fall-through `terminalLabel` and
+ * `reliability-stamp.tsx` use. `null` (no refusal reason recorded) returns null, same as
+ * `terminalLabel`. */
+export function refusalSentence(refusedBy: string | null): string | null {
+  if (refusedBy === null) return null;
+  return REFUSAL_REASON_LABEL[refusedBy] ?? refusedBy;
+}
+
+/**
+ * Business-tier phrasing for `outcome` (detent-ai-trust-loop-plan.md, task A-0).
+ *
+ * `terminal` and `refused_by` got their own plain-language treatment in I-3/I-5; `outcome` did
+ * not, even though it is the *first* badge on the card (`reliability-stamp.tsx` renders it
+ * before either of the others). So a business reader whose turn hit `guardrail_error` read
+ * `crashed` -- a raw ledger token -- before ever reaching the sentence that explains it.
+ *
+ * `answered` and `refused` map to themselves: both are already plain English, and inventing a
+ * different phrase where the raw token already is the plain one is the thing `terminalLabel`
+ * and `refusalSentence` both avoid too. `crashed` reads the same as `REFUSAL_REASON_LABEL`'s own
+ * `guardrail_error`/`model_error` entries -- both name a bug, not a decision, on purpose (see
+ * that map's own comment on why those two "read differently on purpose").
+ */
+const OUTCOME_LABEL: Record<string, string> = {
+  answered: "answered",
+  refused: "refused",
+  clarification: "waiting on a clarification",
+  capped: "stopped after too many tries",
+  crashed: "something broke on our end",
+};
+
+/** `outcome`, in business-tier language. Analyst/engineer keep the raw token -- call this only
+ * where the tier check already decided to translate (see `reliability-stamp.tsx`). Same
+ * fall-through as `terminalLabel`/`refusalSentence`: an outcome this map does not recognise is
+ * shown raw, not hidden. */
+export function outcomeLabel(outcome: string): string {
+  return OUTCOME_LABEL[outcome] ?? outcome;
+}
+
+/**
+ * "What I can see" line for a `no_schema_matched` refusal (I-5). `no_schema_matched` fires at
+ * `Stage.route`, before the agent ever ran -- there is no attempt ledger, no SQL, nothing else
+ * to show. Naming a handful of the tables the engine actually has turns that dead end into
+ * orientation instead of a blank. Deliberately short: `tableNames` is expected pre-filtered
+ * (e.g. excluded tables dropped) by the caller, and this still caps the count itself so a
+ * large corpus renders a glimpse, not a dump.
+ */
+export function catalogGlimpse(tableNames: string[], limit = 5): string | null {
+  if (tableNames.length === 0) return null;
+  return `What I can see: ${tableNames.slice(0, limit).join(", ")}.`;
+}
+
 /** The governed statement the engine actually ran, from the record. */
 export function sqlOf(answer: AnswerView): string | null {
   const sql = answer.record?.generated_sql;
@@ -150,10 +312,14 @@ export function whyLines(provenance: Record<string, unknown>): string[] {
   return lines;
 }
 
-/** Quiet "schemas considered" line from `routed_schemas`. Not a record register field
- * today, so this returns null on a live turn. */
-export function routedSchemasLabel(provenance: Record<string, unknown>): string | null {
-  const schemas = asStringArray(provenance.routed_schemas);
+/** Quiet "schemas considered" line from `record.schemas` — the routed top-N, which is v2's
+ * `register/record.py` analog of v1's `provenance.routed_schemas`.
+ *
+ * Reads the record, not a provenance bag. The v1 spelling was still here and its own comment
+ * conceded it "returns null on a live turn", which is what reading a field the register does
+ * not declare looks like from the inside. */
+export function routedSchemasLabel(record: Record<string, unknown>): string | null {
+  const schemas = asStringArray(record.schemas);
   if (schemas.length === 0) return null;
   return `Schemas considered: ${schemas.join(", ")}`;
 }

@@ -2,6 +2,7 @@
 
 import { Conversation } from "@/components/chat/conversation";
 import { ConversationBar } from "@/components/chat/conversation-bar";
+import { RaisedHistory } from "@/components/chat/raised-history";
 import { useStreamChat } from "@/hooks/use-stream-chat";
 import { useThreadId } from "@/hooks/use-thread-id";
 
@@ -17,6 +18,11 @@ import { useThreadId } from "@/hooks/use-thread-id";
  *
  * The *list* of conversations is not here. It is `/history`, and `?thread=<id>` is the one
  * address both pages agree on.
+ *
+ * `RaisedHistory` (task B-2) rides in `header` beside `ConversationBar`, for the same reason:
+ * this is the one transport with a `threadId` to scope it to, and `?thread=<id>` surviving a
+ * reload is exactly what lets that history still be there afterward. The REST fallback
+ * (`rest-chat.tsx`) has no thread id to give it at all -- a known gap, not wired here.
  */
 export function StreamChat() {
   const { threadId, setThreadId } = useThreadId();
@@ -32,7 +38,16 @@ export function StreamChat() {
       stop={stop}
       clarification={clarification}
       respondClarification={respondClarification}
-      header={<ConversationBar threadId={threadId} onNew={() => setThreadId(null)} />}
+      header={
+        <div className="space-y-2">
+          <ConversationBar threadId={threadId} onNew={() => setThreadId(null)} />
+          <RaisedHistory threadId={threadId} />
+        </div>
+      }
+      // Cancelling a clarification has to leave the thread, not just close the prompt: the graph
+      // is paused at an `interrupt()` and will refuse a new turn until it is answered. Same call
+      // the New button makes, for the same reason.
+      onAbandonThread={() => setThreadId(null)}
     />
   );
 }

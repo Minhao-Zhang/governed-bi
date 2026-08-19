@@ -58,7 +58,7 @@ class SqliteConnector:
         self._conn: sqlite3.Connection | None = None
 
     def __enter__(self) -> SqliteConnector:
-        self._connect()
+        self._conn = self._connect()
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -81,6 +81,28 @@ class SqliteConnector:
         return {"database": self._path.name}
 
     def _connect(self) -> sqlite3.Connection:
+        """Open a connection for **this call**. Never cached across calls.
+
+        A memoized ``self._conn`` used to survive from whichever call first populated it,
+        and ``sqlite3`` enforces thread affinity on the object it returns: a later call from
+        a different thread raised ``ProgrammingError: SQLite objects created in a thread can
+        only be used in that same thread``. LangGraph's node executor runs a tool call (e.g.
+        ``run_query``) in its own worker thread per invocation, so the second call after
+        construction — from any caller on any thread but the first — was the common case, not
+        an edge case, and it crashed instead of erroring cleanly (RESUME.md, 2026-08-06: two
+        independent 15+-minute hangs, both root-caused here).
+
+        A read-only local-file connection is cheap to open, which is exactly what makes
+        opening a fresh one per call the fix rather than a workaround: the alternative is
+        either a lock (serializing every call through one thread) or ``check_same_thread=
+        False`` (silently permitting concurrent access sqlite3's own docs call unsafe).
+        Neither buys anything a fresh connection does not already have for free here.
+
+        Kept as an instance method (rather than a bare function) for ``__enter__``/
+        ``__exit__``, which still track one connection across the `with` block's lifetime —
+        that scope is single-threaded by construction, so caching there was never the
+        problem.
+        """
         if self._conn is not None:
             return self._conn
         if not self._path.exists():
@@ -93,20 +115,26 @@ class SqliteConnector:
             conn.execute("PRAGMA query_only = ON")
         except sqlite3.Error:
             pass
-        self._conn = conn
         return conn
 
     def execute(
         self, sql: str, *, max_rows: int | None = None
     ) -> tuple[Sequence[str], Sequence[tuple[Any, ...]], bool]:
         cap = self._max_rows if max_rows is None else max_rows
+        conn = self._connect()
+        # Whether *this call* opened `conn` (and so owes closing it) or is borrowing the one
+        # a `with` block cached. `self._conn` is unread and unwritten anywhere else between
+        # here and the check, so this is exactly "was there already a cached connection".
+        owns_conn = self._conn is None
         try:
-            conn = self._connect()
             cur = conn.execute(sql)
             columns = [d[0] for d in (cur.description or ())]
             rows = cur.fetchmany(cap + 1)
         except sqlite3.Error as err:
             self._raise_classified(err)
+        finally:
+            if owns_conn:
+                conn.close()
         truncated = len(rows) > cap
         if truncated:
             rows = rows[:cap]
@@ -132,8 +160,14 @@ class SqliteConnector:
     def introspect(self) -> Introspection:
         # Classified like ``execute``: an unclassified failure is neither a query fault nor
         # infrastructure, so nothing downstream can decide whether to retry.
+        #
+        # Both bindings stay *outside* the `try`, where upstream/main has the `_connect()`
+        # call inside it: this fork's `finally` reads them, and a `_connect()` that raised
+        # would leave them unbound and turn the cleanup into a `NameError` masking the real
+        # error. `_connect()` already raises `ConnectionError`, so nothing is unclassified.
+        conn = self._connect()
+        owns_conn = self._conn is None  # see execute()'s comment
         try:
-            conn = self._connect()
             table_names = [
                 row[0]
                 for row in conn.execute(
@@ -167,6 +201,9 @@ class SqliteConnector:
             raise
         except sqlite3.Error as err:
             self._raise_classified(err)
+        finally:
+            if owns_conn:
+                conn.close()
         return Introspection(tables=tuple(tables), foreign_keys=tuple(fks))
 
     def list_tables(self) -> Sequence[str]:

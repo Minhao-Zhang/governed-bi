@@ -1561,12 +1561,25 @@ a run nine-fold, and two ladders that produced no USD at all.
 | `sample_rows(column_id, limit)` | **the only path to real values** |
 | `run_query(sql)` | execution (governed by ADR 0006) |
 | `ask_user(question)` | HITL interrupt |
+| `state_assumption(text)` | nothing — see below |
 
 **`sample_rows` takes a `ColumnAsset` id, not a table plus a column name.**
 Identifiers cannot be bound as query parameters, so a model-supplied column
 *string* interpolated into `SELECT {column} FROM {table}` is a direct injection
 surface. Taking a corpus-resolved id means no model string reaches SQL. It is
 still one of ADR 0006's four enumerated executors and still passes `check()`.
+
+**Amended 2026-08-07 (detent-ai-deployment-targets.md, Gap 1).** `state_assumption`
+is the one entry in this table that reaches nothing — every other tool exists
+because it lets the model reach something the delivered context cannot
+(a body, a full column list, real values, execution, a human). This one has no
+read side at all: it takes plain text and writes it, unread by anything but the
+final answer's own `assumptions` field. "An extra bound tool is a hole in
+[the governance boundary]" (the test guarding this table's count) does not
+apply to a tool that cannot widen what the model can reach — it can only make
+what the model already decided visible to the person reading the answer. Same
+`find_schema_leak` guard as `ask_user`, for the same reason: this reaches the
+business user directly too.
 
 **Every tool is bounded and reads through `AnalystCorpus` as a type**, not as a
 documented convention — v1's unenforced caller contract is how excluded PII

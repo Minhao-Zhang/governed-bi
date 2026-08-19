@@ -57,6 +57,15 @@ def _digest(*parts: object) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 
+def _runtime_overrides() -> dict[str, Any]:
+    """The operator's live switches. A function so the read happens per call rather than at import,
+    and so `Session.turn` names the same thing `_resolved_knobs` does.
+    """
+    from .runtime_overrides import overrides
+
+    return dict(overrides())
+
+
 @dataclass(frozen=True, slots=True)
 class Session:
     """Everything constant for one run, plus the two ways to use it."""
@@ -108,6 +117,12 @@ class Session:
             conf["prompt_variants"] = dict(self.prompt_variants)
         if question and self.embedder is not None:
             conf["query_vector"] = self.embedder.embed([question])[0]
+        if self.corpus_root is not None:
+            # DetentAI, ported: the write target for `serve/nodes/mine_corpus.py`. Conditional
+            # like `agent_model`/`embedder` above -- a session with no curated corpus to write
+            # back to must not hand a node a key whose presence it would otherwise take as
+            # permission to write.
+            conf["corpus_root"] = self.corpus_root
         return {"configurable": conf}
 
     def turn(
@@ -138,7 +153,14 @@ class Session:
             "db_id": self.db_id,
             "corpus_content_hash": self.corpus_content_hash,
             "prompt_set_hash": self.prompt_set_hash,
-            "knobs_resolved": dict(self.knobs_resolved),
+            # The operator's switches are layered on **per turn**, not just at session
+            # construction, because `_resolved_knobs` runs once and this mapping is a copy of what
+            # it produced. Without this a switch flipped after boot writes its file, reports
+            # success, and changes nothing a node reads -- the same defect as a control with no
+            # server behind it, built in reverse. Layering it here also keeps the record honest:
+            # this is the mapping the turn actually ran under, which is what
+            # `measure/gates.py::_knobs_resolved_gate` reads to catch a mid-run flip as drift.
+            "knobs_resolved": {**self.knobs_resolved, **_runtime_overrides()},
             "n_re_served": 0,
             "evidence": str(evidence or ""),
             "messages": [],
@@ -389,6 +411,13 @@ def _resolved_knobs(policy: Any) -> dict[str, Any]:
     if callable(digest):
         knobs["access_grant"] = digest()
     knobs["sqlglot_version"] = sqlglot_version()
+    # **The operator's runtime switches are deliberately NOT applied here.** They are layered by the
+    # two readers that mint a claim -- `Session.turn` and `api/routes.py::capabilities_for` -- and
+    # this function is what produces the base they layer over. Applying them in both places is the
+    # bug that shipped first: a session built while a switch was on baked `True` into this mapping,
+    # so layering `{}` over it after the operator cleared the switch still resolved `True`. The
+    # switch turned on and would not turn off, which is worse than one that does neither, because
+    # the operator cannot tell which state the engine is in. Found by clicking it off.
     for name in knobs:
         override = env_override(name)
         if override is not None:

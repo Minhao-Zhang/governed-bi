@@ -17,15 +17,19 @@ import type { GovEvent } from "@/lib/steps";
 import type {
   AnswerView,
   AssetRow,
+  AssumptionRow,
   AuditCorpus,
   AuditTrace,
   AuditTurns,
   Capabilities,
+  ClarificationRecord,
   ColumnRelated,
+  ConflictRow,
   ErGraph,
   KnowledgeGraph,
   SchemaSummaryResponse,
   TableView,
+  TrustLoopMetrics,
 } from "@/lib/types";
 
 // Two namespaces so the schema rail and cross-schema boundary are exercised
@@ -38,6 +42,8 @@ const BILLING = "billing";
 /* ── /capabilities — offline, no live model (mock mode) ──────────────────── */
 
 export const MOCK_CAPABILITIES: Capabilities = {
+  can_curate_corpus: true,
+  ui_display_mode: "audit",
   environment: "dev",
   dialect: "sqlite",
   can_edit: true,
@@ -66,6 +72,237 @@ export const MOCK_CAPABILITIES: Capabilities = {
   connection: { dialect: "sqlite", database: "gbi_demo_sales.db" },
 };
 
+/* ── /clarifications, POST /clarifications/{id}/answer ───────────────────── */
+
+// Unlike the rest of this file, these five are real content, not abstract
+// placeholders — they are the validated Experiment 003 knowledge-category
+// fixtures the admin clarification UI was built and manually tested against
+// (source-of-truth mapping, business-rule numeric definitions, default
+// exclusions, value mapping, join paths), so mock mode still exercises the
+// exact copy/shape the feature was designed for.
+export const MOCK_CLARIFICATIONS: ClarificationRecord[] = [
+  {
+    id: "q001",
+    scope: "term:revenue",
+    question: "When you say 'revenue', which table/column does that map to?",
+    status: "open",
+    raised_by: ["curator"],
+    choices: [
+      { id: "c1", label: "payments.amount" },
+      { id: "c2", label: "line_items.unit_price" },
+      { id: "c3", label: "line_items.unit_price - line_items.discount" },
+    ],
+    allow_freeform: false,
+    answer: null,
+    answer_choice_id: null,
+    answered_by: null,
+    source: "curator",
+  },
+  {
+    id: "q002",
+    scope: "rule:fiscal_year_start",
+    question: "What month does your fiscal year start?",
+    status: "open",
+    raised_by: ["curator"],
+    choices: [
+      { id: "jan", label: "Jan" },
+      { id: "apr", label: "Apr" },
+      { id: "jul", label: "Jul" },
+      { id: "oct", label: "Oct" },
+    ],
+    allow_freeform: true,
+    answer: null,
+    answer_choice_id: null,
+    answered_by: null,
+    source: "curator",
+  },
+  {
+    id: "q003",
+    scope: "rule:rating_zero_exclusion",
+    question: "Should rating=0 (not yet rated) be excluded from satisfaction averages?",
+    status: "open",
+    raised_by: ["curator"],
+    choices: [
+      { id: "yes", label: "Yes" },
+      { id: "no", label: "No" },
+    ],
+    allow_freeform: false,
+    answer: null,
+    answer_choice_id: null,
+    answered_by: null,
+    source: "curator",
+  },
+  {
+    id: "q004",
+    scope: "term:domestic_country",
+    question: "Which country codes count as 'domestic'?",
+    status: "open",
+    raised_by: ["curator"],
+    choices: [
+      { id: "us", label: "US" },
+      { id: "ca", label: "CA" },
+      { id: "mx", label: "MX" },
+      { id: "uk", label: "UK" },
+    ],
+    allow_freeform: true,
+    answer: null,
+    answer_choice_id: null,
+    answered_by: null,
+    source: "curator",
+  },
+  {
+    id: "q005",
+    scope: "join:category_labels",
+    question:
+      "To show category names instead of codes, this needs a join to `cat_labels` — confirm?",
+    status: "open",
+    raised_by: ["curator"],
+    choices: [
+      { id: "yes", label: "Yes" },
+      { id: "no", label: "No" },
+      { id: "show_join", label: "Show me the join" },
+    ],
+    allow_freeform: false,
+    answer: null,
+    answer_choice_id: null,
+    answered_by: null,
+    source: "curator",
+  },
+  {
+    id: "q_live_001",
+    scope: "live_chat:q_live_001",
+    question: "Should refunds count as negative revenue or be excluded entirely?",
+    status: "open",
+    raised_by: ["live_chat_user"],
+    choices: null,
+    allow_freeform: true,
+    answer: null,
+    answer_choice_id: null,
+    answered_by: null,
+    source: "live_chat",
+  },
+  // A live question the user handed to the admin rather than answering. Here so mock mode
+  // renders the `deferred` badge beside the `open` one above -- the whole point of the status
+  // is that the two look different, which a fixture set containing only `open` cannot show.
+  {
+    id: "q_live_002",
+    scope: "live_chat:q_live_002",
+    question: "Which of these two customer tables is the one your team treats as current?",
+    status: "deferred",
+    raised_by: ["live_chat_user"],
+    choices: null,
+    allow_freeform: true,
+    answer: null,
+    answer_choice_id: null,
+    answered_by: null,
+    source: "live_chat",
+  },
+];
+
+/* ── GET /elicitation/candidates, POST /elicitation/generate (Phase 1c) ───── */
+
+// The proactive admin onboarding wizard's candidates — category-tagged
+// (A/C/E/B; D is never standalone, see curator.elicitation on the backend),
+// each with the UI modality the design doc specifies for that category, and each
+// with the severity/audience the backend's own CATEGORY_CLASSIFICATION assigns it
+// (A -> T2/data, B/C/E -> T2/business). Kept in step with that table so the mock
+// wizard groups into the same tabs and tiers as the live one.
+export const MOCK_ELICITATION_CANDIDATES: ClarificationRecord[] = [
+  {
+    id: "e001",
+    scope: "elicitation:term:revenue",
+    question: "When you say 'revenue', which table/column does that map to?",
+    status: "open",
+    raised_by: ["elicitation_wizard"],
+    choices: [
+      { id: "payments.amount", label: "payments.amount" },
+      { id: "line_items.unit_price", label: "line_items.unit_price" },
+    ],
+    allow_freeform: false,
+    answer: null,
+    answer_choice_id: null,
+    answer_choice_ids: null,
+    answered_by: null,
+    source: "elicitation_wizard",
+    category: "A",
+    ui_modality: "column_picker",
+    severity: "T2",
+    audience: "data",
+    target_table: "line_items",
+    target_column: null,
+  },
+  {
+    id: "e002",
+    scope: "elicitation:rule:fiscal_year_start",
+    question: "What month does your fiscal year start? (enter 1-12, 1 = January)",
+    status: "open",
+    raised_by: ["elicitation_wizard"],
+    choices: null,
+    allow_freeform: true,
+    answer: null,
+    answer_choice_id: null,
+    answer_choice_ids: null,
+    answered_by: null,
+    source: "elicitation_wizard",
+    category: "C",
+    ui_modality: "numeric",
+    severity: "T2",
+    audience: "business",
+    target_table: null,
+    target_column: null,
+  },
+  {
+    id: "e003",
+    scope: "elicitation:exclusion:reviews.rating",
+    question:
+      "Is there a value in `reviews.rating` that means 'not yet rated' (seen: '0')? Should it be excluded from analysis by default?",
+    status: "open",
+    raised_by: ["elicitation_wizard"],
+    choices: [
+      { id: "exclude", label: "Exclude rows where rating = '0'" },
+      { id: "include", label: "Include them" },
+    ],
+    allow_freeform: false,
+    answer: null,
+    answer_choice_id: null,
+    answer_choice_ids: null,
+    answered_by: null,
+    source: "elicitation_wizard",
+    category: "E",
+    ui_modality: "checkbox",
+    severity: "T2",
+    audience: "business",
+    target_table: "reviews",
+    target_column: "rating",
+  },
+  {
+    id: "e004",
+    scope: "elicitation:valuemap:customers.country_code",
+    question:
+      "Which values of `customers.country_code` should count together as 'domestic'? Check all that apply.",
+    status: "open",
+    raised_by: ["elicitation_wizard"],
+    choices: [
+      { id: "US", label: "US" },
+      { id: "CA", label: "CA" },
+      { id: "MX", label: "MX" },
+      { id: "UK", label: "UK" },
+    ],
+    allow_freeform: false,
+    answer: null,
+    answer_choice_id: null,
+    answer_choice_ids: null,
+    answered_by: null,
+    source: "elicitation_wizard",
+    category: "B",
+    ui_modality: "checklist",
+    severity: "T2",
+    audience: "business",
+    target_table: "customers",
+    target_column: "country_code",
+  },
+];
+
 /* ── /schema ─────────────────────────────────────────────────────────────── */
 
 const MOCK_SCHEMA_TABLES: TableView[] = [
@@ -82,6 +319,7 @@ const MOCK_SCHEMA_TABLES: TableView[] = [
     provenance_status: "certified",
     columns: [
       {
+        id: mockColumnId("table_a", "id"),
         physical_name: "id",
         physical_type: "INTEGER",
         logical_type: "id",
@@ -100,6 +338,7 @@ const MOCK_SCHEMA_TABLES: TableView[] = [
         evidence: null,
       },
       {
+        id: mockColumnId("table_a", "label"),
         physical_name: "label",
         physical_type: "TEXT",
         logical_type: "text",
@@ -132,6 +371,7 @@ const MOCK_SCHEMA_TABLES: TableView[] = [
     provenance_status: "certified",
     columns: [
       {
+        id: mockColumnId("table_b", "id"),
         physical_name: "id",
         physical_type: "INTEGER",
         logical_type: "id",
@@ -150,6 +390,7 @@ const MOCK_SCHEMA_TABLES: TableView[] = [
         evidence: null,
       },
       {
+        id: mockColumnId("table_b", "a_id"),
         physical_name: "a_id",
         physical_type: "INTEGER",
         logical_type: "id",
@@ -168,6 +409,7 @@ const MOCK_SCHEMA_TABLES: TableView[] = [
         evidence: null,
       },
       {
+        id: mockColumnId("table_b", "amount"),
         physical_name: "amount",
         physical_type: "REAL",
         logical_type: "measure",
@@ -186,6 +428,7 @@ const MOCK_SCHEMA_TABLES: TableView[] = [
         evidence: null,
       },
       {
+        id: mockColumnId("table_b", "restricted_field"),
         physical_name: "restricted_field",
         physical_type: "TEXT",
         logical_type: "text",
@@ -218,6 +461,7 @@ const MOCK_SCHEMA_TABLES: TableView[] = [
     provenance_status: "heuristic",
     columns: [
       {
+        id: mockColumnId("table_c", "a_id"),
         physical_name: "a_id",
         physical_type: "INTEGER",
         logical_type: "id",
@@ -236,6 +480,7 @@ const MOCK_SCHEMA_TABLES: TableView[] = [
         evidence: null,
       },
       {
+        id: mockColumnId("table_c", "score"),
         physical_name: "score",
         physical_type: "INTEGER",
         logical_type: "measure",
@@ -268,6 +513,7 @@ const MOCK_SCHEMA_TABLES: TableView[] = [
     provenance_status: "certified",
     columns: [
       {
+        id: mockColumnId("table_d", "id"),
         physical_name: "id",
         physical_type: "INTEGER",
         logical_type: "id",
@@ -286,6 +532,7 @@ const MOCK_SCHEMA_TABLES: TableView[] = [
         evidence: null,
       },
       {
+        id: mockColumnId("table_d", "name"),
         physical_name: "name",
         physical_type: "TEXT",
         logical_type: "text",
@@ -415,6 +662,48 @@ export const MOCK_ASSETS: AssetRow[] = [
   { id: "neg_001", asset_type: "negative_example", summary: "requests for excluded/restricted fields", provenance_status: "certified", excluded: false },
 ];
 
+/* ── /corpus/assumptions — admin "agreed assumptions" log (round 9) ───────── */
+
+export const MOCK_ASSUMPTIONS: AssumptionRow[] = [
+  {
+    id: "note_sales_1",
+    question: "Should refunds count as negative revenue or be excluded?",
+    answer: "Exclude refunds from revenue entirely.",
+    answered_by: "admin_jane",
+    answered_at: "2026-07-20T14:32:00+00:00",
+    source: "live_chat",
+  },
+  {
+    id: "note_sales_2",
+    question: "What counts as an 'active' customer for churn reporting?",
+    answer: "A customer with at least one order in the trailing 90 days.",
+    answered_by: "sme",
+    answered_at: "2026-07-18T09:05:00+00:00",
+    source: "curator",
+  },
+];
+
+/* ── /corpus/conflicts — Round C: disagreeing definitions, needs review ──── */
+
+export const MOCK_CONFLICTS: ConflictRow[] = [
+  {
+    id: "note_sales_total_revenue_payments_basis_conflict",
+    status: "unresolved",
+    existing_asset_id: "metric_sales_net_revenue",
+    existing_asset_type: "metric",
+    existing_text: "net_revenue = SUM(unit_price - discount) over line_items.",
+    existing_question:
+      "How should 'revenue' be calculated from line_items? Candidates: unit_price, discount, tax, freight, cogs.",
+    new_question:
+      "By 'total revenue' do you mean the sum of payments received, or the sum of line-item sales?",
+    new_text: "total_revenue_payments_basis = SUM(payments.amount) over payments.",
+    answered_by: "admin_jane",
+    created_at: "2026-07-21T10:12:00+00:00",
+    source: "live_chat",
+  },
+];
+
+
 /* ── Chat: a placeholder answer + a refusal, for the mock transport ──────── */
 
 /**
@@ -507,6 +796,22 @@ export const MOCK_ANSWER: AnswerView = {
   failed_stage: null,
   error_type: null,
   refused_by: null,
+  // Gap 1 (detent-ai-deployment-targets.md): a sample self-reported assumption, and a result
+  // table, so the mock transport still exercises the two panels the engine-faithful upstream
+  // fixture dropped. Both are real fields on `answerViewSchema`; leaving them out of every
+  // mock meant the only way to see either panel was to attach a backend.
+  assumptions: ["Excluded rows with a null category before grouping."],
+  result_table: {
+    columns: ["region", "customers"],
+    rows: [
+      ["Kansai", 15],
+      ["Great Lakes", 15],
+      ["Rhine-Ruhr", 15],
+      ["Pacific Northwest", 15],
+    ],
+    row_count: 4,
+    truncated: false,
+  },
   record: {
     // The full register-shaped block first, so the offline drawer exercises all three named
     // groups; then this answer's own values, which win.
@@ -525,6 +830,7 @@ export const MOCK_ANSWER: AnswerView = {
 
 /** Graded delivery: SQL + result present, but assurance is unverified (§13.2). */
 export const MOCK_GRADED_ANSWER: AnswerView = {
+  assumptions: [],
   // Synthetic, and shaped like what the v2 engine actually emits -- a mock in the old shape
   // is worse than no mock, because it makes a broken UI look correct.
   outcome: "answered",
@@ -755,6 +1061,22 @@ export const MOCK_AGENT_ANSWER: AnswerView = {
   failed_stage: null,
   error_type: null,
   refused_by: null,
+  // Gap 1 (detent-ai-deployment-targets.md): a sample self-reported assumption, and a result
+  // table, so the mock transport still exercises the two panels the engine-faithful upstream
+  // fixture dropped. Both are real fields on `answerViewSchema`; leaving them out of every
+  // mock meant the only way to see either panel was to attach a backend.
+  assumptions: ["Excluded rows with a null category before grouping."],
+  result_table: {
+    columns: ["region", "customers"],
+    rows: [
+      ["Kansai", 15],
+      ["Great Lakes", 15],
+      ["Rhine-Ruhr", 15],
+      ["Pacific Northwest", 15],
+    ],
+    row_count: 4,
+    truncated: false,
+  },
   record: {
     // The full register-shaped block first, so the offline drawer exercises all three named
     // groups; then this answer's own values, which win.
@@ -787,7 +1109,6 @@ export const MOCK_CLARIFICATION: ClarificationRequest = {
     { id: "opt_status", label: "Account status = 'active'" },
   ],
   allow_freeform: true,
-  tier: "audit",
 };
 
 /** The answer the mock resumes to once the clarification is answered; carries
@@ -801,6 +1122,7 @@ export const MOCK_CLARIFIED_ANSWER: AnswerView = {
   failed_stage: null,
   error_type: null,
   refused_by: null,
+  assumptions: [],
   record: {
     // The full register-shaped block first, so the offline drawer exercises all three named
     // groups; then this answer's own values, which win.
@@ -826,6 +1148,7 @@ export const MOCK_REFUSAL: AnswerView = {
   failed_stage: null,
   error_type: null,
   refused_by: "check",
+  assumptions: [],
   record: {
     // The full register-shaped block first, so the offline drawer exercises all three named
     // groups; then this answer's own values, which win.
@@ -1022,4 +1345,16 @@ export const MOCK_AUDIT_CORPUS: AuditCorpus = {
   },
   problems: { fatal: [], degradations: [], n_fatal: 0, n_degradations: 0 },
   servable: false,
+};
+
+// `entrances`/`approved_rules`/`retrieved` are `null` here, matching what the real route
+// reports with no `corpus_root` attached -- mock mode has no corpus, so "unmeasured" is the
+// honest mock, not a fabricated zero for three of the four counters.
+export const MOCK_TRUST_LOOP_METRICS: TrustLoopMetrics = {
+  refusals: { total: 0, by_reason: {}, turns_scanned: 0, scan_bound: 0, possibly_truncated: false },
+  entrances: null,
+  approved_rules: null,
+  retrieved: null,
+  funnel: [0, null, null, null],
+  notes: ["Mock transport: no engine attached."],
 };

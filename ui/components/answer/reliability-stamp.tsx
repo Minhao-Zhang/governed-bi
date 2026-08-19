@@ -1,6 +1,9 @@
 import { CheckCircle2, ShieldAlert, ShieldX } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { outcomeLabel } from "@/lib/answer-delivery";
+import { tierShowsRawTerminal } from "@/lib/capabilities";
+import type { Tier } from "@/lib/display-mode";
 import { cn } from "@/lib/utils";
 
 /**
@@ -27,6 +30,24 @@ import { cn } from "@/lib/utils";
  * unrecognised value rendered `undefined` as a class and a blank label. That is not carried
  * forward: every lookup here falls back explicitly and shows the raw value, on the principle
  * that an unfamiliar state should be visible rather than invisible.
+ *
+ * **`tier` (added for I-3's business-tier terminal phrasing) changes presentation only, never
+ * content.** The caller already decides *which string* `terminal` holds — the raw ledger token
+ * at `analyst`/`engineer`, `lib/answer-delivery.ts::terminalLabel`'s plain-language phrase at
+ * `business` (see `answer-card.tsx`). What this component decides, via the same
+ * `tierShowsRawTerminal` predicate, is only whether that string gets the `ledger: ` prefix and
+ * the monospace styling: right for a token, wrong for a sentence. The attempt counts do not
+ * branch on tier at all.
+ *
+ * **`outcome` and `refusedBy` branch on the same predicate (task A-0), and only in how they
+ * read.** Unlike `terminal`, `outcome` still needs its *raw* value at every tier — the class
+ * lookup below is keyed on it, and a business-tier phrase in that lookup would just miss and
+ * fall back to the muted "unrecognised" class. So this component keeps the raw `outcome` prop
+ * and translates only the displayed text, via `lib/answer-delivery.ts::outcomeLabel`, rather
+ * than asking the caller to pre-translate the string the way it does for `terminal`.
+ * `refusedBy`'s own badge is dropped entirely at `business`: I-5's sentence on the card already
+ * names the reason in a sentence a reader can act on, and the raw token beside it is the exact
+ * noise this task exists to remove.
  */
 
 const OUTCOME_CLASSES: Record<string, string> = {
@@ -47,32 +68,41 @@ export function ReliabilityStamp({
   attempts,
   refusedBy,
   className,
+  tier = "engineer",
 }: {
   outcome: string;
   terminal: string | null;
   attempts: Array<Record<string, unknown>>;
   refusedBy: string | null;
   className?: string;
+  tier?: Tier;
 }) {
   const passed = attempts.filter((a) => a.passed === true).length;
   const blocked = attempts.length - passed;
+  const rawTerminal = tierShowsRawTerminal(tier);
 
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)}>
       {/* Falls back to the raw string rather than to a default class: an outcome this build
-          does not recognise is something a reader should see, not something to style away. */}
+          does not recognise is something a reader should see, not something to style away.
+          The class lookup always reads the raw `outcome` -- only the displayed text below
+          translates at business tier (see the module docstring). */}
       <Badge
-        className={cn("font-mono text-xs", OUTCOME_CLASSES[outcome] ?? "bg-muted text-foreground")}
+        className={cn(
+          "text-xs",
+          rawTerminal && "font-mono",
+          OUTCOME_CLASSES[outcome] ?? "bg-muted text-foreground",
+        )}
       >
-        {outcome}
+        {rawTerminal ? outcome : outcomeLabel(outcome)}
       </Badge>
 
       {/* The ledger's terminal, beside the outcome precisely so a disagreement between them is
           visible. Both are computed from the same attempts and should agree — the engine's own
           contract asserts it — and this is where a reader would notice if they stopped. */}
       {terminal && (
-        <Badge variant="outline" className="font-mono text-xs">
-          ledger: {terminal}
+        <Badge variant="outline" className={cn("text-xs", rawTerminal && "font-mono")}>
+          {rawTerminal ? `ledger: ${terminal}` : terminal}
         </Badge>
       )}
 
@@ -94,7 +124,10 @@ export function ReliabilityStamp({
         </span>
       )}
 
-      {refusedBy && (
+      {/* Dropped entirely at business tier (task A-0), not translated: I-5's sentence on the
+          card already says why the turn was refused, in a sentence a reader can act on, and
+          this raw token repeats it as noise beside that sentence rather than adding to it. */}
+      {refusedBy && rawTerminal && (
         <Badge variant="outline" className="font-mono text-xs text-tier-refused">
           refused by {refusedBy}
         </Badge>
