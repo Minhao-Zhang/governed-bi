@@ -118,7 +118,6 @@ def _connector(tmp_path: Path) -> Any:
     conn.commit()
     conn.close()
     connector = SqliteConnector(db)
-    connector._connect()  # noqa: SLF001 — open for tool use
     return connector
 
 

@@ -222,7 +222,6 @@ def test_the_harness_knobs_reach_the_measurement_row(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
     connector = SqliteConnector(db)
-    connector._connect()  # noqa: SLF001
 
     knobs = _knobs()
     rows = run_arm(

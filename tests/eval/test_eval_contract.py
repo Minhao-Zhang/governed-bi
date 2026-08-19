@@ -35,7 +35,6 @@ def _fixture_db(tmp_path: Path) -> tuple[Path, SqliteConnector]:
     conn.commit()
     conn.close()
     connector = SqliteConnector(db)
-    connector._connect()  # noqa: SLF001
     return db, connector
 
 

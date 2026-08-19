@@ -223,7 +223,6 @@ def test_run_query_blocks_unlicensed_table(tmp_path: Path) -> None:
     from governed_bi.datasource.sqlite import SqliteConnector
 
     connector = SqliteConnector(db)
-    connector._connect()  # noqa: SLF001 — open for tool use
     tools = _tools(_state(licensed=["sales.other"]), _config(connector=connector))
     out, update = _call(tools["run_query"], sql="SELECT id FROM customers")
     assert "refused" in out.lower() or "not" in out.lower()
@@ -241,7 +240,6 @@ def test_run_query_attempt_cap(tmp_path: Path) -> None:
     from governed_bi.datasource.sqlite import SqliteConnector
 
     connector = SqliteConnector(db)
-    connector._connect()  # noqa: SLF001
     policy = GovernancePolicy(guard_rules_enabled={}, run_query_attempt_cap=2)
     tools = _tools(
         _state(licensed=["main.customers", "customers"]),

@@ -35,7 +35,6 @@ def main(argv: list[str] | None = None) -> int:
 
     questions = _load_questions(args.questions, limit=args.limit)
     connector = SqliteConnector(args.db)
-    connector._connect()  # noqa: SLF001
 
     gold_by_qid = {str(q["question_id"]): str(q["gold_sql"]) for q in questions}
     name_to_factory = {

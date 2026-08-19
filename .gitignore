@@ -160,6 +160,11 @@ activemq-data/
 
 # Environments
 .env
+# Any sibling of .env -- backups especially. `.env` alone matched the file exactly, so a
+# `.env.bak-i4` holding the same real credentials sat untracked and unignored, one
+# `git add -A` from being committed. The examples are tracked and stay so.
+.env.*
+!.env.example
 .envrc
 # Local policy overlay (secrets stay in .env; see governed_bi.toml header)
 governed_bi.local.toml
