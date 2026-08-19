@@ -140,6 +140,10 @@ class _TurnLog:
     def get_turn(self, turn_id: str) -> dict[str, Any] | None:
         return next((r for r in self.rows if r["record"].get("turn_id") == turn_id), None)
 
+    def clarifications_of(self, thread_id: str, turn_id: str) -> list[dict[str, Any]]:
+        """No clarification channel in a fixture row, so the honest answer is none."""
+        return []
+
 
 # ── the record is the run's, not the client's ─────────────────────────────────
 

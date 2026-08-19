@@ -358,6 +358,9 @@ def _app_client(threads: list[dict[str, Any]]) -> Any:
         def get_turn(self, turn_id: str) -> None:
             return None
 
+        def clarifications_of(self, thread_id: str, turn_id: str) -> list[Any]:
+            return []
+
     queue, _ = _queue(threads)
     return TestClient(make_app(object(), _TurnLog(), queue))
 

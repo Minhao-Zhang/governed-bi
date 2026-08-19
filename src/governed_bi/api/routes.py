@@ -624,6 +624,13 @@ def trace_for(turn_log: Any, turn_id: str) -> dict[str, Any]:
         return {"found": False, "turn_id": turn_id}
     record = entry.get("record") or {}
     absent = missing_required(record)
+    # The turn carries the thread it belongs to, so this is one keyed read and not a second scan.
+    # A turn recorded without one (nothing writes that path today) reports no clarifications
+    # rather than searching every thread for it.
+    thread_id = record.get("thread_id")
+    clarifications = (
+        turn_log.clarifications_of(str(thread_id), turn_id) if thread_id else []
+    )
 
     by_stage: dict[str, list[dict[str, Any]]] = {}
     for field in RECORD_REGISTER:
@@ -651,6 +658,16 @@ def trace_for(turn_log: Any, turn_id: str) -> dict[str, Any]:
         "outcome": entry.get("outcome"),
         "asked_at": entry.get("asked_at"),
         "stages": stages,
+        # What the reader was asked mid-turn and what they said. Not a member of ``stages``,
+        # because that is ``RECORD_REGISTER`` grouped by owning stage and this is not a record
+        # field -- it is the ``clarifications`` channel, read beside the envelope rather than
+        # joined into it (``get_turn`` returns the five keys ``record_node`` stored, and
+        # `tests/api/test_the_audit_surface_reads_thread_state.py` holds it to them).
+        #
+        # It belongs on the trace for the reason ``ledger`` does: where a clarification happened,
+        # the statement above was chosen *because* of the answer below, so a trace without it
+        # cannot explain the SQL it is showing.
+        "clarifications": clarifications,
         "ledger": (record.get("execution") or {}).get("attempts") or [],
         "terminal": (record.get("execution") or {}).get("terminal"),
         "missing_required": sorted(absent),

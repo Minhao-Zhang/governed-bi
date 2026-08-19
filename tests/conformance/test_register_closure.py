@@ -282,17 +282,17 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
             "tests/conformance/test_corpus_conformance_rules_fire.py, which does run in CI"
         ),
         "check_declared_is_consumed.py": (
-            "reports 6 real violations today, down from 14 on 2026-08-11. **Tier 1 is now "
+            "reports 5 real violations today, down from 14 on 2026-08-11. **Tier 1 is now "
             "clear** -- all five items in docs/analysis/declared-not-consumed.md's tier-1 "
             "section are closed and each is asserted on its VALUE in "
             "tests/serve/test_the_record_follows_the_knob.py, so the condition this entry "
-            "used to name is met. What still stops a CI step is the six remaining findings: "
-            "the run would fail every commit, and waiving 6 genuine findings to make it "
-            "green is the exact lie the gate was written to catch. Three of them "
-            "(expand_hops, negative_tau, clarifications) need a decision in retrieve/ or on "
-            "the clarification protocol rather than a wire. Until then "
+            "used to name is met. What still stops a CI step is the five remaining findings: "
+            "the run would fail every commit, and waiving 5 genuine findings to make it "
+            "green is the exact lie the gate was written to catch. Two of them "
+            "(expand_hops, negative_tau) need a decision in retrieve/ rather than a wire; "
+            "clarifications was the third and is now consumed by the trace route. Until then "
             "test_the_declared_but_unconsumed_set_does_not_grow below runs the gate on every "
-            "commit and fails on a SEVENTH -- which is the half of CI that was actually "
+            "commit and fails on a SIXTH -- which is the half of CI that was actually "
             "missing. Delete this entry, and that test, when the list reaches zero"
         ),
     }
@@ -319,15 +319,16 @@ KNOWN_UNCONSUMED: frozenset[str] = frozenset({
     # deliberately open: the curator that would consume it is not in this repository, and
     # wiring it from the eval driver would launder it under K1's blind spot
     "build_workers",
-    # a ServeState channel with two writers and no reader outside state.py
-    "clarifications",
+    # `clarifications` was here until 2026-08-19, when `/audit/turns/{id}/trace` began
+    # projecting it (`ThreadTurnLog.clarifications_of`). The ratchet is what made removing it
+    # mandatory rather than optional.
 })
 
 
 def test_the_declared_but_unconsumed_set_does_not_grow() -> None:
-    """The gate runs on every commit, and a **seventh** finding fails the build.
+    """The gate runs on every commit, and a **sixth** finding fails the build.
 
-    ``check_declared_is_consumed.py`` is on the ``manual`` list above because it exits 1 on six
+    ``check_declared_is_consumed.py`` is on the ``manual`` list above because it exits 1 on five
     real findings, and a CI step that fails every commit is a step everyone learns to ignore.
     That reasoning is sound and it left the gate running nowhere, so the thing it was written to
     prevent — a new declaration nothing consumes — could still land unnoticed. Three did between
@@ -338,7 +339,7 @@ def test_the_declared_but_unconsumed_set_does_not_grow() -> None:
     with "delete it from KNOWN_UNCONSUMED", because a shrinking list nobody updates is how a
     stale count survives.
 
-    Asserting the **names** and not the count: six findings and six different findings are the
+    Asserting the **names** and not the count: five findings and five different findings are the
     same integer, which is the class of defect this whole package exists for.
     """
     result = _gate("check_declared_is_consumed.py")

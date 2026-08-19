@@ -1,7 +1,8 @@
 """The audit surface's reader, sourced from **thread state** instead of the JSONL log.
 
 It fills ``make_app``'s ``turn_log`` seam, which is now **readers only** -- ``list_turns``,
-``get_turn``, ``summarise_turn``, ``SUMMARY_FIELDS``, ``TURN_LOG_DIR``. There is no ``append_turn``
+``get_turn``, ``clarifications_of``, ``summarise_turn``, ``SUMMARY_FIELDS``, ``TURN_LOG_DIR``.
+There is no ``append_turn``
 because there is no second sink: ``api/graph_app.record_node`` returns the turn onto
 ``ServeState.turns`` and the checkpointer persists it. `api/trace_store.py` and
 ``runs/serve/*.jsonl`` are deleted.
@@ -126,6 +127,18 @@ _THREAD_PAGE = 50
 #: is owed), and adding one means changing the shape this swap deliberately keeps identical.
 _MAX_THREADS = 1000
 
+#: The list read's projection. ``extract`` rather than ``select=["values"]`` for the reason
+#: :func:`_threads` gives at length -- an unprojected thread carries the whole of ``ServeState``,
+#: measured at 2.42 MB for sixteen threads.
+_EXTRACT: dict[str, str] = {"turns": "values.turns"}
+
+#: :meth:`ThreadTurnLog.clarifications_of`'s projection. A separate constant and not a second path
+#: on :data:`_EXTRACT`, because the two reads want different things: the list read pays for this
+#: channel on **every** thread it pages through and never looks at it, while one turn's trace wants
+#: it for one thread it can already name. Widening the paged read to serve the narrow one is how a
+#: 2.42 MB projection got measured in the first place.
+_CLARIFICATION_EXTRACT: dict[str, str] = {"clarifications": "values.clarifications"}
+
 #: Stands for "this server exposes no such attribute", which is not the same as ``None``. Used
 #: once, by :func:`_in_process_client`.
 _UNCHECKED = object()
@@ -227,6 +240,36 @@ class ThreadTurnLog:
         for entry in self._entries(limit=None, thread_id=None, turn_id=str(turn_id)):
             return dict(entry)
         return None
+
+    def clarifications_of(self, thread_id: str, turn_id: str) -> list[dict[str, Any]]:
+        """What this turn asked its reader mid-flight, and what they answered.
+
+        The other half of the pair :class:`PendingClarifications` reads: that reader takes the
+        questions still sitting in interrupt state — the ones nobody answered — and this one takes
+        the ones somebody did, which ``serve/tools.py`` writes into the ``clarifications`` channel
+        on the far side of ``interrupt()``. Between them they cover every clarification the engine
+        has ever asked, and neither needs a store of its own.
+
+        **Read-side only, and one round trip.** Both channels are already in thread state; the
+        join needs no new field because ``ask_user`` puts ``turn_id`` on the row. ``thread_id`` is
+        a parameter rather than something looked up because every caller is holding the turn's
+        record, which carries it — so this is ``ids=[thread_id]``, not a scan.
+
+        Returns ``[]`` for a turn that asked nothing. That is a real answer and not a shrug: a
+        clarification either happened or did not, and this reader has read the channel either way.
+        """
+        client = self._client_once()
+        threads = _blocking(
+            client.threads.search(
+                ids=[str(thread_id)],
+                limit=1,
+                select=["thread_id", "metadata"],
+                extract=_CLARIFICATION_EXTRACT,
+            )
+        )
+        for thread in threads or ():
+            return _answered_clarifications_of(thread).get(str(turn_id)) or []
+        return []
 
     # ── the store ────────────────────────────────────────────────────────────
 
@@ -396,7 +439,7 @@ async def _threads(client: Any, *, thread_id: str | None) -> AsyncIterator[Any]:
             ids=[thread_id],
             limit=1,
             select=["thread_id", "metadata"],
-            extract={"turns": "values.turns"},
+            extract=_EXTRACT,
         ):
             yield thread
         return
@@ -409,7 +452,7 @@ async def _threads(client: Any, *, thread_id: str | None) -> AsyncIterator[Any]:
             sort_by="updated_at",
             sort_order="desc",
             select=["thread_id", "updated_at", "metadata"],
-            extract={"turns": "values.turns"},
+            extract=_EXTRACT,
         )
         if not page:
             return
@@ -420,21 +463,56 @@ async def _threads(client: Any, *, thread_id: str | None) -> AsyncIterator[Any]:
             return
 
 
-def _turns_of(thread: Any) -> list[Any]:
-    """This thread's ``turns`` rows, from wherever the client put them.
+def _channel_of(thread: Any, name: str) -> list[Any]:
+    """One list-valued ``ServeState`` channel, from wherever the client put it.
 
     ``extract`` lands values under ``extracted``; a thread selected *with* ``values`` carries
     them under ``values``. Reading both means a caller that changes its projection does not
-    silently start seeing zero turns.
+    silently start seeing zero rows.
     """
     if isinstance(thread, Mapping):
         extracted = thread.get("extracted")
-        if isinstance(extracted, Mapping) and isinstance(extracted.get("turns"), list):
-            return list(extracted["turns"])
+        if isinstance(extracted, Mapping) and isinstance(extracted.get(name), list):
+            return list(extracted[name])
         values = thread.get("values")
-        if isinstance(values, Mapping) and isinstance(values.get("turns"), list):
-            return list(values["turns"])
+        if isinstance(values, Mapping) and isinstance(values.get(name), list):
+            return list(values[name])
     return []
+
+
+def _turns_of(thread: Any) -> list[Any]:
+    """This thread's ``turns`` rows — the channel ``graph_app``'s record node appends to."""
+    return _channel_of(thread, "turns")
+
+
+def _answered_clarifications_of(thread: Any) -> dict[str, list[dict[str, Any]]]:
+    """This thread's **answered** clarifications, grouped by the ``turn_id`` that asked.
+
+    The other half of the pair :class:`PendingClarifications` reads. That reader takes the
+    questions still sitting in interrupt state — the ones nobody answered — and this one takes the
+    ones somebody did, which ``serve/tools.py`` writes into the ``clarifications`` channel on the
+    far side of ``interrupt()``. Together they are every clarification the engine has ever asked.
+
+    Read-side only: nothing new is stored. Both channels are already in the thread state this
+    reader was going to fetch anyway, and the join needs no new field because ``ask_user`` puts
+    ``turn_id`` on the row itself.
+
+    Grouped rather than returned flat because a turn may ask more than once: ``ask_user`` is a
+    tool the agent loop can call repeatedly, and ``clarifications_by_call`` is keyed per call.
+    """
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in _channel_of(thread, "clarifications"):
+        if not isinstance(row, Mapping):
+            continue
+        # `turn_id` off the row, with the id as the fallback for a row written before `ask_user`
+        # carried one — `clarification_id` has always contained it (:func:`turn_of_clarification`).
+        turn_id = str(row.get("turn_id") or "") or turn_of_clarification(
+            str(row.get("clarification_id") or "")
+        )
+        if not turn_id:
+            continue
+        grouped.setdefault(turn_id, []).append(dict(row))
+    return grouped
 
 
 # ── pending clarifications ───────────────────────────────────────────────────────────────────

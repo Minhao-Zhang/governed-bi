@@ -132,6 +132,9 @@ class _TurnLog:
     def get_turn(self, turn_id: str) -> dict[str, Any] | None:
         return None
 
+    def clarifications_of(self, thread_id: str, turn_id: str) -> list[dict[str, Any]]:
+        return []
+
 
 def test_every_check_the_script_makes_still_passes(smoke_api) -> None:
     """The whole of ``run_checks``, over an app built from :func:`_session`.
