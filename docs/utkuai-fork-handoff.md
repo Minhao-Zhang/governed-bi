@@ -254,10 +254,16 @@ nobody notices until the AST sweep is re-read by hand.
 
 ---
 
-## Why merges stay cheap
+## Why merges stay cheap — and the one thing that makes them expensive
 
-The 2026-08-14 merge of 102 upstream commits (8/07–8/13, 388 files, +77,777/−9,310) is the
-datapoint. Two separate merge operations, both landed clean:
+**Upstream is currently an ancestor of this fork's `main` (`4f83d60`, 2026-08-18), so a sync from
+here is a fast-forward with nothing to resolve.** It was taken on this side deliberately: the fork
+knows what it put in each conflicted file and upstream does not.
+
+Two datapoints, and they say different things.
+
+The 2026-08-14 merge of 102 upstream commits (8/07–8/13, 388 files, +77,777/−9,310) is the cheap
+one. Two separate merge operations, both landed clean:
 
 | Merge | Conflicts | Outcome |
 |---|---|---|
@@ -276,6 +282,27 @@ Three properties are why, and worth preserving deliberately going forward:
    Bedrock patch was deleted (upstream's later, better version superseded it) rather than merged
    line-by-line.
 
+**The second datapoint proves property 3 by breaking it.** The 2026-08-18 merge was *two* upstream
+commits and cost more than the 102 did, because ADR 0014 **deleted `api/trace_store.py`** and
+`runs/serve/*.jsonl`. Fourteen files conflicted and 24 hunks needed resolving, but the textual
+conflicts were the easy part: the fork's trust-loop counting, its thread-history read model and its
+feedback ledger were all built on the deleted module.
+
+Three things kept it to one sitting rather than a port, and they are the properties worth asking
+for next time upstream moves a store:
+
+* upstream kept the **reader names** — `list_turns`, `get_turn`, `SUMMARY_FIELDS`, `TURN_LOG_DIR` —
+  and states the wire contract is byte-identical, so the fork's read paths needed no rewrite;
+* only **two** real writes existed (`append_turn`), because the fork had never fanned that out;
+* the one thing that genuinely could not be adapted was an **offline** script
+  (`scripts/mine_mistakes_v2.py`), since the replacement reader raises `InProcessServerRequired`
+  outside the Agent server. It now reads archived JSONL itself — which also removed a
+  `scripts/ → api/` dependency that was the wrong direction to begin with.
+
+So: additive files cost nothing, changed lines cost a little, and **a deleted module costs
+whatever the fork built on top of it.** That is the number to estimate before a sync, not the
+commit count.
+
 ---
 
 ## The current state, honestly
@@ -286,9 +313,20 @@ code. Summary, so it does not need restating here:
 
 **Verified live, today.** Refusal (names what the corpus can see instead), clarification
 (`ask_user` asks when a term is genuinely ambiguous), report (a reader can say an answer is wrong),
-approve (an admin promotes a draft without a restart), and count (`GET /trust-loop/metrics`
-currently reports **50 refusals → 2 reader entrances → 2 approved rules → 2 retrieved again**,
-against 240 real turns) are all real, run today, not read from code.
+approve (an admin promotes a draft without a restart), and count (`GET /trust-loop/metrics`) are
+all real, run today, not read from code.
+
+**One caveat on the funnel's numbers, and it is a merge artifact rather than a defect.** The
+figures that measurement produced — **50 refusals → 2 reader entrances → 2 approved rules → 2
+retrieved again**, over 240 real turns — were read from `runs/serve/*.jsonl`. Merging ADR 0014
+(`4f83d60`) **deleted that log**: the counter now reads thread state through
+`api/thread_turns.py`. The route works and the mechanism is unchanged, but those exact numbers are
+**not reproducible on this tree without re-measuring**, and a fresh clone starts the funnel at
+zero because the history lived in a gitignored directory that was never part of the repository.
+
+Read the front half rather than the back when it is re-taken. `2 → 2 → 2` converts perfectly and
+means almost nothing at n=2; `50 → 2` is the finding, because 48 refusals happened with no way for
+the reader to respond — the entrances did not exist until 2026-08-16.
 
 **Wired and never populated.** The `assumptions` field is declared, sent, parsed, and rendered —
 and nothing in the prompt or tool layer ever fills it. It sits in the goal sentence of this fork's

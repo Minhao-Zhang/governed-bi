@@ -22,6 +22,13 @@ Verdict below: **the refusing half is real. The assumptions half is not.**
 
 ---
 
+> **The numbers below were measured on 2026-08-18 against `runs/serve/*.jsonl`, the JSONL turn
+> log. Upstream's ADR 0014 merge (`4f83d60`, later the same day) deleted that log — the audit
+> surface reads thread state now. So these figures are **not reproducible on the current tree
+> without re-measuring** against the new store, and the front-half number in particular should be
+> re-taken before anyone quotes it as current. The mechanism they measured is unchanged; the
+> store underneath it is not.**
+
 ## What is real — verified today, by running it
 
 | Claim | Evidence |
