@@ -68,7 +68,13 @@ export function MessageList({
           also shown while suspended at a clarification, so the timeline stays. */}
       {inProgress && (
         <div className="w-full rounded-lg border bg-card p-4">
-          <ServeProgress isRunning={inProgress} steps={steps} />
+          {/* `isRunning`, not `inProgress`: the two differ exactly while suspended at a
+              clarification, and that is the one state where "working" is false. */}
+          <ServeProgress
+            isRunning={isRunning}
+            steps={steps}
+            awaitingClarification={awaitingClarification}
+          />
         </div>
       )}
 
