@@ -226,7 +226,11 @@ def main() -> int:
 
     from governed_bi.api.graph_app import session_from_environment
     from governed_bi.api.routes import make_app
-    from governed_bi.api.thread_turns import InProcessServerRequired, ThreadTurnLog
+    from governed_bi.api.thread_turns import (
+        InProcessServerRequired,
+        PendingClarifications,
+        ThreadTurnLog,
+    )
 
     session = session_from_environment()
     print(f"corpus: {len(session.assets_by_id)} assets, hash {session.corpus_content_hash[:12]}…")
@@ -250,7 +254,9 @@ def main() -> int:
     # No headers: no route asks for a credential (2026-08-13). This used to carry `x-api-key`, and
     # `main()` used to exit 2 when the variable was unset rather than measure the auth gate.
     # `make_app` also lost its `graph` with `POST /chat`, and nothing here posts a turn.
-    failures += run_checks(TestClient(make_app(session, ThreadTurnLog(_EmptyThreadStore))))
+    failures += run_checks(TestClient(make_app(
+        session, ThreadTurnLog(_EmptyThreadStore), PendingClarifications(_EmptyThreadStore)
+    )))
 
     print(f"\n{'PASS' if not failures else 'FAIL: ' + ', '.join(failures)}")
     return 1 if failures else 0

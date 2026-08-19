@@ -52,6 +52,7 @@ from fastapi import FastAPI
 
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import make_router
+from governed_bi.api.clarification_routes import make_clarification_router
 from governed_bi.api.visibility import visible
 from governed_bi.model.provider import reasoning_effort_of
 from governed_bi.paths import REPO_ROOT
@@ -63,8 +64,8 @@ __all__ = ["make_app", "app_from_environment", "app"]
 # ── the seam ─────────────────────────────────────────────────────────────────
 
 
-def make_app(session: Any, turn_log: Any) -> FastAPI:
-    """An app over exactly these two dependencies. **The constructor.**
+def make_app(session: Any, turn_log: Any, pending: Any) -> FastAPI:
+    """An app over exactly these three dependencies. **The constructor.**
 
     ``session`` is a :class:`~governed_bi.serve.session.Session` (or anything with its read
     surface: ``assets_by_id``, ``structure``, ``connector``, ``agent_model``, ``knobs_resolved``,
@@ -77,10 +78,16 @@ def make_app(session: Any, turn_log: Any) -> FastAPI:
     turn is served by the graph ``langgraph.json`` mounts, which the platform drives; this app
     never holds it.
 
-    Both are required and neither is defaulted. A default would put the environment back in the
+    ``pending`` is the third, added when the pending-clarification queue was: a reader exposing
+    ``pending(limit=, offset=)`` and ``PENDING_FIELDS``, with
+    :class:`governed_bi.api.thread_turns.PendingClarifications` the production one. It is a
+    separate dependency from ``turn_log`` because it answers a different question — an open
+    question has no turn yet, which is exactly why thread state does not record it.
+
+    All three are required and none is defaulted. A default would put the environment back in the
     constructor, which is the thing this exists to remove.
     """
-    return _build_app(lambda: session, turn_log)
+    return _build_app(lambda: session, turn_log, pending)
 
 
 def app_from_environment() -> FastAPI:
@@ -91,16 +98,24 @@ def app_from_environment() -> FastAPI:
     a corpus. Resolving it here would make importing this module require a database.
     """
     from governed_bi.api.graph_app import session_from_environment
-    from governed_bi.api.thread_turns import ThreadTurnLog
+    from governed_bi.api.thread_turns import PendingClarifications, ThreadTurnLog
 
     # `ThreadTurnLog`: the audit surface reads a turn's record out of thread state now that
     # `ServeState.turns` accumulates it, so there is no second store of the same thing. Its
     # header says why that is readable in-process.
-    return _build_app(session_from_environment, ThreadTurnLog())
+    #
+    # `PendingClarifications`: the other half of the same store, and the half state does not
+    # record — a question nobody answered writes nothing, so its only trace is the platform's
+    # interrupt state. Constructed separately rather than folded into the reader above because
+    # the two hold different questions; they share the one in-process client seam, which is the
+    # thing that must not exist twice.
+    return _build_app(
+        session_from_environment, ThreadTurnLog(), PendingClarifications()
+    )
 
 
-def _build_app(get_session: Callable[[], Any], turn_log: Any) -> FastAPI:
-    """Assemble the app from a session thunk and a turn log.
+def _build_app(get_session: Callable[[], Any], turn_log: Any, pending: Any) -> FastAPI:
+    """Assemble the app from a session thunk, a turn log and a pending-question reader.
 
     A thunk rather than a value, so :func:`make_app` can hand over a concrete object and
     :func:`app_from_environment` can defer. That is the one difference between the two adapters,
@@ -175,6 +190,9 @@ def _build_app(get_session: Callable[[], Any], turn_log: Any) -> FastAPI:
     # Mounted last so the app's own paths are declared first; the router's own ordering
     # (`/schema/summary` before `/schema/{table_id}`) is stated in `make_router`.
     app.include_router(make_router(_DeferredSession(get_session)))
+    # No `_Deferred` wrapper: the pending reader builds its client on first read already, so it
+    # costs nothing at import and holds no session.
+    app.include_router(make_clarification_router(pending))
     return app
 
 

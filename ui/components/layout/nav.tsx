@@ -4,12 +4,28 @@ import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
-import { Boxes, History, MenuIcon, MessagesSquare, MoonStar, Network, ScrollText, Settings, Sun } from "lucide-react";
+import {
+  Boxes,
+  History,
+  MenuIcon,
+  MessageCircleQuestion,
+  MessagesSquare,
+  MoonStar,
+  Network,
+  ScrollText,
+  Settings,
+  Sun,
+} from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useCapabilities } from "@/hooks/queries";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 
 // `/health` was here and is deleted: it and `/corpus`'s state header were fed by two routes
 // projecting the same session fields, and the health page's only distinctive content was three
@@ -24,6 +40,10 @@ const LINKS = [
   { href: "/schema", label: "Schema", icon: Network },
   { href: "/corpus", label: "Corpus", icon: Boxes },
   { href: "/audit", label: "Audit", icon: ScrollText },
+  // Beside Audit, not inside it. `/audit` says "every turn this server has served" and these are
+  // the ones it did not: a clarification nobody answered never became a turn. The two also read in
+  // opposite directions -- a log newest-first, a queue oldest-first.
+  { href: "/clarifications", label: "Pending", icon: MessageCircleQuestion },
   // Last, and read-only: it answers "what is this engine running on", which is a question you
   // ask about a run you are already looking at, not a place you start.
   { href: "/settings", label: "Settings", icon: Settings },
@@ -34,7 +54,13 @@ function isActive(pathname: string, href: string): boolean {
 }
 
 /** The shared link list, reused by the desktop rail and the mobile sheet. */
-function NavLinks({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+function NavLinks({
+  pathname,
+  onNavigate,
+}: {
+  pathname: string;
+  onNavigate?: () => void;
+}) {
   return (
     <>
       {LINKS.map(({ href, label, icon: Icon }) => (
@@ -65,7 +91,9 @@ export function Nav() {
   return (
     <aside className="hidden h-full w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground lg:flex">
       <div className="flex h-14 items-center justify-between gap-2 border-b px-4">
-        <span className="font-mono text-sm font-semibold tracking-tight">governed-bi</span>
+        <span className="font-mono text-sm font-semibold tracking-tight">
+          governed-bi
+        </span>
         <ThemeToggle />
       </div>
 
@@ -104,7 +132,9 @@ export function MobileNav() {
             <CapabilitiesStrip />
           </SheetContent>
         </Sheet>
-        <span className="font-mono text-sm font-semibold tracking-tight">governed-bi</span>
+        <span className="font-mono text-sm font-semibold tracking-tight">
+          governed-bi
+        </span>
       </div>
       <ThemeToggle />
     </header>
@@ -130,7 +160,11 @@ function ThemeToggle() {
       className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
       {/* Render a stable icon until mounted to avoid a hydration mismatch. */}
-      {mounted && isDark ? <Sun className="size-4" /> : <MoonStar className="size-4" />}
+      {mounted && isDark ? (
+        <Sun className="size-4" />
+      ) : (
+        <MoonStar className="size-4" />
+      )}
     </button>
   );
 }
@@ -150,7 +184,11 @@ function ThemeToggle() {
  */
 function CapabilitiesStrip() {
   const { isSuccess, isError } = useCapabilities();
-  const state = isSuccess ? "connected" : isError ? "disconnected" : "connecting…";
+  const state = isSuccess
+    ? "connected"
+    : isError
+      ? "disconnected"
+      : "connecting…";
 
   return (
     <div className="border-t p-3 text-xs text-muted-foreground">

@@ -173,3 +173,93 @@ export function corpusVersionLabel(provenance: Record<string, unknown>): string 
   if (typeof hash !== "string" || hash.length === 0) return null;
   return `corpus @ ${hash.slice(0, 7)}`;
 }
+
+/**
+ * One plain-language sentence per `refused_by` value — what happened, in terms of the thing a
+ * reader could act on.
+ *
+ * **A hand-copy of the engine's closed vocabulary**, `register/stages.py::REFUSED_BY_TO_STAGE`.
+ * This client cannot import it (ADR 0007: it shares the repository and nothing else), so
+ * `tests/api/test_the_refusal_phrasing_covers_the_vocabulary.py` checks both directions — the same
+ * arrangement `ui/lib/provenance.ts` has with the record register, and for the same reason: a
+ * hand-copy of a list that grows is a silent degradation. There, 32 copied keys had stopped
+ * existing and 35 register fields were never listed, and nothing failed because nothing checked.
+ *
+ * The sentences are deliberately not the engine's own `why` text. `serve/nodes/abstain.py` gives
+ * each abstention a precise reason written for whoever maintains the pipeline — it names Layer 6,
+ * the character budget, the shortlist. Those are the right words for an engineer and the wrong ones
+ * for the reader this mode exists for, so the engineer keeps the record and the reader gets this.
+ *
+ * Nothing here softens a refusal into an answer. Each sentence says the turn produced nothing and
+ * why; that is the product working, and the interface should not apologise for it.
+ */
+const REFUSED_BY_SENTENCE: Record<string, string> = {
+  // Stage.route — nothing in the corpus scored against the question at all.
+  no_schema_matched:
+    "Nothing in your data looked related to this question, so no query was written.",
+  // Stage.abstain — the four declared abstentions (ADR 0013).
+  nothing_licensed:
+    "We found nothing in your data that could answer this, so nothing was queried.",
+  empty_context:
+    "We had no description of your data to work from, so any answer would have been guessed.",
+  licensed_table_evicted:
+    "The right table was found but did not fit in this turn, so the question was not answered from it.",
+  retrieval_channel_failed:
+    "One of the steps that finds relevant data failed, so this turn was not answered rather than answered from the wrong tables.",
+  // Stage.connect — the shape of the question needs relationships that are not declared.
+  missing_join_path:
+    "Answering this needs two tables linked together, and no relationship between them is declared.",
+  over_connect_bounds:
+    "Answering this would need more tables joined than this engine will join at once.",
+  // Stage.guard / Stage.negative_gate — refused before any retrieval.
+  guard: "The question was stopped by an input check before anything was queried.",
+  negative_example:
+    "This question matches one the corpus marks as one not to answer from this data.",
+  // Stage.check — the layer stack refused the statement itself.
+  guardrail:
+    "A query was written and the safety checks refused it, so it never ran against your data.",
+  // Stage.cap — attempts exhausted.
+  attempt_cap:
+    "Several queries were written and none passed the safety checks, so the attempts ran out.",
+  // Our own faults. Named as ours: `CRASH_REFUSED_BY` classifies these as `crashed`, not as a
+  // decision the product took, and a reader should not go looking at their corpus for our bug.
+  model_error: "Something went wrong on our side while writing the query.",
+  guardrail_error: "Something went wrong on our side while checking the query.",
+};
+
+/**
+ * What to tell a reader about how this turn ended, or `null` when the delivery speaks for itself.
+ *
+ * Derived from `deriveDelivery` plus `refused_by`, and from nothing else — every input is a field
+ * the engine produced. That is ADR 0007 §3's rule, which forbade v1's reliability tier on the
+ * answer card: render what was observed, never synthesise a judgement. A sentence here is a
+ * translation of a recorded value, and when there is no recorded value there is no sentence.
+ *
+ * The unrecognised-value fallback shows the raw string rather than hiding it, on the same principle
+ * `reliability-stamp.tsx` states: an unfamiliar state should be visible, not styled away. It reads
+ * worse than the mapped sentences, which is the intended pressure to add the missing key.
+ */
+export function refusalSentence(answer: AnswerView): string | null {
+  const delivery = deriveDelivery(answer);
+  const refusedBy = answer.refused_by ?? null;
+
+  if (refusedBy) {
+    return (
+      REFUSED_BY_SENTENCE[refusedBy] ??
+      `This turn produced no answer (${refusedBy}).`
+    );
+  }
+  if (delivery === "no_statement") {
+    // `Outcome.no_sql` with nothing refusing it: the turn answered from a stored definition
+    // rather than from the database. Honest about it, because the prose above will read like a
+    // current fact and it is not one.
+    return "This was answered without running any query against your data.";
+  }
+  if (delivery === "graded") {
+    return "A query ran, but not every attempt passed the safety checks.";
+  }
+  return null;
+}
+
+/** Every `refused_by` this build has a sentence for. Read by the conformance test. */
+export const PHRASED_REFUSALS: readonly string[] = Object.keys(REFUSED_BY_SENTENCE);

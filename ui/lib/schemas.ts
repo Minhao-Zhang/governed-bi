@@ -526,6 +526,46 @@ export const auditTurnsSchema = z.object({
   }),
 });
 
+/** One open question from `GET /clarifications/pending` — asked, and not yet answered.
+ *
+ * **Not a turn.** A turn exists once one finishes; these are the ones that never did, so none of
+ * `auditTurnSummarySchema`'s outcome fields apply and reusing it would have declared a dozen keys
+ * that are structurally absent. The join back is `turn_id`, which the engine parses out of
+ * `clarification_id` (`clar-{turn_id}-{digest}`).
+ *
+ * `turn_id` is nullable on purpose: the engine returns `null` rather than guessing when an id does
+ * not have the shape it mints, so a row from some other producer arrives unlinked instead of
+ * linked to nowhere. */
+export const pendingClarificationSchema = z.object({
+  asked_at: z.string().nullable(),
+  question: z.string().nullable(),
+  why: z.string().nullable(),
+  clarification_id: z.string().nullable(),
+  turn_id: z.string().nullable(),
+  thread_id: z.string().nullable(),
+  /** What a resume would have to name. Carried, not used — this surface is read-only until the
+   * corpus write path has a provenance gate. */
+  interrupt_id: z.string().nullable().optional(),
+  task_id: z.string().nullable().optional(),
+});
+
+/** `GET /clarifications/pending`.
+ *
+ * `meta.truncated` is the field to render, not `n`: a silently short queue reads as "nobody is
+ * waiting" and the thing under-reported is a person. `meta.threads_scanned` separates "no open
+ * questions" from "the store was not read", which otherwise look identical. */
+export const pendingQueueSchema = z.object({
+  rows: z.array(pendingClarificationSchema),
+  meta: z.object({
+    n: z.number(),
+    truncated: z.boolean(),
+    threads_scanned: z.number(),
+    limit: z.number(),
+    offset: z.number(),
+    columns: z.array(z.string()),
+  }),
+});
+
 /** One recorded field inside a stage section of the trace.
  *
  * **`tier` here is not a reliability tier** and is not the forbidden answer-card field.

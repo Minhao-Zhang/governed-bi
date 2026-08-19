@@ -15,6 +15,8 @@ import type {
   auditTraceStageSchema,
   auditTurnSummarySchema,
   auditTurnsSchema,
+  pendingClarificationSchema,
+  pendingQueueSchema,
   corpusFieldSchema,
   corpusFieldsSchema,
   corpusRowsSchema,
@@ -44,6 +46,8 @@ import type {
 
 export type AuditTurnSummary = z.infer<typeof auditTurnSummarySchema>;
 export type AuditTurns = z.infer<typeof auditTurnsSchema>;
+export type PendingQueue = z.infer<typeof pendingQueueSchema>;
+export type PendingClarification = z.infer<typeof pendingClarificationSchema>;
 export type AuditTraceField = z.infer<typeof auditTraceFieldSchema>;
 export type AuditTraceStage = z.infer<typeof auditTraceStageSchema>;
 export type AuditLedgerRow = z.infer<typeof auditLedgerRowSchema>;

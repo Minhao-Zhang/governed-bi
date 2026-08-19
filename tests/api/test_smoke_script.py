@@ -149,7 +149,7 @@ def test_every_check_the_script_makes_still_passes(smoke_api) -> None:
     from governed_bi.api.routes import make_app
 
     lines: list[str] = []
-    app = make_app(_session(), _TurnLog())
+    app = make_app(_session(), _TurnLog(), _Pending())
     failures = smoke_api.run_checks(TestClient(app), out=lines.append)
 
     assert not failures, "\n".join(lines)
@@ -158,3 +158,26 @@ def test_every_check_the_script_makes_still_passes(smoke_api) -> None:
         f"the script made {len(checks)} checks, which is fewer than it declares. A `run_checks` "
         f"that returns early reports no failures and prints PASS:\n" + "\n".join(lines)
     )
+
+
+class _Pending:
+    """What ``make_app`` asks of the pending-question reader: nothing is waiting.
+
+    Empty rather than seeded. These tests are about the app's other surfaces, and a fake holding
+    rows would turn any assertion about them into an assertion about this class.
+    ``tests/api/test_the_pending_queue_reads_interrupt_state.py`` is where the queue itself is
+    pinned, against a fake that enforces ``status`` and ``select``.
+
+    Self-contained -- it does not import ``PendingPage`` -- because ``make_app`` is imported
+    inside the test bodies here, so there is no module-level engine import to sit beside.
+    """
+
+    PENDING_FIELDS: tuple[str, ...] = ("asked_at", "question")
+
+    class _Page:
+        rows: tuple[Any, ...] = ()
+        truncated = False
+        threads_scanned = 0
+
+    def pending(self, *, limit: int = 50, offset: int = 0) -> Any:
+        return self._Page()

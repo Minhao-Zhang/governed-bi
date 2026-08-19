@@ -20,6 +20,7 @@ import type {
   AuditCorpus,
   AuditTrace,
   AuditTurns,
+  PendingQueue,
   Capabilities,
   ColumnRelated,
   ErGraph,
@@ -993,6 +994,11 @@ export function mockColumnRelated(columnId: string): ColumnRelated {
 export const MOCK_AUDIT_TURNS: AuditTurns = {
   turns: [],
   meta: { n: 0, log_dir: "(no backend)", columns: [] },
+};
+
+export const MOCK_PENDING_QUEUE: PendingQueue = {
+  rows: [],
+  meta: { n: 0, truncated: false, threads_scanned: 0, limit: 50, offset: 0, columns: [] },
 };
 
 export const MOCK_AUDIT_TRACE: AuditTrace = {

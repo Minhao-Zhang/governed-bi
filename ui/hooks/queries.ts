@@ -13,14 +13,27 @@
 "use client";
 
 import { useMemo } from "react";
-import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+} from "@tanstack/react-query";
 
 import { api } from "@/lib/api-client";
 import { canSearch } from "@/lib/capabilities";
-import { buildCatalogIndex, searchCatalog, summaryToCatalog } from "@/lib/catalog";
+import {
+  buildCatalogIndex,
+  searchCatalog,
+  summaryToCatalog,
+} from "@/lib/catalog";
 import { USE_MOCKS } from "@/lib/env";
 import { listConversations } from "@/lib/threads";
-import type { CatalogItem, CorpusWhere, SchemaScope, TableView } from "@/lib/types";
+import type {
+  CatalogItem,
+  CorpusWhere,
+  SchemaScope,
+  TableView,
+} from "@/lib/types";
 
 export function useCapabilities() {
   return useQuery({ queryKey: ["capabilities"], queryFn: api.capabilities });
@@ -41,7 +54,10 @@ export function useCapabilities() {
  * reporting `can_scope: false` had no catalog at all once the dump was deleted — a capability
  * flag deciding whether a page can render is a flag doing something it does not describe.
  */
-export function useSchemaSummary(scope?: SchemaScope, options?: { enabled?: boolean }) {
+export function useSchemaSummary(
+  scope?: SchemaScope,
+  options?: { enabled?: boolean },
+) {
   return useQuery({
     queryKey: ["schema-summary", scope?.schema ?? null],
     queryFn: () => api.schemaSummary({ schema: scope?.schema }),
@@ -125,9 +141,15 @@ export function useCatalog(scope?: SchemaScope) {
 
 /** Client-side fuzzy search over a catalog (the default; permanent at these
  * sizes per D15 Q6). Synchronous + memoized so the index isn't rebuilt per key. */
-export function useCatalogSearch(items: CatalogItem[], query: string): CatalogItem[] {
+export function useCatalogSearch(
+  items: CatalogItem[],
+  query: string,
+): CatalogItem[] {
   const index = useMemo(() => buildCatalogIndex(items), [items]);
-  return useMemo(() => searchCatalog(index, items, query), [index, items, query]);
+  return useMemo(
+    () => searchCatalog(index, items, query),
+    [index, items, query],
+  );
 }
 
 /** Server-ranked search (GET /search; gated on can_search, else no-op). */
@@ -143,7 +165,10 @@ export function useServerSearch(query: string) {
 }
 
 export function useAssets(type?: string) {
-  return useQuery({ queryKey: ["assets", type ?? "all"], queryFn: () => api.assets(type) });
+  return useQuery({
+    queryKey: ["assets", type ?? "all"],
+    queryFn: () => api.assets(type),
+  });
 }
 
 /**
@@ -197,6 +222,26 @@ export function useAuditTurns(limit = 50) {
   });
 }
 
+/**
+ * Clarifications the engine asked and nobody has answered, across every conversation.
+ *
+ * Not derived from `useAuditTurns`: an unanswered question never became a turn, so it is in no
+ * audit row. Its only record is the platform's interrupt state, which is what
+ * `GET /clarifications/pending` reads.
+ *
+ * `refetchInterval` because this is a queue rather than a log — a row appears when some other
+ * reader stops mid-conversation, with no event on this client to notice it. Sixty seconds: the
+ * thing being watched is a person deciding to leave a tab, which does not happen on a timescale
+ * worth polling harder for.
+ */
+export function usePendingClarifications(limit = 50) {
+  return useQuery({
+    queryKey: ["pending-clarifications", limit] as const,
+    queryFn: () => api.pendingClarifications(limit),
+    refetchInterval: 60_000,
+  });
+}
+
 /** One turn's full stage-by-stage trace. Disabled until a turn is selected. */
 export function useAuditTrace(turnId: string | null) {
   return useQuery({
@@ -208,7 +253,10 @@ export function useAuditTrace(turnId: string | null) {
 
 /** Corpus shape plus its problems, split fatal vs degradation. */
 export function useAuditCorpus() {
-  return useQuery({ queryKey: ["audit-corpus"] as const, queryFn: api.auditCorpus });
+  return useQuery({
+    queryKey: ["audit-corpus"] as const,
+    queryFn: api.auditCorpus,
+  });
 }
 
 /* ── filtering (ADR 0009) ──────────────────────────────────────────────────── */
@@ -247,7 +295,9 @@ export function useCorpusRows(params: {
     queryKey: [
       "corpus-rows",
       params.type,
-      (params.where ?? []).map((w) => `${w.field}:${w.op}:${w.value}`).join("|"),
+      (params.where ?? [])
+        .map((w) => `${w.field}:${w.op}:${w.value}`)
+        .join("|"),
       params.sort ?? null,
       params.order ?? "asc",
       params.offset ?? 0,
@@ -282,12 +332,15 @@ export function useCorpusRowsInfinite(params: {
     queryKey: [
       "corpus-rows-infinite",
       params.type,
-      (params.where ?? []).map((w) => `${w.field}:${w.op}:${w.value}`).join("|"),
+      (params.where ?? [])
+        .map((w) => `${w.field}:${w.op}:${w.value}`)
+        .join("|"),
       params.sort ?? null,
       params.order ?? "asc",
       limit,
     ] as const,
-    queryFn: ({ pageParam }) => api.corpusRows({ ...params, offset: pageParam, limit }),
+    queryFn: ({ pageParam }) =>
+      api.corpusRows({ ...params, offset: pageParam, limit }),
     initialPageParam: 0,
     // `offset + rows.length`, not `pages.length * limit`: the server is free to return short of
     // the limit, and deriving the next offset from the page count would then skip rows silently

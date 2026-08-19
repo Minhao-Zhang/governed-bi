@@ -1,3 +1,5 @@
+"use client";
+
 import { AlertTriangle, Info } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,11 +13,13 @@ import {
   deriveDelivery,
   displayText,
   provenanceOf,
+  refusalSentence,
   routedSchemasLabel,
   sqlOf,
   terminalOf,
   whyLines,
 } from "@/lib/answer-delivery";
+import { atLeast, useDisplayMode } from "@/lib/display-mode";
 import { buildStepsFromLedger, type TimelineStep } from "@/lib/steps";
 import { cn } from "@/lib/utils";
 import type { AnswerView } from "@/lib/types";
@@ -25,8 +29,21 @@ import type { AnswerView } from "@/lib/types";
  * warning), hard refusal, or an ending with no governed statement. Branch on `deriveDelivery` —
  * it owns the mapping from the engine's `outcome` + ledger terminal, and a component reading
  * either directly is a second copy of that rule.
+ *
+ * **The display mode changes what is shown, never what happened.** All four states render in all
+ * three modes and the refusal sentence is present in every one; what widens is the machinery —
+ * the SQL, the step trace, the record drawer. A reader in `business` is never shown a turn as
+ * having answered when it refused. See `lib/display-mode.ts`, including why this is display and not
+ * permission.
  */
-export function AnswerCard({ answer, steps }: { answer: AnswerView; steps?: TimelineStep[] }) {
+export function AnswerCard({
+  answer,
+  steps,
+}: {
+  answer: AnswerView;
+  steps?: TimelineStep[];
+}) {
+  const mode = useDisplayMode();
   const delivery = deriveDelivery(answer);
   const provenance = provenanceOf(answer);
   const why = whyLines(provenance);
@@ -41,12 +58,15 @@ export function AnswerCard({ answer, steps }: { answer: AnswerView; steps?: Time
   // The governed trace, kept on the finished answer so it doesn't vanish: the
   // captured live trace if present, else rebuilt from the ledger (live == audit).
   const timeline =
-    steps && steps.length > 0 ? steps : buildStepsFromLedger(provenance.execution);
+    steps && steps.length > 0
+      ? steps
+      : buildStepsFromLedger(provenance.execution);
 
   return (
     <Card
       className={cn(
-        delivery === "graded" && "border-tier-fenced-raw/50 bg-tier-fenced-raw/5",
+        delivery === "graded" &&
+          "border-tier-fenced-raw/50 bg-tier-fenced-raw/5",
       )}
     >
       <CardContent className="space-y-3 pt-0">
@@ -55,6 +75,8 @@ export function AnswerCard({ answer, steps }: { answer: AnswerView; steps?: Time
           terminal={terminalOf(answer)}
           attempts={attemptsOf(answer)}
           refusedBy={answer.refused_by ?? null}
+          mode={mode}
+          sentence={refusalSentence(answer)}
         />
 
         {delivery === "refused" ? (
@@ -76,7 +98,8 @@ export function AnswerCard({ answer, steps }: { answer: AnswerView; steps?: Time
               <div className="flex gap-3 rounded-md border border-tier-lineage/30 bg-tier-lineage/5 p-3">
                 <Info className="mt-0.5 size-4 shrink-0 text-tier-lineage" />
                 <p className="text-sm">
-                  This turn ran no query, so there is no governed statement behind the text below.
+                  This turn ran no query, so there is no governed statement
+                  behind the text below.
                 </p>
               </div>
             )}
@@ -108,25 +131,33 @@ export function AnswerCard({ answer, steps }: { answer: AnswerView; steps?: Time
                 to the model inside the turn and records the statement, not the result set.
                 Rendering an empty table would say "the query returned nothing", which is a
                 different claim from "we did not keep them". */}
-            {sql && <SqlBlock sql={sql} />}
-            {schemasNote && (
+            {/* The statement itself is engineer-only. `refusalSentence` above already told every
+                mode whether a query ran, which is the part a reader needs; the SQL is the part
+                only someone who reads SQL can use. */}
+            {sql && atLeast(mode, "engineer") && <SqlBlock sql={sql} />}
+            {/* Which schemas were considered — an analyst's question, not a reader's. */}
+            {schemasNote && atLeast(mode, "analyst") && (
               <p className="text-xs text-muted-foreground">{schemasNote}</p>
             )}
-            <div className="flex items-center gap-2 pt-1">
-              <ProvenanceDrawer provenance={provenance} />
-              {/* Which pinned corpus answered — quiet, but on the card: reproducibility is
-                  a property of the answer, not of the drawer. */}
-              {corpusNote && (
-                <span className="font-mono text-xs text-muted-foreground">{corpusNote}</span>
-              )}
-            </div>
+            {atLeast(mode, "engineer") && (
+              <div className="flex items-center gap-2 pt-1">
+                <ProvenanceDrawer provenance={provenance} />
+                {/* Which pinned corpus answered — quiet, but on the card: reproducibility is
+                    a property of the answer, not of the drawer. */}
+                {corpusNote && (
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {corpusNote}
+                  </span>
+                )}
+              </div>
+            )}
           </>
         )}
 
         {/* Governed step trace in the main thread — starts expanded so routing /
             assembly / corpus hit dropdowns stay visible after the live placeholder
             is replaced. The Provenance sheet keeps the compact collapsed form. */}
-        {timeline.length > 0 && (
+        {timeline.length > 0 && atLeast(mode, "analyst") && (
           <div className="border-t pt-3">
             <AgentTimeline steps={timeline} isRunning={false} defaultExpanded />
           </div>
@@ -138,7 +169,10 @@ export function AnswerCard({ answer, steps }: { answer: AnswerView; steps?: Time
 
 /** One `| a | b |` row, split into trimmed cells with the outer pipes dropped. */
 function cellsOf(line: string): string[] {
-  return line.replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
+  return line
+    .replace(/^\||\|$/g, "")
+    .split("|")
+    .map((cell) => cell.trim());
 }
 
 /** `|---|:--|--:|` — the row that makes the line above it a header. */
@@ -170,7 +204,12 @@ function Narration({ text }: { text: string }) {
   type Block =
     | { kind: "ul"; items: string[] }
     | { kind: "p"; lines: string[] }
-    | { kind: "table"; head: string[]; rows: string[][]; align: ("left" | "right")[] };
+    | {
+        kind: "table";
+        head: string[];
+        rows: string[][];
+        align: ("left" | "right")[];
+      };
   const blocks: Block[] = [];
   let open: Block | null = null;
   const lines = text.trim().split("\n");
@@ -239,7 +278,9 @@ function Narration({ text }: { text: string }) {
                       <th
                         key={i}
                         className={`px-3 py-1.5 font-medium text-muted-foreground ${
-                          block.align[i] === "right" ? "text-right" : "text-left"
+                          block.align[i] === "right"
+                            ? "text-right"
+                            : "text-left"
                         }`}
                       >
                         <Emphasised text={cell} />
@@ -254,7 +295,9 @@ function Narration({ text }: { text: string }) {
                         <td
                           key={i}
                           className={`px-3 py-1.5 ${
-                            block.align[i] === "right" ? "text-right" : "text-left"
+                            block.align[i] === "right"
+                              ? "text-right"
+                              : "text-left"
                           }`}
                         >
                           <Emphasised text={cell} />
@@ -299,7 +342,11 @@ function Emphasised({ text }: { text: string }) {
   return (
     <>
       {parts.map((part, i) =>
-        i % 2 === 1 ? <strong key={i}>{part}</strong> : <span key={i}>{part}</span>,
+        i % 2 === 1 ? (
+          <strong key={i}>{part}</strong>
+        ) : (
+          <span key={i}>{part}</span>
+        ),
       )}
     </>
   );

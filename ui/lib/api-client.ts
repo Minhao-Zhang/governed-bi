@@ -17,6 +17,7 @@ import {
   MOCK_AUDIT_CORPUS,
   MOCK_AUDIT_TRACE,
   MOCK_AUDIT_TURNS,
+  MOCK_PENDING_QUEUE,
   MOCK_CAPABILITIES,
   MOCK_ER_GRAPH,
   MOCK_GRAPH,
@@ -34,6 +35,7 @@ import {
   auditCorpusSchema,
   auditTraceSchema,
   auditTurnsSchema,
+  pendingQueueSchema,
   corpusFieldsSchema,
   corpusRowsSchema,
   capabilitiesSchema,
@@ -50,6 +52,7 @@ import type {
   AuditCorpus,
   AuditTrace,
   AuditTurns,
+  PendingQueue,
   Capabilities,
   CorpusFields,
   CorpusRows,
@@ -266,6 +269,22 @@ export const api = {
    * cross-thread audit list, which is what `/audit` renders and what the route is for. */
   auditTurns: (limit = 50): Promise<AuditTurns> =>
     get(`/audit/turns${qs({ limit })}`, auditTurnsSchema, MOCK_AUDIT_TURNS),
+
+  /** Questions the engine asked that nobody has answered, oldest first
+   * (GET /clarifications/pending).
+   *
+   * Cross-thread, which is the whole point: `useStream` surfaces the interrupt on the
+   * conversation you are looking at, and this is every *other* one — a reader who closed the tab
+   * leaves no other trace, because the engine records a clarification only on the far side of
+   * `interrupt()`.
+   *
+   * Read `meta.truncated` before presenting `meta.n` as a count. */
+  pendingClarifications: (limit = 50, offset = 0): Promise<PendingQueue> =>
+    get(
+      `/clarifications/pending${qs({ limit, offset })}`,
+      pendingQueueSchema,
+      MOCK_PENDING_QUEUE,
+    ),
 
   /** One turn, grouped by the pipeline stage that produced each recorded field
    * (GET /audit/turns/{id}/trace). The grouping is derived from the engine's

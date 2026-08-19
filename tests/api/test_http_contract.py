@@ -10,7 +10,7 @@ before v1 was deleted, and nothing has ever been in it.
 stubs for the whole of v2, and one cause covered all seven: the surface they describe could not
 be constructed. `routes.app` reached a memoised session built from the environment and the
 graph factory closed over the same global, so reaching any of this needed a Postgres server, a
-corpus and a credential. `routes.make_app(session, turn_log)` and
+corpus and a credential. `routes.make_app(session, turn_log, pending)` and
 `graph_app.build_serve_graph(session)` take their dependencies, and the fixtures below are four
 assets in memory. Nothing here needs a database, a model or a key.
 
@@ -286,7 +286,7 @@ def test_capabilities_reports_what_is_true_not_what_is_configured() -> None:
     """
     from governed_bi.api.routes import make_app
 
-    modelless = _client(make_app(_indexed_session(), _TurnLog())).get("/capabilities")
+    modelless = _client(make_app(_indexed_session(), _TurnLog(), _Pending())).get("/capabilities")
     assert modelless.status_code == 200, modelless.text
     caps = modelless.json()
     assert caps["has_live_model"] is False, (
@@ -300,7 +300,7 @@ def test_capabilities_reports_what_is_true_not_what_is_configured() -> None:
     assert caps["can_search"] is False, "there is no /search route; false is the true answer"
 
     with_model = _client(
-        make_app(_indexed_session(model=object()), _TurnLog())
+        make_app(_indexed_session(model=object()), _TurnLog(), _Pending())
     ).get("/capabilities")
     assert with_model.json()["has_live_model"] is True, (
         "a configured model is reported absent, so the panel degrades on a server that works"
@@ -464,7 +464,7 @@ def test_the_pages_that_do_not_need_a_model_work_without_one() -> None:
     # `browse_routes` imported `routes` backwards to reach the same global, so a test had to
     # patch both — and patching the second was the only thing that made the browse routes
     # answer at all.
-    app = make_app(_tiny_session(), _TurnLog())
+    app = make_app(_tiny_session(), _TurnLog(), _Pending())
     client = _client(app)
 
     for path in ("/audit/corpus", "/schema/summary", "/corpus/assets", "/graph", "/knowledge-graph"):
@@ -926,3 +926,26 @@ def test_a_clarification_interrupt_carries_an_id_and_a_reason() -> None:
     )
     assert payload["question"] == "which year?"
     assert payload["why"], "the prompt renders a reason and this one would be blank"
+
+
+class _Pending:
+    """What ``make_app`` asks of the pending-question reader: nothing is waiting.
+
+    Empty rather than seeded. These tests are about the app's other surfaces, and a fake holding
+    rows would turn any assertion about them into an assertion about this class.
+    ``tests/api/test_the_pending_queue_reads_interrupt_state.py`` is where the queue itself is
+    pinned, against a fake that enforces ``status`` and ``select``.
+
+    Self-contained -- it does not import ``PendingPage`` -- because ``make_app`` is imported
+    inside the test bodies here, so there is no module-level engine import to sit beside.
+    """
+
+    PENDING_FIELDS: tuple[str, ...] = ("asked_at", "question")
+
+    class _Page:
+        rows: tuple[Any, ...] = ()
+        truncated = False
+        threads_scanned = 0
+
+    def pending(self, *, limit: int = 50, offset: int = 0) -> Any:
+        return self._Page()

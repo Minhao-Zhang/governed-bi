@@ -156,7 +156,7 @@ def _client(grant: Grant) -> Any:
         corpus_content_hash_="corpus-under-test",
     )
     assert not session.fatal_problems, [str(p) for p in session.fatal_problems]
-    return TestClient(make_app(session, _TurnLog()))
+    return TestClient(make_app(session, _TurnLog(), _Pending()))
 
 
 class _TurnLog:
@@ -324,3 +324,26 @@ def test_the_one_unfiltered_field_is_declared() -> None:
     assert body["assets"]["total"] == 4, body["assets"]
     assert body["assets"]["by_type"] == {"column": 1, "schema": 1, "table": 1, "term": 1}, body
     assert body["structure"]["untagged_assets"] >= 0, body["structure"]
+
+
+class _Pending:
+    """What ``make_app`` asks of the pending-question reader: nothing is waiting.
+
+    Empty rather than seeded. These tests are about the app's other surfaces, and a fake holding
+    rows would turn any assertion about them into an assertion about this class.
+    ``tests/api/test_the_pending_queue_reads_interrupt_state.py`` is where the queue itself is
+    pinned, against a fake that enforces ``status`` and ``select``.
+
+    Self-contained -- it does not import ``PendingPage`` -- because ``make_app`` is imported
+    inside the test bodies here, so there is no module-level engine import to sit beside.
+    """
+
+    PENDING_FIELDS: tuple[str, ...] = ("asked_at", "question")
+
+    class _Page:
+        rows: tuple[Any, ...] = ()
+        truncated = False
+        threads_scanned = 0
+
+    def pending(self, *, limit: int = 50, offset: int = 0) -> Any:
+        return self._Page()

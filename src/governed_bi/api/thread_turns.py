@@ -46,11 +46,19 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 from ..register.quantity import Measured
 
-__all__ = ["ThreadTurnLog", "InProcessServerRequired", "SUMMARY_FIELDS", "summarise_turn"]
+__all__ = [
+    "ThreadTurnLog",
+    "PendingClarifications",
+    "PendingPage",
+    "InProcessServerRequired",
+    "SUMMARY_FIELDS",
+    "PENDING_FIELDS",
+    "summarise_turn",
+]
 
 #: List-view columns (a subset of record field names), in display order.
 SUMMARY_FIELDS: tuple[str, ...] = (
@@ -427,3 +435,209 @@ def _turns_of(thread: Any) -> list[Any]:
         if isinstance(values, Mapping) and isinstance(values.get("turns"), list):
             return list(values["turns"])
     return []
+
+
+# ── pending clarifications ───────────────────────────────────────────────────────────────────
+#
+# A second reader, in this file rather than its own, for one reason: `_in_process_client` is the
+# thing that must not have a second implementation. `get_client(url=None)` leaks an `app=None`
+# transport into an SDK module global on failure (see `InProcessServerRequired`), and that leak
+# was fixed once already. A reader that acquired its own client would reintroduce it.
+
+#: List-view columns for the pending queue, in display order. Same role as `SUMMARY_FIELDS`:
+#: `meta.columns` is on the wire and the client renders from it.
+PENDING_FIELDS: tuple[str, ...] = (
+    "asked_at",
+    "question",
+    "why",
+    "clarification_id",
+    "turn_id",
+    "thread_id",
+)
+
+#: Prefix ``serve/tools.py`` builds a clarification id with: ``f"clar-{turn_id}-{digest}"``.
+_CLARIFICATION_PREFIX = "clar-"
+
+
+class PendingPage(NamedTuple):
+    """One page of the queue, plus what it could not show.
+
+    ``truncated`` is not cosmetic. ADR 0009 D2/D9 exist because a silently short list reads as
+    "this is everything" -- and here the consequence is a reader whose question is waiting and an
+    operator who cannot see it. The route puts this on the wire.
+    """
+
+    rows: list[dict[str, Any]]
+    truncated: bool
+    threads_scanned: int
+
+
+def turn_of_clarification(clarification_id: str) -> str | None:
+    """The ``turn_id`` inside a clarification id, or ``None`` when the shape is not one we mint.
+
+    ``serve/tools.py`` builds ``f"clar-{turn_id}-{digest}"``, where ``turn_id`` is
+    ``session._digest(...)`` -- a sha256 hex prefix, so it never contains ``-`` -- and the digest
+    is likewise hex. Partitioning on the *last* ``-`` is therefore exact rather than merely
+    usually right, and it stays exact if ``turn_id`` ever gains a ``-``.
+
+    **Returns ``None`` rather than guessing.** An id from some other producer would otherwise be
+    silently mangled into a ``turn_id`` that links nowhere, which is worse than an unlinked row.
+    """
+    text = str(clarification_id or "")
+    if not text.startswith(_CLARIFICATION_PREFIX):
+        return None
+    body = text[len(_CLARIFICATION_PREFIX) :]
+    turn_id, sep, _tail = body.rpartition("-")
+    if not sep or not turn_id:
+        return None
+    return turn_id
+
+
+class PendingClarifications:
+    """Questions the engine asked and nobody has answered, across every conversation.
+
+    **Why this can be a pure read with no store of its own.** A clarification that *was* answered
+    lands in the ``clarifications`` channel, because ``serve/tools.py`` writes it on the far side
+    of ``interrupt()``. One that was *not* answered -- the reader closed the tab -- writes nothing
+    at all, so the queue is exactly the half that state does not record. Its truth lives in the
+    platform's own interrupt state, which ADR 0014's durable checkpointer made survive a restart;
+    before that this reader could not have existed.
+
+    So the queue is one ``threads.search(status="interrupted", ...)``. No ledger file, no new
+    table, no write path. ``clarification_id`` carries the ``turn_id``
+    (:func:`turn_of_clarification`), which is the join back to the turn that asked -- no separate
+    link field is needed.
+
+    ``interrupts`` is *selected* rather than ``extract``ed: it is a first-class
+    ``ThreadSelectField``, so none of ``extract``'s ten-path budget is spent on it.
+
+    **Read-only, deliberately.** Answering from here would mean resuming another caller's thread,
+    and ``serve/resume.py::authorise_resume`` refuses that by design (ADR 0006 B9). The owner's
+    2026-08-19 decision was that an operator's answer feeds the semantic layer instead, and that
+    path is gated on a provenance check this repository does not have -- ``session.py``'s
+    ``_visible`` filters ``governance.excluded`` alone, so a ``proposed`` asset already reaches
+    the model's context. Until that gate exists, this surface only shows.
+    """
+
+    #: Read off the instance by the route to build ``meta.columns``.
+    PENDING_FIELDS = PENDING_FIELDS
+
+    def __init__(self, client_factory: Any | None = None) -> None:
+        self._client_factory = client_factory
+        self._client: Any | None = None
+
+    def pending(self, *, limit: int = 50, offset: int = 0) -> PendingPage:
+        """Oldest question first -- a queue, not a feed.
+
+        Sorted ascending on the thread's ``updated_at``, which for an interrupted thread is when
+        it paused, because the row that has waited longest is the one that most needs answering.
+        That is the opposite of ``list_turns`` and deliberately so: an audit log is read
+        newest-first, a work queue oldest-first.
+        """
+        wanted = max(1, int(limit))
+        start = max(0, int(offset))
+        return _pending(limit=wanted, offset=start, client=self._client_once())
+
+    def _client_once(self) -> Any:
+        """The one client this reader uses.
+
+        See ``ThreadTurnLog._client_once`` for why it is one, why it is built lazily, and why it
+        is safe to reuse across ``asyncio.run`` calls.
+        """
+        if self._client is None:
+            factory = self._client_factory or _in_process_client
+            self._client = factory()
+        return self._client
+
+
+def _pending(*, limit: int, offset: int, client: Any) -> PendingPage:
+    return _blocking(_pending_async(limit=limit, offset=offset, client=client))
+
+
+async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage:
+    """Flatten every interrupted thread's ``interrupts`` into one row per open question.
+
+    ``interrupts`` is ``{task_id: [Interrupt, ...]}`` and one thread can in principle hold more
+    than one, so the window is taken over **rows** rather than threads -- the same reason
+    ``_collect_async`` counts turns rather than threads.
+
+    Only ``kind == "clarification"`` is reported. Nothing else in this engine calls
+    ``interrupt()`` today, but an interrupt of some future kind is not a pending question, and
+    rendering it as one would put a shape the client cannot parse into an operator's queue.
+    """
+    rows: list[dict[str, Any]] = []
+    scanned = 0
+    truncated = False
+    page_offset = 0
+    while page_offset < _MAX_THREADS:
+        page = await client.threads.search(
+            status="interrupted",
+            limit=_THREAD_PAGE,
+            offset=page_offset,
+            sort_by="updated_at",
+            sort_order="asc",
+            select=["thread_id", "updated_at", "interrupts", "metadata"],
+        )
+        if not page:
+            break
+        for thread in page:
+            scanned += 1
+            rows.extend(_open_questions_of(thread))
+        page_offset += len(page)
+        if len(page) < _THREAD_PAGE:
+            break
+    else:
+        # Left the loop on ``_MAX_THREADS`` with pages still arriving: the store holds more
+        # interrupted threads than this reader pages through, so the queue is short and says so.
+        truncated = True
+
+    window = rows[offset : offset + limit]
+    if offset + limit < len(rows):
+        truncated = True
+    return PendingPage(rows=window, truncated=truncated, threads_scanned=scanned)
+
+
+def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
+    """One row per open clarification on ``thread``, or ``[]``.
+
+    ``asked_at`` is the thread's ``updated_at``. For an interrupted thread that is the moment it
+    paused, because the in-memory runtime stamps it in the same update that writes ``interrupts``
+    and ``status``, and nothing has run on the thread since. It is named ``asked_at`` so it
+    matches the turn summaries' column, and this line is the note that it is a proxy rather than
+    a field the engine stamped.
+    """
+    if not isinstance(thread, Mapping):
+        return []
+    interrupts = thread.get("interrupts")
+    if not isinstance(interrupts, Mapping):
+        return []
+    thread_id = thread.get("thread_id")
+    asked_at = thread.get("updated_at")
+    out: list[dict[str, Any]] = []
+    for task_id, raised in interrupts.items():
+        if not isinstance(raised, list):
+            continue
+        for item in raised:
+            if not isinstance(item, Mapping):
+                continue
+            value = item.get("value")
+            if not isinstance(value, Mapping) or value.get("kind") != "clarification":
+                continue
+            clarification_id = str(value.get("clarification_id") or "")
+            out.append(
+                {
+                    "asked_at": asked_at,
+                    "question": value.get("question"),
+                    "why": value.get("why"),
+                    "clarification_id": clarification_id or None,
+                    "turn_id": turn_of_clarification(clarification_id),
+                    "thread_id": thread_id,
+                    # ``interrupt_id`` and ``task_id`` are what a resume would have to name.
+                    # Carried because withholding them would make this surface un-actionable the
+                    # day the provenance gate lands, and they identify nothing a reader could not
+                    # already see on their own thread.
+                    "interrupt_id": item.get("id"),
+                    "task_id": task_id,
+                }
+            )
+    return out
