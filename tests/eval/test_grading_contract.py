@@ -109,7 +109,7 @@ def test_the_grader_has_no_execution_path_that_skips_govern() -> None:
     #: property — churn that gets a test disabled. A count still catches the thing that matters,
     #: which is a **new** way for the grader to reach the database.
     ALLOWED: dict[str, tuple[int, tuple[str, ...]]] = {
-        "harness.py": (
+        "projection.py": (
             3,
             (
                 "abstention pricing: runs the refused proposal to price what the refusal cost",
