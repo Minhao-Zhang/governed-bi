@@ -303,6 +303,41 @@ So: additive files cost nothing, changed lines cost a little, and **a deleted mo
 whatever the fork built on top of it.** That is the number to estimate before a sync, not the
 commit count.
 
+### The cap that made the merge worse, and what was done about it
+
+`tools/check_file_length.py` fails the build at **1000 lines** and, before 2026-08-19, said
+nothing distinguishable before that: its soft-cap list named 81 files, so a file with 16 lines of
+room read exactly like one with 500. Eight files crossed into that blind spot this week — four by
+ordinary growth, then **four more pulled in by the ADR 0014 merge itself** — and every one of them
+would have failed a collaborator's *first* edit, with an error that says the file is too long
+rather than "start a new file".
+
+All eight are split, none of the resulting files exceeds 700 lines, and the app's route
+path+method set was proved set-equal across the split that moved routes:
+
+| file | before → after | lifted into |
+|---|---|---|
+| `api/curation_routes.py` | 984 → 675 | `api/settings_routes.py` 118, `api/elicitation_routes.py` 280 |
+| `eval/harness.py` | 959 → 385 | `eval/projection.py` 598 |
+| `tests/api/test_http_contract.py` | 990 → 569 | + 470 |
+| `tools/mutation_catalogue.py` | 984 → 26 | three data modules, 70/70 entries byte-identical |
+| `tests/eval/test_eval_contract.py` | 957 → 589 | + 390 |
+| `tests/conformance/test_register_closure.py` | 933 → 376 | + 584 |
+| `tests/api/test_elicitation_routes.py` | 925 → 461 | + 213 fixtures, + 324 |
+| `tests/serve/test_agent_tools_hitl.py` | 961 → 698 | + 295 |
+
+The cap now also reports a **`WARN_LIMIT = 900`** tier in its own section, naming each file and the
+lines it has left — deliberately not fatal, because ADR 0005 §6 owns the tiers and a gate that
+starts failing on work already in flight teaches people to route around it. The point is that the
+next batch is visible *before* someone's first commit trips it, which is the property the previous
+version lacked.
+
+**`api/curation_routes.py` is the one to know about if you add to the curation surface.** It is
+back to 675 lines, but the pattern that got it there stands: `drafts_routes.py`,
+`feedback_routes.py`, `trust_loop_routes.py`, `settings_routes.py` and `elicitation_routes.py` are
+each their own `make_*_router(session)` factory mounted in `routes.py`, and that was forced by the
+cap rather than chosen for elegance. Adding a sixth router file is the expected move, not a smell.
+
 ---
 
 ## The current state, honestly
