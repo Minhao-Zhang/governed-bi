@@ -45,6 +45,7 @@ __all__ = [
     "comparison_quotable",
     "headline_ex",
     "knobs_comparable",
+    "outcome_rates",
     "paired_ex",
     "refusal_histogram",
     "refusal_report_lines",
@@ -93,6 +94,21 @@ def arm_population(rows: Sequence[Mapping[str, Any]], *, label: str) -> Populati
 def headline_ex(arm: Population) -> Measured[float]:
     """EX rate over the arm's full population (same object McNemar must share)."""
     return arm.rate("correct")
+
+
+def outcome_rates(arm: Population) -> dict[str, Measured[float]]:
+    """The ``correct / clarified / refused`` scorecard a benchmark report needs — three
+    named rates over the same population
+    ``headline_ex`` reads, so they are directly comparable and always sum to the
+    same denominator. Each is independently ``unmeasured`` if its own field is
+    absent from any row, matching ``Population.rate``'s own absence handling —
+    a run whose instrumentation dropped ``clarified`` on some rows must not read
+    as "nothing was clarified"."""
+    return {
+        "correct": arm.rate("correct"),
+        "clarified": arm.rate("clarified"),
+        "refused": arm.rate("refused"),
+    }
 
 
 def paired_ex(a: Population, b: Population) -> McNemarResult:

@@ -429,6 +429,13 @@ def project_turn(
         # Propagated, never coerced: ``bool(grade["correct"])`` here turns every
         # ``missing_gold`` into a wrong answer (see ``grade.grade_turn``).
         "correct": grade["correct"],
+        # Which non-answered reason this row was, as a field `Population.rate()` can aggregate
+        # -- `outcome` already distinguishes these, but nothing stored either as a rate-able
+        # boolean, so a run's summary could not tell "needed a live clarification" apart from
+        # "refused" apart from "answered and wrong". `eval/report.py::outcome_rates` is the
+        # reader.
+        "clarified": outcome == Outcome.clarification.value,
+        "refused": outcome == Outcome.refused.value,
         "crashed": crashed,
         # What the *dataset* says is wrong with this question (leakage, a gold with no total
         # order, a degenerate gold). Carried on the row rather than filtered, so one artifact
