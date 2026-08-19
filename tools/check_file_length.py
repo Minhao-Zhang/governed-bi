@@ -16,6 +16,21 @@ SOFT_LIMIT = 400
 #: Fatal. ADR 0005 §6.
 HARD_LIMIT = 1000
 
+#: Reported **separately from the soft cap, and never fatal**: a file this close to
+#: :data:`HARD_LIMIT` is one ordinary edit away from a build that fails, and the failure will not
+#: say "start a new file" -- so whoever hits it fights the cap instead of splitting.
+#:
+#: It is its own tier because the soft cap cannot carry this signal. On 2026-08-19 the soft list
+#: named **81** files; four of them were within 41-75 lines of fatal and were indistinguishable
+#: from the other 77. Both of that week's rounds of near-cap files arrived the same way -- an
+#: upstream merge grew files nobody was watching -- which is exactly the case a threshold you
+#: only cross once, silently, cannot catch.
+#:
+#: Not fatal, deliberately. ADR 0005 §6 defines the tiers, so making 900 a build failure is an
+#: ADR-level decision rather than a tooling one, and a gate that starts failing on work already
+#: in flight teaches people to bypass it. This tier's job is to be *read*.
+WARN_LIMIT = 900
+
 #: Roots scanned. ``scripts`` was a fourth root until 2026-08-11, holding the one-shot corpus
 #: rebuild kit — listed here because leaving it out would have made "move it to scripts/" a way
 #: to leave the checks. The kit now lives at ``tools/corpus_rebuild/``, so that escape is closed
@@ -68,7 +83,8 @@ def main() -> int:
 
     counted = [(measure(p), p.relative_to(base).as_posix()) for p in files]
     hard = sorted((c for c in counted if c[0] > HARD_LIMIT), reverse=True)
-    soft = sorted((c for c in counted if SOFT_LIMIT < c[0] <= HARD_LIMIT), reverse=True)
+    warn = sorted((c for c in counted if WARN_LIMIT < c[0] <= HARD_LIMIT), reverse=True)
+    soft = sorted((c for c in counted if SOFT_LIMIT < c[0] <= WARN_LIMIT), reverse=True)
 
     if hard:
         print(f"{len(hard)} file(s) over the hard cap of {HARD_LIMIT} lines:\n",
@@ -88,7 +104,13 @@ def main() -> int:
         f"file length OK across {len(files)} file(s), {total} lines; "
         f"hard cap {HARD_LIMIT}, soft cap {SOFT_LIMIT}"
     )
-    print(f"over the soft cap: {len(soft)} file(s)"
+    if warn:
+        print(f"\napproaching the hard cap of {HARD_LIMIT} — split these before adding to them:")
+        for n, rel in warn:
+            print(f"  {rel}: {n} lines, {HARD_LIMIT - n} left")
+        print("  (not fatal. The next edit to any of these is.)")
+
+    print(f"\nover the soft cap of {SOFT_LIMIT}: {len(soft)} file(s)"
           + (":" if soft else " — none"))
     for n, rel in soft:
         print(f"  {rel}: {n} lines (soft {SOFT_LIMIT}, not fatal)")
