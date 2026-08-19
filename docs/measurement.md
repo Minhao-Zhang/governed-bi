@@ -35,6 +35,21 @@ imply is in [open work](open-work.md).
 The corpus is the treatment identity of every number: `corpus_content_hash`
 digests the tree, so quote the corpus commit alongside any figure.
 
+Two things exist for this step and are **not** called by the driver — you invoke
+them, or they do nothing:
+
+- [`eval/power.py`](../src/governed_bi/eval/power.py)'s `require_power(n,
+  discordant, hypothesised_effect)` raises unless the sample could detect the
+  effect the arm hypothesises. `discordant` is an estimate carried from a
+  comparable prior run, not a measurement of this one, and it must be an `int`
+  count — a rate passed as a count understates the floor by about `sqrt(n)` and
+  approves the arm the gate exists to refuse. `ArmSpec` carries no hypothesised
+  effect, so nothing enforces this yet.
+- [`corpus/snapshot.py`](../src/governed_bi/corpus/snapshot.py)'s `snapshot` /
+  `restore` / `drifted` put a corpus back. `corpus_content_hash` detects that the
+  tree moved; it cannot say what it was. `restore` deletes as well as overwrites,
+  because a file one arm wrote is a file the snapshot never had.
+
 ## Run an arm
 
 ```bash
@@ -256,8 +271,10 @@ more than two variants. **`v4` is the default.**
 ## The measurement row
 
 `project_turn` in
-[`src/governed_bi/eval/harness.py`](../src/governed_bi/eval/harness.py) projects
-one serve final state into one row. Every field it writes:
+[`src/governed_bi/eval/projection.py`](../src/governed_bi/eval/projection.py) projects
+one serve final state into one row. It lived in `eval/harness.py` until the 1,000-line cap split
+the pure row-shaping out of the orchestration on 2026-08-19; `harness.py` still re-exports it. Every
+field it writes:
 
 **Identity**
 
@@ -285,6 +302,8 @@ one serve final state into one row. Every field it writes:
 |---|---|
 | `outcome` | `answered`, `refused`, `clarification`, `capped`, `crashed`, or `no_sql`. `no_sql` is a turn that ended without executing a governed statement — added 2026-08-18, so **rows written before that date record those turns as `answered`** and any rate spanning the boundary mixes two taxonomies. `headline_ex` is unaffected (they graded `correct=false` under both names); coverage and delivered accuracy in `measure/selective.py` are not, because `no_sql` is in `DECLINED` |
 | `correct` | `true`, `false`, or `null`. `null` means the grader had no gold to compare against, and is **not** a wrong answer. Propagate it; do not coerce it |
+| `clarified` | Whether `outcome` is `clarification`. Stored as its own boolean so `Population.rate()` can aggregate it — without it a run reports "44/50 correct" and cannot tell "asked a person a question" from "declined to answer". `eval/report.py::outcome_rates` is the reader |
+| `refused` | Whether `outcome` is `refused`. Same reason as `clarified` above, and the two share `correct`'s denominator |
 | `crashed` | Whether `outcome` is `crashed` |
 | `grade_detail` | Why the grade came out as it did |
 | `gold_fingerprint` | Fingerprint of the gold result set |
@@ -294,6 +313,7 @@ one serve final state into one row. Every field it writes:
 | `refused_by` | Which stage refused |
 | `failed_stage` | Which stage failed |
 | `error_type` | The exception class on a crashed turn |
+| `failure_cause` | Why an answered-but-**wrong** turn was wrong, as an `eval.attribution.FailureCause` member: one of nine named causes, first-match-wins. `null` for every correct answer, every refusal, and every row whose gold is missing — `correct: null` means the instrument had nothing to compare against and is not a failure to explain. **Not** `error_type`, which is declared as an exception class; writing a taxonomy label there makes `error_type is not None` stop meaning "this turn raised" |
 | `guard` | The guard's `outcome` and `rule_id`, written on every turn including `clear`. A gate that leaves a trace only when it fires cannot afterwards be told from one never wired up. The free-text `detail` is dropped |
 | `abstention` | What the declared abstention policy decided and the evidence behind it: `{policy, outcome, reason, rules_evaluated, evidence}`. `null` when the turn ended before the node; `{"outcome": "disabled", …}` when `--abstain` was off, which is what makes a control arm nameable rather than merely silent |
 | `reflect_verdict` | The post-hoc observer's `{verdict, reason, model, prompt_sha256, signals}`. `null` means reflection did not run — never "the turn looked fine" |
@@ -447,6 +467,11 @@ Further conditions apply to a comparison rather than to one arm, and live in
   it never saw.
 - Populations must share units and filters before `paired_ex` runs McNemar
   over them.
+- `outcome_rates(arm)` reports `correct / clarified / refused` as three rates
+  over the same population `headline_ex` reads, so they share a denominator and
+  are directly comparable. Each is independently `unmeasured` when its own field
+  is absent from any row — a run whose instrumentation dropped `clarified` must
+  not read as "nothing was clarified".
 
 `context_hash` distinctness used to be the treatment test: at least 95% of shared
 questions had to have differing hashes. It was retired by audit D9. Retrieval is

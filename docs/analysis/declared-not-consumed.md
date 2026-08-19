@@ -43,7 +43,8 @@ written before these wires and still say what §1–§5 record. The fix is for t
 until one exists the sections below are the correct description of every number on disk.
 
 **What it unblocks, and what it does not.** The condition
-`tests/conformance/test_register_closure.py` names for putting the gate in CI was "tier 1 clear",
+`tests/conformance/test_the_lint_gates_fire_on_a_synthetic_violation.py` names for putting the gate
+in CI was "tier 1 clear",
 and it is. The gate still exits 1 on the six findings in tiers 2–3, so a CI step would fail every
 commit — and waiving six genuine findings to go green is the lie the gate exists to catch. The
 half that was actually missing is now there:
@@ -286,7 +287,7 @@ has no writer.
 |---|---|---:|---:|---:|
 | K1 | every declared knob is named outside `register/` | 16 | 13 | 5 |
 | K2 | every key written into a `knobs` mapping is a declared knob | 1 | 0 | 0 |
-| R1 | every declared record field is named in `eval/harness.py` | 9 | 0 | 0 |
+| R1 | every declared record field is named in `eval/harness.py` or `eval/projection.py` | 9 | 0 | 0 |
 | S1 | every `ServeState` channel has a writer *and* a reader outside `state.py` | 1 | 1 | 1 |
 
 It is red on purpose. A conformance check that went green on first run against a tree with this

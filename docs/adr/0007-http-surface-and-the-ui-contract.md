@@ -76,7 +76,7 @@ its own ADR.
 > only a reader who reached this ADR learned it does not.
 >
 > The one test that named the fields was a strict-xfail stub in the file whose header states
-> this rule. `tests/api/test_http_contract.py::test_the_api_never_synthesizes_a_reliability_field`
+> this rule. `tests/api/test_http_contract_answer_and_stream.py::test_the_api_never_synthesizes_a_reliability_field`
 > is written now, greps all of `src/` rather than just `api/` — the false claim was about the
 > *turn*, not the boundary — and also asserts neither name is in the record register. Bringing
 > the badge back is a deliberate edit to that test.

@@ -265,7 +265,8 @@ exec_error         7
 
 > **23 capped turns ended on a statement that was the correct answer, and scored zero.**
 
-The mechanism is in `eval/harness.py`: a prediction is executed only when `outcome == "answered"`,
+The mechanism is in `eval/projection.py` (`eval/harness.py` until 2026-08-19): a prediction is
+executed only when `outcome == "answered"`,
 and `grade_turn` returns `correct=False` for `capped` without looking at the SQL. (Since
 2026-08-18 `answered` excludes turns that ran no statement — those are `no_sql` — which changes
 nothing here: they had no statement to execute either way, and `grade_turn` returns

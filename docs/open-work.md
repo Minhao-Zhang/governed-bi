@@ -451,7 +451,7 @@ record fields and state channels, mutation-verified against a fixture tree. It r
 violations when written and reports 6 now.
 
 **Tier 1 is clear as of 2026-08-12**, which is the condition
-`tests/conformance/test_register_closure.py` names for a CI step. All five items —
+`tests/conformance/test_the_lint_gates_fire_on_a_synthetic_violation.py` names for a CI step. All five items —
 `llm_reasoning_effort` unreadable on the proxy, `llm_utility_provider` and `embedding_provider`
 publishing `"openai"`, `chat_model` null on four arms with the value in an undeclared key, three
 environment variables outranking `knobs_resolved`, and `sqlglot_version` absent from every row —
@@ -489,6 +489,24 @@ Its own docstring states the blind spot: rule K1 credits any occurrence of a kno
 coincidental string literal launders one. That is why the eight closed above are also asserted on
 their **values**, in `tests/eval/test_the_row_names_the_harness_that_produced_it.py`, and why
 `build_workers` is left red rather than given a number.
+
+**Two capabilities landed before their callers, on purpose (2026-08-19).** Both are the shape this
+section is about and neither is visible to `check_declared_is_consumed.py`, which reads the register
+and not the call graph — so they are written down here instead:
+
+- `eval/power.py::require_power` refuses to declare an arm that cannot detect its own hypothesis.
+  **Nothing calls it.** `ArmSpec` carries no hypothesised effect, so there is nothing to enforce it
+  against. Closing this means a field on `ArmSpec` and a driver-side check, at which point the arm
+  that cannot detect its target fails before it spends anything.
+- `corpus/snapshot.py` puts a corpus back. **Nothing calls it**, because no path in this repository
+  writes to a corpus during a run. It is here because the first path that does will need it on its
+  first turn: adding one file inside `corpus_root` moves `corpus_content_hash`, which
+  `measure/gates.py::_corpus_content_hash_gate` reads as an arm running on two corpora.
+
+The distinction that keeps these off the list above: a knob with no reader **changes the config
+hash** while changing no behaviour, so setting it produces a row that lies. A function with no caller
+produces nothing at all. The failure mode is a reader believing the capability is in force, which is
+what this entry exists to prevent.
 
 ### 3.11 Selective prediction is closed at 0.80, and the reflector closed it
 

@@ -1,6 +1,6 @@
 # Adopting from the downstream fork — what was taken, what was rebuilt, what was declined
 
-**Date:** 2026-08-19. **Branch:** `adopt/downstream-fork`. **Source:**
+**Dates:** 2026-08-19, two rounds. **Branch:** `adopt/downstream-fork`. **Source:**
 [`RyanChenJung/governed-bi-utkuai`](https://github.com/RyanChenJung/governed-bi-utkuai) at
 `12c3e15`, a fork of this repository. **Not an ADR** — the binding decisions it rests on are
 0006, 0007, 0009, 0012, 0013 and 0014. Replace when superseded.
@@ -20,9 +20,9 @@ as machine identifiers. **The curation write-back is not**, and `docs/enterprise
 says so in its own words — "no tenant model, no policy admin UI … those are the product; this is
 the seam."
 
-So this adoption takes the reader-facing half and the fixes, and declines the write path. The
-sections below record the four owner decisions, the facts each one rests on (measured, not
-inferred), and what shipped.
+So this adoption takes the reader-facing half, the eval instrumentation and the fixes, and declines
+the write path. The sections below record the seven owner decisions across two rounds, the facts each
+one rests on (measured, not inferred), and what shipped.
 
 ---
 
@@ -33,7 +33,15 @@ inferred), and what shipped.
 | Where an operator's clarification answer lands | **Semantic layer only** — it does not resume the reader's thread, which expires | ADR 0006 B9 unchanged; but the *answering* half needs a provenance gate, so only a read-only queue shipped |
 | Who sets the display mode default | **Client only**, `localStorage` | Zero backend change; nothing emits a `tier` key from `src/`, so ADR 0007 §3's test is unaffected |
 | Whether `business` mode sees raw identifiers | **Yes**, as the fork does — a refusal may name tables | `schema_term_guard` not needed yet; cost accepted below |
-| Scope of this round | **Reader-facing UI + queue; eval instrumentation deferred** | `attribution.py` / `power.py` / `corpus/snapshot.py` wait |
+| Scope of round one | **Reader-facing UI + queue; eval instrumentation deferred** | `attribution.py` / `power.py` / `corpus/snapshot.py` waited one round, and landed |
+
+### Round two, same day
+
+| Decision | Chosen | Consequence |
+|---|---|---|
+| Scope of round two | **Eval instrumentation + the six file-length splits** | Everything with a `curator/` dependency still declined; the two `serve/` guards deferred, not declined |
+| Whether to take `assumptions` | **No** — dropped, not deferred with a plan | The field the fork's own PR calls "wired and never populated" does not enter this tree. Entry condition below |
+| How it lands in history | **Semantic commits, our own messages** | Six commits, one per defect or capability; the fork's `cherry-pick -x` provenance lives in the prose instead |
 
 ### The first decision's consequence, stated first
 
@@ -110,7 +118,8 @@ another wired-and-empty field.
 ### Two hard constraints
 
 1. **ADR 0007 §3** forbids the reliability tier on the answer card, pinned by
-   `tests/api/test_http_contract.py::test_the_api_never_synthesizes_a_reliability_field`, which
+   `tests/api/test_http_contract_answer_and_stream.py::test_the_api_never_synthesizes_a_reliability_field`
+   (in `test_http_contract.py` until round two split it out), which
    fails on any second producer of a `"tier"` key under `src/`. The rule is: render what the engine
    produced, never synthesise. Reader phrasing is a pure function of produced fields.
 2. **`ask_user` is one of the four tools that can name an asset** (`docs/enterprise-fork.md`), and
@@ -133,7 +142,7 @@ another wired-and-empty field.
 
 ---
 
-## What shipped
+## What shipped in round one
 
 **Fixes** (`20d3df8`). `SqliteConnector._connect` memoised `self._conn`, and `sqlite3` enforces
 thread affinity on it — LangGraph runs each tool call on its own worker thread, so every call from
@@ -274,20 +283,134 @@ is not in this round.
 
 ---
 
+## What shipped in round two, the same day
+
+Six commits, in this order. No `curator/` dependency anywhere in them, and nothing here needs a
+database, a model or a corpus to verify.
+
+**The six file-length splits** (`77d5f9f`). The WARN tier taken in `20d3df8` named six files within
+80 lines of a build failure, and a warning nobody acts on trains people to read past it. The fork had
+already split all six, so the seams are theirs; **the content is ours wherever the two trees
+disagree**, and it disagreed in four places that would each have shipped a false claim:
+
+- `test_register_closure.py`'s ratchet asserts *five* declared-but-unconsumed findings and names
+  ours. `clarifications` is consumed here by `/audit/turns/{id}/trace` and there by `mine_corpus`;
+  their file says six.
+- `test_http_contract.py` asserts `why` is non-empty, because this tree still substitutes a default
+  when the model omits one. They deleted that substitution and weakened the assertion to match.
+  Their `ask_user` also takes a `basis` argument that does not exist here.
+- `_Pending` stays behind: it is `make_app`'s third dependency, which their tree does not have, and
+  three tests that did not move construct it.
+- the outstanding-clarification latch tests stay in `test_agent_tools_hitl.py`. They are a separate
+  module over there, so their split assumed a smaller file than ours.
+
+The one split that is not test-only is `eval/harness.py` → **`eval/projection.py`**: `project_turn`
+and the eleven helpers it calls are pure row-shaping, and what stays is orchestration.
+`check_declared_is_consumed.py`'s R1 asserted every declared record field is named in *the*
+projector, singular — `ARTIFACT_PROJECTOR` is a two-element frozenset now, because `run_id`,
+`turn_id`, `thread_id` and `attempt_id` are written by the orchestration that stayed.
+`check_file_length` now reports **no file approaching the cap at all**.
+
+**`failure_cause`** (`aaf4741`). `eval/attribution.py` — nine named causes, first-match-wins, a pure
+function of a row that is already graded. Three instrument defects come fixed: "could not be graded"
+scored as **wrong**, a CTE reference counted as a base table (`exp.Table` in sqlglot's AST either
+way), and `missing_prediction` conflated with `unparseable`. Its own field and not `error_type`,
+which the register declares as an exception *class*; the fork wrote taxonomy labels there first and
+measured the crashed count going 0 → 78. `ui/lib/provenance.ts` gains the key in the same commit
+because `test_provenance_groups_match_the_register.py` requires that list to partition the register.
+
+**`require_power`** (`4be7f37`). Refuses to declare an arm hypothesising an effect smaller than its
+sample can resolve. It holds the *gate* and not the formula: `measure/stats.mde` is the singleton and
+this calls it. Their first version restated the same arithmetic as `minimum_detectable_effect` with
+its own z-constants, which is the duplicate `20d3df8`'s singleton entry was added for — this is the
+other half of that observation, the duplicate itself deleted. `discordant` must be an `int`: a rate
+passed as a count computed 0.0115 against a true 0.0956 and approved the exact arm shape the gate
+exists to refuse. **Nothing calls it yet in either tree**, and `ArmSpec` carries no hypothesised
+effect for anything to enforce it against.
+
+**`corpus/snapshot.py`** (`991ab76`). `corpus_content_hash` detects that a corpus changed; it cannot
+say what the tree was or undo it. Taken before its caller — nothing here writes to a corpus during a
+run — because all three ways it went wrong are already guarded: it deleted a directory holding one
+`IMPORTANT.txt` and no corpus (a hash succeeds on any directory, so hashing is not identification),
+it accepted a snapshot nested inside the tree it later deletes, and delete-then-copy left a window
+with the corpus in neither place.
+
+**`outcome_rates`** (`a10fad4`). `correct / clarified / refused` as three rates over one denominator.
+`outcome` already distinguished them; nothing stored which non-answered reason a row was as something
+`Population.rate()` can aggregate, so a run reported "44/50 correct" and could not tell "asked a
+person a question" from "declined to answer".
+
+**The concurrent writer** (`613aa0e`). `_run_concurrently` collected with `pool.map`, which yields in
+*input* order — one hung provider request holds every finished row behind it and the crash-safe
+writer goes quiet, so a run making progress looks dead. `as_completed` over submitted futures; the
+returned list stays ordered because callers index it.
+
+**One thing was fixed on the way in, in the fork's own test.**
+`test_a_run_concurrently_crash_never_reaches_the_classifier` called `connector._connect()` to
+pre-open a connection — the pattern `20d3df8` deleted six of. With it in, suite warnings go 1 → 2.
+
+**And the prose was rewritten.** These modules cite figures from experiments this repository does not
+have (`008`, `009`) and name `curator/`, which it does not have either. Every number is kept and
+every one now names the fork as its source, because each is the argument for a specific check or a
+specific ordering, and a rule whose reason has been deleted is a rule the next reader deletes.
+
+### Verification, round two
+
+```
+1557 passed, 39 skipped, 10 xfailed, 1 warning        (1518 before; +39 tests, no test deleted)
+ruff clean · import layering clean (129 files) · singletons 7/0 · file length OK, nothing near the cap
+check_citations · check_measurement_locality · check_no_benchmark_discriminators clean
+check_declared_is_consumed: the same 5 findings, over 42 declared record fields (was 41)
+tools/mutate.py --list still enumerates all 70 mutations in their original order
+tsc clean · eslint 0 errors (3 pre-existing warnings)
+```
+
+The splits are behaviour-neutral by construction and were measured that way: 1518 either side of
+`77d5f9f`, because that commit adds and removes no test. The +39 all arrive with the five capability
+commits after it.
+
+---
+
 ## Deferred, with entry conditions
 
-**Eval instrumentation** — `eval/attribution.py` (names *why* an answered-but-wrong turn was wrong,
-as a pure function of fields already on the row), `eval/power.py` (`require_power` refuses to declare
-an arm that cannot detect its own hypothesis), `corpus/snapshot.py` (restore to a known state; refuse
-to delete a tree it cannot identify as a corpus). All three import only this repository's modules —
-zero `curator/` dependency. Deferred because the taxonomy is one every future arm reads, and it
-should not land while nobody can re-measure against it. Three real instrument defects come with it:
-"could not be graded" scored as **wrong**, a CTE name counted as a base table, and
-`missing_prediction` conflated with `unparseable`.
+**Eval instrumentation is no longer deferred** — it shipped in round two, above. It was held for one
+round because the taxonomy is one every future arm reads and it should not land while nobody can
+re-measure against it; what changed that is not a new measurement but the recognition that the entry
+condition was backwards. Two of the three modules are called by nothing yet in either tree
+(`require_power`, `snapshot`), and the point of both is to be callable *before* the run that wants
+them.
+
+**The two `serve/` guards** — `serve/schema_term_guard.py` (a shape-based block on dotted paths,
+snake_case and camelCase in `ask_user`'s `question`/`why`, retried rather than flagged) and
+`serve/structured_check.py` (a "percentage" question whose executed SQL never scales by 100).
+Deferred, not declined, and cheap: 102 lines of source and 96 of tests, and `serve/runtime.py` already
+carries the `bool_knob` the second one needs. What they cost is a hand-port — `serve/tools.py` has
+diverged by 320 lines on the fork's side, most of it the curation write-back, so neither hunk
+cherry-picks. The guard is also the more interesting of the two here: the third owner decision above
+says a *refusal* may name a table, and `ask_user`'s question is a different surface — prose written
+for a reader, not a verdict.
+
+**A turn-level `reliability` caveat** — 40 lines in `serve/nodes/stamp.py` reusing
+`corpus/schema.py`'s `Reliability`/`ReliabilityStatus` at the turn level, so a turn whose
+clarification was *deferred* rather than answered says the answer rests on the agent's own guess.
+Scoped to the turn, correctly: `state["clarifications"]` accumulates across the thread, so an unscoped
+read flags every later turn. Deferred because it arrives in the same commit as
+`_log_live_clarification`, which writes `<corpus_root>/clarifications.jsonl` — the placement measured
+above to void an arm — and because nothing here sets `deferred` on a clarification yet. Taking it means
+splitting that commit in half.
+
+**`tools/dump_openapi.py`** (91 lines) — regenerates `docs/openapi.json`, which is hand-maintained
+here. Undecided rather than deferred: taking it means accepting whatever it generates from our route
+set as the file's new contents, which is a diff nobody has read yet.
 
 **The curation write-back** needs four things first, in order:
 
-1. a provenance gate that is actually enforced, so `proposed` does not reach the model;
+1. a provenance gate that is actually enforced, so `proposed` does not reach the model. **The fork
+   has one** — 18 lines in `corpus/analyst.py::for_analyst`, dropping any asset whose
+   `audit.provenance.status` is not `certified`, placed there because it is the one function every
+   retrieval and authorisation caller routes through. An asset with no `audit` at all stays visible,
+   which is what keeps every asset this project has ever shipped from vanishing. Taking that alone
+   would be a gate with nothing to gate;
 2. a write-time distinction between a rule that generalises ("exclude delisted") and a result that
    expires ("8,512") — the fork's own finding 2, where a correction became a memorised number recited
    with `terminal: no_sql` and an empty ledger;
@@ -297,6 +420,18 @@ should not land while nobody can re-measure against it. Three real instrument de
    this code.
 
 ## Declined
+
+- **`assumptions`** — the `state_assumption` tool, the `assumptions_by_call` channel, and the
+  unconditional `assumptions` field on the answer. **Dropped, on the owner's call, not deferred with
+  a plan.** The fork's own PR leads with it: wired, on the wire, parsed, rendered, and nothing fills
+  it — two answered turns measured 2026-08-18, both `[]`. The sharp case averaged every row in a
+  table including rows a certified rule excludes, and reported the number with no statement that it
+  had. The only thing that would fill it is a prompt naming the tool, and the variants that do are in
+  the renumbering declined below. This repository already carries one wired-and-empty field
+  (`uncertainty_flags`, whose producer did not survive the rewrite), and the cost of a second is not
+  the code: it is that a reader who sees "no assumptions stated" cannot tell it from "the field does
+  not work". **Entry condition:** a producer lands first — a prompt variant of ours that names the
+  tool, measured to be non-empty on a real turn — and the field follows it, not the other way round.
 
 - **`curator/` and its surfaces** — 4,000+ lines carrying an `UNLAYERED` import-cycle exemption. The
   fork's own position is not to offer it before the layering fix.

@@ -138,5 +138,6 @@ for first:
 > **There is no reliability stamp on any path.** A turn carries the fields above and
 > nothing that summarises them. A single collapsed trust score is worse than none, and
 > a verdict needs a definition of what measures it before it needs a field — so the
-> record carries only what something observes. `tests/api/test_http_contract.py` fails
-> if `safety_clearance` or `semantic_assurance` appears in `src/`.
+> record carries only what something observes.
+> `tests/api/test_http_contract_answer_and_stream.py` fails if `safety_clearance` or
+> `semantic_assurance` appears in `src/`.
