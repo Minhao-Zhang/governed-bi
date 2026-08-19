@@ -1043,6 +1043,15 @@
             "title": "Stages",
             "description": "Every register field grouped by owning stage, in register/stages.Stage order; stages the register does not name sort last, alphabetically."
           },
+          "clarifications": {
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "type": "array",
+            "title": "Clarifications",
+            "description": "What this turn asked its reader mid-flight and what they answered: one object per `ask_user` call, `{clarification_id, question, why, answer, turn_id}`. Empty when the turn asked nothing, which is a read and not a shrug \u2014 the reader read the channel either way.\n\n**Added 2026-08-19.** The `clarifications` channel had two writers and no reader, so a turn whose SQL a *person* selected showed no sign of having asked. Read beside the envelope and not joined into it: `get_turn` returns the five keys the record node stored, and a test holds it to them. The unanswered half of the same pair is `GET /clarifications/pending`, which reads interrupt state instead \u2014 between them they cover every clarification asked."
+          },
           "ledger": {
             "items": {
               "type": "object",
@@ -1486,12 +1495,12 @@
           "checkpoint_durable": {
             "type": "boolean",
             "title": "Checkpoint Durable",
-            "description": "Reported as the literal False, and **stale**: `langgraph.json` mounts a durable AsyncSqliteSaver at `checkpointer.path` (ADR 0014) and a thread survives a restart. The comment in `api/routes.py` still explains the flag by a `POST /chat` that no longer exists. Read `langgraph.json`, not this field \u2014 audit A10, `docs/open-work.md` \u00a74.4."
+            "description": "Whether this deployment mounts a durable checkpointer. **Derived** from `langgraph.json` \u2014 `checkpointer.path` names a module and factory, and that module is on disk \u2014 so the flag goes false if either stops existing, without anyone editing a line (ADR 0009 D4). It is honest about being a *configuration reading* and not an observation: the platform injects the saver into the graph it runs and this custom app never holds that graph, so there is no live handle here to ask. Reported as the literal `False` until 2026-08-18, when `POST /chat`'s process-local `InMemorySaver` \u2014 the thing that comment described \u2014 was deleted (ADR 0014). Audit A10, `docs/open-work.md` \u00a74.4."
           },
           "hitl_survives_process_restart": {
             "type": "boolean",
             "title": "Hitl Survives Process Restart",
-            "description": "Reported as the literal False. The checkpoint that holds a pending interrupt is now durable, but answering one after a restart has not been observed, and under `langgraph dev` the thread index still lives in `.langgraph_ops.pckl`. So the value is not currently derived from anything \u2014 audit A10, `docs/open-work.md` \u00a74.4."
+            "description": "Whether a clarification paused at `interrupt()` survives a restart of this process. Reads the same derivation as `checkpoint_durable`, and cannot be true while that is false: an `ask_user` interrupt *is* checkpoint state, and the resume reads it back out of the same store through the platform's `Command(resume=\u2026)`, so this is one observation and not two.\n\n**The behaviour was watched end to end on 2026-08-19**: a turn paused at `ask_user`, the process was killed and confirmed off the port, a fresh process re-mounted the prompt from checkpointed state, and answering it resumed the turn to a correct answer. So the flag is no longer derived from nothing. It is still derived from configuration rather than re-checked per process, which is what remains open. Audit A10, `docs/open-work.md` \u00a74.4."
           }
         },
         "type": "object",

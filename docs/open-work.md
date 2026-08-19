@@ -411,11 +411,13 @@ One shape keeps recurring: something is declared in the register, stamped by a n
 in a docstring, and **nothing on the other end reads it**. Each instance is individually small;
 together they are the reason numbers here have twice been quotable and wrong.
 
-A sweep found 28 and the checker still reports **6** — unchanged across the 2026-08-12 access-seam
-and abstention work, which added two comparability knobs (`access_grant`,
+A sweep found 28 and the checker now reports **5**. It stood at 6 across the 2026-08-12
+access-seam and abstention work, which added two comparability knobs (`access_grant`,
 `abstention_policy_enabled`), a record field (`abstention`) and a state channel of the same name,
-every one of them with a consumer on the other end. That is the number to watch when adding a
-declaration: it is easy to move and nothing in CI moves it for you.
+every one of them with a consumer on the other end; `clarifications` closed on 2026-08-19. That is
+the number to watch when adding a declaration: it is easy to move, and the only thing in CI that
+moves it is `test_the_declared_but_unconsumed_set_does_not_grow`, which fails on a closure as
+loudly as on a new finding so the list cannot outlive its findings.
 
 Fourteen were fixed in the sweep itself; the
 eight closed on 2026-08-11 are the driver-side identity — `git_sha`, `git_main_sha`,
@@ -424,14 +426,20 @@ eight closed on 2026-08-11 are the driver-side identity — `git_sha`, `git_main
 writes from now on — which is not the same as every row on disk; see below. Evidence and
 the per-field decisions are in [declared-not-consumed](analysis/declared-not-consumed.md).
 
-Six remain, and none of them currently corrupts a number:
+Five remain, and none of them currently corrupts a number:
 
 | | |
 |---|---|
 | `expand_hops` | a comparability knob with no reader: setting it changes no behaviour and does change the config hash. `pulled_in` now reaches the row, which makes the knob's own question answerable — the measurement half exists, the behaviour half does not |
 | `negative_tau`, `facet_model`, `rewrite_model` | dead declarations |
 | `build_workers` | **deliberately still open.** The eval driver serves and does not build a corpus, so a number here would be the `embedding_provider` defect — a null reads as unmeasured, a value reads as a measurement. The knob's own note is about a worker that "holds a connection AND a long-lived agent conversation", which is the curator, and the curator is not in this repository. Wiring it from the driver would launder it under K1's blind spot rather than close it |
-| `clarifications` | a `ServeState` channel with two writers and no reader outside `state.py` |
+
+`clarifications` was the sixth until 2026-08-19. It was a channel with two writers and no reader
+outside `state.py`, and what closed it was seeing the consequence rather than the declaration: a
+turn that paused at `ask_user`, was answered, and resumed had its SQL chosen by a *person*, and
+`/audit/turns/{id}/trace` showed no sign of it. `ThreadTurnLog.clarifications_of` now projects the
+channel onto the trace, joined on the `turn_id` the row already carries. Nothing new is stored --
+which is why turns served before the reader existed show their clarifications too.
 
 The common cause is that declaring and consuming live in different files and nothing forces them
 to meet. **Two of the fixed items were invisible to any static rule by construction** — in each
@@ -800,34 +808,46 @@ state-writing `command` are untouched, and `langgraph.json` keeps `auth.path` fo
 
 ---
 
-### 4.4 `/capabilities` reports two durability flags that are now false in the wrong direction
+### 4.4 `/capabilities`' two durability flags: the direction is fixed, the *kind* of answer is not
 
-`capabilities_for` in `api/routes.py` returns `checkpoint_durable: False` and
-`hitl_survives_process_restart: False` as **literals**, under a comment explaining them by
-`POST /chat`'s process-local `InMemorySaver`. That route was deleted on 2026-08-18 and
-`langgraph.json` now mounts `serve/checkpointer.py::conversation_checkpointer`
-([ADR 0014](adr/0014-one-conversation-store.md)) — the server logs *"Using custom checkpointer:
-AsyncSqliteSaver"* and a thread was read back after a hard kill.
+**Half of this is closed, and the other half is narrower than it was.**
 
-So the surface under-reports a capability it has. [ADR 0007 §7](adr/0007-http-surface-and-the-ui-contract.md)
-argues a flag must be an observation and not a literal, and audit A10 already named these two as
-misreporting; the change of store inverted the direction without touching the line.
+The literals are gone. `capabilities_for` in `api/routes.py` returned `checkpoint_durable: False`
+and `hitl_survives_process_restart: False` under a comment explaining them by `POST /chat`'s
+process-local `InMemorySaver`; that route was deleted on 2026-08-18 and `langgraph.json` mounts
+`serve/checkpointer.py::conversation_checkpointer` ([ADR 0014](adr/0014-one-conversation-store.md)).
+Both now read `durable_checkpointer_configured()` and both report **true**, so the surface no longer
+denies something that is built.
 
-No consumer is misled *today*: `ui/lib/schemas.ts`'s `capabilitiesSchema` declares neither field,
-so zod strips both and nothing in `ui/` reads them. That is what keeps this out of §1. The cost is
-that a surface whose stated job is to report what is built now denies something that is built, so
-the first client to gate a feature on it gates it off.
+**The behaviour behind the second flag was observed on 2026-08-19**, which is what this section used
+to ask for. A live turn paused at `ask_user`; the server process was killed and confirmed off port
+2024; a fresh process was started; the queue still held the question with the same
+`clarification_id`, the prompt re-mounted from checkpointed interrupt state, and answering it resumed
+the turn to a correct answer. This section warned about one way that could fail: under
+`langgraph dev` the thread index is `.langgraph_ops.pckl` on a ten-second flush while the checkpoint
+is SQLite, so the two halves can disagree. They did not. One observation is not a guarantee, and it
+was made by hand; the note in `docs/analysis/adopting-the-downstream-fork-2026-08-19.md` records the procedure so
+it can be repeated.
 
-Two things have to be settled rather than one:
+**What is still open is what kind of answer the flag is.** `durable_checkpointer_configured()` reads
+`langgraph.json` and checks that the named module is on disk. Its own docstring is straight about
+this. Its words are *"honest about being a configuration reading"*, because the platform injects the
+saver into the graph it runs and this custom app never holds that graph, so there is no object here
+to ask. The
+flag therefore goes false if the file or module disappears, which is what
+[ADR 0009 D4](adr/0009-browsing-and-filtering-api.md) asks of a capability flag, and it would stay
+true if the saver were configured and failed to open. That is a smaller gap than a literal, and it
+is the gap [ADR 0007 §7](adr/0007-http-surface-and-the-ui-contract.md) is about: an observation and
+a configuration reading are not the same claim.
 
-- **`checkpoint_durable`** should be derived, not asserted. The honest source is the checkpointer
-  the process is actually running under, which `api/routes.py` does not hold — the platform owns
-  it. Reading `langgraph.json` would be reading configuration and calling it an observation.
-- **`hitl_survives_process_restart`** needs an *observation* first. The checkpoint survives; what
-  has not been watched is a paused clarification answered after a restart, and under `langgraph dev`
-  the thread index is still `.langgraph_ops.pckl` with a ten-second flush, so the two halves can
-  disagree. Flipping this flag on the strength of the checkpointer alone would repeat the defect
-  A10 named.
+`hitl_survives_process_restart` additionally rests on an argument rather than a measurement. An
+`ask_user` interrupt *is* checkpoint state, so it cannot survive less well than the checkpoint. The
+argument is sound and the code says so at the line. It is still not the thing the flag's name
+promises, and nothing re-checks it per process.
+
+No consumer is misled either way: `ui/lib/schemas.ts`'s `capabilitiesSchema` declares neither field,
+so zod strips both and nothing in `ui/` reads them. That is what keeps this out of §1, and it is also
+why the remaining half has never cost anything.
 
 ---
 

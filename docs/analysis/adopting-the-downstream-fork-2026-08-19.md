@@ -189,21 +189,83 @@ module is `make_<surface>_router`.**
 ### Verification
 
 ```
-1539 passed, 17 xfailed, 1 warning
+1518 passed, 39 skipped, 10 xfailed, 1 warning
 ruff clean · import layering clean (125 files) · singletons 7/0 · file length OK
 tsc clean · eslint 0 errors (3 pre-existing warnings)
 ```
+
+1,556 tests either way. The three fixes below added 13; how the rest split between passed and skipped
+depends on which credentials the machine has, so a different total in the first column is not a
+regression and the sum is what to compare.
 
 In a browser: the mode control renders, switches, writes `localStorage`, and survives a reload with
 no hydration warning; `/clarifications` calls `/clarifications/pending?limit=50&offset=0` and
 degrades correctly with no engine attached.
 
-**Not verified: the answer card's three modes.** That needs a real answer, so a live engine and a
-paid model call. The collapse conditions are `atLeast(...)` guards checked only by `tsc`; the client
-has no test runner. A live turn at each mode is the outstanding check, together with the queue's
-end-to-end smoke — ask an ambiguous question, close the tab without answering, and the row must
-appear. That smoke is also the first end-to-end proof that ADR 0014's checkpointer makes a pending
-clarification survive a process restart.
+### Verified against a live engine, later the same day
+
+Both outstanding checks were run on 2026-08-19, against Bedrock `us.anthropic.claude-sonnet-5` over
+the seven-table `gbi_demo_sales` schema from `tools/load_demo_schema.py`. **How to repeat it is at
+the end of this section**, because getting the stack up took longer than the checks did.
+
+**The answer card's three modes**, asserted against the DOM on one real answered turn rather than
+read off a screenshot:
+
+| | `business` | `analyst` | `engineer` |
+|---|---|---|---|
+| answer, narration | yes | yes | yes |
+| outcome badge, `n passed governance` | — | yes | yes |
+| `ledger:` terminal | — | — | yes |
+| SQL panel | — | — | yes |
+| Provenance drawer | — | — | yes |
+
+The refusal path came free. "What was our profit margin by sales channel last quarter?" ended
+`no_sql`, and in `business` the card carried `refusalSentence`'s one line and **no engine
+identifier**. I checked explicitly for the absence of both `no_sql` and `ledger:`, since printing
+either to a reader is the thing this mode exists to prevent. `engineer` showed both.
+
+**The queue, end to end, across a real restart.** An ambiguous question ("Who are our top
+performers?") raised `ask_user`; the tab was abandoned; the row appeared at `/clarifications`. Then
+the API process was killed, with nothing left listening on 2024, and a fresh one started. The
+queue still held it with the same `clarification_id`, the prompt **re-mounted in the new process**
+from checkpointed interrupt state, and answering it resumed the turn to a correct answer, after
+which the row left the backlog. `meta.truncated` flips to `true` at `limit=1`, and
+`clarification_id` carries the `turn_id` as designed.
+
+This is the observation `open-work.md` §4.4 asked for and `api/routes.py` says at the line has never
+been made: *"a clarification answered after a restart has not been watched end to end"*. That
+section warns about a specific way it could fail under `langgraph dev`, a SQLite checkpoint beside a
+`.langgraph_ops.pckl` thread index on a ten-second flush, with the two halves disagreeing. It did not
+happen. One hand-run observation is not a guarantee, which is why the procedure is written down.
+
+**Three defects surfaced while running it**, each fixed in its own commit with a test:
+
+1. `serve/__main__.py`'s `--model` defaulted to `gpt-4o-mini` and overrode `GOVERNED_BI_MODEL`, so
+   under this repository's own `GOVERNED_BI_PROVIDER=bedrock` the documented one-turn CLI sent an
+   OpenAI id to Bedrock and reported `outcome: crashed` naming nothing. The variable's name moved to
+   `model/provider.py::SURFACE_MODEL_VARS`, beside the provider variables; a conformance test now
+   refuses a model id in any `default=`.
+2. `chat/serve-progress.tsx` was not a display-mode consumer, so the live trace rendered in every
+   mode, physical names included, and then *vanished* when the turn completed, the card gating the
+   same timeline on `analyst`. Gating it exposed a second bug underneath: the caller passed
+   `isRunning={isRunning || awaitingClarification}`, so `business` sat spinning "Working…" while the
+   engine was doing nothing but waiting on the reader.
+3. `/audit/turns/{id}/trace` showed no clarification at all, so this very turn, whose SQL a person
+   selected, looked like one the engine chose alone. `ThreadTurnLog.clarifications_of` projects the
+   channel now, which closed the `clarifications` entry in `open-work.md` §3.10's table.
+
+The first two are the same shape as the fork's own findings and the reason for running the thing:
+neither was reachable by reading the code, and both sat on the path a reader takes.
+
+### Repeating it
+
+The committed `.env` does not work unmodified on a machine where 5432 is already taken, and nothing
+in `docs/usage.md` said so. It does now, under "A stack that will actually answer". The short version
+is a Postgres of this repository's own on a free port, `tools/load_demo_schema.py` to fill it,
+`GOVERNED_BI_SCHEMA` pointed at it with `GOVERNED_BI_CORPUS_DIR` unset so the corpus seeds from the
+live schema, and `uv sync --extra bedrock` because the provider here is Bedrock. The corpus in
+`../BIRD-corpus` is semantic-layer YAML with no data behind it, so it cannot answer a question on
+its own.
 
 **Known limitation:** the queue cannot filter by origin. Nothing in `src/` writes thread metadata,
 so a thread carries only the platform's `{graph_id, assistant_id}` and a hand-tested conversation is

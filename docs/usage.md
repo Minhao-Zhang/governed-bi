@@ -55,7 +55,7 @@ Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 | `GOVERNED_BI_CORPUS_DIR` | Corpus directory (else one dir under `corpora/`, or seed via schema) |
 | `GOVERNED_BI_ACCESS_POLICY` | Path to a `StaticRoleAccessPolicy` TOML file ([ADR 0012](adr/0012-access-seam-principal-and-authorization.md) §2), resolved against the repo root. Unset means `OpenAccessPolicy`, which authorizes every table and is what this repository ships. Set to a path that is not a file and the server **refuses to start** rather than serving open under a policy the operator believes is in force |
 | `GOVERNED_BI_SCHEMA` | Optional: seed / pin schema from the live database |
-| `GOVERNED_BI_MODEL` | Main chat model; unset → `has_live_model: false` |
+| `GOVERNED_BI_MODEL` | Main chat model, read by the server and the one-turn CLI both. Unset → `has_live_model: false` on the server, and exit 2 from the CLI unless `--model` or `--no-model` is passed |
 | `GOVERNED_BI_UTILITY_MODEL` | Small model for facet rewrite / scope gate |
 | `GOVERNED_BI_UTILITY_MODEL_EFFORT` | Effort knob for the utility model |
 | `GOVERNED_BI_EMBEDDING_MODEL` | Embedder id |
@@ -77,13 +77,68 @@ that calls this server. `GOVERNED_BI_API_KEY` was a row here until 2026-08-13 an
 nothing — delete it from an old `.env` rather than assuming it still gates something. What its
 absence costs is in [Serve](#serve-langgraph-server).
 
-The provider, AWS region and credential names are read in exactly one module —
-[`model/provider.py`](../src/governed_bi/model/provider.py) (`PROVIDER_VAR`,
-`SURFACE_PROVIDER_VARS`, `AWS_REGION_VARS`, `_CREDENTIAL_NAMES`). The proxy's own
+The provider, the per-surface model ids, the AWS region and the credential names are read in
+exactly one module, [`model/provider.py`](../src/governed_bi/model/provider.py) (`PROVIDER_VAR`,
+`SURFACE_PROVIDER_VARS`, `SURFACE_MODEL_VARS`, `AWS_REGION_VARS`, `_CREDENTIAL_NAMES`). The proxy's own
 three are read in
 [`model/proxy_gateway.py`](../src/governed_bi/model/proxy_gateway.py)
 (`PROXY_SECRET_NAME_VAR`, `PROXY_REGION_VAR`, `PROXY_CA_BUNDLE_VAR`). Check them
 there rather than against this table.
+
+## A stack that will actually answer
+
+Every variable above can be set correctly and the engine still answer nothing, because three of the
+things it needs are not in the repository. This section is the shortest path to a running stack that
+answers a real question, written down on 2026-08-19 after it took longer than the work it was for.
+
+**`.env` is one developer's file, not a checked-in configuration.** It is gitignored, so the DSN in
+it names a database on whoever's machine wrote it. On a machine where port 5432 already belongs to
+another project, that DSN reaches the wrong server and Postgres answers
+`FATAL: password authentication failed`, which reads like a wrong password and is a wrong *server*.
+Check what holds the port before believing the message:
+
+```bash
+docker ps --format '{{.Names}}\t{{.Ports}}'
+```
+
+A Postgres of this repository's own, on a port nothing else wants:
+
+```bash
+docker run -d --name governed-bi-pg -e POSTGRES_USER=gbi -e POSTGRES_PASSWORD=gbi -e POSTGRES_DB=gbi -p 5433:5432 postgres:18
+```
+
+**A corpus is not data.** `corpora/` is gitignored and starts empty, and a curated corpus is
+semantic-layer YAML: table, column, join and term assets, with no rows behind them. Point
+`GOVERNED_BI_CORPUS_DIR` at one and every question refuses, correctly, because the tables it
+describes are not in the warehouse. The two have to match, and the corpus does not carry its half.
+
+`tools/load_demo_schema.py` exists for this. It builds seven tables with foreign keys, a self-join
+and enough rows to aggregate, which is the smallest thing you can ask a real question of:
+
+```bash
+uv run python tools/load_demo_schema.py
+```
+
+Then leave `GOVERNED_BI_CORPUS_DIR` unset and set `GOVERNED_BI_SCHEMA=gbi_demo_sales`. The engine
+seeds a corpus from the live schema at startup, so the two halves cannot disagree.
+
+**`uv sync` alone does not cover a Bedrock `.env`.** `GOVERNED_BI_PROVIDER=bedrock` needs the extra,
+and the failure is a `ModuleNotFoundError` for `langchain_aws` at the first model call rather than at
+startup:
+
+```bash
+uv sync --extra bedrock
+```
+
+Confirm the whole thing from one request, before opening a browser. `/capabilities` reports what the
+process resolved, so it names the model, the gateway and the database it is actually pointed at:
+
+```bash
+curl -s http://127.0.0.1:2024/capabilities
+```
+
+`has_live_model: false` there means `GOVERNED_BI_MODEL` is unset. A `connection.port` you did not
+expect means `.env` won the argument.
 
 ## Serve (LangGraph Server)
 
@@ -229,6 +284,15 @@ uv run python -m governed_bi.serve --schema <schema> -q "…"
 uv run python -m governed_bi.serve --corpus-dir <path> -q "…"
 uv run python -m governed_bi.serve --schema <schema> -q "…" --no-model
 ```
+
+The model comes from `GOVERNED_BI_MODEL`, the same variable the server reads, and `--model`
+overrides it for one run. There is no default: with neither set the command exits 2 naming the
+variable, rather than picking a model for you.
+
+That default used to be `gpt-4o-mini`, and it overrode the variable. Under
+`GOVERNED_BI_PROVIDER=bedrock` it sent an OpenAI id to Bedrock and the turn came back
+`outcome: crashed`, naming nothing that pointed at the model, while the same question answered
+normally through the server. Fixed 2026-08-19.
 
 ## Tests
 
