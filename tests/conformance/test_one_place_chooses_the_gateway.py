@@ -84,6 +84,80 @@ def test_no_call_site_constructs_a_concrete_embedder() -> None:
     )
 
 
+#: A model id, in any vendor's spelling, written as a literal.
+NAMES_A_MODEL = re.compile(
+    r"""['"](?:gpt-[0-9a-z.-]+|claude-[a-z0-9.-]+|us\.anthropic\.[a-z0-9.-]+"""
+    r"""|text-embedding-[a-z0-9.-]+|amazon\.titan-[a-z0-9.:-]+)['"]"""
+)
+
+#: Argument-parser defaults that still name a model. **A ratchet, not a waiver**: every entry is a
+#: real instance of the defect below, may be deleted freely and may not be added to.
+#:
+#: Both are eval tools, and the fix there is not the fix ``serve/__main__.py`` got. Reading the
+#: environment is right for the one-turn CLI and wrong for an arm: the model *is* the treatment, so
+#: an arm that inherits an ambient variable makes two runs of different models record as one. What
+#: these two want is a **required** ``--model``, which changes an interface every measurement
+#: workflow calls, so it is its own change and not a rider on a bug fix.
+LITERAL_MODEL_DEFAULTS: frozenset[str] = frozenset(
+    {
+        "tools/score_reflector.py",
+        "tools/run_datalake_eval.py",
+    }
+)
+
+
+def test_no_argument_default_names_a_model() -> None:
+    """A model id in a ``default=`` is a second place deciding a comparability knob.
+
+    ``serve/__main__.py`` had ``--model`` defaulting to ``gpt-4o-mini``, and the failure was not
+    that it was redundant. Under ``GOVERNED_BI_PROVIDER=bedrock`` -- the configuration this
+    repository's own ``.env`` carries -- it handed an OpenAI id to Bedrock, and the turn came back
+    ``outcome: crashed`` with nothing in the record, the ledger or the printed summary pointing at
+    the model. Measured 2026-08-19, on the entry point ``docs/usage.md`` tells a reader to run.
+
+    The same failure as the provider tests above, one field along: the id and the gateway have to
+    agree, and a literal in a call site cannot follow the variable that sets the other half.
+    ``model/provider.py`` declares each surface's variable (``SURFACE_MODEL_VARS``); a caller reads
+    that, or takes the id from its own caller, and never invents one.
+    """
+    default = re.compile(r"default\s*=\s*" + NAMES_A_MODEL.pattern)
+    offenders = []
+    for path in _sources():
+        rel = path.relative_to(ROOT)
+        if rel.as_posix() in LITERAL_MODEL_DEFAULTS:
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if default.search(line) and not line.lstrip().startswith("#"):
+                offenders.append(f"{rel}:{number}: {line.strip()}")
+    assert not offenders, (
+        "these defaults name a model, so they cannot follow the variable that names the gateway "
+        "and will send one vendor's id to another's endpoint. Read the surface's variable from "
+        "governed_bi.model.provider.SURFACE_MODEL_VARS, or require the argument:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_the_literal_model_ratchet_still_describes_this_tree() -> None:
+    """A pinned entry that stopped violating must be deleted, or the list outlives its findings.
+
+    The same rule ``tests/conformance/test_register_closure.py`` applies to ``KNOWN_UNCONSUMED``,
+    and for the same reason: a list nobody tightens reads as "these are fine".
+    """
+    default = re.compile(r"default\s*=\s*" + NAMES_A_MODEL.pattern)
+    stale = [
+        name
+        for name in sorted(LITERAL_MODEL_DEFAULTS)
+        if not any(
+            default.search(line) and not line.lstrip().startswith("#")
+            for line in (ROOT / name).read_text(encoding="utf-8").splitlines()
+        )
+    ]
+    assert not stale, (
+        f"{stale} no longer default to a literal model id. Delete them from "
+        "LITERAL_MODEL_DEFAULTS so the ratchet tightens."
+    )
+
+
 @pytest.mark.parametrize(
     "module",
     [

@@ -32,6 +32,24 @@ import tempfile
 from typing import Any
 
 
+def _chat_model_var() -> str:
+    """The variable that names the agent's model — ``model.provider``'s, not a copy.
+
+    Deliberately not a constant here. ``api/graph_app.py`` reads the same variable, and two entry
+    points naming it separately is the duplicate ``tools/check_one_implementation.py`` refuses; the
+    shared declaration lives one layer in, beside the provider variables it belongs with.
+
+    There is also deliberately no literal fallback any more. ``--model`` used to default to
+    ``gpt-4o-mini``, a second place deciding a comparability knob -- the thing :func:`_model`'s own
+    docstring argues against -- and it was silently *wrong* rather than merely redundant: under
+    ``GOVERNED_BI_PROVIDER=bedrock`` it sent an OpenAI id to Bedrock and the turn came back
+    ``outcome: crashed`` naming nothing that pointed at the model.
+    """
+    from ..model.provider import SURFACE_MODEL_VARS
+
+    return SURFACE_MODEL_VARS["agent"]
+
+
 def _credentials() -> Any:
     """The shared reader, with ``.env`` bridged into the environment for this process.
 
@@ -80,7 +98,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-q", "--question", required=True)
     parser.add_argument("--schema", help="schema to seed from, or the manifest entry to load")
     parser.add_argument("--corpus-dir", help="a corpus already on disk; omit to seed from --schema")
-    parser.add_argument("--model", default="gpt-4o-mini")
+    parser.add_argument(
+        "--model",
+        help="chat model id; omit to read "
+        f"{_chat_model_var()} from the environment or .env",
+    )
     parser.add_argument("--no-model", action="store_true", help="serve without a model (stub answer path)")
     parser.add_argument("--embed", action="store_true", help="build the index with an embedder (costs tokens)")
     parser.add_argument("--effort", help="reasoning effort for models that take one (none/low/medium/high/xhigh)")
@@ -117,7 +139,18 @@ def main(argv: list[str] | None = None) -> int:
         # all 13,968 summaries in the pooled corpus before answering one question, and nothing
         # here reports how many vectors were reused, so it went unnoticed.
         vector_cache = vector_cache_from_environment(model=embedder.requested_model)
-    model = None if args.no_model else _model(args.model, creds, args.effort)
+    # Resolved after `_credentials()` has bridged `.env` into the environment, so a model named
+    # only in the file is found. `--model` wins, for one run, without editing anything.
+    model_var = _chat_model_var()
+    model_name = args.model or creds.secret(model_var)
+    if not args.no_model and not model_name:
+        print(
+            f"no model: pass --model, or set {model_var} in the environment or .env, "
+            "or pass --no-model to serve the stub path",
+            file=sys.stderr,
+        )
+        return 2
+    model = None if args.no_model else _model(model_name, creds, args.effort)
 
     kwargs: dict[str, Any] = {
         "connector": connector,

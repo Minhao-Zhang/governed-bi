@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from governed_bi.model.provider import SURFACE_MODEL_VARS
 from governed_bi.paths import REPO_ROOT
 from governed_bi.serve.accept import accept_node
 from governed_bi.serve.graph import build_graph
@@ -48,17 +49,19 @@ SCHEMA_VAR = "GOVERNED_BI_SCHEMA"
 #: Curated corpus on disk; takes precedence over live-schema seeding.
 CORPUS_DIR_VAR = "GOVERNED_BI_CORPUS_DIR"
 
-#: Chat model id. Absent = no model (supported; graph still runs).
-MODEL_VAR = "GOVERNED_BI_MODEL"
+#: Chat model id. Absent = no model (supported; graph still runs). The name comes from
+#: ``model/provider.py`` because ``serve/__main__.py`` reads the same variable and cannot
+#: import this module -- ``api`` is the outermost layer.
+MODEL_VAR = SURFACE_MODEL_VARS["agent"]
 
 #: Model for guard + facet rewriters. Unset → share :data:`MODEL_VAR`.
-UTILITY_MODEL_VAR = "GOVERNED_BI_UTILITY_MODEL"
+UTILITY_MODEL_VAR = SURFACE_MODEL_VARS["utility"]
 
 #: Reasoning effort for the utility model (usually low/unset).
 UTILITY_MODEL_EFFORT_VAR = "GOVERNED_BI_UTILITY_MODEL_EFFORT"
 
 #: Embedding model id. Setting it turns the semantic channel on.
-EMBEDDING_MODEL_VAR = "GOVERNED_BI_EMBEDDING_MODEL"
+EMBEDDING_MODEL_VAR = SURFACE_MODEL_VARS["embedding"]
 
 #: Provider SDK retry count. Reaches the agent, the utility model, and the OpenAI and Bedrock
 #: embedders. **The proxy embedder drops it**: ``provider.embedder`` constructs

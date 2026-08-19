@@ -50,6 +50,7 @@ from typing import Any, Callable, Literal, Mapping
 __all__ = [
     "PROVIDER_VAR",
     "SURFACE_PROVIDER_VARS",
+    "SURFACE_MODEL_VARS",
     "AWS_REGION_VARS",
     "Surface",
     "chat_model",
@@ -70,6 +71,20 @@ SURFACE_PROVIDER_VARS: dict[str, str] = {
     "agent": "GOVERNED_BI_MODEL_PROVIDER",
     "utility": "GOVERNED_BI_UTILITY_PROVIDER",
     "embedding": "GOVERNED_BI_EMBEDDING_PROVIDER",
+}
+
+#: The variable naming each surface's model id. Here rather than in an entry point because
+#: **two** entry points read the agent one -- ``api/graph_app.py`` for the server and
+#: ``serve/__main__.py`` for the one-turn CLI -- and while it lived in the first of those the
+#: second could not import it (``api`` is the outermost layer) and so carried a literal default
+#: instead: ``--model`` defaulted to ``gpt-4o-mini``, which under
+#: ``GOVERNED_BI_PROVIDER=bedrock`` sent an OpenAI id to Bedrock and surfaced as
+#: ``outcome: crashed`` naming nothing. The provider variables beside this one had the same
+#: shape of problem and were already answered the same way.
+SURFACE_MODEL_VARS: dict[str, str] = {
+    "agent": "GOVERNED_BI_MODEL",
+    "utility": "GOVERNED_BI_UTILITY_MODEL",
+    "embedding": "GOVERNED_BI_EMBEDDING_MODEL",
 }
 
 #: Region, in precedence order. ``AWS_REGION``/``AWS_DEFAULT_REGION`` are read last so the
