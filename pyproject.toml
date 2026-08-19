@@ -55,6 +55,8 @@ dependencies = [
     # declared as direct deps.
     "langgraph>=1.0,<2",
     "langgraph-cli[inmem]>=0.4,<0.5",
+    # The durable conversation store. See the note below on why it is declared now.
+    "langgraph-checkpoint-sqlite>=3.1,<4",
     "langchain>=1.0",
     "langchain-openai>=1.0",
     # No `langchain-aws` here: it pulls a boto3/botocore tree that the OpenAI and proxy arms
@@ -62,11 +64,24 @@ dependencies = [
     # extra — `uv sync --extra bedrock` — and every import of it is inside the function that
     # needs it, so selecting a non-Bedrock provider never pays for it. See
     # [project.optional-dependencies].
-    # No `langgraph-checkpoint-sqlite` / `-postgres`: zero importers. `InMemorySaver` is
-    # the only saver compiled in-tree (`/chat`); LangGraph Server injects its own for the
-    # stream path. ADR 0004's durable checkpointer half did not ship — `/capabilities`
-    # reports `checkpoint_durable: false`. Declaring a dependency for an unbuilt saver
-    # would advertise a capability nobody built.
+    # `langgraph-checkpoint-sqlite` is declared because it is now **imported**:
+    # `api/checkpointer.py` yields the `AsyncSqliteSaver` that `langgraph.json`'s
+    # `checkpointer.path` mounts on the streamed path, and `serve/graph.compile_graph`
+    # compiles the CLI/eval graph against the same saver on a *separate* database. It
+    # replaced `InMemorySaver` as the default, so `/capabilities` reports
+    # `checkpoint_durable: true`.
+    #
+    # The note this replaces said declaring it "would advertise a capability nobody built".
+    # That objection was about an unbuilt saver and it stands as written — the saver is built,
+    # so the objection is spent rather than overruled. What made it buildable is that a
+    # checkpoint can now hold *every* turn: `state.turn_summaries` accumulates across
+    # `PER_TURN_RESET`, which is the premise ADR 0004 §5 lacked when it withdrew this half.
+    #
+    # One database per kind of data: conversation state is `GOVERNED_BI_CONVERSATION_DB` and
+    # is never the analytics Postgres DSN, whose tables are real facility data.
+    #
+    # No `langgraph-checkpoint-postgres`: still zero importers. The production platform
+    # supplies its own Postgres persistence and this repository never compiles against it.
     #
     # No `deepagents`: zero importers, and **retired rather than deferred.**
     # `FilesystemMiddleware` contributes `write_file` / `edit_file` and they are not

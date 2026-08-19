@@ -121,13 +121,10 @@ def _session() -> Any:
 
 
 class _TurnLog:
-    """The turn-log surface ``make_app`` reads, in memory."""
+    """The turn-log surface ``make_app`` reads, in memory. Readers only -- nothing appends."""
 
     TURN_LOG_DIR = Path("/nowhere")
     SUMMARY_FIELDS: tuple[str, ...] = ("turn_id", "outcome")
-
-    def append_turn(self, record: Any, **kwargs: Any) -> tuple[str | None, str | None]:
-        return record.get("turn_id"), None
 
     def list_turns(self, limit: int = 50, thread_id: str | None = None) -> list[dict[str, Any]]:
         return []
@@ -152,7 +149,7 @@ def test_every_check_the_script_makes_still_passes(smoke_api) -> None:
     from governed_bi.api.routes import make_app
 
     lines: list[str] = []
-    app = make_app(_session(), None, _TurnLog())
+    app = make_app(_session(), _TurnLog())
     failures = smoke_api.run_checks(TestClient(app), out=lines.append)
 
     assert not failures, "\n".join(lines)

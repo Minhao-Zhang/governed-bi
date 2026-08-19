@@ -1290,6 +1290,17 @@ reject a mismatch — v1's process-global checkpointer let a guessable
 question. The primary UI stream path bypasses that gate by design (ADR 0007 §6);
 namespacing is a mitigation, not authentication.
 
+> **The stream path no longer bypasses it, 2026-08-18.** "On the REST path" was the whole problem:
+> the REST path is deleted ([ADR 0014](0014-one-conversation-store.md)), so a gate living there
+> would have been the only gate and would have gone with it. The check is now
+> `serve/resume.py::authorise_resume`, called from `ask_user` on the instruction `interrupt()`
+> returns on — the first point in the process holding both the paused turn's checkpointed
+> `identity` and the resuming run's caller — and it covers every resume, including
+> `Command(resume=…)` applied by the platform. ADR 0006 §10 B9 and ADR 0007 §6 carry the detail.
+> What is still true: with one principal it cannot tell two callers apart, and a guessed
+> `thread_id` still lets a stranger *destroy* a pending question, because the platform consumes
+> the resume before the task re-runs.
+
 **LangGraph mechanics:**
 
 - Fan-out is five static edges; `Send` is unnecessary for a fixed facet set.
@@ -1305,6 +1316,16 @@ namespacing is a mitigation, not authentication.
   where `merge_facets` replaces by key. Concurrent-safe within a super-step
   (five disjoint keys), and overwrite-per-turn across turns (turn 2 writes the same
   five keys).
+
+  > **Read this as "accumulation must be chosen", not "`operator.add` is wrong."** `ServeState.turns`
+  > is `Annotated[list[TurnEntry], operator.add]` on purpose
+  > ([ADR 0014](0014-one-conversation-store.md) §2): a channel that *is* the conversation's history
+  > wants exactly the behaviour this bullet calls a bug. What makes it safe is what `facets` lacked
+  > — every row carries its own `turn_id` inside `record`, and `record_node` refuses to emit a row
+  > without one, so a flat list is still attributable per turn. The same argument as the
+  > `turn_index` on `usage` below. `tests/serve/test_state_channels.py` forces the choice to be
+  > declared: `PER_TURN_RESET | ACCUMULATING | TURN_IDENTITY | TEST_HOOKS` must partition every
+  > channel.
 
 - **`usage` has the same multi-turn bug and needs the same care.**
   `Annotated[list[UsageRecord], operator.add]` accumulates across turns under a

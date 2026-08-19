@@ -35,6 +35,11 @@ import { clarificationChoiceSchema } from "./clarification.ts";
  * grounded an ``answered`` turn was. This is a real capability difference,
  * not a UI simplification: there is nothing on the wire to render a third
  * state between "answered" and "refused" until v2 grows one.
+ *
+ * `no_sql` (2026-08-18, ADR 0014) is the engine's "the turn ended and no governed statement
+ * ran" outcome. It has to be listed here, not only on `answerViewSchema`'s inline shape: this
+ * is the schema `ServeOutcome`'s type is inferred from, and `parseAnswer` drops an answer whose
+ * outcome is not a member of it, so an unlisted member is a turn that renders no card at all.
  */
 export const serveOutcomeSchema = z.enum([
   "answered",
@@ -42,9 +47,25 @@ export const serveOutcomeSchema = z.enum([
   "clarification",
   "capped",
   "crashed",
+  "no_sql",
 ]);
 
 /* ── /capabilities ───────────────────────────────────────────────────────── */
+
+/** One chat surface's resolved identity. Every field nullable: the engine reports what it
+ *  resolved, and an offline profile with no model wired resolves none of it. */
+const modelSurfaceSchema = z.object({
+  id: z.string().nullable(),
+  provider: z.string().nullable(),
+  effort: z.string().nullable(),
+});
+
+/** The embedding surface. `dimensions` is the served width, probed rather than declared. */
+const embeddingSurfaceSchema = z.object({
+  id: z.string().nullable(),
+  provider: z.string().nullable(),
+  dimensions: z.number().nullable(),
+});
 
 export const capabilitiesSchema = z.object({
   environment: z.string(), // "dev" | "prod"
@@ -83,6 +104,31 @@ export const capabilitiesSchema = z.object({
   // misconfiguration hides surfaces rather than leaking them.
   ui_display_mode: z
     .enum(["business", "analyst", "engineer", "audit", "simple"])
+    .optional(),
+  // The three model surfaces, for /settings. Optional so an engine built before this
+  // field still parses — the settings page renders "not reported" rather than breaking.
+  //
+  // `embedding.id` is **provider-qualified** on the wire (`bedrock:amazon.titan-embed-text-v2:0`)
+  // and must be shown as-is: the qualifier is part of the vector cache-key identity, and the id
+  // itself can contain a colon (Titan's `…-v2:0`), so splitting it would corrupt the one field
+  // that keeps two gateways' vectors apart. `provider` arrives beside it.
+  models: z
+    .object({
+      agent: modelSurfaceSchema,
+      utility: modelSurfaceSchema,
+      embedding: embeddingSurfaceSchema,
+    })
+    .optional(),
+  // Which warehouse the engine is pointed at, for /settings. Credential-free by construction:
+  // the connector redacts, and `user`/`password` are never parsed out of the DSN at all — so
+  // there is no field here to accidentally render. `host`/`port` are absent for SQLite (a file).
+  connection: z
+    .object({
+      dialect: z.string(),
+      host: z.string().optional(),
+      port: z.string().optional(),
+      database: z.string().optional(),
+    })
     .optional(),
 });
 

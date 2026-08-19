@@ -119,43 +119,108 @@ function isTurnFinalAi(messages: readonly StreamWireMessage[], index: number): b
   return true;
 }
 
-/** One row of `GET /audit/turns`, reduced to the join key and the card it can render. */
-export interface LoggedTurn {
-  question: string;
-  answer: AnswerView;
+function asMapping(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
 }
 
 /**
- * Pair each of a thread's questions with the logged turn that answered it.
+ * The **1-based question number** a record states it belongs to, or `null` if it does not say.
  *
- * How the log gets attached to the ids {@link mapStreamToChatMessages} asks about, so it lives
- * beside it. The log's rows carry no message id and no `turn_index`, so the question text is the
- * only join key on offer — and a join is needed rather than a position because the log holds rows
- * this conversation never showed. Measured on thread `019fdc77`: two turns in `messages`, four
- * rows under that `thread_id`, two of them from an earlier run asking questions that appear
- * nowhere in the transcript. Indexing by position put one of those under turn one, which renders a
- * real question with a foreign turn's SQL, stamp and provenance beneath it.
+ * `record.usage` is one row per model call, and `stamp` filters that channel to the current
+ * turn before projecting it (`nodes/stamp.py::_usage_for_turn` keeps rows whose `turn_index`
+ * equals the turn's), so every row in a record's `usage` carries **this** turn's index — the
+ * count `serve/accept.py` derives from the thread's human messages. That is the engine's own
+ * statement of which question the row answers, and the only one that survives into the record:
+ * `turn_index` is not a declared record field (`register/record.py`), so this is where it is
+ * readable.
  *
- * Matching walks forward and never re-claims a row, so a thread that asks the same question
- * twice attributes the two answers in the order they were given, and an unmatched row is simply
- * never used.
- *
- * @param frames  One entry per `stream.messages` frame: the question text for a human frame,
- *   `null` for anything else. Turn N is the (N+1)th non-null entry.
- * @param logged  The thread's log rows, oldest first.
- * @returns Answers indexed by 0-based turn number; `undefined` where no row matched.
+ * `null` is a real answer, not a failure: a turn that made no model call records an empty
+ * `usage` list (the register calls that "a measured zero"). {@link turnAnswersByMessageId}
+ * falls back to arrival order for those.
  */
-export function alignLogToQuestions(
-  frames: readonly (string | null)[],
-  logged: readonly LoggedTurn[],
-): readonly (AnswerView | undefined)[] {
-  const out: (AnswerView | undefined)[] = [];
-  let from = 0;
-  for (const question of frames) {
-    if (question == null) continue;
-    const at = logged.findIndex((row, i) => i >= from && row.question === question);
-    out.push(at >= 0 ? logged[at]?.answer : undefined);
-    if (at >= 0) from = at + 1;
+function statedQuestionNumber(record: Record<string, unknown>): number | null {
+  const usage = record.usage;
+  if (!Array.isArray(usage)) return null;
+  for (const row of usage) {
+    const index = asMapping(row)?.turn_index;
+    if (typeof index === "number" && Number.isInteger(index) && index >= 1) return index;
+  }
+  return null;
+}
+
+/**
+ * Attach the graph's own `turns` channel to the message ids {@link mapStreamToChatMessages}
+ * asks about.
+ *
+ * **This replaced a text match, and the deletion is the point.** The records used to be fetched
+ * from `GET /audit/turns` and paired with the transcript by comparing question strings, because
+ * the record and the message lived in two different stores: the log is a JSONL file queried by
+ * `thread_id`, and it holds rows this conversation never showed (measured on thread `019fdc77`:
+ * four rows under one `thread_id` for a two-turn transcript, two from an earlier run). A position
+ * could not be trusted across those two stores, so the question text was the only join key left.
+ *
+ * `turns` is the same store the messages come from. `api/graph_app.record_node` appends exactly
+ * one row per *recorded* turn of *this thread*, to a channel reduced with `operator.add` and
+ * excluded from `PER_TURN_RESET`, and it refuses to append a row whose record has no `turn_id`.
+ * So the rows are this conversation's turns, in order, each one identified — nothing to guess.
+ *
+ * Two rules place a row, in this order:
+ *
+ *  1. The number the record states ({@link statedQuestionNumber}). Load-bearing when a question
+ *     left no row at all — a run killed before `record` — where arrival order would shift every
+ *     later row onto the wrong turn.
+ *  2. Otherwise the slot after the previous row's, i.e. arrival order. Sound here in a way it
+ *     never was against the log, because these rows cannot come from another conversation.
+ *
+ * A row is then attached to the AI frame of *its* turn, from {@link turnFinalAiFrames} — which
+ * counts turns in questions, so a `decline` (terminal, writes no message) keeps its own turn
+ * number instead of shifting the ones after it. A row whose turn left no frame claims nothing;
+ * a declined turn has no bubble to carry a card either way.
+ *
+ * @param turns  `stream.values.turns`, unvalidated: each row is `{asked_at, question,
+ *   answer_text, outcome, record}` (`serve/state.TurnEntry`).
+ * @param messages  `stream.messages`.
+ * @returns The record for each turn, by the id of the message that carries its answer.
+ */
+export function turnAnswersByMessageId(
+  turns: unknown,
+  messages: readonly StreamWireMessage[],
+): Map<string, AnswerView> {
+  const out = new Map<string, AnswerView>();
+  if (!Array.isArray(turns) || turns.length === 0) return out;
+
+  const frameOfTurn = new Map<number, string>();
+  for (const frame of turnFinalAiFrames(messages)) frameOfTurn.set(frame.turn, frame.id);
+
+  const seen = new Set<string>();
+  // The 0-based turn the next row is assumed to answer, when it states no number of its own.
+  let next = 0;
+  for (const row of turns) {
+    const entry = asMapping(row);
+    const record = asMapping(entry?.record);
+    const turnId = record?.turn_id;
+    // `record_node` will not append a row without one, so a row missing it is not a recorded
+    // turn and must not be given a turn's slot. Duplicates are skipped without advancing the
+    // cursor for the same reason: one turn, one slot.
+    if (!record || typeof turnId !== "string" || turnId === "" || seen.has(turnId)) continue;
+    seen.add(turnId);
+    const stated = statedQuestionNumber(record);
+    const turn = stated !== null ? stated - 1 : next;
+    next = turn + 1;
+    const id = frameOfTurn.get(turn);
+    if (id === undefined) continue;
+    // Parsed, not cast: `outcome` is a closed vocabulary (`register/stages.Outcome`) and the
+    // card reads it. A row that does not match is dropped rather than rendered with a made-up
+    // outcome. `text` is null on purpose — it is *system* copy (refusal wording) and the turn
+    // envelope carries only `answer_text`, which is what the model said; see `answerViewSchema`.
+    const answer = parseAnswer({
+      outcome: entry?.outcome ?? "answered",
+      text: null,
+      answer_text: typeof entry?.answer_text === "string" ? entry.answer_text : null,
+      record,
+    });
+    if (answer) out.set(id, answer);
   }
   return out;
 }
@@ -189,7 +254,8 @@ export function mapStreamToChatMessages(args: {
    * busy — which is unanswerable from the frames alone.
    *
    * The caller fills it from two places: the answer it saw when a turn finished in this session,
-   * and the durable log joined onto message ids at fetch time — see `hooks/use-stream-chat`.
+   * and the thread's own `turns` channel keyed onto message ids by
+   * {@link turnAnswersByMessageId} — see `hooks/use-stream-chat`.
    */
   answerFor?: (id: string) => AnswerView | undefined;
   isRunning: boolean;

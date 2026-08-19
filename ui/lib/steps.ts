@@ -282,6 +282,11 @@ function outcomeLabel(outcome: string, failedStage: string | null): string {
       return "Stopped at the attempt limit";
     case "crashed":
       return failedStage ? `Failed in ${failedStage}` : "Failed";
+    // Not "Answered": the turn ended without running a governed statement, and the `stamp` row
+    // carries `status: "ok"` because the rail's status vocabulary has no word for this. The label
+    // is where the distinction lands, so it has to say it.
+    case "no_sql":
+      return "Answered without running a query";
     default:
       return outcome;
   }

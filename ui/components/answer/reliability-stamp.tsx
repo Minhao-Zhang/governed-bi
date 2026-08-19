@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
  *
  * So this reports only what the engine actually records:
  *
- * - `outcome` — answered / refused / clarification / capped / crashed.
+ * - `outcome` — answered / refused / clarification / capped / crashed / no_sql.
  * - `terminal` — the ledger's own terminal state, which the engine now derives from the
  *   attempts rather than from whether a string was produced.
  * - the **attempts**, because "governance refused every statement" and "no statement was ever
@@ -56,6 +56,10 @@ const OUTCOME_CLASSES: Record<string, string> = {
   clarification: "bg-tier-lineage text-tier-lineage-foreground",
   capped: "bg-tier-fenced-raw text-tier-fenced-raw-foreground",
   crashed: "bg-tier-refused text-tier-refused-foreground",
+  // Not the `answered` green. This turn ran no governed statement, and the badge sits directly
+  // beside `ledger: no_sql` and "no SQL attempted" — the three used to disagree, with the badge
+  // the only one of them claiming an answer.
+  no_sql: "bg-tier-fenced-raw text-tier-fenced-raw-foreground",
 };
 
 export function ReliabilityStamp({

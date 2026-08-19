@@ -171,7 +171,51 @@ def run_checks(client: Any, *, out: Callable[[str], None] = print) -> list[str]:
         f"servable={audit.get('servable')}",
     )
 
+    # These two used to be the hole in this file: `main()` was required to build a `turn_log` and
+    # no check read one, which made the reader the only wired dependency nothing here could break.
+    # What is checkable without a server is the whole path except the rows — route to reader to
+    # projection to envelope — so that is what these check. Populated rows are
+    # `npm --prefix ui run check:api` against a live engine; see `main()` for why they cannot be
+    # here.
+    out("\nGET /audit/turns")
+    turns = get("/audit/turns", limit=5)
+    meta = turns.get("meta") or {}
+    check(
+        "the envelope the audit footer reads is whole",
+        isinstance(turns.get("turns"), list)
+        and meta.get("n") == len(turns.get("turns") or [])
+        and bool(meta.get("log_dir"))
+        and "turn_id" in (meta.get("columns") or []),
+        f"n={meta.get('n')} columns={len(meta.get('columns') or [])}",
+    )
+
+    out("\nGET /audit/turns/{turn_id}/trace")
+    missing = get("/audit/turns/no-such-turn/trace")
+    check(
+        "an unknown turn is an answer, not a 404",
+        missing.get("found") is False and missing.get("turn_id") == "no-such-turn",
+        str(missing.get("found")),
+    )
+
     return failures
+
+
+class _EmptyThreadStore:
+    """The thread store this script can honestly offer ``ThreadTurnLog``: an empty one.
+
+    Not a stand-in for the real store and not seeded to look like one. Its only job is to let the
+    reader answer so that the route, the projection and the wire envelope are exercised; a seeded
+    fake would make the row assertions assertions about this class. ``main()`` separately checks
+    that the *production* reader refuses outside the server, so nothing about this substitution is
+    silent.
+    """
+
+    class _Threads:
+        async def search(self, **_: Any) -> list[Any]:
+            return []
+
+    def __init__(self) -> None:
+        self.threads = self._Threads()
 
 
 def main() -> int:
@@ -180,18 +224,33 @@ def main() -> int:
 
     from fastapi.testclient import TestClient
 
-    from governed_bi.api import trace_store
     from governed_bi.api.graph_app import session_from_environment
     from governed_bi.api.routes import make_app
+    from governed_bi.api.thread_turns import InProcessServerRequired, ThreadTurnLog
 
     session = session_from_environment()
     print(f"corpus: {len(session.assets_by_id)} assets, hash {session.corpus_content_hash[:12]}…")
     print(f"        {len(session.fatal_problems)} fatal, {len(session.degradations)} degradations")
 
+    # **Why the audit checks below run over an empty thread store.** `ThreadTurnLog` reads the
+    # Agent server's own thread rows over `langgraph_sdk`'s in-process ASGI transport, which
+    # resolves only inside that server, and this script starts no server (see the module
+    # docstring). So the production reader has no store here — and rather than leave that as a
+    # sentence, it is the check immediately below: the reader must refuse *by name*. It used to
+    # leak a transport and die on a bare `TypeError` instead.
+    print("\nthe turn reader outside the server")
+    failures: list[str] = []
+    try:
+        ThreadTurnLog().list_turns(limit=1)
+        print("  FAIL the production turn reader answered with no server to read")
+        failures.append("the production turn reader answered with no server to read")
+    except InProcessServerRequired as refusal:
+        print(f"  ok   refuses by name — {type(refusal).__name__}")
+
     # No headers: no route asks for a credential (2026-08-13). This used to carry `x-api-key`, and
     # `main()` used to exit 2 when the variable was unset rather than measure the auth gate.
-    # `graph=None`: nothing here posts a turn, and a chat graph would build a model client.
-    failures = run_checks(TestClient(make_app(session, None, trace_store)))
+    # `make_app` also lost its `graph` with `POST /chat`, and nothing here posts a turn.
+    failures += run_checks(TestClient(make_app(session, ThreadTurnLog(_EmptyThreadStore))))
 
     print(f"\n{'PASS' if not failures else 'FAIL: ' + ', '.join(failures)}")
     return 1 if failures else 0

@@ -2,8 +2,7 @@
  * Typed client for the engine's custom REST routes (handoff §4), mounted on the
  * LangGraph Server. Every response is validated with zod at the boundary
  * (fail-loud). Streaming chat goes through `useStream` (see the chat feature);
- * this covers the read routes, the non-streaming `POST /chat` fallback, and the
- * dev `POST /corpus/edit`.
+ * this covers the read routes and the dev `POST /corpus/edit`.
  *
  * In mock mode (`USE_MOCKS`, i.e. no `NEXT_PUBLIC_LANGGRAPH_URL`) each call
  * resolves to a neutral placeholder from `lib/mock/fixtures`, so the UI renders
@@ -14,7 +13,6 @@ import { z } from "zod";
 
 import { LANGGRAPH_URL, USE_MOCKS } from "@/lib/env";
 import {
-  MOCK_ANSWER,
   MOCK_ASSETS,
   MOCK_ASSUMPTIONS,
   MOCK_AUDIT_CORPUS,
@@ -26,7 +24,6 @@ import {
   MOCK_ELICITATION_CANDIDATES,
   MOCK_ER_GRAPH,
   MOCK_GRAPH,
-  MOCK_REFUSAL,
   MOCK_SCHEMA,
   MOCK_SCHEMA_SUMMARY,
   MOCK_TRUST_LOOP_METRICS,
@@ -38,7 +35,6 @@ import {
   filterSummaryItems,
 } from "@/lib/graph-scope";
 import {
-  answerViewSchema,
   assetListSchema,
   assumptionListSchema,
   auditCorpusSchema,
@@ -69,7 +65,6 @@ import {
   trustLoopMetricsSchema,
 } from "@/lib/schemas";
 import type {
-  AnswerView,
   AssetRow,
   AssumptionRow,
   AuditCorpus,
@@ -79,7 +74,6 @@ import type {
   CorpusFields,
   CorpusRows,
   CorpusWhere,
-  ChatTurn,
   ClarificationRecord,
   RuntimeToggle,
   ColumnRelated,
@@ -99,10 +93,6 @@ import type {
   TableView,
   TrustLoopMetrics,
 } from "@/lib/types";
-
-/** Questions routed to a refusal in mock mode (mirrors the engine's fail-closed
- * negative-example / excluded-field gates). */
-const MOCK_REFUSAL_PATTERN = /restrict|exclud|pii|card|secret|password/i;
 
 /** An empty bucket of a scan report's diff, for the mock generate response. */
 const EMPTY_SCAN_BUCKET = { count: 0, by_severity: {}, scopes: [] };
@@ -341,19 +331,11 @@ export const api = {
     );
   },
 
-  /** Non-streaming one-shot answer (POST /chat) — the fallback when the backend
-   * reports `can_stream: false`. Streaming chat uses `useStream` instead. */
-  chat: (question: string, history: ChatTurn[], sessionId: string): Promise<AnswerView> => {
-    if (USE_MOCKS) {
-      if (MOCK_REFUSAL_PATTERN.test(question)) return Promise.resolve(MOCK_REFUSAL);
-      return Promise.resolve(MOCK_ANSWER);
-    }
-    return post(
-      "/chat",
-      { question, session_id: sessionId, history },
-      answerViewSchema,
-    );
-  },
+  // `chat()` — the non-streaming `POST /chat` one-shot — is **gone**, with the route. It was
+  // the transport for a backend reporting `can_stream: false`, and it answered on a different
+  // checkpointer from the streaming graph, so a question replayed through it arrived with none
+  // of the conversation that preceded it. Chat is `useStream` and nothing else; an engine that
+  // cannot stream now says so (see <ChatPanel/>) instead of being answered badly.
 
   /** Validate + write a corpus asset (POST /corpus/edit; dev, gated on can_edit). */
   edit: (asset: Record<string, unknown>): Promise<EditResponse> => {
@@ -607,16 +589,18 @@ export const api = {
   /* ── the audit surface ─────────────────────────────────────────────────── */
   //
   // Ungated: these are projections of the turn log and the loaded corpus, so they
-  // need no model and no capability flag. They are also the only way to see a turn
-  // again — `POST /chat` returns the record inline, once, to the caller who asked.
+  // need no model and no capability flag. They are how a turn is seen *across* threads
+  // and after the checkpoint's TTL sweeps it — the log outlives the conversation.
 
-  /** Served turns, newest first (GET /audit/turns). `threadId` narrows to one conversation.
+  /** Served turns, newest first (GET /audit/turns) — **across every thread**.
    *
-   * **Why a transcript needs this.** A turn's record lives in per-turn graph state, which the
-   * engine clears every turn (`PER_TURN_RESET`), so `values.answer` describes the newest turn
-   * and nothing earlier. This log is the only place every turn of a conversation survives. */
-  auditTurns: (limit = 50, threadId?: string): Promise<AuditTurns> =>
-    get(`/audit/turns${qs({ limit, thread_id: threadId })}`, auditTurnsSchema, MOCK_AUDIT_TURNS),
+   * The `thread_id` filter this used to take is gone with its only caller. The chat
+   * transcript no longer reads the log at all: each finished turn's envelope accumulates on
+   * the graph's own `turns` channel, so a conversation's records come from the same store as
+   * its messages (see `lib/stream-messages.turnAnswersByMessageId`). What is left here is the
+   * cross-thread audit list, which is what `/audit` renders and what the route is for. */
+  auditTurns: (limit = 50): Promise<AuditTurns> =>
+    get(`/audit/turns${qs({ limit })}`, auditTurnsSchema, MOCK_AUDIT_TURNS),
 
   /** One turn, grouped by the pipeline stage that produced each recorded field
    * (GET /audit/turns/{id}/trace). The grouping is derived from the engine's

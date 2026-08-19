@@ -139,7 +139,7 @@ def test_trust_is_registered_by_the_server_factory(two_schema_assets, guard_off_
     )
     assert trusted() == {}, "precondition: the autouse fixture cleared the registry"
 
-    build_serve_graph(session, turn_log=_Log())
+    build_serve_graph(session)
 
     registered = trusted()
     assert registered.get("policy") is session.policy, (

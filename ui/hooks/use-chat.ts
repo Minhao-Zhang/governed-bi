@@ -56,18 +56,18 @@ export interface ChatMessage {
 
 /**
  * The transport-neutral shape every chat hook exposes to the shared conversation
- * UI. The mock, streaming, and REST transports all satisfy this so the parent can
+ * UI. Both the mock and the streaming transport satisfy this, so the parent can
  * swap containers without the UI layer ever changing.
  */
 export interface ChatTransport {
   messages: ChatMessage[];
   send: (question: string) => void;
   isRunning: boolean;
-  /** Agent live timeline (§ agent-step-visualization); optional so the REST
-   * transport can omit it and the renderer falls back to a plain spinner. */
+  /** Agent live timeline (§ agent-step-visualization); optional so a transport with no
+   * governance stream can omit it and the renderer falls back to a plain spinner. */
   steps?: TimelineStep[];
-  /** Cancel the in-flight turn. Optional: transports that can't abort (e.g. the
-   * plain POST /chat fallback) omit it and the composer hides the Stop button. */
+  /** Cancel the in-flight turn. Optional: a transport that cannot abort omits it and the
+   * composer hides the Stop button. */
   stop?: () => void;
   /** The pending serve-time clarification (HITL): non-null while the agent has
    * interrupted mid-turn to ask a question and is waiting on the answer. Only

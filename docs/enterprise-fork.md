@@ -30,9 +30,10 @@ no SELECT-level masking. Those are the product; this is the seam.
 checked a shared key; on 2026-08-13 that was removed, for a reason that holds only here — a
 single-operator engine on `127.0.0.1`, where a required key made LangGraph Studio unusable
 ([usage](usage.md#serve-langgraph-server)). The result is that **anything that can open a socket to
-the port can post a turn and read every past turn's SQL out of `/audit/turns`**; audit findings A1
-and A7 are open again as written. A fork does not inherit that trade. Terminate authentication in
-front of this engine before anything else on this page matters.
+the port can post a turn and read every past turn's SQL out of `/audit/turns`** — and out of the
+platform's own `/threads/{id}/state`, which since 2026-08-18 carries every turn of the thread;
+audit findings A1 and A7 are open again as written. A fork does not inherit that trade. Terminate
+authentication in front of this engine before anything else on this page matters.
 
 ---
 
@@ -244,15 +245,26 @@ Four things the narrowing does not do, stated so you do not discover them:
 ### 6. Retain the ledger
 
 Every governed statement writes an `AttemptRecord` carrying the layer, the rule id, and the exact
-SQL that was sent. `api/trace_store.append_turn` writes turns to `runs/serve/<date>.jsonl`,
-**verbatim and unredacted** — question, answer, statement, literals and all
-([ADR 0006 §11](adr/0006-execution-time-governance.md) deleted the redaction vocabulary rather
-than leave it declared and unenforced).
+SQL that was sent. The finished turn lands on `ServeState.turns` and the LangGraph checkpointer
+persists it to `runs/conversations.sqlite`, **verbatim and unredacted** — question, answer,
+statement, literals and all ([ADR 0006 §11](adr/0006-execution-time-governance.md) deleted the
+redaction vocabulary rather than leave it declared and unenforced;
+[ADR 0014](adr/0014-one-conversation-store.md) moved where it lands).
 
 That is right for a single-user local tool and wrong for you. Before production: decide a retention
 policy, decide whether result literals may be written at all, and replace the sink. The structural
 fingerprint and `statement_sha256` in `govern/ledger.py` exist for a sink that wants auditability
 without echoing values.
+
+**Three things about the store this repository chose, so you can price replacing it.** There is
+exactly one write site (`api/graph_app.record_node`) and one read site
+(`api/thread_turns.ThreadTurnLog`), and the reader is injected at `make_app`'s `turn_log` seam —
+that seam is where your own sink goes, and `/audit/turns`' payload is the contract it must keep.
+Retention is `langgraph.json`'s `checkpointer.ttl`, which **deletes** the thread at 90 days;
+`keep_latest` is not available on `AsyncSqliteSaver`, so there is no "keep the summary, expire the
+trace" middle state to inherit. And the record now accumulates on state, so the platform's
+unauthenticated `/threads/{id}/state` returns every turn of a thread, not the newest — that is a
+disclosure surface a fork must close along with step 0.
 
 ---
 
@@ -341,11 +353,23 @@ Stated here rather than discovered by you:
   and `/audit/turns/{id}/trace` hand any caller every thread's SQL, the full turn records, and an
   absolute log path. They were closed on 2026-08-12 by a shared key and re-opened on 2026-08-13
   when it was removed (step 0 above). This is the finding a fork must not inherit.
-- **Audit findings A5, A6 and B1 are open** — the streamed transport passes no identity, `/chat/resume`
-  validates by thread rather than by caller, and `POST /threads/search` returns `identity` and the
-  rendered context block. They are open because there is one principal, so there is no
-  second caller to be wrong about. **The moment you have two principals, all three are live**, and
-  they are the first things to fix. See [`docs/analysis/audit-2026-08-10.md`](analysis/audit-2026-08-10.md).
+- **Audit finding B1 is open** — `get_state`, `values` frames and `POST /threads/search` return
+  `identity` and the rendered context block, because `ServeOutput` narrows `invoke` and nothing
+  else. It is open because there is one principal, so there is no second caller to be wrong about.
+  **The moment you have two principals it is live**, and it is the first thing to fix — and it got
+  bigger on 2026-08-18: what escapes is now every prior turn's record, not the newest one, because
+  the turn accumulates on state ([ADR 0014](adr/0014-one-conversation-store.md)). **A6 is retired
+  rather than fixed**: the route it named, `POST /chat/resume`, is deleted. See
+  [`docs/analysis/audit-2026-08-10.md`](analysis/audit-2026-08-10.md).
+- **A5 is closed (2026-08-18), and closing it is what makes step 0 pay off.** `serve/accept.py`
+  stores the transport-authenticated caller as the turn's `identity`, and
+  `serve/resume.py::authorise_resume` — called from `ask_user` where `interrupt()` returns —
+  refuses a clarification answer from anyone else. Both halves read one value:
+  `configurable["langgraph_auth_user_id"]`, which `langgraph_api` fills from
+  `api/auth.py::_authenticate`. So a fork that replaces that one function with something returning
+  two different principals gets B9 on the streamed transport with no change in `serve/`, and one
+  that does not still has a gate that fires — it just cannot tell its single caller apart from
+  itself. `tests/serve/test_the_platform_resume_is_identity_bound.py` is the acceptance test.
 - **Corpus prose is not PII-gated.** Rule V5 stops literals reaching an asset's `summary`, so authors
   put them in `body` — and `body` reaches the prompt on every hit while `summary` never does. No gate
   checks `body` for PII. This is the finding most likely to bite a fork with real customer data, and

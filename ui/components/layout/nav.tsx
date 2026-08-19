@@ -160,9 +160,23 @@ function ThemeToggle() {
   );
 }
 
+/**
+ * Bottom of the rail: **whether the engine is reachable, and nothing else.**
+ *
+ * It used to also carry `environment · dialect` and the model id. Both moved to `/settings`,
+ * where there is room to say what they mean — the model id in particular was truncated to
+ * `us.anthropic.claude-sonnet…` at this width, which is the shape of a value nobody can act on.
+ *
+ * **The dot now keys on reachability, not on `has_live_model`.** That was the older bug hiding
+ * in the same nine lines: a server that was answering perfectly well but had no model attached
+ * showed the same grey dot as a server that was down, so the one thing a status light exists to
+ * tell you apart was the one thing it could not. `isSuccess` means `/capabilities` parsed;
+ * `isError` means it did not; neither is a claim about the model.
+ */
 function CapabilitiesStrip() {
-  const { data: caps } = useCapabilities();
+  const { data: caps, isSuccess, isError } = useCapabilities();
   const tier = resolveTier(caps, useDisplayModeOverride());
+  const state = isSuccess ? "connected" : isError ? "disconnected" : "connecting…";
 
   return (
     <div className="border-t p-3 text-xs text-muted-foreground">
@@ -178,15 +192,18 @@ function CapabilitiesStrip() {
         <span
           className={cn(
             "size-2 rounded-full",
-            caps?.has_live_model ? "bg-tier-governed" : "bg-muted-foreground/50",
+            isSuccess && "bg-tier-governed",
+            isError && "bg-destructive",
+            !isSuccess && !isError && "bg-muted-foreground/50 animate-pulse",
           )}
           aria-hidden
         />
-        <span className="truncate">
-          {caps ? `${caps.environment} · ${caps.dialect}` : "connecting…"}
+        {/* `role="status"`: the connection state changes without a navigation, so a screen
+            reader should hear it when it flips rather than only on request. */}
+        <span className="truncate" role="status">
+          {state}
         </span>
       </div>
-      <div className="mt-1 truncate font-mono">{caps?.model ?? ""}</div>
     </div>
   );
 }

@@ -181,10 +181,41 @@ def test_exec_error_is_an_answer_not_a_crash() -> None:
 
 def test_no_sql_and_no_refusal_is_a_crash() -> None:
     """A turn that decided nothing did not refuse. Calling it a refusal is the
-    original defect."""
+    original defect.
+
+    Still a crash **with no ledger verdict handed over**: ``classify_outcome`` returns
+    ``Outcome.no_sql`` only for a caller that read ``execution.terminal`` (see below), so a turn
+    nothing observed ending keeps the name for that.
+    """
     assert (
         stages.classify_outcome(error=None, refused_by=None, has_sql=False)
         is stages.Outcome.crashed
+    )
+
+
+def test_the_statement_less_outcome_is_the_ledger_s_own_word() -> None:
+    """``Outcome.no_sql`` and ``ExecutionRecord.terminal``'s ``"no_sql"`` are one string.
+
+    ``stamp`` classifies the outcome by reading that field — the same way it reads the ledger's
+    verdict for ``capped``, and for the same reason: the two cannot then disagree about whether a
+    statement ran. If the spellings drift, ``classify_outcome``'s comparison stops matching, the
+    member becomes unreachable, and every statement-less turn silently records ``crashed``.
+    ``govern/ledger.py`` asserts the same pair at import; this is the readable half.
+    """
+    from typing import get_args, get_type_hints
+
+    from governed_bi.govern.ledger import ExecutionRecord
+
+    vocabulary = get_args(get_type_hints(ExecutionRecord)["terminal"])
+    assert stages.Outcome.no_sql.value in vocabulary, sorted(vocabulary)
+    assert (
+        stages.classify_outcome(
+            error=None,
+            refused_by=None,
+            has_sql=False,
+            terminal=stages.Outcome.no_sql.value,
+        )
+        is stages.Outcome.no_sql
     )
 
 
@@ -830,20 +861,28 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> Non
     assert decline["answer"]["refused_by"] == "no_schema_matched"
     assert not missing_required(decline["answer"]["record"])
 
-    answered = graph.invoke(
+    # The third terminal, and it is **not** the answered path: this file configures no
+    # ``agent_model``, so ``agent_core`` takes ``_stub`` and the turn ends having executed no
+    # statement. It asserted ``outcome == "answered"`` until 2026-08-18 and passed, because
+    # ``stamp`` hardcoded ``has_sql=True`` whenever the agent loop finished with an empty ledger.
+    # ``Outcome.no_sql`` is what that turn is; the answered path with a real ledger is pinned in
+    # ``tests/serve/test_turn_contract.py``. Named for the property under test either way — every
+    # ``Absence.never`` field is written on every terminal, including this one.
+    statementless = graph.invoke(
         _base_turn(
             question="how many customers",
-            turn_id="turn-answered",
+            turn_id="turn-no-statement",
             facet_route_hits=[("facet_schema", "beer_factory", 0.9)],
         ),
-        _config("t-answered", off),
+        _config("t-no-statement", off),
     )
-    assert answered["answer"]["outcome"] == "answered", (
-        f"refused_by={answered['answer'].get('refused_by')!r} "
-        f"terminal_reason={answered.get('terminal_reason')!r} "
-        f"licensed={answered.get('licensed')!r} schemas={answered.get('schemas')!r}"
+    assert statementless["answer"]["outcome"] == stages.Outcome.no_sql.value, (
+        f"refused_by={statementless['answer'].get('refused_by')!r} "
+        f"terminal_reason={statementless.get('terminal_reason')!r} "
+        f"licensed={statementless.get('licensed')!r} "
+        f"schemas={statementless.get('schemas')!r}"
     )
-    assert not missing_required(answered["answer"]["record"])
+    assert not missing_required(statementless["answer"]["record"])
 
 
 # ── the unbuilt parcels must stay declared, in both directions ─────────────────

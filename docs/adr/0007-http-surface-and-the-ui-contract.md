@@ -222,6 +222,19 @@ The UI's shape is the better one — an id makes the answer attributable to the 
 is a real gap and it is **out of scope here**: it is a security question about a
 single-operator local tool, and it gets its own decision rather than an improvised token.
 
+> **Closed, 2026-08-18** — forced by retiring `POST /chat/resume`, which was the check's only
+> caller, so the gap would have become the *whole* behaviour rather than one transport's.
+> The gate moved to `serve/resume.py::authorise_resume`, called by `ask_user` on the instruction
+> `interrupt()` returns on: `state` is the paused turn's checkpoint and `config` is the resuming
+> run's, so both identities are in one frame. It is not in `api/auth.py` and could not be — an
+> auth handler receives `AuthContext` plus the `RunsCreate` payload and no way to read thread
+> state, and refusing `command.resume` outright deletes the protocol. `serve/accept.py` supplies
+> the other half by storing the transport-authenticated caller as the turn's `identity`, which
+> closes the write half of audit A5. No token was improvised: the caller is read from
+> `configurable["langgraph_auth_user_id"]`, which `langgraph_api` fills from this repo's own
+> `@auth.authenticate` and its request validation refuses to let a client name.
+> `tests/serve/test_the_platform_resume_is_identity_bound.py`.
+
 ### 7. `/capabilities` reports what is true, and false is a legitimate answer
 
 It is the UI's **first** request; without it the chat panel pins at a skeleton forever. Twelve
@@ -234,6 +247,19 @@ is the switch that mounts the prompt and the REST transport has no prompt to mou
 `can_scope` true, `can_search` false, and the two durability flags
 `checkpoint_durable` / `hitl_survives_process_restart`, both false because pause/resume does not
 survive a process restart on either transport.
+
+> **The two durability flags are now stale, 2026-08-18 ([ADR 0014](0014-one-conversation-store.md)).**
+> They are still hardcoded `False` in `capabilities_for`, under a comment that explains them by
+> `POST /chat`'s `InMemorySaver` — a route that no longer exists. What does exist is a durable
+> checkpointer named by `langgraph.json`, verified by killing the server and reading the thread
+> back. So the section's own rule is being broken in the direction it did not anticipate: a flag
+> reporting `false` about a capability that is built is as wrong as one reporting `true` about a
+> capability that is not, and "false is a legitimate answer" is not a licence to leave a literal
+> behind. `hitl_survives_process_restart` additionally needs an *observation* before it flips —
+> a paused clarification answered after a restart — and under `langgraph dev` the thread index
+> still lives in `.langgraph_ops.pckl` with a ten-second flush, which is a second thing that has
+> to hold. Tracked in [`docs/open-work.md`](../open-work.md). `can_clarify`'s expression is
+> unchanged and still right; the transport it excluded is simply gone.
 
 Reporting a capability **false** is not a defeat. `can_search` is false and the UI degrades to a
 client-side index over what it already has, which is a route we do not have to build to get end
@@ -285,9 +311,12 @@ makes the primary debugging client unusable, on a port that is already loopback-
 to cost more than it bought. The maintainer chose reachability over transport auth.
 
 **What that costs, stated rather than dropped.** Anything that can open a socket to the port can
-drive the engine: post a turn, execute governed SQL against the configured database, and read
+drive the engine: post a turn — over the platform's own `/threads` and `/runs`, since 2026-08-18
+the only way to serve one — execute governed SQL against the configured database, and read
 `/audit/turns`, which returns every thread's SQL, the full turn records, and an absolute path to
-the log directory on disk. The CORS origin list in `langgraph.json` is the only remaining
+the conversation store on disk. That last one got *wider* on 2026-08-18: a `values` frame or a
+`get_state` now carries every prior turn's record rather than the newest, because
+`ServeState.turns` accumulates ([ADR 0014](0014-one-conversation-store.md), audit B1). The CORS origin list in `langgraph.json` is the only remaining
 narrowing, and it narrows browsers only. **The port is the boundary.** A deployment that is not
 one operator on loopback needs authentication in front of this engine — see
 [`docs/enterprise-fork.md`](../enterprise-fork.md).

@@ -58,6 +58,18 @@ export const MOCK_CAPABILITIES: Capabilities = {
   // Mock exercises the HITL clarification flow offline (trigger words in
   // use-chat.ts), so the interrupt-prompt UI mounts in preview mode.
   can_clarify: true,
+  // `/settings` in mock mode. `has_live_model` is false here, so the two chat surfaces report
+  // no id — that is the offline profile telling the truth, and it is the state the page's
+  // "not reported" branch exists for. The embedder is the deterministic one the mock retrieval
+  // path uses, and it is provider-qualified on the wire like every other embedding id.
+  models: {
+    agent: { id: null, provider: null, effort: null },
+    utility: { id: null, provider: null, effort: null },
+    embedding: { id: "deterministic:mock", provider: "deterministic", dimensions: 64 },
+  },
+  // Mock mode is the SQLite profile, which is a file — no host, no port, and nothing to
+  // redact. Exercises the settings card's "absent, not empty" branch.
+  connection: { dialect: "sqlite", database: "gbi_demo_sales.db" },
 };
 
 /* ── /clarifications, POST /clarifications/{id}/answer ───────────────────── */

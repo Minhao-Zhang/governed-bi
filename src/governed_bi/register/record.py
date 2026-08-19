@@ -6,7 +6,7 @@ Adding a row records and gates a field by default. Gates are declared on fields;
 register (:mod:`.knobs`).
 
 A fifth column, ``redaction``, is gone (audit §8.1/§10): nothing enforced it, and
-``api/trace_store.append_turn`` wrote the question, the answer and ``executed_sql``
+the recorded turn carried the question, the answer and ``executed_sql``
 verbatim. Records here are unredacted by design -- this is a local-first single-user
 tool and the log is the user's own transcript. A redaction vocabulary needs a threat
 model first; a declaration with no enforcer reads as behaviour.

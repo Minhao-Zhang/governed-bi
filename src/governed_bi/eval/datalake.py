@@ -24,6 +24,8 @@ from collections.abc import Collection, Iterable, Mapping, MutableMapping, Seque
 from pathlib import Path
 from typing import Any
 
+from governed_bi.register.stages import Outcome
+
 __all__ = [
     "load_questions",
     "dataset_qid_lists",
@@ -531,6 +533,13 @@ def retrieval_funnel(
         "tables_in_routed_schemas": 0,
         "all_gold_tables_licensed": 0,
         "answered": 0,
+        # Counted rather than skipped, this module's own rule one stage on: before the
+        # `Outcome.no_sql` split these rows arrived as `answered` with no `generated_sql`, so they
+        # sat in `answered` and `graded` as guaranteed misses. They now leave the funnel at the
+        # `answered` gate, which *raises* `correct/graded` -- so the count they left with is on
+        # the artifact beside it. (`headline_ex` in `eval/report.py` is over the whole arm and
+        # keeps scoring them wrong, so no published EX moved.)
+        "answered_without_a_statement": 0,
         "graded": 0,
         "unmeasured": 0,
         "correct": 0,
@@ -588,6 +597,8 @@ def retrieval_funnel(
         counts["all_gold_tables_licensed"] += 1
 
         if str(row.get("outcome") or "") != "answered":
+            if str(row.get("outcome") or "") == Outcome.no_sql.value:
+                counts["answered_without_a_statement"] += 1
             continue
         counts["answered"] += 1
 

@@ -12,7 +12,7 @@
  * Reachable at every tier on purpose (`lib/capabilities.ts::tierReaches` special-cases it): a tier
  * that could not get back out of itself would be a trap.
  *
- * **Two sections, and the split is who each one affects.** A role is a per-browser preference.
+ * **Four sections, and the split is who each one affects.** A role is a per-browser preference.
  * Engine switches change what the deployment does for everyone it serves, so they are engineer-only
  * — not as a security boundary (this engine binds to loopback and `api/auth.py` says reaching the
  * port is sufficient) but because offering them to a business user would be offering a decision
@@ -28,11 +28,19 @@
  * only ever reachable at this tier (`lib/capabilities.ts::REACHABLE`). Unlike Engine behaviour,
  * these five switches are per-browser view preferences (`lib/corpus-tab-groups.ts`), not engine
  * knobs — they never touch `/settings/toggles`.
+ *
+ * **A fourth section, Models, is engineer-only for the same reason.** `ModelSettings` reports the
+ * three model surfaces (agent, utility, embedding) this engine actually resolved, read off
+ * `/capabilities` rather than derived a second time — a business reader has no way to evaluate a
+ * model id or an embedding width, the same category of "a decision they cannot evaluate" that gates
+ * Engine behaviour above, even though this section itself decides nothing (ADR 0009 D14; the
+ * `serve/runtime.py::model_id` fix that made this reporting honest).
  */
 
 import { PageShell } from "@/components/layout/page-shell";
 import { CorpusTabToggles } from "@/components/settings/corpus-tab-toggles";
 import { EngineToggles } from "@/components/settings/engine-toggles";
+import { ModelSettings } from "@/components/settings/model-settings";
 import { RoleSwitcher } from "@/components/settings/role-switcher";
 import { resolveTier } from "@/lib/capabilities";
 import { useCapabilities } from "@/hooks/queries";
@@ -87,6 +95,19 @@ export default function SettingsPage() {
               </p>
             </div>
             <CorpusTabToggles />
+          </section>
+        )}
+
+        {tier === "engineer" && (
+          <section className="space-y-3">
+            <div className="space-y-1">
+              <h2 className="text-sm font-medium">Models</h2>
+              <p className="max-w-prose text-xs text-muted-foreground">
+                The models this engine resolved at startup, and the warehouse it queries.
+                Read-only — set them in the engine&apos;s environment.
+              </p>
+            </div>
+            <ModelSettings />
           </section>
         )}
       </div>

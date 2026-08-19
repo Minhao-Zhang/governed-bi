@@ -354,7 +354,8 @@ class AccessPolicy(Protocol):
 
 
 # There is no ``Sink`` port and no ``record/`` package. Records are written by
-# ``api/trace_store.append_turn``, verbatim and unredacted, to ``runs/serve/<date>.jsonl``.
+# ``api/graph_app.record_node`` onto ``ServeState.turns``, verbatim and unredacted, and the
+# checkpointer persists it.
 #
 # There is no ``Responder`` port either. Clarification is ``langgraph.types.interrupt`` raised
 # in ``serve/tools.ask_user`` and resumed by ``serve/resume.resume_clarification`` — an

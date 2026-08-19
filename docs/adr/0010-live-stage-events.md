@@ -498,6 +498,12 @@ unrecognised `step` as renderable-but-unlabelled rather than as an error.
   `tools/check_imports.py` orders `serve` before `api`. It swallows its own failures — a turn that
   answered is not a turn that failed, and the client already has the answer by then. Verified
   live: the audit count moved 11 → 12 on one streamed turn.
+  > **The seam stands; the sink changed, 2026-08-18 ([ADR 0014](0014-one-conversation-store.md)).**
+  > `record_node` no longer appends to a file — it returns `{"turns": [envelope]}` onto an
+  > accumulating channel and the durable checkpointer persists it, so the audit surface reads
+  > thread state. `POST /chat`'s `_logged` is deleted with the route, so the two-writer split this
+  > bullet was fixing no longer exists to drift. It still swallows its own failures, and it is
+  > still injected rather than living in `stamp`, for the same import-order reason.
 - The eval harness and `python -m governed_bi.serve` are unaffected: emission is a no-op there.
   ~~no writer is available outside a server run~~ — corrected 2026-08-07, a writer *is*
   available on both paths, because both run the graph; it is LangGraph's discarding fallback,
@@ -517,6 +523,11 @@ unrecognised `step` as renderable-but-unlabelled rather than as an error.
   from it — and both are larger than a fallback deserves, and neither should be improvised in the
   change that turns streaming on. The route says so in its own docstring; the UI must not claim
   otherwise.
+  > **Fixed by deletion, 2026-08-18 ([ADR 0014](0014-one-conversation-store.md)).** Neither
+  > option in that last sentence was taken. `POST /chat` and `POST /chat/resume` are removed, with
+  > their `InMemorySaver` and its 32-thread LRU, because a fallback that silently loses the
+  > conversation it is falling back for is worse than no fallback: there is one transport, one
+  > graph and one saver, and the saver is durable. `make_app` no longer takes a `graph` at all.
 - The step vocabulary is now shared by three artefacts — this ADR's table, `register/stages.py`,
   and the frontend's `lib/steps.ts`. `tests/serve/test_stream_events.py` asserts the first two
   against each other, deliberately from a hand-written list rather than a derived one: a list

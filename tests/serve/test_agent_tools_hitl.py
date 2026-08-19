@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
+from langgraph.types import Command
 
 from governed_bi.corpus.analyst import for_analyst
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
@@ -18,8 +19,9 @@ from governed_bi.govern.layers import GUARDRAIL_ERROR
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.agent_state import CAP_LEDGER_KEY
 from governed_bi.serve.delivery import delivery_hash_for, payload_digest
+from governed_bi.serve.events import tool_event_id
 from governed_bi.serve.graph import compile_graph
-from governed_bi.serve.resume import ResumeRejected, resume_clarification
+from governed_bi.serve.resume import CALLER_KEY, ResumeRejected, resume_clarification
 from governed_bi.serve.scripted_model import ScriptedChatModel
 from governed_bi.serve.tools import build_tools, tool_bounds_from_state
 
@@ -509,10 +511,13 @@ def test_ask_user_interrupt_and_identity_resume() -> None:
     )
     assert done.get("path_kind") == "answered" or done.get("answer", {}).get(
         "outcome"
-    ) in {"answered", "clarification"}
+    ) in {"answered", "clarification", "no_sql"}
     clars = done.get("clarifications") or []
     assert any(c.get("answer") == "2020" for c in clars)
-    assert done["answer"]["outcome"] in {"answered", "clarification"}
+    # `no_sql`: the scripted model answers "ok: 2020" in prose and never calls `run_query`, so the
+    # resumed turn executed no governed statement. It read `answered` until 2026-08-18. The
+    # subject here is the resume, and what it must not be is `crashed` or a refusal.
+    assert done["answer"]["outcome"] in {"answered", "clarification", "no_sql"}
 
 
 def test_state_assumption_reaches_the_final_answer_unconditionally() -> None:
@@ -995,3 +1000,150 @@ def test_only_one_clarification_may_be_outstanding_per_turn() -> None:
     text = replies[0].update["messages"][0].content
     assert "one clarifying question" in text.lower()
     assert "already has one" in text.lower()
+
+
+def _clarify_turn(*, thread: str, turn: str, token: str) -> dict[str, Any]:
+    """A turn shaped for the ``ask_user`` path — the keys ``test_ask_user_interrupt_and_identity_resume`` uses."""
+    return {
+        "question": "revenue?", "thread_id": thread, "turn_index": 1, "turn_id": turn,
+        "run_id": "r", "question_id": "q", "db_id": "sales", "attempt_id": "a",
+        "corpus_content_hash": "c", "prompt_set_hash": "p", "knobs_resolved": {},
+        "n_re_served": 0, "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "messages": [], "usage": [], "identity": {"token": token}, "clarifications": [],
+    }
+
+
+def test_a_second_question_after_a_resume_is_not_refused_as_still_outstanding() -> None:
+    """The one-outstanding-question latch has to be **given back** when the question is answered.
+
+    ``pending_clarification`` is rebuilt by every ``build_tools`` — once per ``agent_core``
+    execution — so it never accumulated across passes. It stayed *occupied*, which is a different
+    bug and the one that reached the model. The call being resumed has no ``ToolMessage`` yet —
+    that is exactly why its ``Send`` re-runs on the resume pass — so it re-appends its own
+    ``clarification_id``, and nothing released it once ``interrupt()`` returned an answer.
+
+    Measured before the fix, on this script: "which year?" is asked, answered "2020", and the
+    model's next ``ask_user`` is refused with *"Only one clarifying question may be outstanding at
+    a time, and this turn already has one"* — with the ``ToolMessage`` carrying "2020" sitting
+    directly above the refusal in the transcript. That refusal also tells the model to ask "after
+    this one is answered", which is what it had just done, so the advice is unfollowable.
+
+    The assertion is that the second question **pauses** rather than returning a string: a real
+    interrupt, on its own ``clarification_id``, answerable by the same identity.
+    """
+    graph = compile_graph()
+    token = "identity-two-questions"
+    config = {
+        "configurable": {
+            "thread_id": "t-two-q",
+            "policy": GovernancePolicy(guard_rules_enabled={}),
+            "agent_model": ScriptedChatModel(
+                responses=[
+                    AIMessage(content="", tool_calls=[{"name": "ask_user",
+                                                       "args": {"question": "which year?"},
+                                                       "id": "c1", "type": "tool_call"}]),
+                    AIMessage(content="", tool_calls=[{"name": "ask_user",
+                                                       "args": {"question": "which region?"},
+                                                       "id": "c2", "type": "tool_call"}]),
+                    AIMessage(content="ok: 2020 EMEA"),
+                ]
+            ),
+        }
+    }
+
+    paused = graph.invoke(_clarify_turn(thread="t-two-q", turn="turn-two-q", token=token), config)
+    first = [i.value for i in (paused.get("__interrupt__") or ())]
+    assert [v.get("question") for v in first] == ["which year?"], (
+        f"precondition: the turn must pause on the first question, got {first}"
+    )
+
+    after = resume_clarification(graph, config=config, identity={"token": token}, answer="2020")
+
+    texts = [str(getattr(m, "content", "")) for m in (after.get("messages") or ())]
+    assert not [t for t in texts if "already has one" in t.lower()], (
+        "the second question was refused as still outstanding, though the first was answered in "
+        f"the same pass. transcript: {texts}"
+    )
+    second = [i.value for i in (after.get("__interrupt__") or ())]
+    assert [v.get("question") for v in second] == ["which region?"], (
+        f"the second question did not pause the turn; interrupts={second}, transcript={texts}"
+    )
+    assert second[0]["clarification_id"] != first[0]["clarification_id"], (
+        "the two questions must not share a clarification_id, or a resume cannot say which one "
+        "it answers"
+    )
+
+    done = resume_clarification(graph, config=config, identity={"token": token}, answer="EMEA")
+    answers = [c.get("answer") for c in (done.get("clarifications") or ())]
+    assert answers == ["2020", "EMEA"], (
+        f"both answered clarifications must reach the record, got {answers}"
+    )
+
+
+def test_the_replayed_ask_user_start_reuses_the_row_id_rather_than_opening_a_second() -> None:
+    """The resume replay re-emits ``start``. That is ADR 0010's contract, and this pins it.
+
+    ``interrupt()`` cannot be reached without re-running everything above it, so the ``start``
+    emitted before it is emitted again on the resume pass. Moving it after ``interrupt()`` would
+    stop the repeat and delete the open row for the whole interval a human spends reading the
+    question — the only interval it exists to describe — and would leave the ``refused`` resolve
+    with no ``start`` on its own stream. ADR 0010 chose the repeat and paid for it with a stable
+    ``id``: "the ``tools`` node re-executes on resume, so ``start`` is emitted twice, and a
+    seq-derived id would have shown the same step twice".
+
+    So the property is not "one start" but **"one row"**: every event for one ``ask_user`` call
+    shares ``tool_event_id("ask_user", tool_call_id)`` and the resolve arrives last, so
+    ``ui/lib/steps.ts::reduceSteps`` — which merges on ``id`` — folds all three into a single row
+    that settles resolved. A repeat carrying a fresh id would show the user their clarification
+    twice; a resolve arriving before a replayed ``start`` would show it spinning after it was
+    answered.
+
+    Measured through the real graph rather than reasoned: the emitter is not what decides how many
+    times the node re-executes.
+    """
+    graph = compile_graph()
+    token = "identity-replay"
+    conf = {
+        "thread_id": "t-replay",
+        "policy": GovernancePolicy(guard_rules_enabled={}),
+        "agent_model": ScriptedChatModel(
+            responses=[
+                AIMessage(content="", tool_calls=[{"name": "ask_user",
+                                                   "args": {"question": "which year?"},
+                                                   "id": "c1", "type": "tool_call"}]),
+                AIMessage(content="ok: 2020"),
+            ]
+        ),
+    }
+
+    def ask_user_events(payload: Any, configurable: dict[str, Any]) -> list[dict[str, Any]]:
+        # ``subgraphs=True`` is not optional: the tools run inside the nested ``create_agent``
+        # graph, and LangGraph does not propagate a nested writer to the parent stream without it.
+        out: list[dict[str, Any]] = []
+        for chunk in graph.stream(
+            payload, {"configurable": configurable}, stream_mode="custom", subgraphs=True
+        ):
+            while isinstance(chunk, tuple) and chunk:
+                chunk = chunk[-1]
+            if isinstance(chunk, dict) and chunk.get("step") == "ask_user":
+                out.append(chunk)
+        return out
+
+    paused = ask_user_events(
+        _clarify_turn(thread="t-replay", turn="turn-replay", token=token), conf
+    )
+    resumed = ask_user_events(Command(resume="2020"), {**conf, CALLER_KEY: token})
+    events = paused + resumed
+
+    assert [e["status"] for e in events] == ["start", "start", "ok"], (
+        "the ask_user row is start (pause), start (replay), then one resolve; got "
+        f"{[(e['status'], e['seq']) for e in events]}"
+    )
+    assert {e["id"] for e in events} == {tool_event_id("ask_user", "c1")}, (
+        f"the replayed start opened a second row: {sorted({e['id'] for e in events})}"
+    )
+    assert len({e["detail"]["clarification_id"] for e in events}) == 1, (
+        "the replay must re-derive the same clarification_id, or the client's side table cannot "
+        f"join onto the row: {[e['detail'] for e in events]}"
+    )
+    assert events[-1]["status"] != "start", "the resolve must arrive last, or the row spins"

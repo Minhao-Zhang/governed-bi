@@ -422,32 +422,39 @@ def _session(*, enabled: bool, model: Any) -> Any:
     )
 
 
-def _serve(*, enabled: bool, thread: str) -> tuple[dict[str, Any], ScriptedChatModel, _TurnLog]:
+def _serve(*, enabled: bool, thread: str) -> tuple[dict[str, Any], ScriptedChatModel]:
     from governed_bi.api.graph_app import build_serve_graph
 
-    model, log = _model(), _TurnLog()
-    graph = as_sync(build_serve_graph(_session(enabled=enabled, model=model), turn_log=log))
+    model = _model()
+    graph = as_sync(build_serve_graph(_session(enabled=enabled, model=model)))
     out = graph.invoke(
         {"messages": [HumanMessage(content=QUESTION)]},
         {"configurable": {"thread_id": thread}},
     )
-    return out, model, log
+    return out, model
 
 
-def test_a_turn_that_licensed_nothing_is_answered_today_and_withheld_by_the_policy() -> None:
+def test_a_turn_that_licensed_nothing_reaches_the_agent_today_and_is_withheld_by_the_policy() -> None:
     """The paired turn, through ``build_serve_graph`` — the topology ``langgraph.json`` runs.
 
-    Off, the turn goes to the agent and answers, which is exactly what v4 does with its four
-    unlicensed turns and is what keeps v4 the control. On, the policy withholds it, and the
-    thing that makes this a *decision* rather than a report is the last assertion: **the agent
-    was never called.** Deciding after five refused ``run_query`` attempts is a description of
-    what happened; deciding before the first one is a policy.
+    Off, the turn goes to the agent and comes back with prose and no statement, which is exactly
+    what v4 does with its four unlicensed turns and is what keeps v4 the control. On, the policy
+    withholds it, and the thing that makes this a *decision* rather than a report is the last
+    assertion: **the agent was never called.** Deciding after five refused ``run_query`` attempts
+    is a description of what happened; deciding before the first one is a policy.
+
+    **Renamed on 2026-08-18, from "is answered today".** ``_model``'s docstring already said it
+    "answers from the context without a statement", and the control turn recorded
+    ``outcome: answered`` anyway — ``stamp`` hardcoded ``has_sql=True`` for a finished agent loop
+    with an empty ledger. It records ``Outcome.no_sql`` now, which sharpens ADR 0013's own case
+    rather than weakening it: without the policy the engine returns prose over a corpus that
+    licensed nothing, and the outcome no longer calls that an answer.
 
     The reason reaches ``terminal_reason``, which is the field the refusal histogram and
     ``eval/report.py`` already read — not a second field a new reader would have to know about.
     """
-    committed, committed_model, committed_log = _serve(enabled=False, thread="t-commit")
-    withheld, withheld_model, withheld_log = _serve(enabled=True, thread="t-withhold")
+    committed, committed_model = _serve(enabled=False, thread="t-commit")
+    withheld, withheld_model = _serve(enabled=True, thread="t-withhold")
 
     on_record = committed["answer"]["record"]
     off_record = withheld["answer"]["record"]
@@ -455,7 +462,7 @@ def test_a_turn_that_licensed_nothing_is_answered_today_and_withheld_by_the_poli
     assert not on_record["licensed"], (
         f"precondition: the turn was supposed to license nothing, got {on_record['licensed']!r}"
     )
-    assert committed["answer"]["outcome"] == "answered", committed["answer"]
+    assert committed["answer"]["outcome"] == Outcome.no_sql.value, committed["answer"]
     assert on_record["abstention"]["outcome"] == "disabled"
     assert on_record["terminal_reason"] is None
 
@@ -478,8 +485,11 @@ def test_a_turn_that_licensed_nothing_is_answered_today_and_withheld_by_the_poli
     )
     assert not (off_record["execution"] or {}).get("attempts"), off_record["execution"]
 
-    assert committed_log.rows and withheld_log.rows
-    assert withheld_log.rows[-1]["outcome"] == "refused"
+    # This pair used to assert that both turns reached an injected turn log and that the withheld
+    # one was logged `refused`. The log is gone and `turns` is not in `ServeOutput`, so the
+    # observable is the answer the same node stamped.
+    assert withheld["answer"]["outcome"] == "refused", withheld["answer"]
+    assert committed["answer"]["outcome"] == Outcome.no_sql.value, committed["answer"]
 
 
 def test_a_disabled_policy_puts_no_row_on_the_timeline(monkeypatch) -> None:
@@ -527,7 +537,7 @@ def test_the_reason_reaches_the_artifact_row() -> None:
     """
     from governed_bi.eval.harness import project_turn
 
-    withheld, _model, _log = _serve(enabled=True, thread="t-artifact")
+    withheld, _model = _serve(enabled=True, thread="t-artifact")
     row = project_turn(withheld, question={"question_id": "q-1"}, arm="abstain")
 
     assert row["terminal_reason"] == "nothing_licensed"

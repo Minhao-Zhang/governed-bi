@@ -41,9 +41,20 @@ it, and ``useStream`` needs that — so the denial is here, on the ``"update"`` 
 
 **What this does not do.** It is not authorization of any kind beyond the two denials above.
 There is one principal and no way to tell two callers apart, so ``resume_authorised``'s
-per-caller check (``govern/bounds.py``) is still the only thing that distinguishes them, and on
-the streamed transport it is still not reached (audit A5 — ``serve/accept.py``'s node passes no
-``identity``). That was true while the key existed too: a shared key cannot name a caller either.
+per-caller check (``govern/bounds.py``) is still the only thing that distinguishes them. That was
+true while the key existed too: a shared key cannot name a caller either.
+
+**And it is not where the resume gate lives, because it cannot be.** ``@auth.on.threads.create_run``
+below sees the resuming *request* — ``kwargs.command.resume`` and ``thread_id`` are both in the
+``RunsCreate`` it is handed, and :func:`_command_of` already reads the first. It cannot see the
+*thread*: ``Auth.types.AuthContext`` carries ``permissions``, ``user``, ``resource`` and
+``action``, and the ``identity`` the paused turn was checkpointed with is graph state, reachable
+only through a runtime connection and a compiled graph that no auth handler is given. Refusing
+``command.resume`` outright is not available either — that is the paused-turn protocol. So B9 is
+enforced inside the graph, at the line ``serve/tools.py``'s ``ask_user`` resumes on; what closes
+audit A5's write half is ``serve/accept.py`` recording the authenticated caller as the turn's
+``identity``, and it reads it from the ``configurable`` slot :func:`_authenticate`'s return value
+lands in. ``serve/resume.py``'s module docstring is the long form.
 """
 
 from __future__ import annotations
@@ -81,7 +92,7 @@ def authenticated_principal() -> Principal:
 
     A fork that authenticates people replaces this with something taking the request's
     claims. The moment it can return two different principals, audit findings A5, A6 and B1
-    go live — the streamed transport passes no identity, ``/chat/resume`` validates by
+    go live — the deleted ``/chat/resume`` validated by
     thread, and ``POST /threads/search`` returns the rendered context block. That trigger is
     recorded in ``docs/enterprise-fork.md`` and is deliberately not fixed here.
     """
@@ -109,6 +120,13 @@ async def _authenticate() -> Auth.types.MinimalUserDict:
     the string ``govern/bounds.resume_authorised`` compares and the principal
     ``api/graph_app.py`` asks the access policy about are one value (ADR 0012 §8.1). It is not
     evidence of anything about the caller — it was not when a shared key produced it either.
+
+    **This return value is now load-bearing twice.** ``langgraph_api/models/run.py`` copies it into
+    every run's ``configurable["langgraph_auth_user_id"]``, which is the only slot
+    ``serve/resume.py`` will read a caller from: ``serve/accept.py`` stores it as the turn's
+    ``identity`` and ``ask_user`` compares the resuming run's copy against it. A fork returning two
+    different principals gets the B9 gate for free, on the streamed transport, without touching
+    ``serve/``.
     """
     return {"identity": authenticated_principal().id, "permissions": []}
 

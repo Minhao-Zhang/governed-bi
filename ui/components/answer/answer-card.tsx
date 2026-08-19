@@ -38,10 +38,10 @@ import { cn } from "@/lib/utils";
 import type { AnswerView } from "@/lib/types";
 
 /**
- * Renders a full `Answer` in one of three states: clean, graded delivery (SQL with an
- * unverified warning), or hard refusal. Branch on `deriveDelivery` — it owns the mapping
- * from the engine's `outcome` + ledger terminal, and a component reading either directly
- * is a second copy of that rule.
+ * Renders a full `Answer` in one of four states: clean, graded delivery (SQL with an unverified
+ * warning), hard refusal, or an ending with no governed statement. Branch on `deriveDelivery` —
+ * it owns the mapping from the engine's `outcome` + ledger terminal, and a component reading
+ * either directly is a second copy of that rule.
  *
  * **How much of it shows depends on the role tier**, and the split is by what a reader can act on:
  *
@@ -210,6 +210,18 @@ export function AnswerCard({
           </div>
         ) : (
           <>
+            {delivery === "no_statement" && (
+              // Informational, not a warning: nothing refused this turn and nothing failed. What
+              // a reader needs is that the prose below has no statement under it, which is the
+              // one thing the record actually says (`register/stages.py::Outcome.no_sql`).
+              <div className="flex gap-3 rounded-md border border-tier-lineage/30 bg-tier-lineage/5 p-3">
+                <Info className="mt-0.5 size-4 shrink-0 text-tier-lineage" />
+                <p className="text-sm">
+                  This turn ran no query, so there is no governed statement behind the text below.
+                </p>
+              </div>
+            )}
+
             {delivery === "graded" && (
               <div className="space-y-2 rounded-md border border-tier-fenced-raw/40 bg-tier-fenced-raw/10 p-3">
                 <div className="flex gap-3">

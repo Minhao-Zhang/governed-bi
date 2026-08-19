@@ -70,6 +70,16 @@ class SqliteConnector:
     def dialect(self) -> str:
         return "sqlite"
 
+    @property
+    def endpoint(self) -> dict[str, Any]:
+        """Which database this is. A file, so there is no host, port or credential.
+
+        Same shape as :attr:`PostgresConnector.endpoint` so a caller renders one thing; the
+        file name rather than the full path, because the absolute path is this machine's
+        directory layout and says nothing a reader of the page needs.
+        """
+        return {"database": self._path.name}
+
     def _connect(self) -> sqlite3.Connection:
         """Open a connection for **this call**. Never cached across calls.
 

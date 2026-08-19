@@ -82,8 +82,11 @@ def test_a_crashed_row_still_names_the_arm_it_crashed_in(tmp_path: Path) -> None
         def invoke(self, *_args, **_kwargs):
             raise RuntimeError("provider went away")
 
-    original = harness.compile_graph
-    harness.compile_graph = lambda *a, **k: _Exploding()  # type: ignore[assignment]
+    # `compile_durable`, not `compile_graph`: the concurrent path builds a durable graph
+    # per worker so each gets its own loop-bound saver, and that is the seam a crash
+    # rides in on.
+    original = harness.compile_durable
+    harness.compile_durable = lambda *a, **k: _Exploding()  # type: ignore[assignment]
     try:
         connector = _connector(tmp_path)
         rows = run_arm(
@@ -93,7 +96,7 @@ def test_a_crashed_row_still_names_the_arm_it_crashed_in(tmp_path: Path) -> None
             connector_factory=lambda: connector,
         )
     finally:
-        harness.compile_graph = original  # type: ignore[assignment]
+        harness.compile_durable = original  # type: ignore[assignment]
 
     assert [r["outcome"] for r in rows] == ["crashed", "crashed"]
     for row in rows:

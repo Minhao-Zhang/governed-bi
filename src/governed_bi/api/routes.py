@@ -1,20 +1,23 @@
 """Custom REST routes mounted by ``langgraph.json``'s ``http.app`` (ADR 0007 §7).
 
 Route shapes follow ``docs/openapi.json``. Capabilities report what is actually built.
-Only the two chat routes need a model — corpus browsing and the audit surface are model-free.
+**Every route here is a read and none of them needs a model.** Serving a turn is the streamed
+LangGraph Server path (``langgraph.json``'s ``graphs.serve`` → ``api/graph_app.make_graph``) and
+nothing else.
 
-**The surface has a constructor** (2026-08-11). :func:`make_app` takes its three dependencies —
-the session, the compiled chat graph and the turn log — and returns an app over exactly those.
+``POST /chat`` and ``POST /chat/resume`` are **deleted** (2026-08-18, ADR 0014). They were a
+second topology for the same job — no ``accept`` node, the whole of ``ServeState`` in and out, a
+process-wide ``InMemorySaver`` of their own and a 32-thread LRU over it — and the second store is
+what made them a bug rather than a fallback: the two transports never shared a thread, so
+degrading to REST lost the conversation it was meant to rescue. Their append into the audit log
+went with them, so ``record_node`` is the only writer of a turn: it returns the envelope onto
+``ServeState.turns`` and the checkpointer persists it.
+
+**The surface has a constructor** (2026-08-11). :func:`make_app` takes its two dependencies —
+the session and the turn log — and returns an app over exactly those.
 :func:`app_from_environment` is the adapter the process entry uses, and is the only thing here
 that resolves anything from the environment; the module-level :data:`app` is that adapter's
 output because ``langgraph.json`` names an attribute rather than a factory.
-
-Before that the app was assembled from process globals: a memoised ``_SESSION`` in
-``graph_app``, a module-level ``_GRAPH``, and a module-level LRU list. The cost is on the record
-— ``tests/serve/test_chat_transport.py`` states that the routes could not be exercised over HTTP
-because they build a Postgres connector and seed a corpus, so ``POST /chat`` was tested by
-calling ``_shape`` directly, and seven of the ten specifications in
-``tests/api/test_http_contract.py`` were strict-xfail stubs for want of a way to construct this.
 
 The two adapters are what justify the seam: the environment in production, a fake ``Session`` in
 tests. Resolution stays **lazy** for the environment one — importing this module must not build
@@ -30,8 +33,10 @@ audit A7. It has been deliberately removed: this is a single-operator dev engine
 Studio unusable, and the maintainer chose reachability over transport auth.
 
 So A7 is open again, knowingly: ``/audit/turns`` and ``/audit/turns/{turn_id}/trace`` hand every
-thread's SQL, the full turn records and an absolute log path to anything that can reach the port,
-and ``/chat`` will spend model budget for it. The ``_cors_headers`` helper that made a 401 legible
+thread's SQL, the full turn records and an absolute path to the conversation store to anything
+that can reach the port — and the platform's own ``/threads`` and ``/runs``, on the same port and
+under the same absent credential, will spend model budget for it. Nothing this app serves will:
+the chat pair that used to is deleted. The ``_cors_headers`` helper that made a 401 legible
 to a browser went with the middleware — with no refusal to head by hand, every response now
 passes back through the platform's ``CORSMiddleware`` normally. See ``api/auth.py``, which keeps
 the state-write denials that are *not* authentication.
@@ -39,13 +44,12 @@ the state-write denials that are *not* authentication.
 
 from __future__ import annotations
 
-import uuid
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from fastapi import FastAPI
 
-from governed_bi.api import trace_store
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import make_router
 from governed_bi.api.curation_routes import make_curation_router
@@ -53,37 +57,35 @@ from governed_bi.api.drafts_routes import make_drafts_router
 from governed_bi.api.feedback_routes import make_feedback_router
 from governed_bi.api.trust_loop_routes import make_raised_router, make_trust_loop_metrics_router
 from governed_bi.api.visibility import visible
+from governed_bi.model.provider import reasoning_effort_of
+from governed_bi.paths import REPO_ROOT
 from governed_bi.register.assets import ASSET_REGISTER
-from governed_bi.serve.messages import surface_answer_text
 from governed_bi.serve.runtime import bool_knob
 
 __all__ = ["make_app", "app_from_environment", "app"]
 
 
-#: Cap how many `/chat` threads one app's ``InMemorySaver`` retains. Eval already calls
-#: ``delete_thread`` per question; without a bound here a long-lived API worker keeps every
-#: session (~100 KB+/turn). Threads with a pending clarification are never evicted.
-_CHAT_THREAD_CAP = 32
-
-
 # ── the seam ─────────────────────────────────────────────────────────────────
 
 
-def make_app(session: Any, graph: Any, turn_log: Any) -> FastAPI:
-    """An app over exactly these three dependencies. **The constructor.**
+def make_app(session: Any, turn_log: Any) -> FastAPI:
+    """An app over exactly these two dependencies. **The constructor.**
 
     ``session`` is a :class:`~governed_bi.serve.session.Session` (or anything with its read
     surface: ``assets_by_id``, ``structure``, ``connector``, ``agent_model``, ``knobs_resolved``,
-    ``corpus_content_hash``, ``problems``). ``graph`` is a compiled, sync-callable serve graph —
-    ``None`` is allowed and means this app has no chat transport, which the chat routes report as
-    a refusal rather than a crash. ``turn_log`` is anything exposing ``append_turn``,
-    ``list_turns``, ``get_turn``, ``SUMMARY_FIELDS`` and ``TURN_LOG_DIR``;
-    :mod:`governed_bi.api.trace_store` is the production one.
+    ``corpus_content_hash``, ``problems``). ``turn_log`` is a **reader** of served turns —
+    anything exposing ``list_turns``, ``get_turn``, ``SUMMARY_FIELDS`` and ``TURN_LOG_DIR``;
+    :class:`governed_bi.api.thread_turns.ThreadTurnLog` is the production one.
 
-    All three are required and none is defaulted. A default would put the environment back in
-    the constructor, which is the thing this exists to remove.
+    **There is no ``graph``.** It was the third dependency and only the deleted chat pair ever
+    called it, so keeping the parameter would advertise a transport this app does not have. A
+    turn is served by the graph ``langgraph.json`` mounts, which the platform drives; this app
+    never holds it.
+
+    Both are required and neither is defaulted. A default would put the environment back in the
+    constructor, which is the thing this exists to remove.
     """
-    return _build_app(lambda: session, lambda: graph, turn_log)
+    return _build_app(lambda: session, turn_log)
 
 
 def app_from_environment() -> FastAPI:
@@ -94,52 +96,22 @@ def app_from_environment() -> FastAPI:
     a corpus. Resolving it here would make importing this module require a database.
     """
     from governed_bi.api.graph_app import session_from_environment
+    from governed_bi.api.thread_turns import ThreadTurnLog
 
-    return _build_app(session_from_environment, _chat_graph, trace_store)
-
-
-#: Process-wide compiled graph + checkpointer for the environment adapter.
-#: ``compile_graph()`` builds a fresh saver per call; compiling once keeps ``thread_id``
-#: meaningful across turns and interrupts.
-_GRAPH: Any = None
+    # `ThreadTurnLog`: the audit surface reads a turn's record out of thread state now that
+    # `ServeState.turns` accumulates it, so there is no second store of the same thing. Its
+    # header says why that is readable in-process.
+    return _build_app(session_from_environment, ThreadTurnLog())
 
 
-def _chat_graph() -> Any:
-    """``POST /chat``'s graph, compiled once for the process.
+def _build_app(get_session: Callable[[], Any], turn_log: Any) -> FastAPI:
+    """Assemble the app from a session thunk and a turn log.
 
-    **The no-``accept`` topology**, deliberately and unlike the streamed surface: this route
-    builds the turn in-process through ``Session.turn`` and passes the whole of ``ServeState``,
-    where the served graph derives it from a client conversation (``api/graph_app``). Two
-    topologies, two input schemas; see ``serve/graph.py::build_graph``.
-    """
-    global _GRAPH
-    if _GRAPH is None:
-        from langgraph.checkpoint.memory import InMemorySaver
-
-        from governed_bi.serve.graph import as_sync, build_graph
-
-        # `as_sync`, because every node is `async def` now (the only shape LangGraph attaches a
-        # node timeout to) and this route's handlers are sync `def`. Starlette runs those in a
-        # worker thread with no running loop, so the facade's `asyncio.run` is safe here.
-        _GRAPH = as_sync(build_graph().compile(checkpointer=InMemorySaver()))
-    return _GRAPH
-
-
-def _build_app(
-    get_session: Callable[[], Any],
-    get_graph: Callable[[], Any],
-    turn_log: Any,
-) -> FastAPI:
-    """Assemble the app from two dependency thunks and a turn log.
-
-    Thunks rather than values, so :func:`make_app` can hand over concrete objects and
+    A thunk rather than a value, so :func:`make_app` can hand over a concrete object and
     :func:`app_from_environment` can defer. That is the one difference between the two adapters,
     and it lives here rather than in the routes.
     """
     app = FastAPI(title="governed-bi", version="2")
-
-    #: Per-app, not per-process: two apps in one test session must not evict each other's threads.
-    chat_threads: list[str] = []
 
     @app.get("/livez")
     def livez() -> dict[str, Any]:
@@ -155,79 +127,6 @@ def _build_app(
     def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
         """Assets of one type as rows. ``type`` is validated against the register."""
         return asset_rows(visible(get_session()), type)
-
-    @app.post("/chat")
-    def chat(body: dict[str, Any]) -> dict[str, Any]:
-        """Serve one turn, blocking. Degradation path — streaming is the primary transport.
-
-        Request: ``{question, session_id, history: [{role, text}]}``.
-        Response: v2 answer shape ``{outcome, text, failed_stage, error_type, refused_by,
-        record}`` plus ``answer_text``. ``session_id`` becomes ``thread_id`` on the config.
-        Sync handler so connector/model calls run in FastAPI's threadpool.
-        """
-        session, compiled = get_session(), get_graph()
-        if compiled is None:
-            return _error("this app was built with no graph, so it cannot serve a turn")
-        question = str(body.get("question") or "").strip()
-        if not question:
-            return _error("no question")
-
-        thread_id = str(body.get("session_id") or "") or uuid.uuid4().hex[:16]
-        turn_index = 1 + sum(1 for h in body.get("history") or [] if (h or {}).get("role") == "user")
-        turn = session.turn(
-            question,
-            turn_index=turn_index,
-            thread_id=thread_id,
-            identity=_identity(body, thread_id),
-        )
-        config = _config(session, question, thread_id)
-        shaped = _logged(turn_log, _shape(compiled.invoke(turn, config)), question)
-        # Evict after the invoke so a pending clarification on this thread is visible to the LRU.
-        _touch_chat_thread(compiled, chat_threads, thread_id)
-        return shaped
-
-    @app.post("/chat/resume")
-    def chat_resume(body: dict[str, Any]) -> dict[str, Any]:
-        """Answer a clarification paused by ``ask_user``.
-
-        Request: ``{session_id, clarification_id?, answer | choice_id | declined, identity?}``.
-        """
-        session, compiled = get_session(), get_graph()
-        if compiled is None:
-            return _error("this app was built with no graph, so it cannot resume a turn")
-        thread_id = str(body.get("session_id") or "")
-        if not thread_id:
-            return _error("no session_id: a resume needs the thread its question is paused on")
-
-        config = _config(session, None, thread_id)
-        pending = _pending_on_thread(compiled, config)
-        if pending is None:
-            return _error(f"no clarification is pending on session {thread_id!r}")
-
-        wanted = str(body.get("clarification_id") or "")
-        if wanted and wanted != pending.get("clarification_id"):
-            return _error(
-                f"clarification_id {wanted!r} does not match the pending question "
-                f"{pending.get('clarification_id')!r}"
-            )
-
-        from governed_bi.serve.resume import ResumeRejected, resume_clarification
-
-        reply = _resume_reply(body)
-        try:
-            out = resume_clarification(
-                compiled,
-                config=config,
-                identity=_identity(body, thread_id),
-                answer=reply or str(body.get("answer") or ""),
-            )
-        except ResumeRejected:
-            return _error(
-                "resume identity mismatch: the caller answering is not the caller that was asked"
-            )
-        shaped = _logged(turn_log, _shape(out), str(pending.get("question") or ""))
-        _touch_chat_thread(compiled, chat_threads, thread_id)
-        return shaped
 
     @app.get("/graph")
     def er_graph(
@@ -261,9 +160,10 @@ def _build_app(
     def audit_turns(limit: int = 50, thread_id: str | None = None) -> dict[str, Any]:
         """Served turns, newest first. ``incomplete_fields`` is judged against today's register.
 
-        ``thread_id`` narrows to one conversation, which is what a transcript needs: the graph
-        checkpoint holds only the newest turn's record (``PER_TURN_RESET``), so this log is the
-        only source for the earlier turns of a thread.
+        ``thread_id`` narrows to one conversation, which is what a transcript needs. It used to be
+        needed because the *store* was global — one time-ordered log of every thread — and it is
+        still needed now the source is thread state, because a transcript asks for one thread and
+        the reader would otherwise page through every other one to find it.
         """
         return turns_page(turn_log, limit=limit, thread_id=thread_id)
 
@@ -328,10 +228,122 @@ class _DeferredSession:
 # ── projections: a function of the session, testable without an app ──────────
 
 
+def models_for(session: Any) -> dict[str, Any]:
+    """The three model surfaces this run resolved, for the settings page.
+
+    **Read from ``knobs_resolved``, not off the client objects.** That mapping is what every
+    measurement row publishes, so a settings page built from it shows the identity a run is
+    actually recorded under — and a disagreement between screen and artifact becomes
+    impossible rather than merely unlikely. ``serve/runtime.py::model_id`` is where that
+    identity is derived, and its own note records what a wrong derivation cost.
+
+    ``embedding.id`` is **provider-qualified** (``bedrock:amazon.titan-embed-text-v2:0``) and is
+    reported verbatim rather than split on ``:``. The qualifier is part of the cache-key
+    identity (``retrieve.semantic.cache_key`` is ``model|dimensions|text``), and the id itself
+    can contain a colon — Titan's ``…-v2:0`` does — so parsing it would corrupt the one field
+    that keeps two gateways' vectors apart. ``provider`` is carried beside it instead.
+
+    ``utility.effort`` is observed off the live client because no knob records it: the register
+    declares ``llm_reasoning_effort`` for the agent surface only. Adding a second knob is not
+    this function's call to make (``register/knobs.py`` is the one home for a knob), so the
+    field is honest about being an observation and is ``None`` when there is no live model.
+    """
+    knobs = session.knobs_resolved
+    # `getattr`, matching how this module reads `connector.dialect`: these projections are
+    # documented as "a function of the session, testable without an app", and a hard attribute
+    # read here would make every existing test fake grow a field to keep passing — which is a
+    # test-maintenance tax for no assertion. A session without the handle reports no effort.
+    utility = getattr(session, "utility_model", None)
+    return {
+        "agent": {
+            "id": knobs.get("chat_model"),
+            "provider": knobs.get("llm_provider"),
+            "effort": knobs.get("llm_reasoning_effort"),
+        },
+        "utility": {
+            "id": knobs.get("llm_utility_model"),
+            "provider": knobs.get("llm_utility_provider"),
+            "effort": reasoning_effort_of(utility) if utility is not None else None,
+        },
+        "embedding": {
+            "id": knobs.get("embedding_model"),
+            "provider": knobs.get("embedding_provider"),
+            "dimensions": knobs.get("embedding_dimensions"),
+        },
+    }
+
+
+def connection_for(session: Any) -> dict[str, Any]:
+    """Which warehouse this engine is pointed at. **Credential-free by construction.**
+
+    The redaction is the connector's (``datasource/postgres.py::endpoint``), not this
+    function's — see that property for why it lives there. Here the only job is to be robust
+    about *shape*: a partial session or a test double may have no ``endpoint``, or one that is
+    not a mapping, and a settings page is not worth a 500. ``dialect`` is always present because
+    every connector declares it.
+    """
+    out: dict[str, Any] = {"dialect": getattr(session.connector, "dialect", "postgres")}
+    endpoint = getattr(session.connector, "endpoint", None)
+    if isinstance(endpoint, Mapping):
+        out.update({str(k): v for k, v in endpoint.items()})
+    return out
+
+
+def durable_checkpointer_configured() -> bool:
+    """Whether this deployment mounts a durable checkpointer, read off ``langgraph.json``.
+
+    **Derived, because the alternative is unobservable from here.** The platform injects the saver
+    it loads from ``checkpointer.path`` into every graph it runs (``langgraph_api/graph.py``
+    copies the compiled graph with the saver attached), and this custom app never holds that
+    graph — there is no object here to ask. What *is* in the process is the file that decides it,
+    and the module it names: if either stops existing the flag goes false without anyone editing
+    this line, which is what ADR 0009 D4 asks of a capability flag.
+
+    Both halves are checked. The field alone would report a checkpointer that fails to load; the
+    file alone would report one nothing mounts. Neither says the saver is *open* — a live handle
+    is what cannot be seen from here, and this is honest about being a configuration reading.
+    """
+    try:
+        config = json.loads((REPO_ROOT / "langgraph.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    declared = str((config.get("checkpointer") or {}).get("path") or "")
+    module, _, factory = declared.rpartition(":")
+    return bool(module and factory) and (REPO_ROOT / module).is_file()
+
+
+def served_graph_declared() -> bool:
+    """Whether ``langgraph.json`` declares the streamed graph, and its module is on disk.
+
+    The streaming transport is the platform's, not this app's, so there is no client object here
+    to ask -- the same bind as :func:`durable_checkpointer_configured`, and the same answer: read
+    the file that decides it and the module it names. Delete either and the flag goes false with
+    nobody editing this line, which is what makes it an observation.
+
+    It cannot see that the graph *imports*. A syntactically broken `serve` module would leave this
+    true while the server failed to start -- at which point nothing answers `/capabilities` either,
+    so the lie is unobservable.
+    """
+    try:
+        config = json.loads((REPO_ROOT / "langgraph.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    declared = str((config.get("graphs") or {}).get("serve") or "")
+    module, _, factory = declared.rpartition(":")
+    return bool(module and factory) and (REPO_ROOT / module).is_file()
+
+
 def capabilities_for(session: Any) -> dict[str, Any]:
     """``/capabilities``' body. Every field is an observation (ADR 0007 §7)."""
     #: Bound once so ``can_clarify`` cannot drift from ``can_stream``.
-    can_stream = True
+    #
+    # Derived, not the literal `True` it was. It was left hardcoded because a `false` value would
+    # have made the UI mount the REST fallback against a route that no longer exists -- and that
+    # reason is spent: the fallback is deleted and `can_stream: false` now renders `<NoTransport/>`,
+    # which explains itself. So the last capability flag that described an intention rather than an
+    # observation is one too (ADR 0009 D4).
+    can_stream = served_graph_declared()
+    durable = durable_checkpointer_configured()
     from governed_bi.serve.runtime_overrides import overrides as _live_overrides
 
     live_knobs = {**session.knobs_resolved, **_live_overrides()}
@@ -342,16 +354,33 @@ def capabilities_for(session: Any) -> dict[str, Any]:
         "edit_mode": "none",
         "can_stream": can_stream,
         "has_live_model": session.agent_model is not None,
+        # Kept: the existing header chip reads it, and it is the agent surface's id. The
+        # per-surface detail is under `models`, which is what the settings page renders.
         "model": session.knobs_resolved.get("chat_model"),
+        "models": models_for(session),
+        # Which warehouse this engine is pointed at, credential-free — the connector redacts
+        # (`datasource/postgres.py::endpoint`). `getattr` for the same reason as `dialect`
+        # above: these projections must stay callable with a partial session.
+        "connection": connection_for(session),
         "can_scope": True,
         "can_search": False,
-        # Clarification UI mounts only on the streaming transport.
+        # `can_stream and …` is kept, unchanged, from ADR 0009 D12 — the flag mounts the
+        # interrupt prompt, so it must not be true on a client that cannot show one. The
+        # expression is now *trivially* satisfied on its first term rather than load-bearing:
+        # the streamed transport is the only one there is, and it has the clarification pair.
+        # Still the right shape, because the term that can go false is the model.
         "can_clarify": can_stream and session.agent_model is not None,
-        # Honest durability: `/chat` compiles with InMemorySaver (process-local). LangGraph
-        # Server injects its own saver for the stream path; local_dev is still not Postgres.
-        # Pause/resume does not survive a process restart on either surface today.
-        "checkpoint_durable": False,
-        "hitl_survives_process_restart": False,
+        # Both derived (ADR 0009 D4: a flag is flipped by building the thing, not by editing the
+        # line). They were hardcoded `False` and described `POST /chat`'s process-local
+        # `InMemorySaver`, which is deleted; the served path checkpoints to SQLite through
+        # `langgraph.json`'s `checkpointer.path` → `serve/checkpointer.py` (ADR 0014).
+        "checkpoint_durable": durable,
+        # One observation, not two: an `ask_user` interrupt *is* checkpoint state, and the
+        # resume reads it back out of the same store through the platform's `Command(resume=…)`.
+        # So this cannot be true while `checkpoint_durable` is false, and it must not be reported
+        # as a separate belief. What ADR 0014 verified is thread state surviving a hard kill and
+        # a restart; a clarification answered *after* one has not been watched end to end.
+        "hitl_survives_process_restart": durable,
         # Corpus curation (the Agreed Assumptions / Needs Review admin tabs) is a different
         # question from `can_clarify` above -- that one is "does a live ask_user interrupt
         # fire", this one is "would /corpus/conflicts*, /corpus/assumptions and
@@ -594,7 +623,17 @@ def corpus_audit(session: Any) -> dict[str, Any]:
 
 
 def turns_page(turn_log: Any, *, limit: int = 50, thread_id: str | None = None) -> dict[str, Any]:
-    """``/audit/turns``' body."""
+    """``/audit/turns``' body.
+
+    ``meta.log_dir`` is **where these turns come from**, and since ADR 0014 that is the
+    conversation checkpoint database rather than a directory of JSONL files — the audit surface
+    reads thread state, and there is no second store to name. The *key* keeps the old spelling
+    deliberately: the client's ``auditTurnsSchema`` requires ``log_dir`` and the audit footer
+    renders it, so renaming the field would break ``npm run check:api`` to relabel one caption.
+    The value is read off the seam (``turn_log.TURN_LOG_DIR``) and not from
+    ``serve/checkpointer.py``, because a route that names the production store directly would
+    report it for an app built over a fake.
+    """
     turns = turn_log.list_turns(limit=limit, thread_id=thread_id)
     return {
         "turns": turns,
@@ -648,150 +687,6 @@ def trace_for(turn_log: Any, turn_id: str) -> dict[str, Any]:
         "missing_required": sorted(absent),
         "record": record,
         "undeclared_keys": sorted(undeclared_keys(record)),
-    }
-
-
-# ── chat plumbing: pure over what it is handed ────────────────────────────────
-
-
-def _touch_chat_thread(compiled: Any, threads: list[str], thread_id: str) -> None:
-    """Remember ``thread_id`` as most-recently used; drop the oldest idle threads over the cap.
-
-    **A thread leaves the list only once the saver has actually dropped it.** The first version
-    popped the victim before checking whether the checkpointer could delete it, so a saver
-    without ``delete_thread`` left the thread retained but untracked — the unbounded growth the
-    cap exists to prevent, reported as a bounded LRU. ``InMemorySaver`` does expose the method,
-    but the guard is here precisely because the saver gets swapped (LangGraph Server injects its
-    own), so the case it was written for is the one that must not fail silently.
-    """
-    if thread_id in threads:
-        threads.remove(thread_id)
-    threads.append(thread_id)
-
-    saver = getattr(compiled, "checkpointer", None)
-    delete = getattr(saver, "delete_thread", None)
-    if not callable(delete):
-        return  # nothing can be evicted; keep the list honest rather than forgetting threads
-
-    # Oldest first, newest last; the current thread is never a candidate, because a
-    # clarification it just raised may not be visible until the invoke that follows.
-    current = threads[-1]
-    remaining = len(threads) - _CHAT_THREAD_CAP
-    keep: list[str] = []
-    for victim in threads[:-1]:
-        # Left to right: no checkpointer read at all once enough have been evicted.
-        pending = _pending_on_thread(compiled, {"configurable": {"thread_id": victim}})
-        if remaining > 0 and pending is None:
-            delete(victim)
-            remaining -= 1
-        else:
-            keep.append(victim)  # under the cap, or a paused turn that is never evicted
-    keep.append(current)
-    threads[:] = keep
-
-
-def _config(session: Any, question: str | None, thread_id: str) -> dict[str, Any]:
-    """Request config. ``thread_id`` goes on the config (what LangGraph checkpoints on)."""
-    config = session.configurable(question=question) if question else session.configurable()
-    config["configurable"]["thread_id"] = thread_id
-    return config
-
-
-def _resume_reply(body: dict[str, Any]) -> Any:
-    """What ``resume_clarification`` receives: the structured reply pulled out of the request
-    body, or the bare ``answer`` string when nothing structured was sent.
-
-    ``defer`` sits beside ``declined`` for the reason this fork's Bug 3 exists at all:
-    ``governed-bi-ui``'s "I don't know -- ask the admin later" button sends ``{"defer": true}``.
-    Without that key in the filter ``reply`` came back ``{}`` -- falsy -- and the bare-``answer``
-    fallback produced ``""``, so a live client hitting exactly the path
-    ``_clarification_answer``'s ``defer`` alias was fixed for still reached the model as an
-    empty-string answer, one HTTP layer above that fix.
-    """
-    reply = {k: v for k, v in body.items() if k in ("answer", "choice_id", "declined", "defer")}
-    return reply or str(body.get("answer") or "")
-
-
-def _identity(body: dict[str, Any], thread_id: str) -> dict[str, str]:
-    """Caller identity for ``resume_authorised``. Falls back to thread id when none supplied."""
-    supplied = body.get("identity")
-    if isinstance(supplied, str) and supplied:
-        return {"token": supplied}
-    if isinstance(supplied, dict):
-        token = next((str(v) for v in supplied.values() if v), "")
-        if token:
-            return {"token": token}
-    return {"token": thread_id}
-
-
-def _clarification(interrupts: Any) -> dict[str, Any] | None:
-    """The ``ask_user`` payload (ADR 0007 §6) among interrupts, or ``None``."""
-    for item in interrupts or ():
-        value = getattr(item, "value", item)
-        if isinstance(value, dict) and value.get("kind") == "clarification":
-            return value
-    return None
-
-
-def _pending_on_thread(compiled: Any, config: dict[str, Any]) -> dict[str, Any] | None:
-    """The clarification paused on this thread, from the checkpoint."""
-    tasks = getattr(compiled.get_state(config), "tasks", ()) or ()
-    return _clarification([i for task in tasks for i in (getattr(task, "interrupts", ()) or ())])
-
-
-def _shape(out: dict[str, Any]) -> dict[str, Any]:
-    """One response shape for both chat routes, including the paused one.
-
-    Pure over ``out``: a draft consulted ``graph.get_state`` when no ``__interrupt__`` was
-    present, which put a checkpoint read — and therefore a session build — on the answered path
-    of every request.
-    """
-    pending = _clarification(out.get("__interrupt__"))
-    if pending is not None:
-        return {
-            "outcome": "clarification",
-            "text": pending.get("question"),
-            "failed_stage": None,
-            "error_type": None,
-            "refused_by": None,
-            "record": {},
-            "answer_text": None,
-            "clarification": pending,
-        }
-    answer = dict(out.get("answer") or {})
-    answer["answer_text"] = surface_answer_text(answer, out)
-    answer.setdefault("clarification", None)
-    return answer
-
-
-def _logged(turn_log: Any, shaped: dict[str, Any], question: str) -> dict[str, Any]:
-    """Append the turn to the audit log. Paused turns (no record) are skipped."""
-    record = shaped.get("record") or {}
-    if not record.get("turn_id"):
-        return shaped
-    _turn_id, error = turn_log.append_turn(
-        record,
-        question=question,
-        answer_text=shaped.get("answer_text"),
-        outcome=shaped.get("outcome"),
-    )
-    shaped["audit_logged"] = error is None
-    if error is not None:
-        shaped["audit_error"] = error
-    return shaped
-
-
-def _error(detail: str) -> dict[str, Any]:
-    """A refusal a client can read, in the same shape as every other reply."""
-    return {
-        "outcome": "crashed",
-        "text": detail,
-        "failed_stage": "resume",
-        "error_type": "ValueError",
-        "refused_by": None,
-        "record": {},
-        "answer_text": None,
-        "clarification": None,
     }
 
 

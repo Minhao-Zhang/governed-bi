@@ -5,6 +5,9 @@ fifteen fields. This node derives them from the last human message through
 :meth:`~governed_bi.serve.session.Session.turn`, so nothing a client sends in a provenance field
 is merged: ``run_id``, ``turn_id``, ``corpus_content_hash``, ``prompt_set_hash`` and
 ``knobs_resolved`` are the run's own claims about itself, and every quotability gate reads them.
+``identity`` is derived the same way and for a second reason: it is what a later
+``Command(resume=…)`` is checked against (``serve/resume.py``), so a client that could set it
+could answer another caller's paused clarification.
 
 **Here rather than in ``api/graph_app.py``, and taking its session as an argument.** It lived
 there as a closure over a module-level ``_SESSION``, which is why no test ever executed it: the
@@ -19,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from governed_bi.serve.resume import caller_identity
 from governed_bi.serve.state import PER_TURN_RESET
 
 __all__ = ["accept_node"]
@@ -49,7 +53,24 @@ def accept_node(session: Any) -> Callable[[dict, Any], dict]:
                 },
             }
         prior = sum(1 for m in state.get("messages") or [] if _kind(m) == "human")
-        turn = session.turn(question, turn_index=max(1, prior), thread_id=_thread_id(config))
+        # **The identity a later resume is checked against, and it is written here or nowhere.**
+        # This node passed none (audit A5's write half), so every turn the streamed transport
+        # created checkpointed no ``identity`` — and `resume_authorised` refuses an absent stored
+        # identity, so with `serve/resume.py`'s in-graph gate wired that would refuse every
+        # clarification answer on the only serve path there is. It is taken from the caller the
+        # *transport* authenticated rather than from anything the client sent: `ServeInput` is one
+        # key, so a request cannot write `identity` through the graph's input, and
+        # `api/auth.py` denies the `command.update` and `POST /threads/{id}/state` channels that
+        # could write it around the schema. Absent when nothing named a caller — in-process
+        # drivers build their own turns and this node is not on their path — and `Session.turn`
+        # omits the key rather than storing a null, so absence keeps failing closed.
+        caller = caller_identity(config)
+        turn = session.turn(
+            question,
+            turn_index=max(1, prior),
+            thread_id=_thread_id(config),
+            identity={"token": caller} if caller else None,
+        )
         # Per-turn query vector: streamed path binds config once with no question.
         if session.embedder is not None:
             try:

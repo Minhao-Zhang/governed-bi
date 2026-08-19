@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * useStreamChat — the live streaming transport.
+ * useStreamChat — the chat transport. **The only one against a real engine.**
  *
  * Backs onto the engine's shipped LangGraph runtime via the LangChain
  * `useStream` hook (`@langchain/langgraph-sdk/react`) pointed at LANGGRAPH_URL +
- * ASSISTANT_ID. Only mounted when `/capabilities` reports `can_stream: true`.
+ * ASSISTANT_ID. Mounted when `/capabilities` reports `can_stream: true`; when it does not,
+ * there is nothing to mount and <ChatPanel/> says so, because the engine deleted the
+ * `POST /chat` route this used to degrade to.
  *
  * The serve graph is the governed agentic core (ADR 0002): it streams a
  * governance ledger live as custom `GovEvent`s (`rail` / `tool` / `final`, the
@@ -24,19 +26,17 @@
  * AgentTimeline is the live surface for those (gotcha G2).
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { StreamMode } from "@langchain/langgraph-sdk";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import { toast } from "sonner";
 
 import type { ChatTransport } from "@/hooks/use-chat";
-import { useRestChat } from "@/hooks/use-rest-chat";
 import {
   parseClarification,
   type ClarificationRequest,
   type ClarificationResponse,
 } from "@/lib/clarification";
-import { api } from "@/lib/api-client";
 import { ASSISTANT_ID, LANGGRAPH_URL } from "@/lib/env";
 import {
   buildStepsFromLedger,
@@ -47,12 +47,9 @@ import {
   type TimelineStep,
 } from "@/lib/steps";
 import {
-  alignLogToQuestions,
-  flattenContent,
   mapStreamToChatMessages,
   parseAnswer,
-  turnFinalAiFrames,
-  type LoggedTurn,
+  turnAnswersByMessageId,
 } from "@/lib/stream-messages";
 import type { AnswerView } from "@/lib/types";
 
@@ -84,6 +81,12 @@ const SUBMIT_OPTIONS: { streamMode: StreamMode[]; streamSubgraphs: boolean } = {
  * The slice of graph state we care about. `messages` is loosely typed so the
  * `submit` payload below (a bare human turn) type-checks; the rendered messages
  * come from `stream.messages`, which the SDK types on its own.
+ *
+ * `turns` is **every finished turn's audit envelope**, accumulated on the thread
+ * (`serve/state.ServeState.turns`, `operator.add`, never in `PER_TURN_RESET`) — which is what
+ * makes `answer` being per-turn survivable: `answer` describes the newest turn only, and this
+ * channel holds the rest. Typed `unknown[]` because it is wire data with no parse step of its
+ * own; `turnAnswersByMessageId` validates each row.
  */
 interface ChatStreamState {
   messages: Array<{
@@ -93,6 +96,7 @@ interface ChatStreamState {
     additional_kwargs?: Record<string, unknown>;
   }>;
   answer: unknown;
+  turns?: unknown[];
 }
 
 /**
@@ -234,16 +238,14 @@ export function useStreamChat(
   // its timeline after the run ends (the live `steps` state resets next send).
   // State, not a ref, so the mapping below can read it during render.
   const [completedSteps, setCompletedSteps] = useState<Map<string, TimelineStep[]>>(new Map());
-  // **Finished turns' answers, by the same key, for the same reason.**
+  // **Answers captured live, by the same key, for the same reason.**
   //
   // `values.answer` describes the newest turn only (`PER_TURN_RESET`), so the moment turn two
-  // starts, turn one's record is gone from state and its card had to be rebuilt from the audit log
-  // by *position*, on every render. That cost the card twice: it degraded to bare text for as long
-  // as the fetch took, and a position is not a fact about a turn, so it could name the wrong one.
+  // starts, turn one's record is gone from that channel. This holds what `onFinish` saw first-hand
+  // while the component was mounted; `values.turns` (read below) covers every other turn.
   //
-  // Keyed on the message that carries the answer instead, and filled from both sources — the
-  // record seen when a turn finished here (`onFinish`), and the log joined onto ids once, below.
-  // A finished turn's card is then a lookup that cannot go stale or shift.
+  // Keyed on the message that carries the answer, so a finished turn's card is a lookup on an
+  // identity rather than a position that can shift.
   const [completedAnswers, setCompletedAnswers] = useState<Map<string, AnswerView>>(new Map());
   // Latest live trace, mirrored in a ref so the `onFinish` event handler can read
   // it (event handlers may touch refs; render may not) to snapshot the finished
@@ -255,24 +257,6 @@ export function useStreamChat(
   // rather than a ref because it is read during render (the projection), and the
   // rule in this file is that render may not touch refs.
   const [clarified, setClarified] = useState<ReadonlyMap<string, ClarificationFact>>(new Map());
-
-  // Graceful degradation: if the streaming run errors (e.g. the LangGraph server
-  // can't execute the graph), fall back to the non-streaming POST /chat transport
-  // and replay the pending question there, so the user still gets an answer.
-  //
-  // It is a *degradation*, and a sharper one than it looks: the two transports do
-  // not share a thread. The engine's REST route and its streaming route are built
-  // on different checkpointers, and `useRestChat` starts with an empty transcript,
-  // so the replayed question is answered with no memory of the conversation that
-  // preceded it. The client cannot bridge that — it can only say so, which the
-  // toast in `onError` does.
-  //
-  // `degradedRef`, not the `degraded` state, is the re-entrancy guard: state lands
-  // a render later and `onError` can fire again before it does.
-  const rest = useRestChat();
-  const [degraded, setDegraded] = useState(false);
-  const degradedRef = useRef(false);
-  const pendingRef = useRef("");
 
   const stream = useStream<ChatStreamState>({
     apiUrl: LANGGRAPH_URL,
@@ -314,25 +298,14 @@ export function useStreamChat(
       }
     },
     onError: () => {
-      // Fires at most once per transport: `degradedRef` (not the `degraded` state,
-      // which lands a render later) is what stops a second stream error — or a
-      // failed clarification resume — from replaying the question a second time.
-      if (degradedRef.current) return;
-      degradedRef.current = true;
-      setDegraded(true);
-      // Honest about what is lost, not just about what changed. The engine's REST
-      // route and its streaming route use **different checkpointers**, so the
-      // thread the stream was building is not readable from `POST /chat`: the
-      // replayed question is answered on its own, with the earlier turns of this
-      // conversation gone. Nothing on the client can bridge that.
-      toast.error(
-        "Live streaming failed — answering without live progress, and without the earlier turns of this conversation.",
-      );
-      // `pendingRef` is the question that was in flight. Cleared as it is handed
-      // over so a later error can never replay the same turn twice.
-      const pending = pendingRef.current;
-      pendingRef.current = "";
-      if (pending) rest.send(pending);
+      // **There is no second transport to fall back to, and the honest thing is to say so.**
+      //
+      // This used to switch the whole hook over to a `POST /chat` replay of the pending
+      // question. That route is gone from the engine, and it was never a good failure mode: it
+      // ran on a different checkpointer, so the replayed question was answered with none of the
+      // conversation that preceded it. A failed run now leaves the question in the transcript
+      // with no answer, which is what happened, and the user can retry on the same thread.
+      toast.error("The run failed — no answer was produced. Ask again to retry on this thread.");
     },
   });
 
@@ -403,90 +376,68 @@ export function useStreamChat(
     return withClarifications(rows, resolvedFacts);
   };
 
-  // **Earlier turns' records, from the durable turn log — the reload path.**
+  // **Every other turn's record, read off the thread's own state — the reload path.**
   //
   // `stream.values.answer` describes the newest turn only: the engine clears the record channels
-  // every turn (`PER_TURN_RESET`), so a two-turn thread has one record in state. `onFinish` above
-  // keeps the turns that finished while this component was mounted; the log is what covers the
-  // ones that did not, which after a reload is all of them.
+  // every turn (`PER_TURN_RESET`), so a two-turn thread has one `answer` in state. `onFinish`
+  // above keeps the turns that finished while this component was mounted; `values.turns` covers
+  // the ones that did not, which after a reload is all of them.
   //
-  // **The rows are attached to message ids here, in the fetch's own callback, rather than read
-  // positionally at render time.** Two reasons, and the second is the load-bearing one:
+  // **This was a fetch of `GET /audit/turns` plus a question-text match, and both are gone.** The
+  // engine now accumulates each finished turn's envelope on a graph channel (`ServeState.turns`,
+  // `operator.add`, outside `PER_TURN_RESET`), so the records and the messages are one store and
+  // `useStream` already has them: no request, no effect, no cache to invalidate, and no window
+  // where a card is bare text while a fetch is in flight. It also fixes what the text match was
+  // working around rather than solving — the log is a file queried by `thread_id` and holds rows
+  // this conversation never showed, so neither a position nor a string was ever an identity.
+  // `turnAnswersByMessageId` explains the keying.
   //
-  //  1. The rows carry neither a message id nor a `turn_index`, so they can only be joined on the
-  //     question — and that is a text match, not an identity. It has to be done somewhere it
-  //     cannot go wrong. Here, the frames present are exactly the turns that have already
-  //     answered: the run this fetch was triggered by has not produced its frame yet, so no row
-  //     can be attached to a question still being worked on. That matters because the log really
-  //     does hold rows this conversation never showed — thread `019fdc77` had four under one
-  //     `thread_id` for a two-turn transcript, two of them from an earlier run, one repeating a
-  //     question asked again later.
-  //  2. Once resolved to an id, a finished turn's record no longer depends on run state at all.
-  //     That is what closes the last blank window: `submit()` flips `isLoading` before appending
-  //     the human frame, and during that gap the previous turn's answer is the newest frame with
-  //     nothing behind it — recognisable as settled only by identity. Measured: ~700ms.
+  // **`turns` is on the checkpoint but NOT on the streamed surface, so the rows are held.**
   //
-  // Refetched when the turn count changes rather than on every render. Never cleared, and it does
-  // not need to be: message ids are unique, so a row resolved on another thread cannot match a
-  // frame on this one. Failures are swallowed on purpose — a missing log costs an earlier turn its
-  // SQL panel, and must not cost the live turn its answer.
+  // Measured against `langgraph-api` on 2026-08-18, one two-turn thread: `GET
+  // /threads/{id}/state` returns all 41 channels *including* `turns`, and every root `values`
+  // frame of a streamed run carries exactly two keys — `{answer, messages}`, the graph's
+  // `output_schema` (`serve/state.ServeOutput`). `useStream` reads the checkpoint on mount and
+  // again when the run ends (our `onFinish` declares a parameter, which is what makes the SDK
+  // refetch the thread head), and its `values` falls back to that read — so the channel is
+  // complete while idle and *missing for stretches of a run*. Not even reliably missing: a
+  // `messages` frame re-merges the fetched history under the streamed values, so whether `turns`
+  // is there mid-run depends on which frame arrived last.
   //
-  // Fetched for a *one*-turn thread too, though it has no earlier turns to rebuild. Reason (2)
-  // above is why: reload a one-turn conversation and ask a follow-up, and that turn's card has to
-  // survive the submit window on a record keyed to its message — which it only has if the log was
-  // already read. Waiting until there were two turns raced the request against the run.
-  const turnCount = stream.messages.filter((m) => m.type === "human").length;
-  useEffect(() => {
-    if (!threadId || turnCount === 0) return;
-    // Captured before the request so the join reads the frames as they were when this turn count
-    // was reached. They are the settled turns' frames, which do not change while the fetch is in
-    // flight; adding `stream.messages` to the deps would refetch the log on every streamed token.
-    const questions = stream.messages.map((m) =>
-      m.type === "human" ? flattenContent(m.content) : null,
-    );
-    const frames = turnFinalAiFrames(stream.messages);
-    let live = true;
-    void api
-      .auditTurns(200, threadId)
-      .then(({ turns }) => {
-        if (!live) return;
-        const logged: LoggedTurn[] = [...turns].reverse().map((turn) => ({
-          question: typeof turn.question === "string" ? turn.question : "",
-          answer: {
-            outcome: (turn.outcome ?? "answered") as AnswerView["outcome"],
-            text: null,
-            // The turn log does not record the model's stated assumptions, so a transcript
-            // rebuilt from it has none to show. `[]` is what this row actually knows.
-            assumptions: [],
-            answer_text: turn.answer_text ?? null,
-            record: turn as unknown as Record<string, unknown>,
-          },
-        }));
-        const byTurn = alignLogToQuestions(questions, logged);
-        // Merged, never replaced: a record captured live is first-hand, so it outranks the log for
-        // the same message.
-        setCompletedAnswers((prev) => {
-          let next: Map<string, AnswerView> | null = null;
-          for (const frame of frames) {
-            const answer = byTurn[frame.turn];
-            if (!answer || prev.has(frame.id)) continue;
-            next ??= new Map(prev);
-            next.set(frame.id, answer);
-          }
-          return next ?? prev;
-        });
-      })
-      .catch(() => {
-        // Nothing to undo: the map only ever gained entries.
-      });
-    return () => {
-      live = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- see the capture note above.
-  }, [threadId, turnCount]);
+  // Held for that reason, not as a cache. Without it, reloading a two-turn thread and asking a
+  // third question blanked the two cards above it — down to bare text, no SQL, no governance —
+  // for the length of the run, which is 30–120 seconds. That is the same window the deleted
+  // fetch's own comment described closing, and it has to stay closed.
+  //
+  // Written during render rather than from an effect: this is React's "adjust state when the
+  // input changes" and it settles in one extra render, where an effect would land the correction
+  // a commit late — the transcript would flash the degraded turns exactly once per run. Keyed on
+  // the thread and only ever grown: the channel is append-only per thread (`operator.add`), and
+  // rows from another conversation must be dropped rather than held, because they would be
+  // positioned against *this* thread's frames.
+  const liveTurns = Array.isArray(stream.values?.turns) ? stream.values.turns : [];
+  const [heldTurns, setHeldTurns] = useState<{ thread: string | null; rows: unknown[] }>({
+    thread: threadId,
+    rows: liveTurns,
+  });
+  const held = heldTurns.thread === threadId ? heldTurns.rows : [];
+  if (heldTurns.thread !== threadId || liveTurns.length > held.length) {
+    setHeldTurns({ thread: threadId, rows: liveTurns });
+  }
+  const rebuiltAnswers = turnAnswersByMessageId(
+    liveTurns.length >= held.length ? liveTurns : held,
+    stream.messages,
+  );
 
-  /** The record for the turn this message answered, if we have one. */
-  const answerFor = (id: string): AnswerView | undefined => completedAnswers.get(id);
+  /**
+   * The record for the turn this message answered, if we have one.
+   *
+   * Live first, rebuilt second — the precedence the old merge-never-replace map enforced, now
+   * expressed where it is read. A record captured by `onFinish` is first-hand: it is the `answer`
+   * channel of the run this client watched, complete before `record`'s envelope was even built.
+   */
+  const answerFor = (id: string): AnswerView | undefined =>
+    completedAnswers.get(id) ?? rebuiltAnswers.get(id);
 
   // Drop tool/system frames and intermediate ReAct AI text — see mapStreamToChatMessages.
   const messages = mapStreamToChatMessages({
@@ -499,24 +450,16 @@ export function useStreamChat(
   });
 
   const send = (question: string) => {
-    if (degradedRef.current) {
-      rest.send(question);
-      return;
-    }
     const trimmed = question.trim();
     // A suspended turn is not a finished one: `isLoading` is false at an
     // interrupt, so without `awaitingClarification` the composer could start a
     // second run on a thread that is waiting for an answer to its first.
     if (!trimmed || isRunning || awaitingClarification) return;
-    pendingRef.current = trimmed;
     // Reset the agent timeline for the new turn; events refill it as they arrive.
     stepsRef.current = [];
     setSteps([]);
     void stream.submit({ messages: [{ type: "human", content: trimmed }] }, SUBMIT_OPTIONS);
   };
-
-  // Once degraded, the REST transport owns the whole transcript + sends.
-  if (degraded) return rest;
 
   return {
     messages,

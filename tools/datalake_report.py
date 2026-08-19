@@ -24,6 +24,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
+from governed_bi.measure.selective import DECLINED  # noqa: E402 — after the sys.path insert
+
 
 def _abstention(every: list[dict]) -> None:
     """What declining to answer bought, and what it cost.
@@ -39,10 +41,14 @@ def _abstention(every: list[dict]) -> None:
     reported as unmeasured rather than as zero.
     """
     committed = [r for r in every if r.get("outcome") == "answered"]
-    # Wider than the harness's `PRICED_ABSTENTIONS`, on purpose: a clarification is an
-    # abstention, it just has no statement to re-execute. Counting it here and not there keeps
-    # "how often did the engine decline" separate from "of those, how many could be priced".
-    abstained = [r for r in every if r.get("outcome") in ("capped", "refused", "clarification")]
+    # `measure.selective.DECLINED`, not a literal tuple. Wider than the harness's
+    # `PRICED_ABSTENTIONS`, on purpose: a clarification is an abstention, it just has no
+    # statement to re-execute, and so is a turn that ran no statement at all. Counting them here
+    # and not there keeps "how often did the engine decline" separate from "of those, how many
+    # could be priced". Read from the register rather than restated because it was restated here
+    # and `Outcome.no_sql` was added to one copy: a hand-written third copy of the set is a third
+    # abstention rate.
+    abstained = [r for r in every if r.get("outcome") in DECLINED]
     if not committed or not abstained:
         return
     ok = sum(1 for r in committed if r.get("correct") is True)

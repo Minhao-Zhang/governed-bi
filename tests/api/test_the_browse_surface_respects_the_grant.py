@@ -156,7 +156,7 @@ def _client(grant: Grant) -> Any:
         corpus_content_hash_="corpus-under-test",
     )
     assert not session.fatal_problems, [str(p) for p in session.fatal_problems]
-    return TestClient(make_app(session, None, _TurnLog()))
+    return TestClient(make_app(session, _TurnLog()))
 
 
 class _TurnLog:

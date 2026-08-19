@@ -283,7 +283,7 @@ one serve final state into one row. Every field it writes:
 
 | Field | Meaning |
 |---|---|
-| `outcome` | `answered`, `refused`, `clarification`, `capped`, or `crashed` |
+| `outcome` | `answered`, `refused`, `clarification`, `capped`, `crashed`, or `no_sql`. `no_sql` is a turn that ended without executing a governed statement — added 2026-08-18, so **rows written before that date record those turns as `answered`** and any rate spanning the boundary mixes two taxonomies. `headline_ex` is unaffected (they graded `correct=false` under both names); coverage and delivered accuracy in `measure/selective.py` are not, because `no_sql` is in `DECLINED` |
 | `correct` | `true`, `false`, or `null`. `null` means the grader had no gold to compare against, and is **not** a wrong answer. Propagate it; do not coerce it |
 | `crashed` | Whether `outcome` is `crashed` |
 | `grade_detail` | Why the grade came out as it did |

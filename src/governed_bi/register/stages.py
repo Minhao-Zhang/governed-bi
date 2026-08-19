@@ -128,6 +128,21 @@ class Outcome(str, Enum):
     ``crashed`` vs ``refused`` must stay separate: a crash is our bug, a refusal is
     the product working, and ``capped`` is neither (ADR 0006 §5). Graded delivery is
     not an outcome — the turn ``answered``.
+
+    :attr:`no_sql` is the fourth thing none of those three is, and it must stay apart from
+    :attr:`answered` for the reason the class exists: **the turn executed no governed
+    statement.** For an engine whose claim is grounded answers that is the distinction that
+    matters — an answer with no auditable statement is not a governed answer — and folding it
+    into ``answered`` is what made a model declining in prose ("these terms are not defined in
+    the provided schemas") record ``outcome: answered`` beside ``ledger: no_sql`` and
+    ``generated_sql: null``, live, on 2026-08-18.
+
+    It is deliberately **not** narrower than that. Three live paths produce exactly these
+    signals and the record cannot separate them: the no-model stub
+    (``agent_core._stub``), a genuine answer read off the delivered context ("which tables are
+    available?"), and a prose decline. Naming the member after the one property all three share
+    is the only claim the ledger can back; a "does this prose look like a refusal" heuristic
+    would be a declaration with no enforcer, which is what this register exists to refuse.
     """
 
     answered = "answered"
@@ -135,6 +150,12 @@ class Outcome(str, Enum):
     clarification = "clarification"
     capped = "capped"
     crashed = "crashed"
+    #: Spelled exactly as ``govern.ledger.ExecutionRecord``'s ``terminal`` word, and
+    #: ``govern/ledger.py`` asserts the two agree at import. ``stamp`` derives this member
+    #: *from* that field rather than from ``path_kind``, the same way it reads the ledger's
+    #: verdict for ``capped``, so ``outcome`` and ``ledger`` cannot disagree; a second spelling
+    #: here would be a second answer to one question.
+    no_sql = "no_sql"
 
 
 #: The abstention policy's closed vocabulary — **the reason the engine decided to withhold**,
@@ -225,11 +246,24 @@ def classify_outcome(
     refused_by: str | None,
     has_sql: bool,
     clarification_requested: bool = False,
+    terminal: str | None = None,
 ) -> Outcome:
     """Map terminal signals onto exactly one :class:`Outcome`.
 
     Precedence: infra error → crash refused_by → attempt cap → clarification →
-    other refused_by → SQL present ⇒ answered, else crashed.
+    other refused_by → SQL present ⇒ answered → the ledger's own ``no_sql`` ⇒
+    :attr:`Outcome.no_sql`, else crashed.
+
+    ``terminal`` is ``govern.ledger.ExecutionRecord``'s field, and it is read in the **last two
+    lines only**. That ordering is load-bearing: a guard-blocked or declined turn also carries
+    an empty ledger, so ``terminal == "no_sql"`` is true of it, and reading the ledger any
+    earlier would relabel a refusal as a turn that merely ran no statement.
+    :func:`_assert_refusal_tables_are_closed` asserts the precedence over the whole declared
+    vocabulary rather than leaving it to this docstring.
+
+    An **absent** ``terminal`` still falls through to ``crashed``. A turn with no statement whose
+    ledger says nothing at all has not been observed ending, and that is what a crash is; the
+    caller has to hand over the ledger's verdict to get :attr:`Outcome.no_sql`.
     """
     if error and error.startswith(INFRA_ERROR_PREFIX):
         return Outcome.crashed
@@ -246,6 +280,8 @@ def classify_outcome(
         return Outcome.refused
     if has_sql:
         return Outcome.answered
+    if terminal == Outcome.no_sql.value:
+        return Outcome.no_sql
     return Outcome.crashed
 
 
@@ -302,6 +338,29 @@ def _assert_refusal_tables_are_closed() -> None:
         raise AssertionError(
             f"abstention reasons classified as crashes: {crashing}. Declining on purpose is "
             "the product working; `Outcome` requires it stay apart from our own bugs."
+        )
+
+    # Every declared refusal outranks an empty ledger. A guard-blocked turn, a decline and an
+    # abstention all reach `stamp` with `attempts: []`, so `execution.terminal` is `"no_sql"` on
+    # each of them -- and `Outcome.no_sql` is the one member that reads that field. Tested over
+    # the whole vocabulary rather than trusted to `classify_outcome`'s line order, because the
+    # failure is silent: the refusal keeps its `refused_by`, its `terminal_reason` and its stage,
+    # and only `outcome` stops saying a decision was taken. `refusal_histogram` counts `refused`
+    # rows, so the reasons would simply leave the histogram.
+    leaked = sorted(
+        reason
+        for reason in REFUSED_BY_TO_STAGE
+        if reason not in CRASH_REFUSED_BY
+        and reason != ATTEMPT_CAP_REFUSED_BY
+        and classify_outcome(
+            error=None, refused_by=reason, has_sql=False, terminal=Outcome.no_sql.value
+        ) is not Outcome.refused
+    )
+    if leaked:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"declared refusals reclassified once the ledger was consulted: {leaked}. "
+            "`Outcome.no_sql` means nothing decided and no statement ran; a turn something "
+            "refused is a decision, and it carries an empty ledger too."
         )
 
 

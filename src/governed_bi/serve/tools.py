@@ -39,6 +39,7 @@ from governed_bi.serve.ledger import (
     execution_from_attempts,
     pipeline_error_attempt,
 )
+from governed_bi.serve.resume import ResumeRejected, authorise_resume
 from governed_bi.serve.runtime import bool_knob, configurable, prompt_variants
 from governed_bi.serve.schema_term_guard import find_schema_leak
 from governed_bi.serve.structured_check import percentage_scale_suffix
@@ -497,9 +498,16 @@ def build_tools(
     #: surface has no way to say which question is being answered, so the fix is upstream: there
     #: is only ever one question outstanding.
     #:
-    #: It resets on every ``build_tools``, which is once per node execution. That is correct: on
-    #: resume the satisfied call's ``Send`` is filtered out by its existing ``ToolMessage``, so a
-    #: second question after a resume is a genuinely new one.
+    #: **Released when the question is answered, not held for the rest of the node execution.**
+    #: The list is rebuilt by every ``build_tools`` — once per ``agent_core`` execution — and a
+    #: resume re-executes that node, so the ``append`` below never *accumulates* across passes
+    #: (measured: two distinct lists, one entry each). What it did do was stay occupied. The call
+    #: being resumed has no ``ToolMessage`` yet — that is precisely *why* its ``Send`` re-runs — so
+    #: it re-takes the latch on the resume pass, and nothing gave the latch back. Measured: after
+    #: "which year?" came back answered, the model's next ``ask_user`` was told "this turn already
+    #: has one" outstanding, with the answer to that one sitting in the transcript directly above
+    #: the refusal. The ``append`` still has to happen *before* ``interrupt()``, because that is
+    #: the only point at which it can stop two concurrent ``Send``s; the release is the fix.
     pending_clarification: list[str] = []
 
     @tool
@@ -592,6 +600,24 @@ def build_tools(
         clarification_id = f"clar-{turn_id}-{digest}"
         pending_clarification.append(clarification_id)
         started = {"clarification_id": clarification_id}
+        # **This ``start`` is emitted before ``interrupt()`` and therefore again on every resume,
+        # and that is the wire contract rather than a leak** (ADR 0010, "``id`` is keyed on …
+        # ``tool_call_id`` … stable across a resume replay … the ``tools`` node re-executes on
+        # resume, so ``start`` is emitted twice"). Two requirements meet here and only a
+        # pre-``interrupt()`` emit satisfies both: the row must be *open* for the whole time a
+        # human is looking at the question, and a resume is a **second stream** — a client that
+        # reloaded while the question was pending connects only to that one, so the replayed
+        # ``start`` is the only one it ever sees, and it is what gives the resolve below a row to
+        # land in. Both events carry the same ``event_id``, so the client folds them into one row
+        # (``ui/lib/steps.ts::reduceSteps`` merges on ``id``; a repeated ``start`` re-asserts
+        # ``running``, which the row already holds).
+        #
+        # Measured for one call: ``start`` (pausing pass), ``start`` (resume pass), then exactly
+        # one resolve. A resolved row is never followed by a ``start`` — a resume refused below is
+        # terminal, and a satisfied call's ``Send`` is filtered out of every later pass by its
+        # ``ToolMessage`` — so the repeat cannot regress a settled status. Do not "fix" it by
+        # moving this line after ``interrupt()``: that deletes the open row for exactly the
+        # interval it exists to describe.
         emit(
             kind="tool",
             step="ask_user",
@@ -641,6 +667,42 @@ def build_tools(
             basis=basis,
         )
         answer = interrupt(interrupt_payload)
+        # **The resume identity gate (ADR 0006 B9), on the first instruction that can hold it.**
+        # ``interrupt()`` raises on the initial pass, so everything below runs only on a resume —
+        # and only here do both halves exist in one frame: ``state`` is the *paused* turn's
+        # checkpoint, ``config`` belongs to the run applying the resume. The streamed transport
+        # posts ``{"command": {"resume": …}}`` straight into the graph, so nothing in ``api/`` is
+        # consulted; ``api/auth.py`` can read that payload but not the thread it targets
+        # (``serve/resume.py``'s module docstring measures why), and it cannot refuse
+        # ``command.resume`` wholesale without deleting the paused-turn protocol.
+        #
+        # Before the line, not after: ``_clarification_answer`` is where an unauthorised caller's
+        # text would first become something the model is handed and the record keeps.
+        try:
+            authorise_resume(state, config)
+        except ResumeRejected:
+            # The ``start`` row above is already on the live stream, and on *this* run's stream
+            # too, since the replay re-emitted it; a raise alone never closes it, so the operator
+            # would watch a clarification spin forever and find only ``error_type:
+            # "ResumeRejected"`` in the record. ``detail`` stays ``started``: the clarification
+            # id, never the answer, which is the thing this refusal is withholding.
+            emit(
+                kind="tool",
+                step="ask_user",
+                status="refused",
+                event_id=tool_event_id("ask_user", _call_id(runtime)),
+                detail=started,
+            )
+            raise
+        # **The latch is given back here**, after the gate and before the answer is read: an
+        # authorised resume means this question is no longer outstanding, so the next one the
+        # model asks in this same ``agent_core`` execution is a genuinely new question and must be
+        # allowed to pause. Kept *after* ``authorise_resume`` so that call stays the first
+        # instruction ``interrupt()`` returns onto (ADR 0006 B9) — a caller who was not asked
+        # neither answers the question nor frees it. ``remove`` cannot raise: this frame appended
+        # the entry, the check above admits exactly one, and nothing between the two lines
+        # ``await``s, so no other frame can have taken it.
+        pending_clarification.remove(clarification_id)
         text = _clarification_answer(answer)
         resume_reply = answer if isinstance(answer, Mapping) else {}
         # Phase 1b (this initiative): `declined` and `deferred` used to collapse onto one

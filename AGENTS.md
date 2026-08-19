@@ -7,7 +7,7 @@
 ## Repo Structure
 
 - This is a monorepo with a backend and a frontend.
-- Record all the documentation under `docs/` and do NOT put anything in the root of the repo and ui repo.
+- Record all the documentation under `docs/` and do NOT put anything in the root of the repo or in the root of `ui/`.
 - The backend is in `src/governed_bi/` and the frontend is in `ui/`.
 
 ## Code Guidelines

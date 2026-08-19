@@ -173,11 +173,9 @@ export interface GraphSelection {
   node?: GraphNode;
 }
 
-/** One prior turn sent to the non-streaming POST /chat (TurnIn). */
-export interface ChatTurn {
-  role: "user" | "assistant";
-  text: string;
-}
+// `ChatTurn` — one prior turn in the `POST /chat` request body — is **gone**, with the route
+// and the transport that built it. The streaming graph owns the conversation itself: history
+// is `messages` on the thread's checkpoint, so a client never re-sends it.
 
 /** Non-table corpus asset types — the values `/corpus/assets?type=` accepts. */
 export const ASSET_TYPES = [
