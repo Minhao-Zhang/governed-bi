@@ -190,6 +190,7 @@ def _run_one(
     _evict(compiled, thread_id)
     return row
 
+
 def _turn_knobs(question: Mapping[str, Any], session: Any) -> dict[str, Any] | None:
     """The configuration this question runs under: its own override, else the session's.
 
@@ -261,7 +262,7 @@ def _run_concurrently(
     as a shorter file.
     """
     import threading
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     local = threading.local()
     # Every graph this pool builds, so `finally` can close them all. A durable saver binds its
@@ -320,7 +321,13 @@ def _run_concurrently(
     results: dict[int, dict[str, Any]] = {}
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            for index, row in pool.map(run_index, range(len(questions))):
+            # `as_completed`, not `pool.map`: `map` yields in *input* order, so one hung provider
+            # request holds back every finished row behind it and the crash-safe writer goes
+            # quiet. The returned list is still ordered -- callers index it -- but `on_row` now
+            # fires when the row is actually done.
+            futures = [pool.submit(run_index, i) for i in range(len(questions))]
+            for future in as_completed(futures):
+                index, row = future.result()
                 results[index] = row
                 if on_row is not None:
                     on_row(index, row)
@@ -352,7 +359,6 @@ def run_comparison(
         )
         for arm in arms
     }
-
 
 
 def _base_turn(question: Mapping[str, Any], *, run_id: str, arm: str) -> dict[str, Any]:
