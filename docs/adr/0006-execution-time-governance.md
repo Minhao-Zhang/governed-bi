@@ -380,6 +380,40 @@ and from a model refusal — 0005's node wrapper would otherwise stamp
 `Outcome.crashed`, which is the inverse of the defect that retired the
 pre-2026-07-25 numbers.
 
+**And so does a turn that executed no statement at all** (`Outcome.no_sql`, added
+2026-08-18). The same argument, one step further out: `capped` exists because the
+turn stopped for a reason neither a crash nor a refusal describes, and a turn whose
+ledger holds no answering attempt stopped for a *third* such reason. For an engine
+whose claim is grounded answers this is the distinction that matters most — an
+answer with no auditable statement is not a governed answer — and until that date it
+was recorded as `answered`. `stamp._path_signals`'s `path_kind == "answered"`
+fall-through hardcoded `has_sql=True` and never read `state["generated_sql"]`, so a
+model that declined in prose because the corpus defined none of the question's terms
+recorded `outcome: answered` beside `execution.terminal: "no_sql"` and
+`generated_sql: null`. The interface rendered all three side by side, disagreeing.
+
+The member is named after the ledger's own word, and `stamp` derives it by **reading
+`execution.terminal`** rather than by re-deriving one from `path_kind` — the same
+construction `capped` already uses, and for the same reason given above: two
+derivations of "did a statement run" can disagree, and one of them will be the one a
+reader believes. `govern/ledger.py` asserts the two spellings at import.
+
+Three live paths produce exactly these signals and nothing in the record separates
+them: the no-model stub, a genuine answer read off the delivered context ("which
+tables are available?"), and a prose decline. The member is deliberately named for
+the one property all three share rather than for the benign one, because the
+alternative is a heuristic over the prose — a classifier with no ground truth, which
+is the declaration-with-no-enforcer shape §5 keeps rejecting elsewhere. Which of the
+three a turn was stays unanswerable from the record, and that is stated rather than
+guessed at.
+
+> **Rows written before 2026-08-18 carry the old label.** All 23 statement-less turns
+> in the 9,459 rows of `runs/eval/*.jsonl` are stamped `answered`, so any rate
+> computed across that date mixes two taxonomies: `answered` means "answered" after
+> it and "answered or ran nothing" before. `headline_ex` does not move (those rows
+> already graded `correct=false` either way), but coverage and delivered accuracy in
+> `measure/selective.py` do — see its `DECLINED`.
+
 > OQ4 asks whether this path earns its complexity at all. With the rule narrowed
 > to one layer, deleting it is a small change.
 
@@ -608,6 +642,16 @@ vocabulary having no such member, not by a constructor raising.
 **`thread_id` alone is not a capability** (B9). A clarification resume is bound
 to `identity` and rejects a mismatch.
 
+Enforced **inside the graph**, at `serve/resume.py::authorise_resume`, which `ask_user` calls on
+the instruction `interrupt()` returns on. It used to live only in `POST /chat/resume`, which the
+streamed transport never calls — LangGraph Server applies `{"command": {"resume": …}}` to the
+pending interrupt directly, and `api/auth.py` can read that payload but not the identity the
+paused turn was checkpointed with. So the check sits where both halves are: the paused turn's
+`identity` in `state`, the resuming caller in `config`. An absent identity on either side is a
+mismatch (G1), and the residue B9 names remains — a guessed `thread_id` still lets a stranger
+*destroy* a pending question, because the platform consumes the resume before the task re-runs.
+It never lets them answer or read one.
+
 ### 11. The ledger and redaction
 
 > **Superseded, 2026-08-06. The retention table below was never implemented, and
@@ -624,6 +668,15 @@ to `identity` and rejects a mismatch.
 > and `api/trace_store.append_turn` writing the question, the answer and the whole
 > record verbatim to `runs/serve/<date>.jsonl`. Verified on a live log — one line
 > held a full `generated_sql`, another held `… WHERE c."county" = 'ARECIBO' …`.
+>
+> **Same conclusion, different disk, 2026-08-18** ([ADR 0014](0014-one-conversation-store.md)).
+> `trace_store` and `runs/serve/*.jsonl` are deleted; the verbatim record now reaches
+> `runs/conversations.sqlite` on `ServeState.turns` through the LangGraph checkpointer. Two things
+> this note asserted have changed value. It is no longer plaintext a `grep` can read, which is a
+> smaller property than it sounds — the envelope is still unredacted and the store is still
+> protected by nothing but the filesystem. And "no retention policy" is no longer true:
+> `checkpointer.ttl` deletes a thread after 90 days, which is a retention *policy* and still not a
+> redaction one, since it drops the whole conversation rather than any class of field.
 >
 > Deleted rather than wired, deliberately. This is a local-first single-user tool
 > and that file is the user's own transcript on their own disk; the honest thing is

@@ -28,7 +28,7 @@ def assemble_node(state: dict, config: RunnableConfig) -> dict:
 
     ``messages`` is checkpointed and ``add_messages``-reduced, so appending the block re-sends
     every prior turn's context to the provider; it also adds a second human message per turn,
-    and both ``api/graph_app.py`` and ``POST /chat`` derive ``turn_index`` by counting those.
+    and ``api/graph_app.py`` derives ``turn_index`` by counting those.
     ``agent_core`` passes the block to the agent as an ephemeral message instead. The block is
     not lost — it is in ``delivery``, hashed, and the record publishes ``context_hash``.
 

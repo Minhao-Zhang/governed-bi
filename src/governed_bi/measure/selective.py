@@ -64,8 +64,27 @@ MIN_OPERATING_POINT = 50
 #: Outcomes in which the engine declined to answer. ``crashed`` is deliberately absent:
 #: a crash is our bug, not a decision, and counting one as an abstention flatters
 #: exactly the claim this module exists to test. :func:`graded` drops them and says so.
+#:
+#: ``no_sql`` **is** here, and it moves a measured rate. Coverage is the share of turns that got
+#: an answer, and this module's subject is *governed* answers, so a turn that executed no
+#: statement did not get one — whether it declined in prose, read the answer off the delivered
+#: context, or was the no-model stub. Before the taxonomy split those turns arrived as
+#: ``answered`` with ``correct=False``, i.e. in the **delivered** bucket as guaranteed misses:
+#: they inflated coverage and deflated delivered accuracy. Both figures move now, in opposite
+#: directions, by the ``no_sql`` share of the arm — 23 of 9,459 rows (0.24%) on the artifacts on
+#: disk, which carry the old label and are therefore **not** recomputable across the boundary.
+#:
+#: The alternative was to drop them the way :func:`graded` drops crashes. Rejected: an
+#: exclusion hides the behaviour, and an engine answering without querying is the behaviour a
+#: risk-coverage curve is supposed to price. It abstained from the governed path; that is a
+#: decision, even when the record cannot say which of the three took it.
 DECLINED: frozenset[str] = frozenset(
-    {Outcome.refused.value, Outcome.capped.value, Outcome.clarification.value}
+    {
+        Outcome.refused.value,
+        Outcome.capped.value,
+        Outcome.clarification.value,
+        Outcome.no_sql.value,
+    }
 )
 
 

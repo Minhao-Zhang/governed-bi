@@ -251,7 +251,10 @@ def test_stub_arm_invokes_serve(tmp_path: Path) -> None:
     _, connector = _fixture_db(tmp_path)
     rows = run_arm(_questions()[:1], stub_arm(connector=connector))
     assert len(rows) == 1
-    assert rows[0]["outcome"] in {"answered", "refused", "crashed"}
+    # `no_sql` is what the stub arm produces: `agent_core._stub` finishes the loop having
+    # executed nothing, and since 2026-08-18 that is its own outcome rather than `answered`.
+    # The set stays a set because this test's subject is that the arm reached serve at all.
+    assert rows[0]["outcome"] in {"answered", "refused", "crashed", "no_sql"}
     assert rows[0]["crashed"] == (rows[0]["outcome"] == "crashed")
     assert "question_id" in rows[0]
 

@@ -64,7 +64,8 @@ Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 | `GOVERNED_BI_UTILITY_TIMEOUT_S` | Utility-model timeout |
 | `GOVERNED_BI_MODEL_EFFORT` | Main-model effort |
 | `GOVERNED_BI_SEED_DIR` | Where a seeded corpus is written when no curated one is given |
-| `GOVERNED_BI_TURN_LOG_DIR` | Turn log root; defaults to `runs/serve/` |
+| `GOVERNED_BI_CONVERSATION_DB` | Served conversations' checkpoint database; defaults to `runs/conversations.sqlite`. A **file path**: `serve/checkpointer.py::assert_not_a_warehouse` refuses a value carrying `host=`, `dbname=`, `password=` or a `postgres://`-style URL at configuration time, because a checkpointer pointed at the analytics warehouse writes conversation state into it on the first turn |
+| `GOVERNED_BI_HARNESS_DB` | The one-turn CLI's and the eval driver's checkpoint database; defaults to `runs/harness-checkpoints.sqlite`. Separate from the above so 131 benchmark questions do not become the conversation history. Same refusal applies |
 | `GOVERNED_BI_VECTOR_CACHE` | Persistent vector cache directory — one LanceDB database per model, one table per vector width. Defaults to `runs/vectors/`. The server, the one-turn CLI and the eval driver share it |
 | `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` | Wall clock for the whole `agent_core` loop, overriding the `agent_node_timeout_s` knob (default 1200.0). `0` means no wall; empty means unset |
 | `GOVERNED_BI_AGENT_RECURSION_LIMIT` | Superstep ceiling for the nested `create_agent` graph, overriding the `agent_recursion_limit` knob (default 40) |
@@ -107,7 +108,9 @@ curl localhost:2024/capabilities
 absolute log path, unauthenticated" — were closed on 2026-08-12 by requiring a shared key. The key
 was removed on 2026-08-13 and both findings are live again, in exactly the terms they were written
 in: anything that can reach this port can post a turn, execute governed SQL against the configured
-database, and read every past turn out of `/audit/turns`.
+database, and read every past turn out of `/audit/turns` — or out of the platform's own
+`/threads/{id}/state`, which since 2026-08-18 returns every turn of that thread rather than the
+newest one.
 
 **Why, deliberately.** This is a single-operator engine on `127.0.0.1` under `langgraph dev`, and
 LangGraph Studio cannot hold a credential on the calls it bootstraps with. Measured 2026-08-13:
@@ -130,9 +133,31 @@ was already the model here — it is simply no longer proven by anything.
 
 Route shapes are in [`openapi.json`](openapi.json).
 
-Streaming (preferred): `POST /threads/{id}/runs/stream` with
+Serving a turn is `POST /threads/{id}/runs/stream` with
 `stream_mode: ["values", "messages", "custom"]` and `stream_subgraphs: true`
-([ADR 0010](adr/0010-live-stage-events.md)). Blocking: `POST /chat`.
+([ADR 0010](adr/0010-live-stage-events.md)), and **there is no second way**: `POST /chat` and
+`POST /chat/resume` were deleted on 2026-08-18 ([ADR 0014](adr/0014-one-conversation-store.md)).
+They kept their own `InMemorySaver`, so degrading to them silently lost the conversation they
+were meant to rescue. Every route `api/routes.py` mounts is now a read.
+
+A clarification is answered by posting a run with `{"command": {"resume": …}}` on the same thread.
+`serve/resume.py::authorise_resume` refuses one whose caller is not the caller that was asked
+(ADR 0006 §10 B9); with one principal and no transport credential that gate cannot tell two
+callers apart, which is the state [`enterprise-fork.md`](enterprise-fork.md) says to fix first.
+
+Conversations are durable as of 2026-08-18: `langgraph.json` mounts an `AsyncSqliteSaver` over
+`runs/conversations.sqlite`, the server logs *"Using custom checkpointer: AsyncSqliteSaver"* at
+startup, and a thread survives a restart. Two limits come with it. `keep_latest` retention is not
+available — `AsyncSqliteSaver` does not implement `aprune`, and the server names the missing
+methods at startup — so `checkpointer.ttl` **deletes** a thread 90 days after its last update,
+  **Inert under `langgraph dev`:** the in-memory runtime's `sweep_ttl` returns `(0, 0)`
+  ("Not implemented for inmem server") and nothing calls it, so nothing is deleted locally and a
+  long-lived thread grows without bound. The setting takes effect on a deployed runtime only.
+with no "keep the summary, expire the trace" middle state. And `checkpointer.path` replaces the
+*checkpoint* store only: under `langgraph dev` the thread, run and assistant index still lives in
+`.langgraph_api/.langgraph_ops.pckl`, which has no config knob. `/capabilities` has not caught up
+and still reports `checkpoint_durable: false`; read `langgraph.json`, not the flag
+([`open-work.md`](open-work.md)).
 
 Serve expects Postgres.
 

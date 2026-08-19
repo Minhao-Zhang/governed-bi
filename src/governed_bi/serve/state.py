@@ -8,6 +8,8 @@ channel as the per-turn cost list.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import operator
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal, NotRequired, TypedDict
@@ -29,6 +31,7 @@ __all__ = [
     "Delivery",
     "UsageRecord",
     "Answer",
+    "TurnEntry",
     "ServeInput",
     "ServeState",
     "PathKind",
@@ -38,6 +41,12 @@ __all__ = [
     "ACCUMULATING",
     "TURN_IDENTITY",
     "TEST_HOOKS",
+    "COMPACT_RECORD_BUDGET",
+    "COMPACT_MIN_VALUE_BYTES",
+    "MAX_TURNS_RETAINED",
+    "protected_record_keys",
+    "compact_turn_record",
+    "keep_turns",
     "cleared",
     "merge_delta",
     "merge_facets",
@@ -190,6 +199,238 @@ class Answer(TypedDict):
     record: dict[str, Any]
 
 
+class TurnEntry(TypedDict, total=False):
+    """One finished turn's audit envelope — the same five keys the JSONL log writes.
+
+    These five keys were the JSONL log's line shape, kept when the log was deleted because the
+    audit surface already read them and ``api/thread_turns.summarise_turn`` still projects them.
+    ``api/graph_app.record_node`` builds one envelope; there is no second sink left to disagree
+    with it.
+
+    ``question`` / ``answer_text`` sit beside ``record`` rather than inside it for
+    ``append_turn``'s reason: merged in, every record read back out fails ``undeclared_keys``.
+
+    ``total=False`` and not ``NotRequired`` per key: the log's own entries are written by a
+    function that always fills all five, so absence here means "an older row", not "optional
+    field", and a reader must tolerate it either way.
+
+    Three fields are ``| None`` because ``append_turn`` really writes ``None`` into them — a
+    refusal has no prose, and a turn derived from a non-text message has no question. Declaring
+    them ``str`` would describe a shape the production writer violates, and the readers
+    (``api/thread_turns.summarise_turn``, the audit routes) already treat null as "not present".
+    """
+
+    #: UTC isoformat to the second, stamped when the turn was recorded.
+    asked_at: str
+    question: str | None
+    answer_text: str | None
+    outcome: str | None
+    record: dict[str, Any]
+
+    #: What :func:`compact_turn_record` replaced on this row, ``{"dropped": [...], "was_bytes": n}``.
+    #: Present on **every** archived row and absent only on the newest, so ``{"dropped": []}`` is a
+    #: statement ("archived, nothing trimmed") and not a missing field. Lives on the envelope and
+    #: not inside ``record`` for the reason ``question`` does: a key the register does not declare
+    #: makes every read of that record fail ``undeclared_keys``.
+    compacted: dict[str, Any]
+    #: Turns dropped from this thread's history *before* this row, because
+    #: :data:`MAX_TURNS_RETAINED` bit. Carried on the **oldest surviving** row, which is where the
+    #: gap is. ADR 0009 D2: a cap that says nothing reads as full coverage, and ``/audit/turns``
+    #: has no truncation field on the wire — so this is the only place the elision is stated, and
+    #: surfacing it is owed by whoever next changes that response shape.
+    elided_turns: int
+
+
+#: Bytes an **archived** turn's ``record`` is trimmed toward — a target, not a guarantee: the
+#: protected keys of :func:`protected_record_keys` are never compacted and set a floor of ~6 KB
+#: on a real record (``knobs_resolved`` alone is 3.0 KB of it).
+#:
+#: 8 192 is measured, not chosen: on the real 103.8 KB records in ``runs/conversations.sqlite``
+#: (2026-08-18) exactly two keys are above the line — ``facet_hits`` at 49.8 KB and ``pulled_in``
+#: at 46.2 KB, together 92% of the record — and trimming those two lands at 7.5 KB. So this value
+#: compacts the two bulk diagnostics and nothing else. A lower budget would start replacing
+#: sub-kilobyte fields for no measurable gain.
+COMPACT_RECORD_BUDGET = 8192
+
+#: Values below this are never compacted, because the marker would be **larger** than the value.
+#: The 66-byte ``context_hash`` is the case that made this necessary: trimming it grew the row.
+COMPACT_MIN_VALUE_BYTES = 256
+
+#: Rows :attr:`ServeState.turns` keeps. **This is what makes growth bounded rather than merely
+#: cheaper.** ``AsyncSqliteSaver`` has two tables and no per-channel blob store, so every
+#: super-step re-serialises the whole channel: at the measured 18 super-steps per served turn, a
+#: retained history of ``n`` rows costs ``18 * n * row_bytes`` of writes **for one turn**.
+#:
+#: Priced on the real records (2026-08-18, ``runs/conversations.sqlite``), 25 rows plateaus the
+#: channel at 253 KB — 4.4 MB of writes per turn, of which 1.6 MB is the one verbatim newest row —
+#: and it stays there for turn 26 and turn 400. ``operator.add`` reached 33.8 MB by turn 25 and 54
+#: MB by turn 40, and did not stop. Over forty turns the two are 135 MB and 1 111 MB of writes.
+#: Retention does not save the unbounded case: under ``langgraph dev`` the TTL sweep is
+#: ``return (0, 0)`` ("Not implemented for inmem server"), so nothing evicts locally.
+#:
+#: 25 is a judgement and the arithmetic above is how to move it. It leaves ``turns`` roughly level
+#: with — no longer dominating — the ~5 MB per turn that ``answer`` (88 KB), ``delivery`` (80 KB)
+#: and ``retrieved`` (75 KB) cost on the same thread whatever this channel does. Those three are
+#: per-turn, so they are a constant this cannot touch; a cheaper conversation store has to start
+#: there next.
+#:
+#: Elided rows are not destroyed: their full ``answer["record"]`` is still in that turn's own
+#: checkpoints, and ``AsyncSqliteSaver`` prunes nothing (verified — three turns, three distinct
+#: ``answer`` records reachable through ``alist`` after ``PER_TURN_RESET`` had run twice). Nothing
+#: reads history today, which is why the elision is also *stated* on the row above the gap.
+MAX_TURNS_RETAINED = 25
+
+#: Record keys the audit list view projects that the register does **not** require. Mirrors
+#: ``api/thread_turns.SUMMARY_FIELDS`` and ``summarise_turn``'s ``licensed_count``, spelled here
+#: rather than imported because ``serve`` sits below ``api`` in the layering;
+#: ``tests/serve/test_a_thread_keeps_every_turn.py`` asserts the two agree, so the copy cannot
+#: drift silently.
+_LIST_VIEW_KEYS: frozenset[str] = frozenset({
+    "terminal_reason", "schemas", "generated_sql", "latency_sec", "licensed",
+})
+
+
+def protected_record_keys() -> frozenset[str]:
+    """Record keys :func:`compact_turn_record` must never touch.
+
+    Derived from :data:`~governed_bi.register.record.RECORD_REGISTER` rather than listed, which is
+    what keeps the **read-time register judgement** ADR 0004 §2 defends: ``missing_required``
+    reads exactly the ``Absence.never`` fields, so retaining all of them verbatim means
+    ``incomplete_fields`` is still computed at read time, against today's declaration, and still
+    gets the same answer it would have got from the untouched record. Compaction therefore buys
+    ~14× on storage *without* moving that judgement to write time.
+
+    What it does **not** buy: a field that is ``not_applicable`` today and is re-declared
+    ``never`` tomorrow may have been compacted on old rows, and would then read as absent. That
+    is why the trim is named on the envelope (:attr:`TurnEntry.compacted`) instead of being done
+    silently — the alternative reading, "the stage never produced it", is a different and false
+    fact about the turn.
+    """
+    from governed_bi.register.record import required_keys
+
+    return frozenset(required_keys()) | _LIST_VIEW_KEYS
+
+
+def _sized(value: Any) -> int:
+    """Bytes ``value`` costs as JSON. Only a *relative* measure is needed — the checkpoint is
+    msgpack — so the cheapest stable ruler is the right one."""
+    try:
+        return len(json.dumps(value, default=str))
+    except Exception:  # noqa: BLE001 — an unserialisable value is compacted on its repr instead
+        return len(repr(value))
+
+
+def _marker(name: str, value: Any) -> dict[str, Any]:
+    """What an archived record carries in place of a bulk value.
+
+    **The key stays present.** Deleting it would make ``/audit/turns/{id}/trace`` render
+    ``present: false`` beside the register's "why", which says the stage did not produce the
+    value — a truncation reading as an omission, the shape ADR 0009 D2 refuses. A value that
+    names itself cannot be misread, and ``sha256`` lets a reader match it against the full copy in
+    that turn's own checkpoint.
+    """
+    payload = json.dumps(value, default=str, sort_keys=True)
+    return {
+        "compacted": name,
+        "bytes": len(payload),
+        "n": len(value) if isinstance(value, (Mapping, list, tuple)) else None,
+        "sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16],
+    }
+
+
+def compact_turn_record(record: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Trim an archived turn's record toward :data:`COMPACT_RECORD_BUDGET`.
+
+    Returns the new record and the names trimmed, largest value first. Byte-driven rather than
+    key-listed, so a future bulk field is caught by the rule instead of needing to be remembered
+    (ADR 0005 §6, "no hand-maintained field lists") — and a field that is small stays verbatim
+    however large the register grows.
+    """
+    kept = dict(record)
+    protected = protected_record_keys()
+    total = _sized(kept)
+    candidates = sorted(
+        ((_sized(v), k) for k, v in kept.items() if k not in protected),
+        key=lambda pair: (-pair[0], pair[1]),
+    )
+    dropped: list[str] = []
+    for size, name in candidates:
+        if total <= COMPACT_RECORD_BUDGET or size < COMPACT_MIN_VALUE_BYTES:
+            break
+        marker = _marker(name, kept[name])
+        kept[name] = marker
+        total -= size - _sized(marker)
+        dropped.append(name)
+    return kept, dropped
+
+
+def _turn_id_of(row: Mapping[str, Any]) -> str | None:
+    record = row.get("record")
+    if not isinstance(record, Mapping):
+        return None
+    turn_id = record.get("turn_id")
+    return str(turn_id) if turn_id else None
+
+
+def keep_turns(left: Any, right: Any) -> list[dict[str, Any]]:
+    """Append finished turns to a **bounded, deduplicated** history. Replaces ``operator.add``.
+
+    ``operator.add`` had two defects, and only one of them was visible:
+
+    * **Quadratic checkpoint growth.** ``AsyncSqliteSaver`` has exactly two tables and no
+      per-channel blob store, so every super-step serialises the entire checkpoint into one BLOB.
+      Measured on the real store: 18 super-steps per served turn, 103.8 KB per record, so turn
+      *n* rewrote the previous *n-1* records eighteen times — 5.89 MB of writes for a two-turn
+      thread, ~30 MB for the last turn of a twenty-turn one. Retention does not save us: under
+      ``langgraph dev`` the TTL sweep is ``return (0, 0)`` ("Not implemented for inmem server").
+      :func:`compact_turn_record` shrinks the row ~14× and :data:`MAX_TURNS_RETAINED` bounds how
+      many there are; together they replace an unbounded term with a fixed one.
+    * **Duplicate rows.** ``operator.add`` cannot deduplicate, so a turn resumed after an
+      ``ask_user`` interrupt could append its envelope twice and the audit list would show one
+      question answered twice. ``record["turn_id"]`` is the upsert key the register already
+      declares for exactly this, so a repeat write **replaces** rather than appends.
+
+    Oldest first, as before — ``api/thread_turns`` reverses per thread and sorts on ``asked_at``.
+    """
+    rows: list[dict[str, Any]] = [
+        dict(row) for row in (cleared(left) or ()) if isinstance(row, Mapping)
+    ]
+    incoming = right if isinstance(right, (list, tuple)) else ()
+    for row in incoming:
+        if not isinstance(row, Mapping):
+            continue
+        fresh = dict(row)
+        turn_id = _turn_id_of(fresh)
+        at = (
+            next((i for i, held in enumerate(rows) if _turn_id_of(held) == turn_id), None)
+            if turn_id
+            else None
+        )
+        if at is None:
+            rows.append(fresh)
+        else:
+            rows[at] = fresh
+
+    # Only the newest row keeps its record verbatim: it is the one an operator debugging the turn
+    # they just ran opens, and `answer` already holds the same record for that turn anyway.
+    for index, row in enumerate(rows[:-1]):
+        if "compacted" in row:
+            continue
+        record = row.get("record")
+        if not isinstance(record, Mapping):
+            continue
+        was = _sized(record)
+        trimmed, dropped = compact_turn_record(record)
+        rows[index] = {**row, "record": trimmed, "compacted": {"dropped": dropped, "was_bytes": was}}
+
+    if len(rows) > MAX_TURNS_RETAINED:
+        gone = rows[: len(rows) - MAX_TURNS_RETAINED]
+        rows = rows[len(rows) - MAX_TURNS_RETAINED :]
+        elided = len(gone) + sum(int(row.get("elided_turns") or 0) for row in gone)
+        rows[0] = {**rows[0], "elided_turns": int(rows[0].get("elided_turns") or 0) + elided}
+    return rows
+
+
 def merge_delta(left: Any, right: Any) -> Any:
     """Merge a mapping channel by top-level key — right wins per key. ``None`` clears.
 
@@ -302,13 +543,24 @@ class ServeOutput(TypedDict, total=False):
     Two keys, matching what the interface consumes: the transcript the SDK reconciles, and the
     turn's whole result. Adding a key here is the deliberate act.
 
-    **``output_schema`` narrows ``invoke`` and nothing else**, which is audit-2026-08-10 §B1 and
-    is still open. Re-measured on langgraph 1.2.11: the compiled ``accept`` graph's
-    ``stream_channels_asis`` is all **46** declared channels, so a ``values`` frame and
-    ``get_state(...).values`` both still return ``identity`` (the token
-    :func:`~governed_bi.serve.resume.resume_authorised` gates clarification resume on) and
+    **``output_schema`` narrows ``invoke``**, and audit-2026-08-10 §B1 is about what it does *not*
+    narrow. Two measurements on langgraph 1.2.11, of two different things, and the difference
+    matters:
+
+    - the compiled ``accept`` graph's ``stream_channels_asis`` is all **47** declared channels;
+    - but the root ``values`` frames of an actual streamed run carried **only** ``answer`` and
+      ``messages`` — 4 frames, 0 containing ``turns``, measured over the wire from the client.
+
+    So the graph *attribute* is wide and the frames are not. ``get_state(...)`` and
+    ``GET /threads/{id}/state`` **are** wide: both return ``identity`` (the token
+    :func:`~governed_bi.serve.resume.authorise_resume` gates clarification resume on) and
     ``delivery`` (the whole rendered corpus context block). This class is not a guarantee about
-    the streamed or checkpoint-read surfaces.
+    either surface.
+
+    Count went 46 → 47 with :attr:`ServeState.turns`. That channel widens the §B1 remainder on the
+    **checkpoint-read** surfaces and not on the streamed one: what escapes there is one
+    ``answer["record"]`` per read today and every prior turn's record once ``turns`` is present.
+    Since ``GET /threads/*`` requires no credential (finding A7), that is the surface to price.
     """
 
     messages: Annotated[list, add_messages]
@@ -363,6 +615,26 @@ class ServeState(TypedDict, total=False):
     usage: Annotated[list[UsageRecord], operator.add]
     clarifications: Annotated[list[dict[str, Any]], operator.add]
     clarification_requested: bool
+    #: Every finished turn of this thread, appended by ``api/graph_app.record_node``. This is the
+    #: channel that makes a checkpoint hold the **whole conversation's** audit trail rather than
+    #: only the newest turn: ``answer``, ``execution`` and ``generated_sql`` are all in
+    #: :data:`PER_TURN_RESET`, so turn two erases turn one's record and a now-deleted JSONL log
+    #: was the only surviving copy — a reader with the thread id and no filesystem access could
+    #: not say what the conversation had already been told. Hence ``operator.add`` and
+    #: :data:`ACCUMULATING`, never ``PER_TURN_RESET``. Deleting that log is what this channel
+    #: made possible.
+    #:
+    #: Each row carries turn identity inside ``record`` — ``turn_id``, ``run_id``, ``thread_id``,
+    #: ``question_id``, and ``record_node`` refuses to append a row with no ``turn_id`` — which is
+    #: what ``ACCUMULATING`` requires: the rows of every turn are one flat list, so a reader that
+    #: cannot tell whose row it is holding would attribute turn one's refusal to turn three. Same
+    #: defect the ``usage`` channel's ``turn_index`` exists to prevent, one level up. ``turn_id``
+    #: is also what :func:`keep_turns` deduplicates on.
+    #:
+    #: Reduced by :func:`keep_turns` and **not** ``operator.add``, which grew this channel — and
+    #: therefore every super-step's checkpoint BLOB — without bound. That function carries the
+    #: measurement and the bound.
+    turns: Annotated[list[TurnEntry], keep_turns]
 
     execution: ExecutionRecord
     failure: Annotated[NodeFailure | None, settle_failure]
@@ -429,7 +701,7 @@ PER_TURN_RESET: dict[str, Any] = {
 }
 
 #: Channels that accumulate across turns (each row carries turn identity).
-ACCUMULATING: frozenset[str] = frozenset({"messages", "usage", "clarifications"})
+ACCUMULATING: frozenset[str] = frozenset({"messages", "usage", "clarifications", "turns"})
 
 #: Written by ``turn()`` itself — turn identity and run claims.
 TURN_IDENTITY: frozenset[str] = frozenset({

@@ -417,7 +417,10 @@ export const resultTableSchema = z.object({
  * list here would drift the first time one is added.
  */
 export const answerViewSchema = z.object({
-  outcome: z.enum(["answered", "refused", "clarification", "capped", "crashed"]),
+  // `no_sql` is the engine's "the turn ended and no governed statement ran" outcome
+  // (`register/stages.py::Outcome`). It is listed because `parseAnswer` **drops** an answer whose
+  // outcome is not in this enum, so an unlisted member is a turn that renders no card at all.
+  outcome: z.enum(["answered", "refused", "clarification", "capped", "crashed", "no_sql"]),
   text: z.string().nullable(),
   answer_text: z.string().nullable().optional(),
   failed_stage: z.string().nullable().optional(),

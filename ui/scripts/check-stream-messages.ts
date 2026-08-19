@@ -9,10 +9,10 @@
  */
 
 import {
-  alignLogToQuestions,
   flattenContent,
   mapStreamToChatMessages,
   parseAnswer,
+  turnAnswersByMessageId,
   turnFinalAiFrames,
   type StreamWireMessage,
 } from "../lib/stream-messages.ts";
@@ -262,52 +262,124 @@ check(
 );
 
 /**
- * **The audit log holds rows this conversation never showed.**
+ * **Records come off the thread's own `turns` channel, keyed to message ids.**
  *
- * Measured on thread `019fdc77`: two turns in `messages`, four rows under that `thread_id`, the
- * two extra from an earlier run whose questions appear nowhere in the transcript. Reading the log
- * by position put one of those under turn one. This is that thread, verbatim.
+ * This replaced a fetch of `GET /audit/turns` matched to the transcript by question *text*.
+ * The text match existed because the log is a file queried by `thread_id` and holds rows this
+ * conversation never showed (measured on thread `019fdc77`: four rows for a two-turn
+ * transcript), so neither a position nor a string was an identity. `turns` is the same store
+ * the messages come from — `record_node` appends one row per recorded turn of this thread, and
+ * refuses a row with no `turn_id` — so the checks below are about placing rows, not matching
+ * them.
  */
-const row = (question: string, text: string) => ({
-  question,
-  answer: { outcome: "answered", text: null, answer_text: text, record: { question } } as AnswerView,
+const turnRow = (opts: {
+  turnId: string;
+  question: string;
+  answerText: string;
+  outcome?: string | null;
+  /** The 1-based question number the record states, via its usage rows (see `stamp`). */
+  turnIndex?: number;
+}) => ({
+  asked_at: "2026-08-18T00:00:00+00:00",
+  question: opts.question,
+  answer_text: opts.answerText,
+  outcome: opts.outcome ?? "answered",
+  record: {
+    turn_id: opts.turnId,
+    thread_id: "019fdc77",
+    ...(opts.turnIndex === undefined
+      ? {}
+      : { usage: [{ turn_index: opts.turnIndex, stage: "guard", model: "m" }] }),
+  },
 });
-const realLog = [
-  row("How many stores are there in the beer factory data?", "3 stores"), // foreign
-  row("how many restaurants are above 4 star rating", "32 (earlier run)"), // foreign
-  row("Provide the alias of the city with the highest population in year 2020.", "Katy"),
-  row("how many resturant do we have with more than 4 star rating on average", "32 restaurants"),
+
+const twoTurns = [
+  turnRow({ turnId: "t1", question: "question 1", answerText: "Katy", turnIndex: 1 }),
+  turnRow({ turnId: "t2", question: "question 2", answerText: "whuber", turnIndex: 2 }),
 ];
-const aligned = alignLogToQuestions(
-  [
-    "Provide the alias of the city with the highest population in year 2020.",
-    null,
-    null,
-    null,
-    "how many resturant do we have with more than 4 star rating on average",
-    null,
-    null,
-    null,
-  ],
-  realLog,
-);
+const placed = (rows: unknown[], messages: StreamWireMessage[]) =>
+  [...turnAnswersByMessageId(rows, messages).entries()]
+    .map(([id, a]) => `${id}=${a.answer_text}`)
+    .join(",");
+
 check(
-  aligned.map((a) => a?.answer_text).join() === "Katy,32 restaurants",
-  `the log join skips rows this thread never asked (got ${aligned.map((a) => a?.answer_text).join()})`,
+  placed(twoTurns, settled) === "a1=Katy,a2=whuber",
+  `each turn's record lands on its own answer frame (got ${placed(twoTurns, settled)})`,
 );
 
-const repeated = alignLogToQuestions(
-  ["same question", "same question"],
-  [row("same question", "first"), row("same question", "second")],
+// **A declined turn holds its slot.** `decline_node` writes no message, so turn 2 here has a
+// row and no frame: turn 3's record must still land on turn 3's frame. Reading the rows by
+// arrival order against the *frames* would put turn 2's decline under turn 3's answer.
+const withDecline = [
+  turnRow({ turnId: "t1", question: "question 1", answerText: "Katy", turnIndex: 1 }),
+  turnRow({
+    turnId: "t2",
+    question: "question 2",
+    answerText: "No schema matched.",
+    outcome: "refused",
+    turnIndex: 2,
+  }),
+  turnRow({ turnId: "t3", question: "question 3", answerText: "whuber", turnIndex: 3 }),
+];
+check(
+  placed(withDecline, withDeclineInMiddle) === "a1=Katy,a3=whuber",
+  `a declined turn claims no later turn's frame (got ${placed(withDecline, withDeclineInMiddle)})`,
+);
+
+// **A question that left no row at all.** A run killed before `record` appends nothing, so
+// arrival order under-counts every row after it — the stated question number is what carries
+// them. Here turn 1 left no row and turn 2's answer frame is the only one.
+const gap = [turnRow({ turnId: "t2", question: "question 2", answerText: "whuber", turnIndex: 2 })];
+check(
+  placed(gap, settled) === "a2=whuber",
+  `a row states its own question number rather than inheriting a position (got ${placed(gap, settled)})`,
+);
+
+// …and with no stated number (a turn that made no model call records an empty `usage`), arrival
+// order is the fallback — sound here because the rows cannot come from another conversation.
+const unstated = [
+  turnRow({ turnId: "t1", question: "question 1", answerText: "Katy" }),
+  turnRow({ turnId: "t2", question: "question 2", answerText: "whuber" }),
+];
+check(
+  placed(unstated, settled) === "a1=Katy,a2=whuber",
+  `rows with no stated number fall back to arrival order (got ${placed(unstated, settled)})`,
+);
+
+// A row whose record carries no `turn_id` is not a recorded turn — `record_node` will not append
+// one — and must not take a turn's slot from the row that follows it.
+const forged = [
+  { asked_at: null, question: "junk", answer_text: "junk", outcome: "answered", record: {} },
+  turnRow({ turnId: "t1", question: "question 1", answerText: "Katy" }),
+];
+check(
+  placed(forged, settled) === "a1=Katy",
+  `a row with no turn_id is skipped without consuming a slot (got ${placed(forged, settled)})`,
+);
+
+// The same turn appearing twice must not be placed twice, and must not shift the cursor.
+const duplicated = [
+  turnRow({ turnId: "t1", question: "question 1", answerText: "Katy" }),
+  turnRow({ turnId: "t1", question: "question 1", answerText: "Katy again" }),
+  turnRow({ turnId: "t2", question: "question 2", answerText: "whuber" }),
+];
+check(
+  placed(duplicated, settled) === "a1=Katy,a2=whuber",
+  `a duplicated turn_id is placed once (got ${placed(duplicated, settled)})`,
+);
+
+// An unparseable outcome is dropped rather than rendered with a made-up one, and a row for a
+// turn with no answer frame claims nothing.
+check(
+  placed([turnRow({ turnId: "t1", question: "q", answerText: "x", outcome: "nonsense" })], settled)
+    === "",
+  "a row whose outcome is outside the engine's vocabulary is dropped",
 );
 check(
-  repeated.map((a) => a?.answer_text).join() === "first,second",
-  "a repeated question takes its answers in the order they were given",
+  turnAnswersByMessageId(twoTurns, turn(1, "The alias is Katy.")).size === 1,
+  "a row whose turn left no frame claims nothing",
 );
-check(
-  alignLogToQuestions(["never logged"], realLog).every((a) => a === undefined),
-  "a question with no matching row claims nothing",
-);
+check(turnAnswersByMessageId(undefined, settled).size === 0, "no turns channel yields no records");
 
 if (failed) {
   console.error("\nmapped messages:", JSON.stringify(mapped, null, 2));

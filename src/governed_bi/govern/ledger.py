@@ -16,12 +16,13 @@ is a second answer to "what is the durable record", and the one a reader believe
 from __future__ import annotations
 
 import hashlib
-from typing import Iterable, Literal, Sequence, TypedDict
+from typing import Iterable, Literal, Sequence, TypedDict, get_args, get_type_hints
 
 import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import SqlglotError
 
+from ..register.stages import Outcome
 from .layers import GUARDRAIL_ERROR, CheckVerdict
 from .policy import DEFAULT_DIALECT
 
@@ -64,6 +65,11 @@ class ExecutionRecord(TypedDict):
     attempts: list[AttemptRecord]
     #: ``crashed`` is written only by ``stamp`` when the turn failed after attempts
     #: existed — so ``outcome=crashed`` never sits beside ``terminal=answered``.
+    #:
+    #: ``"no_sql"`` is also an :class:`~governed_bi.register.stages.Outcome` member, and
+    #: :func:`_assert_the_no_statement_word_is_shared` asserts the two spellings at import.
+    #: ``stamp`` classifies that outcome by reading *this* field, so a drift here would leave
+    #: ``outcome`` and ``terminal`` answering "did a statement run" differently.
     terminal: Literal["answered", "graded", "refused", "capped", "no_sql", "crashed"]
     #: Exceptions swallowed by ``check()``. ``== 0`` joins the quotability
     #: preconditions.
@@ -131,3 +137,26 @@ def execution_record(
         terminal=terminal,
         guardrail_errors=guardrail_errors(attempts),
     )
+
+
+def _assert_the_no_statement_word_is_shared() -> None:
+    """Import-time: the ledger's "no statement ran" word is ``Outcome.no_sql``'s.
+
+    Asserted rather than imported, for :data:`~.layers.GUARDRAIL_REFUSED_BY`'s reason: the
+    ``Literal`` above has to be spelled out to be a type at all. ``stamp`` derives
+    ``Outcome.no_sql`` from this field, so if the two strings drift the outcome becomes
+    unreachable and every statement-less turn silently records ``crashed`` instead.
+    """
+    # ``get_type_hints``, not ``__annotations__``: ``from __future__ import annotations`` makes
+    # the latter a dict of strings, so ``get_args`` over it returns ``()`` and the guard passes
+    # vacuously on every spelling.
+    vocabulary = set(get_args(get_type_hints(ExecutionRecord)["terminal"]))
+    if Outcome.no_sql.value not in vocabulary:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"Outcome.no_sql is {Outcome.no_sql.value!r} and ExecutionRecord.terminal declares "
+            f"{sorted(vocabulary)}. stamp reads terminal to classify that outcome, so the two "
+            "must be one word."
+        )
+
+
+_assert_the_no_statement_word_is_shared()

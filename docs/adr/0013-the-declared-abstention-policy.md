@@ -137,6 +137,21 @@ they compare declarations to declarations, never to a row. That is the gap `unat
 `Outcome` stays `refused`, never `crashed`. Declining on purpose is the product working, and
 `stages.py` already asserts the two do not mix.
 
+> **Amended 2026-08-18: a model declining in prose is not this policy, and now says so.**
+> `Outcome` gained `no_sql` for a turn that ended having executed no governed statement
+> ([0006](0006-execution-time-governance.md) §5). It matters here for two reasons. First, the
+> engine's *accidental* decline — the thing this ADR exists to replace — had one more shape than
+> §"The engine declines by accident" counted: besides the refusal that is really a routing miss,
+> there is the turn where the model reads the context, finds the question's terms undefined, and
+> answers in prose. That turn recorded `outcome: answered`, so it appeared in no abstention
+> figure at all, and criterion 3 below asserted the appearance rather than noticing it. Second,
+> the two must not be confused going forward: this policy is a **declared decision with a reason
+> and its evidence**, taken before the agent spends an attempt, and `no_sql` is the absence of
+> one — a turn the ledger can only report ran nothing. `Outcome.no_sql` carries no
+> `terminal_reason` and no `abstention` verdict, so `refusal_histogram` still counts exactly the
+> decisions and nothing else. If the case is worth a policy, it is worth a *declared* rule with
+> its own reason; recording it as an answer was the only option this ADR ruled out.
+
 ### 3. Every rule is a deterministic predicate over recorded state
 
 No model call, no threshold, no fitted parameter, no free variable. `decide()` is a **pure
@@ -271,10 +286,15 @@ paired arm is for and why the knob ships off.
    itself, since there is no "before" to compare a record against once the node is in the graph.
 2. No timeline row when off; exactly one, `status: declined`, when it withholds. Measured on the
    wire by patching the stream writer, over the served graph.
-3. A turn that licenses nothing is **answered** with the policy off and **withheld** with it on,
-   through `build_serve_graph` — the topology `langgraph.json` runs. The withheld turn made fewer
-   model calls and wrote no ledger row, which is the "before the agent spends its attempts"
-   claim.
+3. A turn that licenses nothing **reaches the agent and comes back with prose and no
+   statement** with the policy off, and is **withheld** with it on, through `build_serve_graph` —
+   the topology `langgraph.json` runs. The withheld turn made fewer model calls and wrote no
+   ledger row, which is the "before the agent spends its attempts" claim.
+   *(Restated 2026-08-18. This criterion said "is **answered** with the policy off", which the
+   test asserted and which passed — the control turn's model answers from context without a
+   statement, and `stamp` called that `answered`. It records `Outcome.no_sql` now. The comparison
+   the criterion is about is unchanged and the control is still the control; what changed is that
+   the control's own outcome no longer overstates it.)*
 4. The reason reaches `terminal_reason`, the turn record's `abstention` field, and the artifact
    row, and `classify_outcome` returns `Outcome.refused` for every member of the vocabulary.
 5. Every rule fires on its own evidence and `rules_evaluated` stops at the rule that fired.

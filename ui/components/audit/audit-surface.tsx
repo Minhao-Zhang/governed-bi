@@ -5,10 +5,10 @@
  *
  * Two things, and both are about **runs**:
  *
- *   1. **Every served turn** — `POST /chat` returns the record inline, once, to the
- *      caller who asked. Until the engine started appending turns there was no way
- *      to see one again, so the governance ledger and the licensed set were produced
- *      and dropped.
+ *   1. **Every served turn, across every thread** — the durable log. A turn's record
+ *      reaches its own client once, in the run that produced it; until the engine started
+ *      appending turns there was no way to see one again, so the governance ledger and the
+ *      licensed set were produced and dropped.
  *   2. **One turn, stage by stage** — grouped by the pipeline stage that *owns* each
  *      recorded field, read from the engine's own record register. Not a layout
  *      written here: a field added to the register appears in this page with no

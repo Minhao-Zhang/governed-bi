@@ -12,7 +12,7 @@ import type { ChatTransport } from "@/hooks/use-chat";
  * The chat cockpit's shared view: a full-height column where the transcript
  * scrolls and the composer is pinned to the bottom. Transport-neutral — it takes
  * the same `{ messages, send, isRunning, steps }` shape every chat hook
- * exposes, so the mock, streaming, and REST containers all render through this
+ * exposes, so the mock and streaming containers both render through this
  * one component. An optional `banner` renders just above the composer (used for
  * the mock-mode preview notice), and an optional `header` sits above the transcript
  * (used by the streaming transport for the conversation switcher — the only transport

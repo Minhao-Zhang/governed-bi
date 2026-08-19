@@ -1,6 +1,6 @@
 """Readers over the ``messages`` channel. One implementation each, at the layer that owns it.
 
-:func:`last_ai_text` lived in ``api/trace_store.py`` where its first two callers were, but
+:func:`last_ai_text` lived in the deleted ``api/trace_store.py`` where its first two callers were, but
 ``tools/check_imports.py`` orders ``serve`` before ``api``, so its third caller
 (``serve/nodes/narrate.py``) could not reach it. The ``messages`` channel is declared in
 ``serve/state.py``; a reader of it belongs beside the declaration, and ``api`` may import
@@ -14,13 +14,15 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
+from governed_bi.register.stages import Outcome
+
 __all__ = ["last_ai_text", "last_proposed_sql", "surface_answer_text"]
 
 
 def last_ai_text(state: Mapping[str, Any]) -> str | None:
     """The model's answer, via LangChain's own ``AIMessage.text``.
 
-    Three callers that must not disagree — ``routes._shape``, ``graph_app.record_node`` and
+    Two callers that must not disagree — ``graph_app.record_node`` and
     ``serve/nodes/narrate.py`` — because two readers of "what did the model say" is how the
     audit list, the response and the answer card drift apart.
 
@@ -48,17 +50,32 @@ def last_ai_text(state: Mapping[str, Any]) -> str | None:
     return None
 
 
+#: Outcomes whose prose is the model's own to show. Neither took a governance decision: one
+#: delivered a statement, the other delivered none. Every other member of
+#: :class:`~governed_bi.register.stages.Outcome` has system copy in ``answer["text"]`` instead,
+#: and backfilling model text over it is how a refusal came to read as an explanation.
+_MAY_ADOPT_MODEL_TEXT: frozenset[str] = frozenset({Outcome.answered.value, Outcome.no_sql.value})
+
+
 def surface_answer_text(answer: Mapping[str, Any], state: Mapping[str, Any]) -> str | None:
     """Prose for REST/audit. Never backfill model text over a governance terminal.
 
     ``narrate`` already skips refuse/decline/crashed and ledger capped/refused. The old
     ``answer_text or last_ai_text(...)`` at the boundary undid that and put model prose on
-    crashed/capped/refused turns. Only ``outcome=answered`` may adopt leftover AI text.
+    crashed/capped/refused turns. Only a turn that ended *without a governance decision* may
+    adopt leftover AI text.
+
+    :data:`_MAY_ADOPT_MODEL_TEXT` is two outcomes, not one. ``Outcome.no_sql`` is the turn that
+    produced prose and no governed statement, so it is exactly the turn whose only content is the
+    model's own words — and ``narrate`` reaches it (``ledger_ended_without_answer`` is false when
+    ``terminal`` is ``no_sql``), so on the ordinary path ``answer_text`` is already set and the
+    first branch returns. The set matters when ``narrate`` degraded: without ``no_sql`` here, the
+    audit surface would show nothing for the one class of turn that has nothing else to show.
     """
     text = answer.get("answer_text")
     if text:
         return str(text)
-    if answer.get("outcome") != "answered":
+    if answer.get("outcome") not in _MAY_ADOPT_MODEL_TEXT:
         return None
     return last_ai_text(state)
 

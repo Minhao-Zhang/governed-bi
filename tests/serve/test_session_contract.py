@@ -200,7 +200,7 @@ def test_two_threads_asking_one_question_are_two_turns(two_schema_assets, guard_
 
     It digested ``(run_id, turn_index, question)`` and not the thread, so two conversations
     asking the same question in one run minted the **same** id. The turn log keys on it, so
-    ``trace_store.get_turn`` returned the first and the second turn was simply unreachable in
+    the turn reader returned the first and the second turn was simply unreachable in
     the trace view — and React refused to render the list at all, because two rows carried one
     key. Observed live: "how many air carriers are listed?" at 04:39 and again at 05:52.
 

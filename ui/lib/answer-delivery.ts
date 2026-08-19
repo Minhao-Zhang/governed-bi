@@ -9,7 +9,7 @@
 
 import type { AnswerView } from "@/lib/types";
 
-export type AnswerDelivery = "clean" | "graded" | "refused";
+export type AnswerDelivery = "clean" | "graded" | "refused" | "no_statement";
 
 /**
  * One plain-language line per uncertainty flag — a flag with no entry here would fire the
@@ -47,8 +47,17 @@ const FLAG_WHY: Record<string, string> = {
  * re-deriving it the day the grader path lands; leaving it wired means the UI already
  * handles that turn. It is mapped from the ledger, not guessed from an assurance level
  * that no longer exists.
+ *
+ * `"no_statement"` is the fourth state and it exists because three collapsed two different
+ * turns. `outcome: "no_sql"` means the turn ended and executed no governed statement — nothing
+ * refused it and nothing failed — so under `outcome !== "answered"` it rendered the red refusal
+ * panel with the system's "This question can't be answered as asked" copy over the top of the
+ * model's own words. That is the same defect the engine side of this change fixes, one layer out:
+ * the interface asserting a decision the record does not carry. It is its own state rather than
+ * folded into `"clean"`, because a turn that queried nothing is also not a clean delivery.
  */
 export function deriveDelivery(answer: AnswerView): AnswerDelivery {
+  if (answer.outcome === "no_sql") return "no_statement";
   if (answer.outcome !== "answered") return "refused";
   if (terminalOf(answer) === "graded") return "graded";
   return "clean";
@@ -77,9 +86,16 @@ export function sqlOf(answer: AnswerView): string | null {
  * decline message. They are separate fields in the engine on purpose (engine ADR 0007 §4),
  * so this picks by delivery rather than falling back from one to the other: a silent
  * fallback would render a refusal's system copy as though the model had said it.
+ *
+ * `no_sql` reads the model's field for the same reason `answered` does: nothing wrote system
+ * copy for that turn (`stamp` sets `text` only on refuse and decline), so the prose is all the
+ * turn produced and the `??` chain would have reached it anyway. Named explicitly so it is a
+ * decision rather than a coincidence of the fallback order.
  */
 export function displayText(answer: AnswerView): string | null {
-  if (answer.outcome === "answered") return answer.answer_text ?? null;
+  if (answer.outcome === "answered" || answer.outcome === "no_sql") {
+    return answer.answer_text ?? null;
+  }
   return answer.text ?? answer.answer_text ?? null;
 }
 

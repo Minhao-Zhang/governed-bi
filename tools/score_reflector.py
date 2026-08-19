@@ -169,6 +169,10 @@ def _excluded(row: dict, questions: dict[str, str]) -> str | None:
     if row.get("outcome") != "answered":
         return "not_answered"
     if not row.get("generated_sql"):
+        # Kept, and only reachable on artifacts written **before** `Outcome.no_sql` existed:
+        # `stamp` no longer stamps `answered` on a turn with no statement, so on rows written
+        # after 2026-08-18 this branch is dead and the row is excluded as `not_answered` above.
+        # 23 of the 9,459 rows in `runs/eval/*.jsonl` are the old spelling, and they still read.
         return "no_sql"
     if row.get("correct") not in (True, False):
         return "ungraded"

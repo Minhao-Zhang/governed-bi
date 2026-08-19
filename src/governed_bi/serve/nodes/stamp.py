@@ -110,8 +110,20 @@ def _attempts(execution: Mapping[str, Any] | Any) -> list[Any]:
 
 def _path_signals(
     state: Mapping[str, Any],
-) -> tuple[str | None, str | None, str | None, str | None, bool]:
-    """Return ``(refused_by, failed_stage, error_type, text, has_sql)``."""
+    execution: Mapping[str, Any],
+) -> tuple[str | None, str | None, str | None, str | None, bool, str | None]:
+    """Return ``(refused_by, failed_stage, error_type, text, has_sql, terminal)``.
+
+    ``terminal`` is the ledger's own verdict, and it is handed to
+    :func:`~governed_bi.register.stages.classify_outcome` **only** on the paths where the ledger
+    observed an ending. ``None`` everywhere else, which is what keeps an unmarked or crashed turn
+    classifying as ``crashed`` rather than as a turn that merely ran no statement.
+
+    ``execution`` is passed in rather than re-read from ``state``: :func:`_execution` is the one
+    place that substitutes ``execution_from_attempts(())`` for a turn nothing wrote a ledger for
+    — the ``--no-model`` stub is one — and reading ``state["execution"]`` here instead would see
+    ``None`` and report a stubbed turn as a crash.
+    """
     path_kind = state.get("path_kind")
     failure = state.get("failure")
     generated_sql = state.get("generated_sql")
@@ -126,6 +138,7 @@ def _path_signals(
             err if isinstance(err, str) else None,
             None,
             has_sql,
+            None,
         )
 
     if path_kind == "refuse":
@@ -133,28 +146,28 @@ def _path_signals(
         if not isinstance(reason, str) or not reason:
             guard = state.get("guard") or {}
             reason = "guard" if guard.get("outcome") == "blocked" else "negative_example"
-        return reason, None, None, GUARD_PUBLIC_MESSAGE, False
+        return reason, None, None, GUARD_PUBLIC_MESSAGE, False, None
 
     if path_kind == "decline":
         reason = state.get("terminal_reason")
         if not isinstance(reason, str) or not reason:
             reason = "no_schema_matched"
-        return reason, None, None, None, False
+        return reason, None, None, None, False, None
 
     if path_kind == "answered":
         # The agent loop finished, which is not the same as the turn having answered. The
         # ledger decides: a turn whose every attempt was refused is a refusal, and a turn the
         # cap ended is `capped`. `has_sql` alone is not enough — it comes from the tool-call
         # *arguments*, so producing a string counted as producing an answer.
-        execution = state.get("execution")
         attempts = _attempts(execution)
-        terminal = execution.get("terminal") if isinstance(execution, Mapping) else None
+        raw_terminal = execution.get("terminal")
+        terminal = raw_terminal if isinstance(raw_terminal, str) else None
         # The cap first, and on its own condition — nested inside the "no attempt passed"
         # branch it is unreachable on any turn where a statement ever succeeded, so a capped
         # turn with two passing attempts records `outcome: answered`. `execution_from_attempts`
         # decides this and here we read its verdict, so the two cannot disagree.
         if terminal == "capped":
-            return ATTEMPT_CAP_REFUSED_BY, None, None, None, False
+            return ATTEMPT_CAP_REFUSED_BY, None, None, None, False, terminal
         if attempts and not any(attempt_field(a, "passed") is True for a in attempts):
             # Nothing passed. *Why* nothing passed decides the outcome, and the two answers are
             # different engineering problems: the layer stack objecting is the product working,
@@ -164,16 +177,29 @@ def _path_signals(
             # `govern.layers.GUARDRAIL_ERROR` documents. `guardrail_errors` is derived by
             # `execution_from_attempts`, so as with the cap above we read its verdict rather
             # than re-deriving one that could disagree. 2026-08-10 audit (C3).
-            errors = execution.get("guardrail_errors") if isinstance(execution, Mapping) else None
+            errors = execution.get("guardrail_errors")
             if isinstance(errors, int) and errors > 0:
-                return GUARDRAIL_ERROR, Stage.check.value, None, None, False
-            return GUARDRAIL_REFUSED_BY, None, None, None, False
-        # No attempt at all: the model answered from the delivered context (or the F3 stub
-        # did). That is `answered` with `generated_sql` null, which the register declares.
-        return None, None, None, None, True
+                return GUARDRAIL_ERROR, Stage.check.value, None, None, False, terminal
+            return GUARDRAIL_REFUSED_BY, None, None, None, False, terminal
+        # No answering attempt at all, so no governed statement ran. `has_sql` is read off
+        # `generated_sql`, which `agent_core` writes only from an *executed* ledger row, so it is
+        # false here and the turn classifies `Outcome.no_sql` from the ledger's own `terminal`.
+        #
+        # This line used to `return ..., True` — `has_sql` hardcoded, `generated_sql` ignored —
+        # and its comment said the model had answered from the delivered context. Three paths
+        # produce exactly these signals and nothing in the record separates them
+        # (`Outcome.no_sql`'s docstring names all three), so the fall-through was picking the
+        # benign one. Measured 2026-08-18: a model declining in prose because the corpus defined
+        # none of the question's terms recorded `outcome: answered` beside `ledger: no_sql` and
+        # `generated_sql: null`; and across the 9,459 rows in `runs/eval/*.jsonl` all 23
+        # `answered`-with-no-statement turns carry a **null** `answer_text`, so the case the
+        # comment defended has no evidence behind it. What holds of all three is that no governed
+        # statement ran, and that is what is recorded now.
+        return None, None, None, None, has_sql, terminal
 
-    # Unmarked path: let classify_outcome fall through (no SQL ⇒ crashed).
-    return None, None, None, None, has_sql
+    # Unmarked path: no ledger verdict is handed over, so classify_outcome falls through
+    # (no SQL ⇒ crashed). A turn nothing marked has not been observed ending.
+    return None, None, None, None, has_sql, None
 
 
 def _extract_factory(
@@ -311,21 +337,25 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
     """
     state = {**state, **{k: cleared(state.get(k)) for k in ("path_kind", "failure", "facets")}}
     path_kind = state.get("path_kind")
-    refused_by, failed_stage, error_type, text, has_sql = _path_signals(state)
+    # The ledger first, because the classification now reads it. One derivation, shared with the
+    # projection below, so the `outcome` a reader sees and the `execution` printed beside it came
+    # out of the same record.
+    execution = _execution(state)
+    refused_by, failed_stage, error_type, text, has_sql, terminal = _path_signals(state, execution)
 
     outcome = classify_outcome(
         error=None,
         refused_by=refused_by,
         has_sql=has_sql,
         clarification_requested=bool(state.get("clarification_requested")),
+        terminal=terminal,
     )
 
-    # Crash with a failed stage but no refused_by: classify_outcome already returns
-    # crashed when has_sql is false. Keep outcome as stamped.
+    # Crash with a failed stage but no refused_by: classify_outcome already returns crashed when
+    # has_sql is false and no ledger verdict was handed over. Keep outcome as stamped.
     if path_kind == "crashed" or state.get("failure") is not None:
         outcome = Outcome.crashed
 
-    execution = _execution(state)
     # Attempts stay; rewrite terminal so outcome=crashed never sits beside
     # execution.terminal=answered (a careless reader would treat the crash as answered).
     if outcome is Outcome.crashed and execution.get("terminal") != "crashed":
@@ -408,6 +438,13 @@ def _final_status(path_kind: Any, outcome: Outcome) -> str:
     return {
         Outcome.answered: "ok",
         Outcome.clarification: "ok",
+        # The rail's status vocabulary is closed and shared with the client
+        # (``ui/lib/steps.ts``'s ``GovEvent["status"]``), and no member of it means "ended with
+        # no statement" — ``refused`` and ``error`` would each claim something this turn did not
+        # do. ``ok`` with the outcome in ``detail`` is the honest pair: the client labels the row
+        # from ``detail.outcome`` (``outcomeLabel``), so the distinction survives without a wire
+        # value being invented for it.
+        Outcome.no_sql: "ok",
         Outcome.refused: "refused",
         Outcome.capped: "cap",
         Outcome.crashed: "error",

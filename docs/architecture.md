@@ -31,6 +31,12 @@ any node raising (wrap_node) ─────────────────
 `wrap_node` turns a node exception into `failure` + `path_kind: crashed` and
 routes there rather than letting it escape the graph.
 
+`record` writes nothing itself. It returns the finished turn onto `ServeState.turns`, an
+accumulating channel, and the durable checkpointer `langgraph.json` mounts is what persists it —
+which is why the audit surface reads thread state and there is no second store
+([ADR 0014](adr/0014-one-conversation-store.md)). It is the only producer of a turn record; the
+REST chat pair that was the second one is deleted.
+
 | Stage | Role |
 |---|---|
 | `guard` | Five deterministic rules (`govern/guard.py::GUARD_RULES`), then a model-backed BI-scope gate on the utility model. **Enabled per rule id, and `guard_rules_enabled` ships `UNSET`** — the served app (`api/graph_app.py`) turns on `g_bi_scope` and nothing else; the eval driver, the one-turn CLI and `tools/` all pass `{}`, so no guard rule fires on any measured arm |
@@ -115,9 +121,13 @@ See [usage](usage.md).
 `stamp` projects the record `register/record.py` declares. The fields a reader reaches
 for first:
 
-- **`outcome`** — `answered` / `refused` / `capped` / `crashed` / `clarification`, from
-  `register/stages.classify_outcome`, derived from the **ledger** rather than from
-  whether a SQL string exists.
+- **`outcome`** — `answered` / `refused` / `capped` / `crashed` / `clarification` /
+  `no_sql`, from `register/stages.classify_outcome`, derived from the **ledger** rather
+  than from whether a SQL string exists. `no_sql` is a turn that ended having executed no
+  governed statement: it is not `answered`, because an answer with no auditable statement is
+  not a governed answer, and not `crashed`, because nothing failed. Rows written before
+  2026-08-18 record those turns as `answered`, so a rate spanning that date mixes two
+  taxonomies (ADR 0006 §5).
 - **`guardrail_errors`** — how many attempts died of an exception *inside* `check()`.
   Derived from the attempts, never counted alongside them.
 - **`terminal_reason`** — why a refusal or decline ended the way it did, so that

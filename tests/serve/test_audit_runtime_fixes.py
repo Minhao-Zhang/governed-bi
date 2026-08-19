@@ -120,8 +120,16 @@ def test_proxy_chat_model_retries_default_matches_knob() -> None:
     assert default == int(knob_default("llm_max_retries"))
 
 
-def test_capabilities_admit_hitl_is_not_durable() -> None:
-    """The projection takes its session, so there is no module global to swap for a stub."""
+def test_capabilities_report_durability_by_observing_the_config_not_a_literal() -> None:
+    """This asserted ``checkpoint_durable is False`` when the only saver was ``/chat``'s
+    process-local ``InMemorySaver``. That route is deleted and the served path checkpoints to
+    SQLite through ``langgraph.json``'s ``checkpointer.path`` (ADR 0014), so the flag is now true.
+
+    The assertion that matters is not the value — it is that the value is **derived**. ADR 0009 D4
+    says a capability flag is flipped by building the thing, never by editing the line, so the
+    test removes the declaration and requires the flag to follow.
+    """
+    from governed_bi.api import routes
     from governed_bi.api.routes import capabilities_for
 
     class _S:
@@ -130,5 +138,38 @@ def test_capabilities_admit_hitl_is_not_durable() -> None:
         knobs_resolved: dict[str, Any] = {}
 
     caps = capabilities_for(_S())
-    assert caps["checkpoint_durable"] is False
-    assert caps["hitl_survives_process_restart"] is False
+    assert caps["checkpoint_durable"] is True
+    # One observation, not two: an `ask_user` interrupt *is* checkpoint state.
+    assert caps["hitl_survives_process_restart"] is True
+
+    original = routes.durable_checkpointer_configured
+    original_graph = routes.served_graph_declared
+    routes.durable_checkpointer_configured = lambda: False
+    try:
+        undeclared = capabilities_for(_S())
+    finally:
+        routes.durable_checkpointer_configured = original
+    assert undeclared["checkpoint_durable"] is False, (
+        "the flag survived the checkpointer declaration going away, so it is a literal dressed "
+        "as an observation"
+    )
+    assert undeclared["hitl_survives_process_restart"] is False
+
+    # `can_stream` is the same kind of claim and was the last flag still hardcoded. It stayed a
+    # literal while a `false` value would have mounted a REST fallback at a deleted route; that
+    # fallback is gone and the UI now renders an explanatory panel instead, so the flag is an
+    # observation too — and `can_clarify` rides on it, which is why it must not drift.
+    routes.served_graph_declared = lambda: False
+    try:
+        ungraphed = capabilities_for(_S())
+    finally:
+        routes.served_graph_declared = original_graph
+    assert ungraphed["can_stream"] is False, (
+        "the flag survived the graph declaration going away, so it describes an intention"
+    )
+    assert ungraphed["can_clarify"] is False, (
+        "`can_clarify` outlived `can_stream`; it mounts the interrupt prompt, so a client with no "
+        "transport must not be told it can answer a clarification (ADR 0009 D12)"
+    )
+
+

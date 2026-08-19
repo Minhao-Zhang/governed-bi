@@ -540,8 +540,9 @@ tracing callback at all.
 
 ## Amendment 4 (2026-07-14): HITL clarification shipped server-side
 
-**Status:** Implemented on v1 (server side), and the mechanism was rebuilt in v2;
-durable persistence is still deferred.
+**Status:** Implemented on v1 (server side), the mechanism was rebuilt in v2, and durable
+persistence landed 2026-08-18 ([ADR 0014](0014-one-conversation-store.md)). The paragraphs below
+are kept as written; the two dated notes correct them.
 
 The Q6 row (the "no clarification (the model guesses)" line above) and Phase 3
 listed HITL (`interrupt()` + checkpointer) as deferred. The **interrupt mechanism
@@ -555,6 +556,14 @@ with `POST /chat/resume` in `api/routes.py` as the REST half and the payload sha
 re-decided by [ADR 0007](0007-http-surface-and-the-ui-contract.md) §6
 (`tests/serve/test_agent_tools_hitl.py`, `tests/serve/test_chat_transport.py`).
 
+> **Corrected, 2026-08-18 (ADR 0014).** There is no REST half. `POST /chat/resume` is deleted, and
+> with it the only caller of `resume_clarification` outside the CLI: the streamed transport posts a
+> run carrying `{"command": {"resume": …}}` and the platform applies it to the pending interrupt
+> without passing through any route here. The identity check therefore moved *into* the graph —
+> `serve/resume.py::authorise_resume`, called by `ask_user` on the instruction `interrupt()`
+> returns on — because leaving it on the route would have deleted it (ADR 0006 §10,
+> ADR 0007 §6).
+
 What remains deferred is only the **durable** checkpointer (Postgres). Both surfaces
 still save in memory — `serve/graph.py::compile_graph` defaults to `InMemorySaver` and
 so does `api/routes.py` — so a clarification does not survive a process restart, which
@@ -562,3 +571,17 @@ is what `/capabilities` reports as `checkpoint_durable: false` and
 `hitl_survives_process_restart: false`. The frontend that consumes it is built, in
 [`ui/`](../../ui/), which holds no persistence of its own either. So
 "Open questions → HITL" scopes to *durable persistence*, not the mechanism.
+
+> **No longer deferred, 2026-08-18 (ADR 0014).** `langgraph.json`'s `checkpointer.path` names
+> `serve/checkpointer.py::conversation_checkpointer`, an `AsyncSqliteSaver` over
+> `runs/conversations.sqlite`; the server logs *"Using custom checkpointer:
+> AsyncSqliteSaver"* and a thread's state was read back after a hard kill. Not Postgres — SQLite,
+> and single-writer, which is a real constraint when the eval harness runs `workers > 1`.
+> `compile_graph()` still defaults to `InMemorySaver` and that is deliberate: the durable path is
+> `compile_durable()`, so the test suite neither shares one file nor replays the fixed thread ids
+> (`t-hitl`, `t-ledger`) that would make a run depend on the previous one.
+> **`/capabilities` has not caught up** — `checkpoint_durable` and
+> `hitl_survives_process_restart` are still hardcoded `False` in `api/routes.py`, under a comment
+> that names a `POST /chat` that no longer exists. So the two flags now *under*-report, which is
+> the same defect as over-reporting and is tracked in
+> [`docs/open-work.md`](../open-work.md).

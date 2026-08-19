@@ -484,11 +484,15 @@ sentence is the root of this section: it is what made a raw-key comparison look 
 - Nothing tests a real corpus's false-refusal rate under a real grant. Acceptance criterion 12.
 - The seam withholds **assets**, never **values already read**, never **rows**, and never the
   prose of an answer built from data the principal may see.
-- `/audit/turns` and `/audit/turns/{id}/trace` are not filtered. They project the turn log, whose
-  rows are records of turns that were already governed at serve time. Audit A7 once put a
+- `/audit/turns` and `/audit/turns/{id}/trace` are not filtered. They project turn records —
+  since 2026-08-18 out of LangGraph thread state rather than out of a JSONL log
+  ([ADR 0014](0014-one-conversation-store.md)) — whose rows are turns that were already governed
+  at serve time. Audit A7 once put a
   transport key in front of them; that key was removed on 2026-08-13, so today these two routes
   are unfiltered *and* unauthenticated — the grant narrows what a turn may read, and narrows
-  nothing about who may read a turn that already ran.
+  nothing about who may read a turn that already ran. The change of store widened the *other*
+  leak beside them: `values` and `get_state` on the platform's unauthenticated `/threads` routes
+  now carry every prior turn's record rather than the newest one.
 
 ### 9. The adversarial suite
 
@@ -617,12 +621,13 @@ calls `StaticRoleAccessPolicy.from_toml` when `GOVERNED_BI_ACCESS_POLICY` is set
 said it had none, which was true the day §8's wires were designed and false the day they landed —
 the same class of stale note as `govern/access.py`'s "not imported by `api/` today".
 
-**What it does not cover.** Authentication, tenancy, per-caller tokens (audit A5/A6/B1 stand
-unfixed and still say why). Masking or obfuscating a value that was legitimately read. Row-level
+**What it does not cover.** Authentication, tenancy, per-caller tokens (audit B1 stands unfixed
+and still says why; A5 closed and A6 retired on 2026-08-18 with the route it named, and neither
+was closed by this seam). Masking or obfuscating a value that was legitimately read. Row-level
 predicates (§5: declared, refused, never applied). Indirect disclosure through an answer's prose.
-The curation problem strings on `/audit/corpus` (§8.5). The turn-log routes under `/audit/turns`
-(§8.7). It is **not** true that the seam covers nothing in `serve/` or `api/`; that sentence stood
-here while §8 opened "enforced end to end", and §8.7 is the replacement for both.
+The curation problem strings on `/audit/corpus` (§8.5). The turn-record routes under
+`/audit/turns` (§8.7). It is **not** true that the seam covers nothing in `serve/` or `api/`; that
+sentence stood here while §8 opened "enforced end to end", and §8.7 is the replacement for both.
 
 ---
 

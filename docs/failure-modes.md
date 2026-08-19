@@ -266,7 +266,10 @@ exec_error         7
 > **23 capped turns ended on a statement that was the correct answer, and scored zero.**
 
 The mechanism is in `eval/harness.py`: a prediction is executed only when `outcome == "answered"`,
-and `grade_turn` returns `correct=False` for `capped` without looking at the SQL.
+and `grade_turn` returns `correct=False` for `capped` without looking at the SQL. (Since
+2026-08-18 `answered` excludes turns that ran no statement — those are `no_sql` — which changes
+nothing here: they had no statement to execute either way, and `grade_turn` returns
+`correct=False` for them too.)
 
 **That is a defensible scoring policy.** An engine that ran out of attempts and never endorsed an
 answer should not collect the score for a statement it would not deliver. But the policy has a

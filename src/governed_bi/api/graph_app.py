@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ from governed_bi.serve.accept import accept_node
 from governed_bi.serve.graph import build_graph
 from governed_bi.serve.runtime import trust
 from governed_bi.serve.session import Session
+from governed_bi.serve.state import TurnEntry
 
 __all__ = [
     "build_serve_graph",
@@ -329,16 +331,23 @@ def _dropped_in_corpus(root: Path) -> str | None:
     return str(found[0])
 
 
-def record_node(turn_log: Any) -> Any:
-    """The ``record`` node for ``turn_log``: append the finished turn. Never raises.
+def record_node() -> Any:
+    """The ``record`` node: put the finished turn onto ``ServeState.turns``. Never raises.
 
-    Takes the log rather than importing one, so a test can watch what a served turn writes
-    without pointing the repository's own ``runs/serve`` at a fixture. ``turn_log`` is anything
-    exposing ``append_turn`` — :mod:`governed_bi.api.trace_store` is the production one.
+    **It takes no sink.** It used to be handed a turn log to append to, and that argument is gone
+    with the log: the turn is returned as state and the checkpointer persists it, so there is one
+    store and nothing to inject. A test observes the node by reading what it returns.
 
     Sits after ``stamp`` and outside ``wrap_node``, so it swallows its own failures: there is
     nothing after it to receive a ``crashed`` stamp, and a turn that answered is not a turn that
     failed.
+
+    **It writes the record whole and lets the channel bound it.** The row it returns carries the
+    full ``answer["record"]``, because the newest turn is the one an operator opens and
+    ``ServeState.turns``' reducer keeps the newest row verbatim.
+    :func:`~governed_bi.serve.state.keep_turns` is what trims the row on the *next* turn, dedupes
+    on ``turn_id`` and caps the history — so this node has no policy in it and a change to the
+    retention rule is one edit, in the place that owns the channel.
     """
 
     def record(state: dict) -> dict:
@@ -348,21 +357,36 @@ def record_node(turn_log: Any) -> Any:
             answer = state.get("answer") or {}
             record_dict = answer.get("record") or {}
             if not isinstance(record_dict, Mapping) or not record_dict.get("turn_id"):
+                # A paused turn (``ask_user``) has no record yet. Neither sink gets a row: an
+                # entry with no ``turn_id`` is unaddressable by ``get_turn`` either way.
                 return {}
-            turn_log.append_turn(
-                record_dict,
-                question=str(state.get("question") or "") or None,
-                answer_text=surface_answer_text(answer, state),
-                outcome=answer.get("outcome"),
-            )
-        except Exception:  # noqa: BLE001 — logging must not fail a served turn
+            entry: TurnEntry = {
+                # Stamped here rather than read back from the log, because ``append_turn`` takes
+                # no ``asked_at`` and derives its own. The two can therefore differ by up to a
+                # second; state's value is the one the audit surface sorts on
+                # (``api/thread_turns``), so it is the one that must exist even when the log
+                # write fails.
+                "asked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "question": str(state.get("question") or "") or None,
+                "answer_text": surface_answer_text(answer, state),
+                # ``append_turn``'s own fallback, applied here instead of relying on it: the
+                # value below is what the log will store (it prefers a non-None argument), so
+                # resolving it once is what keeps the two rows equal rather than nearly equal.
+                "outcome": (
+                    answer.get("outcome")
+                    if answer.get("outcome") is not None
+                    else record_dict.get("outcome")
+                ),
+                "record": dict(record_dict),
+            }
+        except Exception:  # noqa: BLE001 — a turn that answered is not a turn that failed
             return {}
-        return {}
+        return {"turns": [entry]}
 
     return record
 
 
-def build_serve_graph(session: Session, *, turn_log: Any) -> Any:
+def build_serve_graph(session: Session) -> Any:
     """The served topology, compiled. **The constructor a test can call.**
 
     This is the graph ``langgraph.json`` runs: ``accept`` in front of ``guard`` (so the turn is
@@ -382,20 +406,17 @@ def build_serve_graph(session: Session, *, turn_log: Any) -> Any:
     No checkpointer — the server supplies its own (needed for ``/threads``).
     """
     trust(dict(session.configurable()["configurable"]))
-    return build_graph(accept=accept_node(session), record=record_node(turn_log)).compile()
+    return build_graph(accept=accept_node(session), record=record_node()).compile()
 
 
 def make_graph() -> Any:
     """What ``langgraph.json``'s ``graphs.serve`` points at: the environment adapter."""
-    from governed_bi.api import trace_store
-
     _warm_imports()
-    return build_serve_graph(session_from_environment(), turn_log=trace_store)
+    return build_serve_graph(session_from_environment())
 
 
 def _warm_imports() -> None:
     """Import request-path modules at load time (avoids blockbuster ``os.getcwd`` on first request)."""
-    from governed_bi.api.trace_store import append_turn  # noqa: F401
     from governed_bi.govern import guard as _guard  # noqa: F401
     from governed_bi.register.record import missing_required  # noqa: F401
     from governed_bi.retrieve.index import IndexEntry  # noqa: F401

@@ -222,6 +222,15 @@ are asset ids") only holds if something supplies them.
   trace's `stages` is derived *from* the register, so it structurally cannot show that, and looks
   complete either way.
 
+> **The two surviving `/audit/turns` routes changed store, not shape, on 2026-08-18**
+> ([ADR 0014](0014-one-conversation-store.md) §3). They read a turn out of LangGraph thread state
+> (`api/thread_turns.ThreadTurnLog`) rather than out of `runs/serve/*.jsonl`, which is deleted.
+> Payloads are byte-identical by intent, which is what lets `npm run check:api` be the regression
+> test for the swap. One value changed meaning without changing key: `meta.log_dir` is now the
+> path of the conversation database, not a directory of files. D2's argument that the list owes a
+> truncation field is now *more* owed, not less: the reader caps its scan at 1 000 threads and the
+> wire has nowhere to say so.
+
 And one route added: **`GET /columns/{column_id}/related`**, the only genuinely absent one. The
 column detail panel opened on it and the client's query declares `retry: false`, so it went
 straight to an error state. An unknown id answers **200 with `column_resolvable: false`**, not
@@ -244,13 +253,22 @@ events, `can_stream` became true, the UI mounts `<StreamChat/>` -- which does ha
 pair -- and `can_clarify` came true as a consequence. The expression is unchanged, which is the
 whole claim of this decision surviving contact with the thing it was waiting for.
 
+> **And then the loser was deleted, 2026-08-18 ([ADR 0014](0014-one-conversation-store.md)).**
+> `POST /chat` and `POST /chat/resume` are gone, so the two clauses above are the record of a
+> transport rather than a description of one. `can_stream and agent_model is not None` is still
+> the expression and still correct -- there is now only one transport for it to be true of.
+
 ### The sufficient set: 12 read routes
 
 `GET /capabilities` | `GET /livez` | `GET /schema/summary` |
 `GET /schema/{table_id}` | `GET /corpus/fields` | `GET /corpus/rows` |
 `GET /columns/{column_id}/related` | `GET /graph` | `GET /knowledge-graph` |
-`GET /audit/turns` | `GET /audit/turns/{id}/trace` | `GET /audit/corpus` -- plus the chat pair
-`POST /chat` and `POST /chat/resume` from [0007](0007-http-surface-and-the-ui-contract.md).
+`GET /audit/turns` | `GET /audit/turns/{id}/trace` | `GET /audit/corpus` -- and, since
+2026-08-18, **that is the whole set**: the chat pair `POST /chat` and `POST /chat/resume` is
+deleted ([ADR 0014](0014-one-conversation-store.md)), so every route this app mounts is a read and
+none of them needs a model. A turn is served only by the graph `langgraph.json` mounts, over the
+platform's own `/threads/{id}/runs/stream`. `make_app` lost its `graph` parameter with the pair,
+because nothing left here calls one.
 
 `GET /health` was in this list, which is why the list ran to **thirteen** under a heading that
 said twelve. It is deleted ([0007](0007-http-surface-and-the-ui-contract.md) Amendment 1): it and

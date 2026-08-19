@@ -102,12 +102,28 @@ relationship grounding, not table budget — raising `table` budget above 8 does
 The other 26 capped turns had partial coverage, no coverage, or a tableless gold, so the capped
 bucket is about half a retrieval problem. Concentrated in `movie_3` and `works_cycles`, 8 each.
 
-### 1.7 Three answers were delivered with no SQL at all
+### 1.7 Three answers were delivered with no SQL at all — the label is fixed, the behaviour is not
 
 `outcome: answered` with an empty `generated_sql` — the model answered from the delivered
-schema descriptions without querying. This is a declared state (`stamp.py`), not a
-serialization fault, and for a governed system it is the worst available failure: an answer
-with no auditable statement.
+schema descriptions without querying. For a governed system this is the worst available
+failure: an answer with no auditable statement.
+
+**Half of this is closed (2026-08-18).** It was *not* a declared state, as this section used to
+claim. `stamp._path_signals`'s `path_kind == "answered"` fall-through hardcoded `has_sql=True`
+and never read `state["generated_sql"]`, so the register's word for the turn was the one word it
+must not have been. Those turns record `Outcome.no_sql` now, derived from `execution.terminal`
+(ADR 0006 §5), and the register no longer calls a statement-less turn an answer.
+
+**What is still open is the behaviour.** The engine can end a turn without querying, and nothing
+stops it or decides that it should. ADR 0013's policy is the machinery for that decision, and
+this case is not in its vocabulary — its rules run *before* the agent, and this one is only
+observable after. Either a rule that withholds a statement-less turn, or an accepted decision
+that prose over the delivered context is a legitimate answer; today it is neither, just named.
+
+The old figure ("three answers") is from the 2026-08-09 arm and is not the boundary count. Across
+the 9,459 rows in `runs/eval/*.jsonl` there are **23** statement-less turns, and in every one
+`answer_text` is null. All 23 carry the old `answered` label, so any rate computed across
+2026-08-18 mixes two taxonomies — `measure/selective.py::DECLINED` names which figures move.
 
 ---
 
@@ -751,12 +767,26 @@ therefore live again in the words they were written in
 - **A1** — every route is unauthenticated, so anything that can open a socket to `:2024` can post
   a turn and execute governed SQL against the configured database.
 - **A7** — `/audit/turns` and `/audit/turns/{id}/trace` hand that caller every thread's SQL, the
-  full turn records, and an absolute path to the log directory.
+  full turn records, and an absolute path to the conversation database. **Wider since 2026-08-18**
+  ([ADR 0014](adr/0014-one-conversation-store.md)): the record accumulates on `ServeState.turns`,
+  so the platform's own unauthenticated `/threads/{id}/state` — and any `values` stream frame —
+  now carries *every* prior turn of the thread rather than the newest one. That is audit B1's leak
+  surface enlarged by this change and mitigated by nothing.
 
 **This is a recorded choice, not an oversight.** The engine is one operator on `127.0.0.1` under
 `langgraph dev`, and LangGraph Studio's bootstrap fetches (`/info`, `/assistants/search`,
 `/assistants/{id}`) carry no custom header — measured 2026-08-13 — so a required key made the
 primary debugging client unusable. Reachability won.
+
+**A5 is closed as of 2026-08-18, and it is the one that moved.** The clarification-resume
+identity gate is `serve/resume.py::authorise_resume`, called by `ask_user` on the instruction
+`interrupt()` returns on, comparing the paused turn's checkpointed `identity` against
+`configurable["langgraph_auth_user_id"]` on the resuming run — a slot `langgraph_api` fills from
+this repo's `@auth.authenticate` and refuses to let a client name. It fires on the streamed
+transport, which is now the only one. What it cannot do here is *distinguish* two callers, because
+`api/auth.py` returns one principal to everybody; the gate is correct and its input is degenerate,
+which is why this stays under §4.3 rather than being called done. A6 retires with `POST /chat/resume`
+rather than being fixed: the route whose check was same-thread-not-same-caller is deleted.
 
 **What is actually open here** is not "put the key back". It is that the repository now has one
 control against this class of exposure, the CORS origin list, and that control stops a browser
@@ -767,6 +797,37 @@ caller at all — [ADR 0012 §8.7](adr/0012-access-seam-principal-and-authorizat
 unfiltered by design, which was a smaller claim when it sat behind a key. Neither is scheduled.
 A2, A3 and A4 stay closed throughout: the `@auth.on` handlers that refuse a client-supplied
 state-writing `command` are untouched, and `langgraph.json` keeps `auth.path` for them.
+
+---
+
+### 4.4 `/capabilities` reports two durability flags that are now false in the wrong direction
+
+`capabilities_for` in `api/routes.py` returns `checkpoint_durable: False` and
+`hitl_survives_process_restart: False` as **literals**, under a comment explaining them by
+`POST /chat`'s process-local `InMemorySaver`. That route was deleted on 2026-08-18 and
+`langgraph.json` now mounts `serve/checkpointer.py::conversation_checkpointer`
+([ADR 0014](adr/0014-one-conversation-store.md)) — the server logs *"Using custom checkpointer:
+AsyncSqliteSaver"* and a thread was read back after a hard kill.
+
+So the surface under-reports a capability it has. [ADR 0007 §7](adr/0007-http-surface-and-the-ui-contract.md)
+argues a flag must be an observation and not a literal, and audit A10 already named these two as
+misreporting; the change of store inverted the direction without touching the line.
+
+No consumer is misled *today*: `ui/lib/schemas.ts`'s `capabilitiesSchema` declares neither field,
+so zod strips both and nothing in `ui/` reads them. That is what keeps this out of §1. The cost is
+that a surface whose stated job is to report what is built now denies something that is built, so
+the first client to gate a feature on it gates it off.
+
+Two things have to be settled rather than one:
+
+- **`checkpoint_durable`** should be derived, not asserted. The honest source is the checkpointer
+  the process is actually running under, which `api/routes.py` does not hold — the platform owns
+  it. Reading `langgraph.json` would be reading configuration and calling it an observation.
+- **`hitl_survives_process_restart`** needs an *observation* first. The checkpoint survives; what
+  has not been watched is a paused clarification answered after a restart, and under `langgraph dev`
+  the thread index is still `.langgraph_ops.pckl` with a ten-second flush, so the two halves can
+  disagree. Flipping this flag on the strength of the checkpointer alone would repeat the defect
+  A10 named.
 
 ---
 

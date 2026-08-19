@@ -86,8 +86,8 @@ def grade_turn(
 ) -> GradeResult:
     """Grade one serve turn. ``correct`` is ``True``, ``False``, or ``None`` for *unmeasured*.
 
-    Crashes and refusals are **incorrect**, never collapsed into each other —
-    ``correct=False`` with ``detail`` naming the outcome. Only ``answered`` turns
+    Crashes, refusals, caps and statement-less turns are **incorrect**, never collapsed into
+    each other — ``correct=False`` with ``detail`` naming the outcome. Only ``answered`` turns
     with a comparable result can be ``correct=True``.
 
     **Three values, not two.** A missing *gold* is ``None`` — the instrument had nothing to
@@ -123,6 +123,20 @@ def grade_turn(
             gold_fingerprint=gold_fingerprint,
             pred_fingerprint=None,
             detail="capped",
+        )
+    if outcome == "no_sql":
+        # `False`, like every other non-answer, and **not** `None`: `None` is reserved for the
+        # instrument having nothing to compare against, and here the gold is fine — the engine
+        # ran no statement. The EX arithmetic is unchanged by the taxonomy split, deliberately:
+        # before it, these turns arrived as `answered` with no `generated_sql`, so the harness
+        # executed nothing, `pred_columns` stayed `None` and `grade_turn` returned
+        # `correct=False, detail="missing_prediction"`. Same score, and `detail` now says which
+        # of the two it was rather than describing a prediction that was never attempted.
+        return GradeResult(
+            correct=False,
+            gold_fingerprint=gold_fingerprint,
+            pred_fingerprint=None,
+            detail="no_sql",
         )
     if outcome != "answered":
         return GradeResult(

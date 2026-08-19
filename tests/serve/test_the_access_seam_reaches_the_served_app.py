@@ -87,17 +87,6 @@ class _EchoConnector:
         return (["n"], [(1,)], False)
 
 
-class _TurnLog:
-    """Everything ``record_node`` asks of a turn log, in memory."""
-
-    def __init__(self) -> None:
-        self.rows: list[dict[str, Any]] = []
-
-    def append_turn(self, record: Any, **kwargs: Any) -> tuple[str | None, str | None]:
-        self.rows.append({"record": dict(record), **kwargs})
-        return record.get("turn_id"), None
-
-
 def _model() -> ScriptedChatModel:
     call = {"name": "run_query", "args": {"sql": STATEMENT}, "id": "rq-1", "type": "tool_call"}
     return ScriptedChatModel(
@@ -179,17 +168,20 @@ def _session(grant: Grant, *, model: Any = None) -> Any:
     return session
 
 
-def _serve(grant: Grant, *, thread: str, model: Any = None) -> tuple[dict[str, Any], _TurnLog]:
-    """One turn through the served topology. Returns ``(final state, turn log)``."""
+def _serve(grant: Grant, *, thread: str, model: Any = None) -> dict[str, Any]:
+    """One turn through the served topology. Returns the final state.
+
+    The recorded turn is read off ``state["turns"]`` rather than out of an injected log fake:
+    ``record_node`` has no sink to inject any more, because the turn *is* state.
+    """
     from governed_bi.api.graph_app import build_serve_graph
 
-    log = _TurnLog()
-    graph = as_sync(build_serve_graph(_session(grant, model=model), turn_log=log))
+    graph = as_sync(build_serve_graph(_session(grant, model=model)))
     out = graph.invoke(
         {"messages": [HumanMessage(content=QUESTION)]},
         {"configurable": {"thread_id": thread}},
     )
-    return out, log
+    return out
 
 
 def _attempts(record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -213,8 +205,8 @@ def test_a_licensed_but_unauthorized_table_refuses_as_r_table_not_authorized() -
     an authorization refusal — asserted on the ledger row rather than inferred from the
     outcome.
     """
-    allowed, _ = _serve(OPEN_GRANT, thread="t-open", model=_model())
-    denied, log = _serve(RESTRICTIVE, thread="t-denied", model=_model())
+    allowed = _serve(OPEN_GRANT, thread="t-open", model=_model())
+    denied = _serve(RESTRICTIVE, thread="t-denied", model=_model())
 
     open_record = allowed["answer"]["record"]
     denied_record = denied["answer"]["record"]
@@ -246,7 +238,12 @@ def test_a_licensed_but_unauthorized_table_refuses_as_r_table_not_authorized() -
     assert rows[0].get("executed_sql") is None, (
         "an authorization refusal produced an executable string (acceptance criterion 6)"
     )
-    assert log.rows and log.rows[-1]["outcome"] == "refused", log.rows
+    # The assertion that used to sit here read an injected turn log to prove `record` ran. There
+    # is no log to inject, and `turns` is unreadable from `invoke`: `ServeOutput` narrows the
+    # returned channels to `messages` and `answer`. The recorder's own contract is covered by
+    # `tests/serve/test_a_thread_keeps_every_turn.py`, which compiles with a saver and reads
+    # `get_state(...).values["turns"]` — so re-asserting the refusal off `answer` here would only
+    # repeat the line above.
 
 
 def test_the_denied_tables_prose_never_reaches_the_prompt() -> None:
@@ -262,8 +259,8 @@ def test_the_denied_tables_prose_never_reaches_the_prompt() -> None:
     an outage.
     """
     open_model, denied_model = _model(), _model()
-    allowed, _ = _serve(OPEN_GRANT, thread="t-open-ctx", model=open_model)
-    denied, _ = _serve(RESTRICTIVE, thread="t-denied-ctx", model=denied_model)
+    allowed = _serve(OPEN_GRANT, thread="t-open-ctx", model=open_model)
+    denied = _serve(RESTRICTIVE, thread="t-denied-ctx", model=denied_model)
 
     open_block = allowed["answer"]["record"]["context_hash"]
     denied_block = denied["answer"]["record"]["context_hash"]
@@ -491,7 +488,7 @@ def test_three_spellings_of_the_open_grant_produce_the_same_record() -> None:
     }
     records = {}
     for name, grant in grants.items():
-        out, _ = _serve(grant, thread=f"t-id-{name}", model=_model())
+        out = _serve(grant, thread=f"t-id-{name}", model=_model())
         records[name] = {
             k: v for k, v in out["answer"]["record"].items() if k not in _VOLATILE
         }
@@ -524,8 +521,8 @@ def test_the_grant_digest_reaches_the_record_and_comes_from_the_policy() -> None
     # read as a second, independent check. The claim it was reaching for is that the *resolver*
     # reads the policy rather than the register, which needs two runs — below.
 
-    wide, _ = _serve(OPEN_GRANT, thread="t-knob-open", model=_model())
-    narrow, _ = _serve(RESTRICTIVE, thread="t-knob-denied", model=_model())
+    wide = _serve(OPEN_GRANT, thread="t-knob-open", model=_model())
+    narrow = _serve(RESTRICTIVE, thread="t-knob-denied", model=_model())
 
     open_digest = wide["answer"]["record"]["knobs_resolved"]["access_grant"]
     denied_digest = narrow["answer"]["record"]["knobs_resolved"]["access_grant"]

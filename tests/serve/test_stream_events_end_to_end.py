@@ -323,31 +323,27 @@ def test_a_streamed_turn_reaches_the_audit_log() -> None:
     assert out["answer"] is logged["answer"], "the recorder must not alter the answer"
 
 
-def test_a_failing_recorder_cannot_fail_a_served_turn() -> None:
+def test_a_malformed_turn_cannot_fail_a_served_turn() -> None:
     """A turn that answered is not a turn that failed.
 
     The node is unwrapped — there is nothing after it to receive a ``crashed`` stamp — so it
-    swallows its own failures. ``graph_app.record_node`` does; this pins that a graph built with
-    a *raising* recorder is the one shape that must not happen, by asserting the real node's
-    contract rather than the toy one's.
+    swallows its own failures rather than propagating them.
 
-    The fourth case is the one the old version could not state: a log that **raises**. It used
-    to reach ``trace_store`` directly, so the only failures reachable were the ones a malformed
-    state produced; the log is an argument now, so the swallow itself is assertable.
+    **This test used to be about a log that raised**, and that case is gone with the log: the node
+    has no sink to fail. Its remaining fallible input is the state it is handed, so that is what is
+    asserted — three shapes that must yield no entry, and one that must yield exactly one.
     """
     from governed_bi.api.graph_app import record_node
 
-    class _Exploding:
-        def append_turn(self, *a: Any, **k: Any) -> Any:
-            raise OSError("disk is full")
-
-    node = record_node(_Exploding())
-    # No `turn_id`, a record that is not a mapping, and a state with nothing in it at all.
+    node = record_node()
+    # No `turn_id`, a record that is not a mapping, and a state with nothing in it at all. None of
+    # these is addressable by `get_turn`, so appending one would put an unreachable row in state.
     assert node({}) == {}
     assert node({"answer": {"record": None}}) == {}
     assert node({"answer": {"record": {"turn_id": ""}}}) == {}
-    assert node({"answer": {"record": {"turn_id": "t1"}, "outcome": "answered"}}) == {}, (
-        "a log that raised took the turn with it; the recorder must swallow its own failures"
+    recorded = node({"answer": {"record": {"turn_id": "t1"}, "outcome": "answered"}})
+    assert [e["record"]["turn_id"] for e in recorded["turns"]] == ["t1"], (
+        "a finished turn did not reach `ServeState.turns`, which is now the only store it has"
     )
 
 

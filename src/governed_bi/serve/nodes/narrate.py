@@ -1,7 +1,7 @@
 """``narrate`` — the turn's last step: say the answer in a sentence.
 
 **A node and not a boundary patch.** ``answer.answer_text`` is what the answer card reads, and
-it used to be written only in ``routes._shape`` at the REST boundary — so ``POST /chat`` had an
+it used to be written only at the now-deleted REST boundary (``routes._shape``) — so that transport had an
 answer and the streamed path, which is the one the UI uses, rendered the SQL and the ledger
 with no answer on it. This sits after ``agent_core``, where every answering path funnels.
 

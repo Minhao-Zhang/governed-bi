@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "governed-bi",
-    "summary": "Corpus browsing, relationship graphs, governed NL2SQL turns, and the turn audit log, as JSON.",
-    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\nEvery handler is annotated `-> dict[str, Any]`, so FastAPI neither validates nor filters a response against the schemas here: they document what the handlers build. Paths, parameters and operation ids in this file are taken from the running app.\n\n**No route requires a credential, and that is why there is no security scheme and no 401 in this file.** Reaching the port is sufficient \u2014 on every route, including `/audit/turns` and `/audit/turns/{turn_id}/trace`, which return every thread's SQL, the full turn records, and an absolute path to the log directory. The shared key that guarded these routes until 2026-08-13 is gone, and audit findings A1 and A7 are live again with it; `docs/usage.md` records why (LangGraph Studio's bootstrap calls carry no header) and what it costs. This engine expects to be reachable only on 127.0.0.1.\n\n`api/auth.py` survives and is still wired, but what it enforces is not authentication: `threads.update` and `threads.create_run` refuse a client-supplied state-writing `command` (audit A2/A3/A4). Those are LangGraph Server's own routes and are not described here.\n\nServing needs a live Postgres connector and a corpus; there is no offline mode.",
+    "summary": "Corpus browsing, relationship graphs, and the turn audit surface, as JSON.",
+    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\n**Every route here is a read, and none of them serves a turn.** `POST /chat` and `POST /chat/resume` were deleted on 2026-08-18 (ADR 0014): they were a second serve topology with a checkpointer of their own, so falling back to them lost the conversation they were meant to rescue. A turn is served by the graph `langgraph.json` mounts, over the platform's `POST /threads/{thread_id}/runs/stream`, which is not described here. The answer, clarification and result-table shapes that `AnswerResponse` documented here until then are the streamed contract now: ADR 0007 \u00a72\u2013\u00a74 and \u00a76 own them, and `ui/lib/schemas.ts` (`resultTableSchema`, the answer schema) is the client's copy.\n\nEvery handler is annotated `-> dict[str, Any]`, so FastAPI neither validates nor filters a response against the schemas here: they document what the handlers build. Paths, parameters and operation ids in this file are taken from the running app.\n\n**No route requires a credential, and that is why there is no security scheme and no 401 in this file.** Reaching the port is sufficient \u2014 on every route, including `/audit/turns` and `/audit/turns/{turn_id}/trace`, which return every thread's SQL, the full turn records, and an absolute path to the conversation database. The shared key that guarded these routes until 2026-08-13 is gone, and audit findings A1 and A7 are live again with it; `docs/usage.md` records why (LangGraph Studio's bootstrap calls carry no header) and what it costs. This engine expects to be reachable only on 127.0.0.1.\n\n`api/auth.py` survives and is still wired, but what it enforces is not authentication: `threads.update` and `threads.create_run` refuse a client-supplied state-writing `command` (audit A2/A3/A4). Those are LangGraph Server's own routes and are not described here.\n\nServing needs a live Postgres connector and a corpus; there is no offline mode.",
     "version": "2"
   },
   "paths": {
@@ -44,90 +44,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CapabilitiesResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/chat": {
-      "post": {
-        "tags": [
-          "chat"
-        ],
-        "summary": "Chat",
-        "description": "Answer one turn, blocking. The degradation path: streaming over LangGraph Server is the primary transport, and clarification only works there.\n\n`session_id` becomes the LangGraph thread_id, so state is server-side and rebuilt from the checkpoint, not from `history`. Threads are held in a process-local saver capped at 32; one with a pending clarification is never evicted.\n\nA rejected request still answers 200 with `outcome: crashed` \u2014 this route reports failures in the answer shape rather than as HTTP errors.",
-        "operationId": "chat_chat_post",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChatRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AnswerResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/chat/resume": {
-      "post": {
-        "tags": [
-          "chat"
-        ],
-        "summary": "Chat Resume",
-        "description": "Answer a clarification a turn paused on, and run the turn to completion.\n\nRefused (200, `outcome: crashed`) when `session_id` is missing, nothing is pending on that thread, `clarification_id` does not match the pending question, or the caller identity differs from the one checkpointed when the turn paused.",
-        "operationId": "chat_resume_chat_resume_post",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChatResumeRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AnswerResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -746,7 +662,7 @@
           "audit"
         ],
         "summary": "Audit Turns",
-        "description": "Served turns, newest first, from the durable log under runs/serve/.\n\n`thread_id` narrows to one conversation, which is what a transcript needs: the graph checkpoint holds only a thread's newest turn, so this log is the only source for the earlier ones.",
+        "description": "Served turns, newest first, out of LangGraph thread state (ADR 0014).\n\n`thread_id` narrows to one conversation. Rows are collected per thread and then sorted by `asked_at`, because conversations interleave in time and per-thread order is not global order. `limit` counts **turns**, not threads, so the reader pages until the budget is met; it stops scanning at 1 000 threads and the response has no field that says so.",
         "operationId": "audit_turns_audit_turns_get",
         "parameters": [
           {
@@ -808,7 +724,7 @@
           "audit"
         ],
         "summary": "Audit Trace",
-        "description": "One logged turn's record, grouped by the stage that owns each field. An unknown turn_id answers 200 with `found: false`, not 404.",
+        "description": "One recorded turn's record, grouped by the stage that owns each field. Found by scanning thread state; an unknown turn_id answers 200 with `found: false`, not 404.",
         "operationId": "audit_trace_audit_turns__turn_id__trace_get",
         "parameters": [
           {
@@ -871,130 +787,6 @@
   },
   "components": {
     "schemas": {
-      "AnswerResponse": {
-        "properties": {
-          "outcome": {
-            "type": "string",
-            "enum": [
-              "answered",
-              "refused",
-              "capped",
-              "crashed",
-              "clarification"
-            ],
-            "title": "Outcome",
-            "description": "register/stages.Outcome. Derived from the attempt ledger, not from whether a SQL string exists."
-          },
-          "text": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Text",
-            "description": "**System copy, not the answer.** Null on the answered path and set on a refusal; answer_text is the other way round, and the client renders on that asymmetry."
-          },
-          "answer_text": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Answer Text",
-            "description": "The model's prose answer, from the narrate stage. Null unless outcome is answered."
-          },
-          "failed_stage": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Failed Stage",
-            "description": "Which node raised, on a crashed turn: a register/stages.Stage value. A request this route itself rejects (no question, unknown session, mismatched clarification_id, identity mismatch) reports the literal \"resume\"."
-          },
-          "error_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Type",
-            "description": "Exception class name on a crashed turn. Never a driver message."
-          },
-          "refused_by": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Refused By",
-            "description": "Which control refused, keyed into register/stages.REFUSED_BY_TO_STAGE."
-          },
-          "record": {
-            "$ref": "#/components/schemas/TurnRecord"
-          },
-          "clarification": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ClarificationResponse"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Set only when outcome is clarification; the pending ask_user interrupt."
-          },
-          "result_table": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ResultTableResponse"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Rows from the last successful query. Live only \u2014 deliberately not in `record`, so it is absent from the durable audit log. Null on every path that ran no query, which is a different fact from an empty table. Absent on a paused turn and on a request this route rejected."
-          },
-          "audit_logged": {
-            "type": "boolean",
-            "title": "Audit Logged",
-            "description": "Whether the turn reached the durable log under runs/serve/. Absent on a paused turn and on a turn whose record carries no turn_id, because neither is logged."
-          },
-          "audit_error": {
-            "type": "string",
-            "title": "Audit Error",
-            "description": "``ExceptionName: message`` from the log write. Present only when it failed; a turn that answered is not a turn that failed."
-          }
-        },
-        "type": "object",
-        "required": [
-          "outcome",
-          "text",
-          "answer_text",
-          "failed_stage",
-          "error_type",
-          "refused_by",
-          "record",
-          "clarification"
-        ],
-        "title": "AnswerResponse",
-        "description": "The answer shape both chat routes return, as api/routes._shape builds it.\n\nThe eight required keys are on every reply, including a paused turn and a request the route rejects. `result_table`, `audit_logged` and `audit_error` are conditional."
-      },
       "AssetRowResponse": {
         "properties": {
           "id": {
@@ -1228,7 +1020,8 @@
                 "type": "null"
               }
             ],
-            "title": "Outcome"
+            "title": "Outcome",
+            "description": "How the turn ended: one of `answered`, `refused`, `clarification`, `capped`, `crashed`, `no_sql` (`register/stages.py::Outcome`). Not enumerated in this schema because the handler passes the recorded string through. **`no_sql` was added on 2026-08-18** for a turn that ended having executed no governed statement; turns recorded before that date carry `answered` for the same state, so a list spanning the boundary mixes two taxonomies (ADR 0006 \u00a75)."
           },
           "asked_at": {
             "anyOf": [
@@ -1365,7 +1158,8 @@
                 "type": "null"
               }
             ],
-            "title": "Outcome"
+            "title": "Outcome",
+            "description": "How the turn ended: one of `answered`, `refused`, `clarification`, `capped`, `crashed`, `no_sql` (`register/stages.py::Outcome`). Not enumerated in this schema because the handler passes the recorded string through. **`no_sql` was added on 2026-08-18** for a turn that ended having executed no governed statement; turns recorded before that date carry `answered` for the same state, so a list spanning the boundary mixes two taxonomies (ADR 0006 \u00a75)."
           },
           "terminal_reason": {
             "anyOf": [
@@ -1409,14 +1203,11 @@
                 "type": "number"
               },
               {
-                "type": "string"
-              },
-              {
                 "type": "null"
               }
             ],
             "title": "Latency Sec",
-            "description": "Seconds, unrounded. A string when the turn recorded the quantity as not measured \u2014 the log is written with `default=str`, so a Measured lands as its rendered text."
+            "description": "Seconds, unrounded. **Not reachable as an absence on a served turn**: `wrap_node` stamps `turn_started_at`, so only a hand-built state is unmeasured. The old `string` member of this union came from the JSONL log\u2019s `json.dumps(..., default=str)`, which is deleted with the log (ADR 0014); an unmeasured `Measured` now survives the checkpoint as itself (`register/quantity.py`) and would reach the wire as an object, which `ui/lib/schemas.ts` validates as `z.number().nullable()` and would reject. Narrowed to match the client rather than documenting a shape nothing produces."
           },
           "execution": {
             "anyOf": [
@@ -1506,7 +1297,7 @@
           "incomplete_fields"
         ],
         "title": "AuditTurnSummaryResponse",
-        "description": "One row of the turn log. The record-sourced keys are exactly api/trace_store.SUMMARY_FIELDS: turn_id, run_id, thread_id, question_id, db_id, outcome, terminal_reason, schemas, generated_sql, latency_sec, execution."
+        "description": "One row of the turn list. The record-sourced keys are exactly api/thread_turns.SUMMARY_FIELDS: turn_id, run_id, thread_id, question_id, db_id, outcome, terminal_reason, schemas, generated_sql, latency_sec, execution."
       },
       "AuditTurnsMetaResponse": {
         "properties": {
@@ -1518,7 +1309,7 @@
           "log_dir": {
             "type": "string",
             "title": "Log Dir",
-            "description": "Absolute path the turns were read from."
+            "description": "Absolute path the turns were read from. Since ADR 0014 that is the conversation checkpoint database (a file), not a directory of logs. The key is unchanged so the client's footer keeps rendering."
           },
           "columns": {
             "items": {
@@ -1526,7 +1317,7 @@
             },
             "type": "array",
             "title": "Columns",
-            "description": "api/trace_store.SUMMARY_FIELDS in display order."
+            "description": "api/thread_turns.SUMMARY_FIELDS in display order."
           }
         },
         "type": "object",
@@ -1695,12 +1486,12 @@
           "checkpoint_durable": {
             "type": "boolean",
             "title": "Checkpoint Durable",
-            "description": "False: /chat compiles with an in-process saver and LangGraph Server injects its own non-Postgres one, so no checkpoint outlives the process."
+            "description": "Reported as the literal False, and **stale**: `langgraph.json` mounts a durable AsyncSqliteSaver at `checkpointer.path` (ADR 0014) and a thread survives a restart. The comment in `api/routes.py` still explains the flag by a `POST /chat` that no longer exists. Read `langgraph.json`, not this field \u2014 audit A10, `docs/open-work.md` \u00a74.4."
           },
           "hitl_survives_process_restart": {
             "type": "boolean",
             "title": "Hitl Survives Process Restart",
-            "description": "False on both surfaces \u2014 a paused clarification is lost with the process."
+            "description": "Reported as the literal False. The checkpoint that holds a pending interrupt is now durable, but answering one after a restart has not been observed, and under `langgraph dev` the thread index still lives in `.langgraph_ops.pckl`. So the value is not currently derived from anything \u2014 audit A10, `docs/open-work.md` \u00a74.4."
           }
         },
         "type": "object",
@@ -1720,132 +1511,6 @@
         ],
         "title": "CapabilitiesResponse",
         "description": "What this server can actually do. The UI blocks on it, so every key is always present."
-      },
-      "ChatRequest": {
-        "properties": {
-          "question": {
-            "type": "string",
-            "title": "Question",
-            "description": "Empty or absent is answered with outcome=crashed, not 422."
-          },
-          "session_id": {
-            "type": "string",
-            "title": "Session Id",
-            "description": "Becomes the LangGraph thread_id. Absent or empty gets a fresh random one, so a caller that omits it cannot resume a clarification."
-          },
-          "history": {
-            "items": {
-              "$ref": "#/components/schemas/TurnIn"
-            },
-            "type": "array",
-            "title": "History",
-            "description": "Only its user entries are counted, to derive turn_index. Working memory comes from the thread's checkpoint, not from this list."
-          },
-          "identity": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "object",
-                "additionalProperties": true
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Identity",
-            "description": "Caller identity a later /chat/resume must match. A string is the token; a mapping contributes its first truthy value. Absent falls back to session_id."
-          }
-        },
-        "type": "object",
-        "required": [],
-        "title": "ChatRequest",
-        "description": "The handler reads a plain JSON object and ignores keys it does not know, so nothing here is enforced by the framework: a malformed body fails inside the turn, not at validation.",
-        "additionalProperties": true
-      },
-      "ChatResumeRequest": {
-        "properties": {
-          "session_id": {
-            "type": "string",
-            "title": "Session Id",
-            "description": "The thread the clarification is paused on. Absent is answered with outcome=crashed."
-          },
-          "clarification_id": {
-            "type": "string",
-            "title": "Clarification Id",
-            "description": "Checked against the pending question when supplied; a mismatch is refused. Omit to answer whatever is pending."
-          },
-          "answer": {
-            "type": "string",
-            "title": "Answer",
-            "description": "Free-text reply."
-          },
-          "choice_id": {
-            "type": "string",
-            "title": "Choice Id",
-            "description": "Reply by option id instead of text."
-          },
-          "declined": {
-            "type": "boolean",
-            "title": "Declined",
-            "description": "True resumes the turn with a declined-to-answer reply."
-          },
-          "identity": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "object",
-                "additionalProperties": true
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Identity",
-            "description": "Must match the identity checkpointed when the turn paused, or the resume is refused. Absent falls back to session_id."
-          }
-        },
-        "type": "object",
-        "required": [],
-        "title": "ChatResumeRequest",
-        "description": "Only `answer`, `choice_id` and `declined` reach the paused tool; `declined` wins, then `answer`, then `choice_id`.",
-        "additionalProperties": true
-      },
-      "ClarificationResponse": {
-        "properties": {
-          "kind": {
-            "type": "string",
-            "const": "clarification",
-            "title": "Kind"
-          },
-          "clarification_id": {
-            "type": "string",
-            "title": "Clarification Id",
-            "description": "``clar-<turn_id>-<digest>``."
-          },
-          "question": {
-            "type": "string",
-            "title": "Question",
-            "description": "What the agent is asking the human."
-          },
-          "why": {
-            "type": "string",
-            "title": "Why",
-            "description": "Why the turn cannot proceed without an answer."
-          }
-        },
-        "type": "object",
-        "required": [
-          "kind",
-          "clarification_id",
-          "question",
-          "why"
-        ],
-        "title": "ClarificationResponse",
-        "description": "The pending ask_user interrupt. Answer it with POST /chat/resume on the same session_id."
       },
       "ColumnIdentityResponse": {
         "properties": {
@@ -2883,57 +2548,6 @@
         ],
         "title": "RelatedTermResponse"
       },
-      "ResultTableResponse": {
-        "properties": {
-          "columns": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Columns"
-          },
-          "rows": {
-            "items": {
-              "items": {},
-              "type": "array"
-            },
-            "type": "array",
-            "title": "Rows",
-            "description": "Row-major; cells keep their JSON type."
-          },
-          "row_count": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Row Count",
-            "description": "Rows the statement produced, which may exceed the rows delivered."
-          },
-          "truncated": {
-            "type": "boolean",
-            "title": "Truncated",
-            "description": "The delivered rows are a prefix of the result."
-          },
-          "preview_rows": {
-            "type": "integer",
-            "title": "Preview Rows",
-            "description": "Length of `rows`."
-          }
-        },
-        "type": "object",
-        "required": [
-          "columns",
-          "rows",
-          "row_count",
-          "truncated",
-          "preview_rows"
-        ],
-        "title": "ResultTableResponse"
-      },
       "SchemaGraphEdgeResponse": {
         "properties": {
           "id": {
@@ -3429,24 +3043,6 @@
           "fields"
         ],
         "title": "TraceStageResponse"
-      },
-      "TurnIn": {
-        "properties": {
-          "role": {
-            "type": "string",
-            "title": "Role",
-            "description": "Only \"user\" is counted; any other value is ignored."
-          },
-          "text": {
-            "type": "string",
-            "title": "Text",
-            "description": "Carried for the caller's own transcript; the server does not read it."
-          }
-        },
-        "type": "object",
-        "required": [],
-        "title": "TurnIn",
-        "additionalProperties": true
       },
       "TurnRecord": {
         "properties": {},

@@ -1,8 +1,19 @@
 {
   "python_version": "3.13",
-  "dependencies": ["."],
+  "dependencies": [
+    "."
+  ],
   "graphs": {
     "serve": "./src/governed_bi/api/graph_app.py:make_graph"
+  },
+  "checkpointer": {
+    "path": "./src/governed_bi/serve/checkpointer.py:conversation_checkpointer",
+    "ttl": {
+      "strategy": "delete",
+      "default_ttl": 129600,
+      "sweep_interval_minutes": 60,
+      "sweep_limit": 1000
+    }
   },
   "env": ".env",
   "auth": {
@@ -21,10 +32,18 @@
         "http://127.0.0.1:3100",
         "https://smith.langchain.com"
       ],
-      "allow_methods": ["*"],
-      "allow_headers": ["*"],
+      "allow_methods": [
+        "*"
+      ],
+      "allow_headers": [
+        "*"
+      ],
       "allow_credentials": true,
-      "expose_headers": ["x-pagination-total", "x-pagination-next", "content-location"]
+      "expose_headers": [
+        "x-pagination-total",
+        "x-pagination-next",
+        "content-location"
+      ]
     }
   }
 }

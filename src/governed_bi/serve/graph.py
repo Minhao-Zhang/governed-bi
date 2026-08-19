@@ -321,14 +321,58 @@ class _SyncApp:
     connection pool on its first loop.
     """
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: Any, *, loop: Any | None = None) -> None:
         self._app = app
+        #: A caller-owned loop, or ``None`` for a fresh loop per call. ``None`` is the default
+        #: precisely so that adding the durable path changed nothing for the callers that were
+        #: already here: `compile_graph()` still behaves exactly as it did.
+        self._loop = loop
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._app, name)
 
+    def run_coro(self, coro: Any) -> Any:
+        """Drive ``coro`` on this app's loop. The one place the two modes differ.
+
+        A pinned loop is required by a durable saver and not merely nicer: ``AsyncSqliteSaver``
+        holds an ``asyncio.Lock`` bound to its constructing loop, and a *contended* acquire from a
+        second loop raises and leaves that lock held, poisoning the saver. Not the connection --
+        ``aiosqlite`` is loop-agnostic; ``serve/checkpointer.py`` carries the measurement. It also
+        fixes the hazard this class's docstring records -- a provider client that caches a
+        connection pool on its first loop.
+        """
+        if self._loop is None:
+            return asyncio.run(coro)
+        return self._loop.run_until_complete(coro)
+
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
-        return asyncio.run(self._app.ainvoke(*args, **kwargs))
+        return self.run_coro(self._app.ainvoke(*args, **kwargs))
+
+    def close(self) -> None:
+        """Close a pinned loop and the saver connection under it. A no-op without one.
+
+        **Required, not tidiness.** ``aiosqlite`` runs its connection on a ``Thread`` created
+        without ``daemon=True``, and CPython joins non-daemon threads *before* it runs ``atexit``
+        handlers -- so a process that opens a durable saver and does not close it does not exit,
+        it hangs. Measured, on the first attempt at this.
+        """
+        loop, self._loop = self._loop, None
+        if loop is None:
+            return
+        conn = getattr(getattr(self._app, "checkpointer", None), "conn", None)
+        close = getattr(conn, "close", None)
+        if close is not None:
+            try:
+                loop.run_until_complete(close())
+            except Exception:  # noqa: BLE001 -- a connection that will not close is not a turn
+                pass
+        loop.close()
+
+    def __enter__(self) -> "_SyncApp":
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        self.close()
 
     def stream(self, *args: Any, **kwargs: Any) -> Any:
         """Drained, then replayed. Order is preserved; incrementality is not.
@@ -340,7 +384,7 @@ class _SyncApp:
         async def drain() -> list[Any]:
             return [chunk async for chunk in self._app.astream(*args, **kwargs)]
 
-        return iter(asyncio.run(drain()))
+        return iter(self.run_coro(drain()))
 
 
 def as_sync(app: Any) -> _SyncApp:
@@ -367,3 +411,28 @@ def compile_graph(*, checkpointer: Any | None = None) -> _SyncApp:
         return as_sync(build_graph().compile())
     saver = InMemorySaver() if checkpointer is None else checkpointer
     return as_sync(build_graph().compile(checkpointer=saver))
+
+
+def compile_durable(*, path: Any | None = None) -> _SyncApp:
+    """Compile against a **durable** SQLite saver, on a loop this app then owns.
+
+    For the CLI and eval, whose threads outlive the process that made them: a turn paused on
+    ``ask_user`` can be answered by a later invocation, which under ``InMemorySaver`` was
+    impossible from an entry point that exits after every question.
+
+    The loop is created here and handed to :class:`_SyncApp` because the saver must be opened on
+    the same loop that will later use it -- see ``checkpointer.open_harness_saver``.
+
+    **The caller must close it**, with ``with compile_durable() as graph:`` or ``graph.close()``.
+    :meth:`_SyncApp.close` says why that is load-bearing rather than polite.
+
+    Not the default for :func:`compile_graph`. Most of the test suite calls that with no
+    arguments, and a file-backed default would make every test share one database *and* reuse the
+    fixed thread ids they pass (``t-hitl``, ``t-ledger``), so a passing run would depend on what
+    the last run left behind.
+    """
+    from governed_bi.serve.checkpointer import open_harness_saver
+
+    loop = asyncio.new_event_loop()
+    saver = loop.run_until_complete(open_harness_saver(path))
+    return _SyncApp(build_graph().compile(checkpointer=saver), loop=loop)

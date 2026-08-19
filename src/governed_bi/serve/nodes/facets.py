@@ -353,7 +353,7 @@ def _query_vector(
 
     **State first, config second.** ``Session.configurable(question=...)`` puts a
     ``query_vector`` on the config, which works for a caller building one config per question
-    (``eval/harness.py``, ``POST /chat``) but not on the streamed path, where
+    (``eval/harness.py``, the CLI) but not on the streamed path, where
     ``graph_app.make_graph`` binds run constants once at load time with no question — the key is
     simply absent and the semantic channel reports ``failed`` however many vectors the index
     holds. ``accept`` writes it into state per turn, so state must win.

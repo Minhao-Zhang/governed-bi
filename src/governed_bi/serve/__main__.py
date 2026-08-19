@@ -103,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     from ..govern.policy import GovernancePolicy
     from ..register.record import missing_required
     from . import session as session_mod
-    from .graph import compile_graph
+    from .graph import compile_durable
 
     connector = PostgresConnector(dsn)
     embedder = None
@@ -156,13 +156,22 @@ def main(argv: list[str] | None = None) -> int:
         if len(session.degradations) > 10:
             print(f"  ... and {len(session.degradations) - 10} more")
 
-    graph = compile_graph()
+    # Durable, so a turn paused on `ask_user` is still there for a *later* invocation. Under
+    # `InMemorySaver` the interrupt died with the process that raised it, which made the
+    # clarification path unreachable from the one entry point that exits after every question.
+    graph = compile_durable()
     # One question, one thread. `configurable()` supplies no `thread_id` -- a thread is per
     # conversation, not a run constant, and defaulting it collapsed conversations together --
     # so the caller names it, and here the run id is the honest answer.
     config = session.configurable(question=args.question)
     config["configurable"]["thread_id"] = session.run_id
-    out = graph.invoke(session.turn(args.question), config)
+    try:
+        out = graph.invoke(session.turn(args.question), config)
+    finally:
+        # Closed here rather than at the end: everything below only reads `out`, and the point
+        # of a durable saver is that the checkpoint is on disk, not that the handle stays open.
+        # `_SyncApp.close` says why leaving it open would stop the process from exiting at all.
+        graph.close()
 
     # A paused turn is not a failed one. `ask_user` interrupts and no node writes `answer`, so
     # the code below would print `outcome: None` and exit 1 on an incomplete record, naming
@@ -173,7 +182,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"why: {pending.get('why')}", file=sys.stderr)
         print(
             "This entry point serves one turn and has nowhere to send an answer. Use "
-            "POST /chat + POST /chat/resume, or LangGraph Server's own resume.",
+            "LangGraph Server's own resume: post a run carrying "
+            "{'command': {'resume': …}} to the thread this turn paused on.",
             file=sys.stderr,
         )
         return 4

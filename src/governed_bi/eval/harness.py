@@ -12,7 +12,7 @@ from governed_bi.eval.oracle import oracle_grade
 from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
 from governed_bi.register.quantity import Measured
 from governed_bi.register.stages import Outcome
-from governed_bi.serve.graph import compile_graph
+from governed_bi.serve.graph import compile_durable
 from governed_bi.serve.messages import last_proposed_sql
 
 __all__ = ["run_arm", "run_comparison", "project_turn"]
@@ -78,21 +78,32 @@ def run_arm(
         )
 
     if workers == 1:
-        compiled = graph if graph is not None else compile_graph()
+        # A caller-supplied graph is the caller's to close; one we make here is ours. Durable so
+        # that `HARNESS_DB` -- not the conversation store -- carries the arm's threads.
+        compiled = graph if graph is not None else compile_durable()
+        ours = graph is None
         out: list[dict[str, Any]] = []
-        for index, question in enumerate(questions):
-            row = _run_one(
-                question,
-                arm=arm,
-                base_cfg=base_cfg,
-                compiled=compiled,
-                session=session,
-                run_id=run_id,
-                order_sensitive_qids=order_sensitive_qids,
-            )
-            out.append(row)
-            if on_row is not None:
-                on_row(index, row)
+        try:
+            for index, question in enumerate(questions):
+                row = _run_one(
+                    question,
+                    arm=arm,
+                    base_cfg=base_cfg,
+                    compiled=compiled,
+                    session=session,
+                    run_id=run_id,
+                    order_sensitive_qids=order_sensitive_qids,
+                )
+                out.append(row)
+                if on_row is not None:
+                    on_row(index, row)
+        finally:
+            # `getattr`: a caller-supplied graph and the test doubles that stand in for one are
+            # not required to be closeable, and housekeeping must not turn into the arm's error.
+            if ours:
+                close = getattr(compiled, "close", None)
+                if close is not None:
+                    close()
         return out
 
     return _run_concurrently(
@@ -187,6 +198,11 @@ def _run_one(
 #: abstention too and has no statement to re-execute, so it is absent here and still reported
 #: as one by the driver. Two questions, two sets -- merging them would either invent a
 #: fingerprint for a turn that ran nothing or drop a decline from the abstention rate.
+#:
+#: ``no_sql`` is absent for the ``clarification`` reason, and structurally so: the turn reached
+#: this state *because* the ledger holds no answering attempt, and ``last_proposed_sql`` reads
+#: ``run_query`` calls -- every one of which writes a ledger row (audit C1 closed the one escape).
+#: There is no proposal to re-execute, so adding it here would be a priced set with no producer.
 PRICED_ABSTENTIONS: frozenset[str] = frozenset({"capped", "refused"})
 
 
@@ -292,6 +308,21 @@ def _evict(compiled: Any, thread_id: str) -> None:
     a blunt clear — with ``workers > 1`` several questions share the saver.
     """
     saver = getattr(getattr(compiled, "_app", compiled), "checkpointer", None)
+    if saver is None:
+        return
+    # A durable saver is async-only: `AsyncSqliteSaver.delete_thread` *exists* and raises
+    # `NotImplementedError`, so probing for the attribute and swallowing the failure would
+    # silently stop evicting and grow the harness database without bound. Prefer the async
+    # method, driven on the graph's own pinned loop -- which is the only loop its connection
+    # will answer on.
+    run_coro = getattr(compiled, "run_coro", None)
+    adelete = getattr(saver, "adelete_thread", None)
+    if run_coro is not None and adelete is not None and getattr(compiled, "_loop", None) is not None:
+        try:
+            run_coro(adelete(thread_id))
+        except Exception:  # noqa: BLE001 — a saver that cannot evict is a leak, not a failed turn
+            return
+        return
     delete = getattr(saver, "delete_thread", None)
     if delete is None:
         return
@@ -326,10 +357,20 @@ def _run_concurrently(
     from concurrent.futures import ThreadPoolExecutor
 
     local = threading.local()
+    # Every graph this pool builds, so `finally` can close them all. A durable saver binds its
+    # `aiosqlite` connection to the loop that opened it, so each worker gets its **own** graph,
+    # loop and connection -- sharing one across threads would drive it from a loop it will not
+    # answer on. They contend on one SQLite file as writers; that is the cost of durability here,
+    # and `workers` defaults to 1.
+    built: list[Any] = []
+    built_lock = threading.Lock()
 
     def worker_state() -> tuple[Any, Any]:
         if not hasattr(local, "pair"):
-            local.pair = (compile_graph(), connector_factory())
+            compiled = compile_durable()
+            with built_lock:
+                built.append(compiled)
+            local.pair = (compiled, connector_factory())
         return local.pair
 
     def run_index(index: int) -> tuple[int, dict[str, Any]]:
@@ -370,11 +411,19 @@ def _run_concurrently(
         return index, row
 
     results: dict[int, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for index, row in pool.map(run_index, range(len(questions))):
-            results[index] = row
-            if on_row is not None:
-                on_row(index, row)
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for index, row in pool.map(run_index, range(len(questions))):
+                results[index] = row
+                if on_row is not None:
+                    on_row(index, row)
+    finally:
+        # Not housekeeping: an unclosed `aiosqlite` connection holds a non-daemon thread, and
+        # CPython joins those *before* `atexit`, so an arm that leaves one open never exits.
+        for compiled in built:
+            close = getattr(compiled, "close", None)
+            if close is not None:
+                close()
     return [results[i] for i in range(len(questions))]
 
 
