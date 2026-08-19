@@ -19,7 +19,7 @@ from typing import Mapping
 
 import sqlglot
 from sqlglot import expressions as exp
-from sqlglot.errors import SqlglotError
+from sqlglot.errors import OptimizeError, SqlglotError
 
 from ..corpus.analyst import AnalystCorpus
 from .check import GovernanceUsageError, check
@@ -129,9 +129,12 @@ def spellings_for(
 def _handles_in_scope(view) -> dict[str, str | None]:
     """One scope's ``{handle (folded) -> by_table key}``. ``None`` is a **derived** source.
 
-    ``binding.py::_classify_sources``, restated over the same ``scope.sources`` mapping and with
-    the same two rules, because the whole justification for this resolver is that it and
-    ``bind()`` must not disagree about what a handle names:
+    ``binding.py::_classify_sources``, restated over the same ``scope.selected_sources``
+    mapping and with the same two rules, because the whole justification for this resolver is
+    that it and ``bind()`` must not disagree about what a handle names -- which is also why
+    this moved off ``scope.sources`` in lockstep with ``bind()``: that mapping merges every
+    visible CTE into every scope, so a sibling CTE's name resolved here as a handle this
+    scope's ``FROM`` never introduced:
 
     * an **aliased** table registers under its alias only — Postgres hides the table name behind
       an alias, so resolving ``sales.customers.id`` against ``FROM sales.customers AS cc`` would
@@ -154,7 +157,15 @@ def _handles_in_scope(view) -> dict[str, str | None]:
     failures over its 115 cases either way.
     """
     local: dict[str, str | None] = {}
-    for alias, source in view.scope.sources.items():
+    try:
+        selected = view.scope.selected_sources.items()
+    except OptimizeError:
+        # Two sources in one scope answering to one name. No handle here names one table, so
+        # this scope contributes no qualified rewrites and its columns fall to the flat pass --
+        # and then to BINDING, which refuses the statement. Fail-closed, and it keeps the
+        # agreement this function exists for: ``bind()`` refuses the same shape.
+        return {}
+    for alias, (_node, source) in selected:
         if isinstance(source, exp.Table) and isinstance(source.this, exp.Identifier):
             name = fold(str(source.name))
             if not name:

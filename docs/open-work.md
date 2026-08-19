@@ -230,8 +230,10 @@ scope, so `SELECT r."Name" FROM sales.regions AS r WHERE EXISTS (SELECT 1 FROM (
 refused `r_ambiguous_fold` for a reference naming exactly one table. Measured on the adversarial
 suite: false-refusal 2/46 under the tree-wide rule, 0/46 under the per-scope one.
 `pipeline._column_sources` now resolves each reference in its own scope and then its ancestors —
-`binding.py::_lookup`'s walk over the same `scope.sources` mapping — so the two resolvers agree by
-construction. Both spellings of the false-refusal shape are benign cases in
+`binding.py::_lookup`'s walk over the same `scope.selected_sources` mapping — so the two resolvers
+agree by construction. (Both read `scope.sources` until 2026-08-19, when that mapping turned out to
+merge every visible CTE into every scope and both moved off it together; see
+[the binding-scope fix](analysis/binding-scope-and-statement-timeout-2026-08-19.md).) Both spellings of the false-refusal shape are benign cases in
 `govern/adversarial.toml`.
 
 One consequence is a widening, not a narrowing: a handle reused for two different tables in two

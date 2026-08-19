@@ -96,6 +96,20 @@ class _QueriesBesideAnotherTool(ScriptedChatModel):
         return ChatResult(generations=[ChatGeneration(message=AIMessage("", tool_calls=calls))])
 
 
+class _QueriesTwiceInOneMessage(ScriptedChatModel):
+    """Two ``run_query`` calls in the same assistant message — the shape production hit.
+
+    Distinct from ``_QueriesBesideAnotherTool``: there the stranded sibling has a *different*
+    tool name, and the middleware's own filter was keyed on the name. Two calls to the capped
+    tool put the boundary inside one name, which is where the real thread died.
+    """
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[no-untyped-def]
+        self.prompts_seen.append(list(messages))
+        calls = [_query_call(next(_IDS)), _query_call(next(_IDS))]
+        return ChatResult(generations=[ChatGeneration(message=AIMessage("", tool_calls=calls))])
+
+
 def _assets() -> dict[str, Any]:
     table = TableAsset(
         id="main.customers", schema="main", physical_name="customers",
@@ -269,6 +283,47 @@ def test_a_cap_reached_beside_another_tool_call_still_ends_the_turn(tmp_path: Pa
         if str(getattr(m, "type", "")) == "tool"
     }
     assert asked <= answered, f"unanswered tool calls: {sorted(asked - answered)}"
+
+
+def test_a_cap_reached_inside_one_batch_of_the_capped_tool_answers_both_calls(tmp_path: Path) -> None:
+    """The defect that poisoned a live thread, reproduced.
+
+    Two ``run_query`` calls arrive in one assistant message with one slot left. Upstream's
+    ``_separate_tool_calls`` allows the first and blocks the second, and — on
+    ``exit_behavior="continue"``, which this middleware is constructed with — it writes a
+    ``ToolMessage`` for the *blocked* one only. The allowed one was to be answered by the tool
+    node, which ``jump_to: "end"`` skips. Upstream does answer it, but only inside its own
+    ``exit_behavior="end"`` branch, which this subclass never reaches.
+
+    The stranded-call filter was keyed on ``name != tool_name``, so it looked past a sibling
+    that shared the capped tool's name and the call was never answered at all. Measured on
+    thread ``01a01bb8`` (2026-08-19): 12 ``tool_use`` blocks, 11 ``tool_result``. Bedrock
+    requires every ``tool_use`` to be answered, so **every subsequent turn on that thread
+    raised ``ValidationException``** — 0 attempts, no answer, permanently. A dangling id is not
+    a cosmetic defect in a message list; it is a conversation that cannot be continued.
+    """
+    model = _QueriesTwiceInOneMessage(responses=[])
+    out = _run(tmp_path, model, cap=3)
+    _executed, caps = _rows(out)
+
+    assert out["path_kind"] == "answered", f"failure={out.get('failure')!r}"
+    assert len(caps) == 1, f"one cap row per capped turn, got {len(caps)}"
+
+    asked = {
+        tc["id"]
+        for m in out["messages"]
+        if isinstance(m, AIMessage)
+        for tc in m.tool_calls or ()
+    }
+    answered = {
+        str(getattr(m, "tool_call_id", ""))
+        for m in out["messages"]
+        if str(getattr(m, "type", "")) == "tool"
+    }
+    assert asked <= answered, (
+        f"unanswered tool calls: {sorted(asked - answered)} — this history cannot be replayed, "
+        "so the next turn on this thread is dead on arrival"
+    )
 
 
 def test_sampling_a_column_does_not_spend_a_statement(tmp_path: Path) -> None:

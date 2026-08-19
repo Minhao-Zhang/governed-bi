@@ -76,8 +76,37 @@ class ScopeView:
                 yield node
 
     def output_aliases(self) -> frozenset[str]:
-        """Folded projection aliases, for ``ORDER BY <alias>`` references."""
+        """Folded output names this scope's ``ORDER BY`` may reference.
+
+        Two scope shapes, because Postgres answers the question differently in each.
+
+        A ``Select`` contributes its **explicit** aliases only. A projection spelled without
+        ``AS`` is a ``Column`` that already binds to a source in this same scope, so the
+        binding layer resolves it there and gets the column layer's authorization check with
+        it; naming it here as well would route it to ``opaque`` and skip that.
+
+        A **set operation** contributes its whole output list. There is no FROM at that level,
+        and Postgres resolves ``ORDER BY`` after a ``UNION`` against the output names — the
+        leftmost branch's, per ``named_selects``, which recurses for nested operations — and
+        against nothing else. So an output name is not merely *allowed* in that position, it is
+        the only legal spelling, and unlike the ``Select`` case it must include names that
+        carry no ``AS``: ``SELECT code FROM a UNION SELECT code FROM b ORDER BY code`` outputs
+        ``code`` without ever aliasing it.
+
+        **This used to return ``frozenset()`` for anything that is not a ``Select``**, so the
+        ``ORDER BY <alias>`` branch could never fire for the one construct where an output name
+        is all there is. Measured 2026-08-19: a two-branch ``UNION ALL ... ORDER BY side,
+        bldg_code`` was refused twice on the served surface, the agent recovered by deleting
+        the ``ORDER BY``, and the turn cost 5 attempts and 142s to return 755 unordered rows.
+        ``exp.SetOperation`` and not ``exp.Union``, or ``EXCEPT`` and ``INTERSECT`` keep failing.
+
+        Widening it no further is the point: a name absent from the output list still has
+        nothing to bind to and still refuses, which is what keeps the position governed rather
+        than exempt.
+        """
         expression = self.scope.expression
+        if isinstance(expression, exp.SetOperation):
+            return frozenset(fold(name) for name in expression.named_selects if name)
         if not isinstance(expression, exp.Select):
             return frozenset()
         return frozenset(

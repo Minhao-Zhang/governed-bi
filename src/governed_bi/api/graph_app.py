@@ -114,7 +114,6 @@ def session_from_environment() -> Session:
         )
 
     from governed_bi.datasource.postgres import PostgresConnector
-    from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve import session as session_mod
 
     schema = os.environ.get(SCHEMA_VAR)
@@ -153,15 +152,9 @@ def session_from_environment() -> Session:
 
     utility = _utility_model(credentials)
 
-    from governed_bi.govern.guard import BI_SCOPE_RULE_ID
-
     kwargs: dict[str, Any] = {
         "connector": PostgresConnector(dsn),
-        # Injection rules stay off (ADR 0006 OQ3); scope gate is on.
-        "policy": GovernancePolicy(
-            guard_rules_enabled={BI_SCOPE_RULE_ID: True},
-            access_grant=resolve_access_grant(root),
-        ),
+        "policy": serve_policy(root),
         "agent_model": model,
         "utility_model": utility,
     }
@@ -177,6 +170,46 @@ def session_from_environment() -> Session:
         state = "unchanged" if cache.written == 0 else f"wrote {cache.written}"
         print(f"vector cache: {cache.opened_with} hit / {len(cache)} total, {state} — {cache.uri}")
     return _SESSION
+
+
+def serve_policy(root: Path) -> Any:
+    """The governance policy the **served** surface runs under. Production, not the benchmark.
+
+    Named and separate from ``_session`` so the one line below that differs from every other
+    entry point is assertable, rather than a keyword buried in a dict literal.
+
+    ``guard_rules_enabled``: injection rules stay off (ADR 0006 OQ3), scope gate on.
+
+    **``hard_block_suspect=False``, which is the knob's own production value.** Its ``why``
+    reads "True in development and on the benchmark, False in production, where a suspect
+    column warns instead of refusing" — and until 2026-08-19 this entry point passed nothing,
+    so the served surface silently ran the benchmark's arm. What that cost, measured on the
+    live corpus: ``plant_run_hour_readings.tag_description`` is ``suspect``, and it is also
+    the *only* bridge from a historian tag to an asset — the column's own body says so. Asked
+    which chillers ran the most hours, the agent correctly reached for ``sample_rows`` on it,
+    was refused at COLUMNS, and fell back to reading bare tag names (``BOP_HMI_DFP4_TOT_RT``)
+    from which no equipment type can be recovered. It spent all five ``run_query`` attempts
+    and hit the cap. There are 81 tags and none of them is a chiller, which one look at the
+    descriptions would have settled.
+
+    **"Warns" is not a verdict field; the warning is in the prompt.** ``serve/context.py``
+    renders one line per suspect column — ``- <column>: suspect - <note>`` — so with the hard
+    block off the model still knows which columns it may not trust, and can say so in the
+    answer. Reading the ``False`` branch as "the caveat disappears" is the mistake; the
+    caveat moves from the layer stack to the analyst.
+
+    Every other entry point keeps the ``True`` default on purpose: ``eval/arms.py`` and the
+    ``tools/`` drivers construct their own ``GovernancePolicy`` and are the benchmark, where
+    a suspect column must refuse so a measured number cannot rest on one.
+    """
+    from governed_bi.govern.guard import BI_SCOPE_RULE_ID
+    from governed_bi.govern.policy import GovernancePolicy
+
+    return GovernancePolicy(
+        guard_rules_enabled={BI_SCOPE_RULE_ID: True},
+        access_grant=resolve_access_grant(root),
+        hard_block_suspect=False,
+    )
 
 
 def access_policy_from_environment(root: Path) -> Any:

@@ -8,6 +8,11 @@ with no answer on it. This sits after ``agent_core``, where every answering path
 **It usually calls no model.** The agent narrates for free, so the normal path is to *adopt*
 that text; the model runs only on the remainder — a loop that ended on a tool call, or on
 reasoning blocks with no text at all — which is the case where there is nothing to fall back to.
+
+**A turn stopped by the attempt cap is the third case, and it always generates.** Its last AI
+message is ``_CapEndsTheTurn``'s synthetic "Stopped: run_query reached its attempt limit", so
+there is prose to adopt and adopting it would be worse than silence: the card would present the
+budget's exit line as the answer. See :func:`narrate_node`.
 """
 
 from __future__ import annotations
@@ -29,6 +34,32 @@ __all__ = ["narrate_node"]
 #: a 200,001-row cap upstream means "the rows" is not a bounded thing to paste into a prompt.
 _ROWS_SHOWN = 20
 
+#: Prepended to the narrator's brief on a capped turn. Two claims it cannot get from the payload:
+#: the turn ran out of budget rather than reaching a conclusion, and the statement shown is the
+#: last one that *succeeded*, which on this path is usually a probe. Without it the narrator reads
+#: an intermediate result set out loud as though it answered the question.
+_CAP_PREAMBLE = (
+    "IMPORTANT — this turn ended at its statement-attempt budget, not at a conclusion. The "
+    "statement and result below are the LAST ONE THAT SUCCEEDED, which on a capped turn is "
+    "usually an intermediate step rather than an answer to the question. Report how far the "
+    "turn got and state plainly that it is incomplete. Do not present these rows as the "
+    "answer, and do not extrapolate one.\n\n"
+)
+
+
+def _ended_at_the_cap(state: Mapping[str, Any]) -> bool:
+    """Whether the ledger says the attempt cap ended this turn.
+
+    Narrower than :func:`~governed_bi.serve.ledger.ledger_ended_without_answer`, which also
+    covers ``refused``, and deliberately not a change to that function: ``reflect`` is its other
+    caller and a refusal and a cap are the same thing to a judge of answer quality. The
+    distinction only matters to the narrator. See :func:`narrate_node`.
+    """
+    execution = state.get("execution")
+    if not isinstance(execution, Mapping):
+        return False
+    return execution.get("terminal") == "capped"
+
 
 async def narrate_node(state: dict, config: RunnableConfig) -> dict:
     """Write ``answer_text``. Adopts the agent's prose; generates only when there is none.
@@ -40,19 +71,37 @@ async def narrate_node(state: dict, config: RunnableConfig) -> dict:
     **Never raises into ``wrap_node``.** A timeout or unexpected exception would otherwise mark
     an already-answered turn ``crashed`` (``failure is not None`` wins in ``stamp``). Degrade
     to no prose instead.
+
+    **``capped`` is separated from ``refused``, which ``ledger_ended_without_answer`` groups.**
+    Grouping them was right about refusals and wrong about caps. A refused turn had every
+    attempt rejected, so it executed nothing and has no rows — narrating it would invent a
+    result, which is the "do not decorate a governance decision" rule this node already obeys
+    three lines up. A **capped** turn is the opposite: its statements passed every layer and
+    ran, and the budget ran out afterwards. Measured 2026-08-19 on the served surface: a turn
+    spent 47.5s over eight executed statements, returned a nine-row table, and wrote
+    ``answer_text: null`` — the reader got a table with no sentence on it and no way to know
+    what it was.
+
+    Two things keep that from becoming the decoration the old grouping feared. It **generates
+    rather than adopts** (above), and ``_brief`` tells the narrator the turn stopped at its
+    budget and that the table is the last statement that *succeeded* — on a capped turn usually
+    an intermediate probe, not the answer. Saying "here is how far it got" is honest; letting
+    the last probe's rows read as a conclusion is not.
     """
     # A terminal turn already has its wording, and it is not the model's: `refuse` and `decline`
     # write `answer["text"]`, which is system copy, and narrating over it would put a generated
     # sentence where a governance decision belongs.
     if state.get("path_kind") in ("refuse", "decline", "crashed"):
         return {}
-    if ledger_ended_without_answer(state):
+    capped = _ended_at_the_cap(state)
+    if ledger_ended_without_answer(state) and not capped:
         return {}
 
     try:
-        adopted = last_ai_text(state)
-        if adopted:
-            return {"answer_text": adopted.strip()}
+        if not capped:
+            adopted = last_ai_text(state)
+            if adopted:
+                return {"answer_text": adopted.strip()}
 
         result = state.get("result_table")
         if not isinstance(result, Mapping):
@@ -60,7 +109,7 @@ async def narrate_node(state: dict, config: RunnableConfig) -> dict:
             # answer the turn did not produce.
             return {}
 
-        text, spent = await _generate(state, config, result)
+        text, spent = await _generate(state, config, result, capped=capped)
         update: dict = {"answer_text": text}
         if spent is not None:
             update["usage"] = [spent]
@@ -76,7 +125,11 @@ async def narrate_node(state: dict, config: RunnableConfig) -> dict:
 
 
 async def _generate(
-    state: Mapping[str, Any], config: RunnableConfig, result: Mapping[str, Any]
+    state: Mapping[str, Any],
+    config: RunnableConfig,
+    result: Mapping[str, Any],
+    *,
+    capped: bool = False,
 ) -> tuple[str | None, dict | None]:
     """One utility-model call over (question, statement, rows). ``(None, None)`` if it cannot run.
 
@@ -101,7 +154,7 @@ async def _generate(
         reply = await model.ainvoke(
             [
                 SystemMessage(prompt_text("narrate", prompt_variants(config))),
-                HumanMessage(_brief(state, result)),
+                HumanMessage(_brief(state, result, capped=capped)),
             ],
             # Named after the registered prompt, like the scope gate and the rewriters.
             config={"run_name": "narrate"},
@@ -117,7 +170,7 @@ async def _generate(
     return (text or None), spent
 
 
-def _brief(state: Mapping[str, Any], result: Mapping[str, Any]) -> str:
+def _brief(state: Mapping[str, Any], result: Mapping[str, Any], *, capped: bool = False) -> str:
     """The narrator's whole input: the question, the statement, and a bounded slice of rows.
 
     Deliberately not the delivered context, the retrieved assets or the transcript: this stage
@@ -135,7 +188,11 @@ def _brief(state: Mapping[str, Any], result: Mapping[str, Any]) -> str:
     # model narrates as if it were the answer.
     if len(rows) > len(shown):
         payload["note"] = f"showing the first {len(shown)} of {len(rows)} returned rows"
+    # First, not appended: on a capped turn this reframes everything below it, and a caveat
+    # after the rows is one the narrator has already written past.
+    preamble = _CAP_PREAMBLE if capped else ""
     return (
+        f"{preamble}"
         f"Question: {state.get('question') or ''}\n\n"
         f"Statement:\n{state.get('generated_sql') or '(none)'}\n\n"
         f"Result:\n{json.dumps(payload, default=str)}"

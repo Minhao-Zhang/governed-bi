@@ -1,10 +1,14 @@
 """Postgres connector adapter (BIRD obfuscated path).
 
 Session settings required by ADR 0006 §10 are applied on open:
-``default_transaction_read_only = on`` and ``synchronize_seqscans = off``.
+``default_transaction_read_only = on`` and ``synchronize_seqscans = off``. Since 2026-08-19,
+``statement_timeout`` joins them (``statement_timeout_ms``): it is the only bound one governed
+statement has, because the agent's wall clock cannot fire while a query blocks.
 
 Error taxonomy is SQLSTATE class lookup (parcel C): ``42`` → ``QueryError``;
-``08`` / ``53`` / ``57`` → ``ConnectionError``. Never message-regex.
+``08`` / ``53`` / ``57`` → ``ConnectionError``, less ``57014`` (``query_canceled`` — our own
+``statement_timeout``), which is a verdict on the statement and leaves the handle usable.
+Never message-regex.
 
 **A failed statement must discard a dead connection** (audit §9.1). Reusing the
 cached handle let one network blip poison every remaining question in the run, and
@@ -26,6 +30,7 @@ from ..corpus.introspect import (
     IntrospectedTable,
     Introspection,
 )
+from ..register.knobs import knob_default
 from .errors import ConnectionError, QueryError
 
 __all__ = ["PostgresConnector"]
@@ -33,14 +38,31 @@ __all__ = ["PostgresConnector"]
 _CONNECT_TIMEOUT_S = 5
 #: Driver gave no code on a connect-path failure (e.g. TCP timeout). Class 08.
 _FALLBACK_CONNECTION_SQLSTATE = "08006"
+#: ``query_canceled``: ``statement_timeout`` fired. Class 57 by code, a statement fault by
+#: meaning -- see :meth:`PostgresConnector._raise_classified`.
+_STATEMENT_TIMEOUT_SQLSTATE = "57014"
 
 
 class PostgresConnector:
     """Read-only Postgres access. Context-managed or lazy-connect on first use."""
 
-    def __init__(self, dsn: str, *, max_rows: int = 200_000) -> None:
+    def __init__(
+        self,
+        dsn: str,
+        *,
+        max_rows: int = 200_000,
+        statement_timeout_ms: int | None = None,
+    ) -> None:
         self._dsn = dsn
         self._max_rows = max_rows
+        #: ``None`` means *the register's value*, not *no bound*. Resolved here rather than as
+        #: a literal default so the number a run records and the number it enforces are one
+        #: value; pass ``0`` to disable the bound, which is what Postgres already means by it.
+        self._statement_timeout_ms = (
+            int(knob_default("statement_timeout_ms"))
+            if statement_timeout_ms is None
+            else int(statement_timeout_ms)
+        )
         self._conn: Any = None
 
     def __enter__(self) -> PostgresConnector:
@@ -126,6 +148,18 @@ class PostgresConnector:
             )
             conn.execute("SET default_transaction_read_only = on")
             conn.execute("SET synchronize_seqscans = off")
+            # A server-side bound on one statement, and the only bound run_query has. The
+            # agent's own wall clock is checked between stream frames, so a query that blocks
+            # emits no frame and cannot be timed out from the client without cancelling a
+            # statement that may already have executed -- the audit break
+            # ``serve/nodes/agent_core.py::_run`` refuses to risk. Postgres cancelling its own
+            # statement has neither problem: nothing executed, the connection stays usable, and
+            # the agent gets a QueryError it can rewrite against.
+            #
+            # Interpolated and not a bound parameter: SET takes no parameters, and psycopg
+            # raises on the placeholder. The value is an int by construction one frame up.
+            if self._statement_timeout_ms > 0:
+                conn.execute(f"SET statement_timeout = {self._statement_timeout_ms}")
         except Exception as err:
             self._raise_classified(err, connecting=True)
         self._conn = conn
@@ -170,6 +204,16 @@ class PostgresConnector:
             sqlstate = str(sqlstate)
 
         if sqlstate and sqlstate.startswith("42"):
+            raise QueryError(str(err), sqlstate=sqlstate) from err
+        # **Before the class-57 branch, which would call this infrastructure and discard a
+        # healthy handle.** 57014 is ``query_canceled`` -- on this connector, ``statement_timeout``
+        # firing. The rest of class 57 is the operator taking the server away (shutdown,
+        # ``pg_terminate_backend``), where discarding is right; this one is the server enforcing
+        # a bound *we* set on *this statement*, so the connection is fine and the verdict belongs
+        # to the statement. Classifying it ConnectionError would reconnect on every attempt and,
+        # worse, tell the agent the warehouse is unreachable when what happened is that its query
+        # was too expensive -- the one fact that would make it write a cheaper one.
+        if sqlstate == _STATEMENT_TIMEOUT_SQLSTATE:
             raise QueryError(str(err), sqlstate=sqlstate) from err
         if sqlstate and (
             sqlstate.startswith("08")

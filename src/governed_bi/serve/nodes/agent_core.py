@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Container, Mapping
 from typing import Any
 
 from langchain.agents import create_agent
@@ -460,10 +460,18 @@ class _CapEndsTheTurn(ToolCallLimitMiddleware):
     **Constructed ``"continue"`` and ended here, not constructed ``"end"``.** When this was
     decided, native's ``"end"`` raised ``NotImplementedError`` if the AI message also called a
     different tool — ``_run`` records that as ``crashed``, and falling back to ``"continue"``
-    restores the original defect. On the pinned langchain (1.3.15) that is no longer true: the
-    ``"end"`` branch now answers every stranded sibling with a ``ToolMessage`` before jumping,
-    which is the concern that made ending unsafe. What still keeps the subclass is the ledger
-    row above — native ``"end"`` writes none, so a capped turn would read as ``answered``.
+    restores the original defect. What keeps the subclass is the ledger row above: native
+    ``"end"`` writes none, so a capped turn would read as ``answered``.
+
+    **And because it is constructed ``"continue"``, answering the stranded calls is this
+    class's job, not upstream's.** This paragraph used to say the concern had lapsed — that on
+    the pinned langchain "the ``"end"`` branch now answers every stranded sibling with a
+    ``ToolMessage`` before jumping". That is true of upstream's ``"end"`` branch and irrelevant
+    here: ``"continue"`` returns the blocked messages and no jump, so that code never runs.
+    Meanwhile this hook jumps to ``"end"`` on its own, skipping the tool node and every allowed
+    call in the same batch. The docstring's confidence is what let
+    :func:`_unanswered_tool_calls` ship keyed on the tool's *name*, which strands a second call
+    to the capped tool and kills the thread. Read that function before changing this one.
     """
 
     def __init__(self, cap: int) -> None:
@@ -486,10 +494,10 @@ class _CapEndsTheTurn(ToolCallLimitMiddleware):
             ToolMessage(
                 content=f"Not executed: the turn ended at the {self.tool_name} attempt cap.",
                 tool_call_id=call["id"],
-                name=call["name"],
+                name=call.get("name"),
                 status="error",
             )
-            for call in _sibling_tool_calls(state, self.tool_name)
+            for call in _unanswered_tool_calls(state, {m.tool_call_id for m in blocked})
         ]
         final = AIMessage(
             f"Stopped: {self.tool_name} reached its attempt limit of {self.thread_limit}."
@@ -509,11 +517,27 @@ class _CapEndsTheTurn(ToolCallLimitMiddleware):
         }
 
 
-def _sibling_tool_calls(state: Any, tool_name: str | None) -> list[Any]:
-    """The last AI message's calls to tools *other* than ``tool_name`` — the stranded ones."""
+def _unanswered_tool_calls(state: Any, answered: Container[str]) -> list[Any]:
+    """The last AI message's calls that nothing has answered — the stranded ones.
+
+    **Keyed on whether a call was answered, not on what it is named.** This asked for
+    ``name != tool_name`` and so looked straight past a *second* call to the capped tool in the
+    same assistant message. Upstream splits one batch at the boundary: with one slot left, the
+    first ``run_query`` is *allowed* and the second is *blocked*, and on
+    ``exit_behavior="continue"`` it writes a ``ToolMessage`` for the blocked one only — the
+    allowed one is the tool node's job, and ``jump_to: "end"`` skips the tool node. So the
+    allowed call left the turn with no ``tool_result``, and the name filter could not see it
+    because it was a ``run_query`` too.
+
+    Measured on thread ``01a01bb8`` (2026-08-19): 12 ``tool_use`` blocks against 11
+    ``tool_result``. Bedrock rejects a history with an unanswered ``tool_use``, and these
+    messages are replayed at the head of every later turn, so **the thread was permanently
+    unusable** — each subsequent turn raised ``ValidationException`` before reaching a single
+    attempt. The name was the accident; being unanswered is the property that matters.
+    """
     for message in reversed(list((state or {}).get("messages") or ())):
         if isinstance(message, AIMessage):
-            return [tc for tc in message.tool_calls or () if tc.get("name") != tool_name]
+            return [tc for tc in message.tool_calls or () if tc.get("id") not in answered]
     return []
 
 

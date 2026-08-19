@@ -248,6 +248,18 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "with agent_recursion_limit. NOT paired with a node RetryPolicy -- agent_core executes "
        "governed SQL",
        env_var="GOVERNED_BI_AGENT_NODE_TIMEOUT_S"),
+    _k("statement_timeout_ms", 120_000, Role.comparability,
+       "server-side wall clock for ONE governed statement, applied as Postgres "
+       "`statement_timeout` when the connection opens. Until 2026-08-19 a run_query had no "
+       "bound of its own: agent_core's soft wall is checked BETWEEN stream frames, a blocking "
+       "query emits no frames, so the only backstop was the soft wall plus the hang grace and "
+       "one correlated-EXISTS query over a 1.2M-row table burned 1500s of a 1200s budget and "
+       "returned the turn `crashed` with no answer. Paired with the two knobs above: "
+       "run_query_attempt_cap * this = 5 * 120s = 600s, half of agent_node_timeout_s, so five "
+       "statements can each time out and still leave the other half for model calls. 57014 is "
+       "classified QueryError, not ConnectionError, so the agent sees a statement it may "
+       "rewrite rather than a database it cannot reach",
+       ),
     _k("agent_recursion_limit", 40, Role.comparability,
        "superstep ceiling for the nested create_agent graph. create_agent's own default "
        "is 9999; without an explicit outer override that ceiling wins. run_query is also "

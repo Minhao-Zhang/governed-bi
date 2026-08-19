@@ -184,6 +184,64 @@ def test_a_class_42_sqlstate_is_a_query_fault(connector, fixture_schema, sqlstat
     )
 
 
+def test_statement_timeout_cancels_one_statement_and_keeps_the_connection(dsn) -> None:
+    """The only bound one governed statement has, and it must not read as infrastructure.
+
+    ``agent_core``'s wall clock is checked *between* stream frames, so a query that blocks
+    emits no frame and cannot be timed out from the client without cancelling a statement
+    that may already have executed — the audit break ``_run`` refuses to risk. On
+    2026-08-19 that left one correlated-``EXISTS`` query over a 1.2M-row table running for
+    24 minutes until the soft wall plus the hang grace fired, and the turn recorded
+    ``crashed`` with no answer and no ledger row for the statement.
+
+    Three assertions, because the code alone is not the fix:
+
+    * the bound fires at all — so ``SET statement_timeout`` really reached the session;
+    * ``57014`` is a **QueryError**, not the ``ConnectionError`` its class-57 prefix would
+      give it. The agent's tool surface turns one into "rewrite this" and the other into
+      "the warehouse is unreachable", and only the first is true;
+    * the handle survives. Class 57 discards it; a statement Postgres cancelled on our own
+      instruction leaves nothing wrong with the socket, and the paired fast query below is
+      what tells "the bound is selective" from "everything times out".
+    """
+    from governed_bi.datasource import errors  # type: ignore[import-not-found]
+    from governed_bi.datasource.postgres import PostgresConnector  # type: ignore[import-not-found]
+
+    connector = PostgresConnector(dsn, statement_timeout_ms=50)
+    with pytest.raises(errors.QueryError) as caught:
+        connector.execute("SELECT pg_sleep(5)")
+    assert getattr(caught.value, "sqlstate", None) == "57014", (
+        "the cancellation must carry its SQLSTATE, or a reader cannot tell a timeout from "
+        "any other statement fault without parsing prose"
+    )
+    assert connector._conn is not None, (
+        "statement_timeout discarded a working connection: 57014 fell through to the "
+        "class-57 branch, which is for the operator taking the server away"
+    )
+    assert connector.execute("SELECT 1")[1] == [(1,)], (
+        "the same connector must still serve a query that fits inside the bound"
+    )
+
+
+def test_the_statement_timeout_default_is_the_registers_and_not_a_literal() -> None:
+    """A second copy of the number is a second thing to forget when it changes.
+
+    ``statement_timeout_ms`` is ``Role.comparability``: the value a run *records* and the
+    value it *enforces* have to be one value, or two arms sharing a config hash ran
+    different bounds.
+    """
+    from governed_bi.datasource.postgres import PostgresConnector  # type: ignore[import-not-found]
+    from governed_bi.register.knobs import knob_default
+
+    assert PostgresConnector("postgresql://unused")._statement_timeout_ms == int(
+        knob_default("statement_timeout_ms")
+    )
+    assert PostgresConnector("postgresql://unused", statement_timeout_ms=0)._statement_timeout_ms == 0, (
+        "0 must stay 0: Postgres already spells 'no bound' that way, and a falsy check here "
+        "would silently restore the register's value"
+    )
+
+
 def test_a_class_08_sqlstate_is_infrastructure(dsn) -> None:
     """The complement, and without it a connector that raised ``QueryError`` for
     everything would satisfy every test above."""
@@ -251,6 +309,7 @@ def _connector_with(conn: object) -> object:
         def __init__(self) -> None:
             self._dsn = "postgresql://unused"
             self._max_rows = 10
+            self._statement_timeout_ms = 0
             self._conn = None
             self.connects = 0
 

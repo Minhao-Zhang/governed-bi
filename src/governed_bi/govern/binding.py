@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Mapping, Sequence
 
 from sqlglot import expressions as exp
+from sqlglot.errors import OptimizeError
 from sqlglot.optimizer.scope import Scope
 
 from .identifiers import column_key, fold, table_key
@@ -111,9 +112,27 @@ def _classify_sources(
     the table name behind an alias: resolving ``public.customers.id`` against ``FROM
     public.customers AS cc`` would approve a reference the engine rejects, and the
     quoting "fix" that follows is B5's shape.
+
+    **``selected_sources`` and not ``scope.sources``, because a CTE is *visible* to every
+    scope in the statement while a reference can only bind to what this scope's own
+    ``FROM``/``JOIN`` brought in.** ``scope.sources`` merges every visible CTE into every
+    scope, so in ``WITH pm AS (...), cm AS (...), j AS (...) SELECT aft FROM j`` the bare
+    ``aft`` counted three derived sources where the engine sees one -- and the
+    exactly-one-derived branch in :func:`_bind_columns` became unreachable for any statement
+    with more than one CTE. Every such statement carrying a single unqualified column refused
+    ``r_ambiguous_reference``; measured on the served thread of 2026-08-19, 6 of 16
+    ``run_query`` attempts, not one of them ambiguous to Postgres, and the rewrite the refusal
+    pushed the model into was a correlated ``EXISTS`` over a 1.2M-row table that ran until the
+    agent wall clock killed the turn.
+
+    Narrowing to the selected set is **not** a relaxation. A qualified reference to a CTE this
+    scope does not select from now refuses ``r_unbound_reference`` -- which is what Postgres
+    does -- and a genuine two-base ambiguity still reaches the refusal below.
     """
     local: dict[str, BoundSource] = {}
-    for alias, source in view.scope.sources.items():
+    # ``selected_sources`` values are ``(node, source)``; the node is the FROM/JOIN item that
+    # named it and nothing here needs it.
+    for alias, (_node, source) in view.scope.selected_sources.items():
         if isinstance(source, exp.Table):
             # A table-valued function parses as exp.Table wrapping a Func: no
             # Identifier, so no name to license. bind() refuses it, at layer 4.
@@ -348,7 +367,23 @@ def bind(
     tables: dict[str, str] = {}
     sources: dict[int, dict[str, BoundSource]] = {}
     for view in views:
-        sources[id(view.scope)] = _classify_sources(view, default_schema, tables)
+        try:
+            sources[id(view.scope)] = _classify_sources(view, default_schema, tables)
+        except OptimizeError:
+            # ``selected_sources`` raises where ``scope.sources`` quietly papered over it: two
+            # sources in one scope answering to one name. Measured on sqlglot 30.16.0,
+            # ``FROM s.orders AS a, s.audit AS a`` yields ``{"a": s.orders, "audit": s.audit}``
+            # -- the first keeps the alias and the second is filed under its *table name*,
+            # which the alias is supposed to hide. So ``a.id`` bound to whichever source came
+            # first, and ``audit.id`` bound through a name the statement does not offer: the
+            # B5 shape this function's opening paragraph refuses, arriving by the back door.
+            # Postgres rejects the statement outright ("table name a specified more than
+            # once"), and refusing is the only answer that does not invent a binding.
+            return LayerRefusal(
+                "r_ambiguous_reference",
+                "two sources in this scope answer to the same name, so no reference "
+                "through that name has exactly one binding",
+            )
 
     columns: list[ColumnBinding] = []
     opaque: dict[str, str] = {}

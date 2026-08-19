@@ -21,6 +21,18 @@ from governed_bi.serve.nodes.narrate import narrate_node
 
 RESULT = {"columns": ["restaurant_count"], "rows": [[9590]], "row_count": 1, "truncated": False}
 
+#: The synthetic message ``_CapEndsTheTurn.after_model`` appends at ``cap=5``.
+#:
+#: **A duplicate of the f-string in ``agent_core.py``, not a read of it.** The middleware builds
+#: the line inline and exposes no seam to ask for it, and driving ``after_model`` to obtain one
+#: would mean constructing middleware state and letting ``emit`` fire for a string. So if that
+#: wording changes, ``test_a_capped_turn_generates_instead_of_adopting_the_cap_exit_line`` keeps
+#: passing while testing nothing — the assertion would compare the generated text against a
+#: sentence no longer in the transcript. Stated because an unrecorded weak assertion is worse
+#: than a recorded one; the paired ``len(model.calls) == 1`` check is what actually pins the
+#: generate-don't-adopt behaviour, and it does not depend on this constant.
+_CAP_EXIT_LINE = "Stopped: run_query reached its attempt limit of 5."
+
 
 class _Recorder:
     """A model that records what it was asked and answers a fixed sentence."""
@@ -127,30 +139,104 @@ def test_a_refusal_keeps_the_systems_own_wording() -> None:
     assert model.calls == []
 
 
-def test_a_capped_or_all_refused_ledger_is_not_narrated() -> None:
+def _capped_state(result: Any = RESULT, last_ai: str = _CAP_EXIT_LINE) -> dict[str, Any]:
+    """A turn whose statements ran and whose budget then ended it.
+
+    ``last_ai`` defaults to the real synthetic message ``_CapEndsTheTurn`` appends, because that
+    is what is actually sitting there to be adopted.
+    """
+    return {
+        "path_kind": "answered",
+        "question": "which chillers ran the most hours",
+        "generated_sql": "SELECT DISTINCT assetdesc FROM work_orders WHERE assetdesc ILIKE '%CHILLER%'",
+        "result_table": result,
+        "messages": [HumanMessage("q"), AIMessage(last_ai)],
+        "execution": {"terminal": "capped", "attempts": [], "guardrail_errors": 0},
+    }
+
+
+def test_an_all_refused_ledger_is_not_narrated() -> None:
     """``agent_core`` still writes ``path_kind: answered``; stamp reclassifies from the ledger.
 
-    Narrating those turns would put generated prose on a refusal/cap the card should not
-    decorate.
+    A refused turn had every attempt rejected, so it executed nothing. Narrating it would put
+    generated prose over a governance decision and invent a result to go with it.
     """
     model = _Recorder()
-    for terminal in ("capped", "refused"):
-        out = asyncio.run(
-            narrate_node(
-                {
-                    "path_kind": "answered",
-                    "question": "q",
-                    "result_table": RESULT,
-                    "messages": [
-                        HumanMessage("q"),
-                        AIMessage("There are nine thousand restaurants."),
-                    ],
-                    "execution": {"terminal": terminal, "attempts": [], "guardrail_errors": 0},
-                },
-                _config(model),
-            )
+    out = asyncio.run(
+        narrate_node(
+            {
+                "path_kind": "answered",
+                "question": "q",
+                "result_table": RESULT,
+                "messages": [HumanMessage("q"), AIMessage("There are nine thousand restaurants.")],
+                "execution": {"terminal": "refused", "attempts": [], "guardrail_errors": 0},
+            },
+            _config(model),
         )
-        assert out == {}, f"ledger terminal {terminal!r} must not be narrated"
+    )
+    assert out == {}, "a refused ledger must not be narrated"
+    assert model.calls == []
+
+
+def test_a_capped_turn_is_narrated_because_its_statements_ran() -> None:
+    """The revision. This used to be asserted the other way, grouped with ``refused``.
+
+    Grouping was right about refusals and wrong about caps. A capped turn's statements passed
+    every layer and executed; only the budget ran out. Measured 2026-08-19 on the served
+    surface: 47.5s, eight executed statements, a nine-row table, and ``answer_text: null`` — the
+    reader got a table with no sentence on it and no way to tell what it was.
+    """
+    model = _Recorder("It found nine chiller assets before running out of attempts.")
+    out = asyncio.run(narrate_node(_capped_state(), _config(model)))
+
+    assert out.get("answer_text"), "a capped turn that executed statements has something to say"
+    assert len(model.calls) == 1, "it must generate; see the adopt test below for why"
+
+
+def test_a_capped_turn_generates_instead_of_adopting_the_cap_exit_line() -> None:
+    """Why generation, not adoption, is the fix.
+
+    ``_CapEndsTheTurn`` appends a synthetic ``AIMessage`` — the exact string asserted here — so a
+    capped turn *does* have prose to adopt. Adopting it would be worse than the null it replaced:
+    the answer card would present the budget's exit line as the answer to the question.
+    """
+    model = _Recorder("Nine chiller assets found; the run-hours question stayed open.")
+    out = asyncio.run(narrate_node(_capped_state(), _config(model)))
+
+    assert out["answer_text"] != _CAP_EXIT_LINE
+    assert _CAP_EXIT_LINE not in (out.get("answer_text") or "")
+
+
+def test_the_narrator_is_told_the_capped_turn_is_incomplete() -> None:
+    """The honesty guard, and the reason narrating a cap is not the decoration it replaced.
+
+    On a capped turn ``result_table`` holds the last statement that *succeeded*, which is
+    usually an intermediate probe — in the measured case, the nine chiller assets it found while
+    still looking for run-hours. Handed those rows with no framing, a narrator reads them out as
+    the answer. So the brief must say the turn stopped at its budget and the rows are not a
+    conclusion, and it must say so *before* the rows.
+    """
+    model = _Recorder()
+    asyncio.run(narrate_node(_capped_state(), _config(model)))
+
+    brief = model.calls[0][-1].content
+    assert "budget" in brief.lower(), brief[:200]
+    assert "incomplete" in brief.lower(), brief[:200]
+    assert brief.index("IMPORTANT") < brief.index("Result:"), (
+        "the caveat must precede the rows; after them it is one the narrator has written past"
+    )
+
+
+def test_a_capped_turn_with_no_rows_is_still_not_narrated() -> None:
+    """The cap exception is earned by having executed something, not by being capped.
+
+    A turn that burned its budget on refused or probing statements and returned no table has
+    nothing to report, and generating from the exit line alone would be inventing a result.
+    """
+    model = _Recorder()
+    out = asyncio.run(narrate_node(_capped_state(result=None), _config(model)))
+
+    assert out == {}
     assert model.calls == []
 
 

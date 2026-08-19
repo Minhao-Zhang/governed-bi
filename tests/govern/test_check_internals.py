@@ -236,6 +236,73 @@ def test_using_keys_are_column_checked_on_both_sides(check, layer) -> None:
     assert half["failed_layer"] is layer.COLUMNS
 
 
+def test_a_sibling_cte_is_not_a_source_this_scope_can_bind_to(check, layer) -> None:
+    """A CTE is *visible* everywhere; a bare name binds only to this scope's ``FROM``.
+
+    ``scope.sources`` merges every visible CTE into every scope, so the outer select below
+    counted three derived sources where Postgres sees one — and the exactly-one-derived
+    branch became unreachable for any statement with more than one CTE. Every multi-CTE
+    statement carrying a single unqualified column refused ``r_ambiguous_reference``:
+    measured on the served thread of 2026-08-19, 6 of 16 ``run_query`` attempts.
+
+    The pair is the point. Narrowing to the selected set must not narrow to *nothing*, so
+    the genuine two-base ambiguity next door
+    (``test_a_bare_name_in_a_mixed_base_and_derived_scope_refuses``) still refuses, and the
+    reference this change newly rejects is asserted below.
+    """
+    verdict = check(
+        "WITH pm AS (SELECT c.id AS pid FROM customers c), "
+        "cm AS (SELECT c.id AS cid FROM customers c), "
+        "j AS (SELECT pm.pid AS jid FROM pm) "
+        "SELECT jid FROM j",
+        licensed=CUSTOMERS,
+        allowed_columns=frozenset({"customers.id"}),
+    )
+    assert verdict["passed"] is True, verdict
+    assert verdict["bound"]["jid"] == "derived:j"
+
+
+def test_a_cte_outside_this_scopes_from_cannot_even_be_qualified_against(check, layer) -> None:
+    """The other half of "visible is not selectable", and the stricter half.
+
+    ``pm`` is defined and in scope, and the reference names it explicitly — but this select
+    reads ``customers``, so Postgres has no ``pm`` to resolve against and neither may we.
+    Under the old mapping this bound happily.
+    """
+    verdict = check(
+        "WITH pm AS (SELECT c.id AS pid FROM customers c) SELECT pm.pid FROM customers",
+        licensed=CUSTOMERS,
+        allowed_columns=frozenset({"customers.id"}),
+    )
+    assert verdict["failed_layer"] is layer.BINDING
+    assert verdict["reason_code"] == "r_unbound_reference"
+
+
+def test_two_sources_answering_to_one_name_refuse(check, layer) -> None:
+    """Postgres rejects the statement; the old mapping bound it two wrong ways.
+
+    Measured on sqlglot 30.16.0, ``FROM customers AS a, orders AS a`` produced
+    ``{"a": customers, "orders": orders}``: ``a.id`` resolved to whichever source came
+    first, and ``orders.id`` resolved through a name the statement hides behind an alias.
+    Both are bindings nobody wrote. The pair distinguishes this from "two sources always
+    refuse".
+    """
+    verdict = check(
+        "SELECT a.id FROM customers AS a, orders AS a",
+        licensed=frozenset({"customers", "orders"}),
+        allowed_columns=frozenset({"customers.id", "orders.id"}),
+    )
+    assert verdict["failed_layer"] is layer.BINDING
+    assert verdict["reason_code"] == "r_ambiguous_reference"
+
+    distinct = check(
+        "SELECT a.id, b.id FROM customers AS a JOIN orders AS b ON a.id = b.id",
+        licensed=frozenset({"customers", "orders"}),
+        allowed_columns=frozenset({"customers.id", "orders.id"}),
+    )
+    assert distinct["passed"] is True, distinct
+
+
 def test_count_star_is_the_carve_out_and_every_other_star_argument_is_not(check) -> None:
     """§2's exception, stated as a pair so the carve-out cannot swallow the rule."""
     ok = check(
