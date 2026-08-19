@@ -78,6 +78,7 @@ in all of them have drifted**: resolve a citation by symbol.
 | [Decisions taken working that audit](analysis/decisions-2026-08-10.md) | every call made without asking, with the reasoning and what would reverse it, so a reviewer can disagree with one without re-deriving it |
 | [Architecture review 2026-08-11](analysis/architecture-review-2026-08-11.md) | ten deepening candidates across `serve/`, `eval/`, `api/` and the `ui/` seam, at tree `506ad9b`, each marked verified-here or reported |
 | [Hand-parsed model replies](analysis/parsed-model-output.md) | every place `src/` parses a model reply by hand, and the two fail-open defects that found — both fixed at `95e3b07` |
+| [Adopting from the downstream fork 2026-08-19](analysis/adopting-the-downstream-fork-2026-08-19.md) | what was taken from the `governed-bi-utkuai` fork, what was rebuilt because its designs predate ADR 0014, and what was declined — with the measurement showing why a clarification ledger must not live under `corpus_root` |
 
 ## Frontend, and external data
 
