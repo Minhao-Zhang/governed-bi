@@ -383,6 +383,19 @@ all** — every fold this fork's engine produces, toggle on or off, is written `
 answer. The shipped behavior is stricter than the original design, and matches your own default
 more closely than planned, not less.
 
+**And the operational trap that follows from it, which is the one thing about this fork most likely
+to read as broken.** That knob's register default is `false`, and `POST /settings/toggles` stores an
+override **in-process only** — nothing writes it anywhere, so every fresh `langgraph dev` starts
+with the write-back path disabled. With it off, answering a clarification records the answer and
+produces **no draft and no error**: the Drafts tab stays empty, and the loop looks like it does not
+work rather than like it is switched off. Two persistence routes exist and neither covers this
+knob — `governed_bi.local.toml` is read by nothing (`api/curation_routes.py::list_toggles` says so),
+and only three knobs declare an env var, all of them float or int, so there is no bool env path to
+use. Turn it on per process, from Settings → Engine behaviour at engineer tier or:
+
+    curl -sX POST 127.0.0.1:2124/settings/toggles/enable_clarification_to_draft \
+      -H 'content-type: application/json' -d '{"value": true}'
+
 ---
 
 ## Upstream decisions, stated not asked
