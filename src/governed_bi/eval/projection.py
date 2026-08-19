@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from governed_bi.eval.attribution import attribute
 from governed_bi.eval.grade import grade_turn, result_fingerprint
 from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
 from governed_bi.register.quantity import Measured
@@ -114,7 +115,6 @@ def _routing_was_pinned(question: Mapping[str, Any], record: Mapping[str, Any]) 
     if not pinned:
         return False
     return [str(s) for s in (record.get("schemas") or ())] == pinned
-
 
 
 #: How many ranked entries the summarised retrieval fields keep.
@@ -413,7 +413,7 @@ def project_turn(
     if not isinstance(knobs, Mapping):
         knobs = state.get("knobs_resolved")
 
-    return {
+    projected: dict[str, Any] = {
         "question_id": str(question["question_id"]),
         "arm": arm,
         # The gold schema, from the question. Every funnel stage under ``schema_routed`` is
@@ -564,4 +564,24 @@ def project_turn(
         "refused_by": answer.get("refused_by") if isinstance(answer, Mapping) else None,
         "failed_stage": answer.get("failed_stage") if isinstance(answer, Mapping) else None,
     }
+
+    # Why a wrong answer was wrong -- `None` on all 78 answered-but-wrong rows of experiment
+    # 008, which is why that experiment could not say whether its treatment was aimed at
+    # anything.
+    #
+    # **Its own field, not `error_type`.** `register/record.py` declares `error_type` as the
+    # exception CLASS of a turn that raised, and this classifier's output is a taxonomy label
+    # for a turn that completed. Writing one into the other made `error_type is not None` --
+    # which reads as "this turn crashed" against the declaration -- go from 0 to 78 on 008's
+    # baseline. The precedent is `computed_correct` a hundred lines up: a separate field on
+    # purpose, because "one merge of the two and the artifact silently reports an engine that
+    # commits to everything".
+    #
+    # `attribute()` already refuses any row whose `outcome` is not `"answered"` and any row
+    # whose `correct` is not `False`, so a crashed or ungraded turn gets `None` here without
+    # this line knowing the rule.
+    cause = attribute(projected)
+    projected["failure_cause"] = None if cause is None else cause.value
+
+    return projected
 

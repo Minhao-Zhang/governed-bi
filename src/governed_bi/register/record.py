@@ -285,6 +285,24 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "null when the turn did not fail"),
     _f("error_type", Tier.outcome, Absence.not_applicable, Stage.stamp,
        "exception CLASS only. Tracebacks echo SQL and row values"),
+    _f("failure_cause", Tier.outcome, Absence.not_applicable, Stage.stamp,
+       "why an answered-but-WRONG turn was wrong, as a `eval.attribution.FailureCause` member. "
+       "A separate field from `error_type` above, deliberately, and for the same reason "
+       "`computed_correct` is separate from `correct` (`eval/projection.py`: 'one merge of the "
+       "two and the artifact silently reports an engine that commits to everything'). "
+       "`error_type` is declared as the exception CLASS of a turn that RAISED, and a consumer "
+       "reading `error_type is not None` as 'this turn crashed' is reading the declaration. The "
+       "downstream fork wrote taxonomy strings into it first and measured what that cost -- the "
+       "crashed count on one arm's baseline went from 0 to 78 -- which is why this is a field "
+       "and not a second meaning. Null when the turn is not "
+       "answered-and-wrong -- which includes every correct answer, every refusal, and a row "
+       "whose gold is missing, since `correct: None` means the instrument had nothing to "
+       "compare against and is not a failure to explain. Also null on every served turn: this "
+       "is written by `eval/projection.py::project_turn`, which is the only place both the "
+       "prediction and the answer key are in one row, so `stamp` projects the null the register "
+       "declares. Reconstructable by construction -- a pure function of `outcome`, `correct`, "
+       "`generated_sql`, `gold_sql` and `touched_decoy`, all carried on the same row",
+       reconstructable=True),
     _f("generated_sql", Tier.outcome, Absence.not_applicable, Stage.stamp,
        "null when no SQL was produced, which is not the same as empty. **This is the "
        "statement the engine SENT** -- canonicalised, quoted and row-limited, read from the "
