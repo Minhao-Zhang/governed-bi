@@ -110,7 +110,11 @@ def test_a_resume_through_the_compiled_graph_writes_a_corpus_draft(tmp_path: Pat
     done = resume_clarification(
         graph, config=config, identity={"token": token}, answer="a customer who ordered in the last 90 days"
     )
-    assert done["answer"]["outcome"] in {"answered", "clarification"}
+    # `no_sql`, not only `answered`: the no-model stub executes no governed statement, and
+    # since 2026-08-18 `stamp` no longer hardcodes `has_sql=True` for a finished loop with an
+    # empty ledger (ADR 0014). The property under test -- the resume mines a corpus draft --
+    # holds on either outcome.
+    assert done["answer"]["outcome"] in {"answered", "clarification", "no_sql"}
 
     assets, problems = load(tmp_path)
     assert not problems, problems

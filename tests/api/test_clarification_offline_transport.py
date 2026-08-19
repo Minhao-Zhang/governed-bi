@@ -107,11 +107,11 @@ def _offline_session(tmp_path: Path, db_id: str) -> Any:
 def _offline_client(monkeypatch, session: Any) -> Any:
     from fastapi.testclient import TestClient
 
-    from governed_bi.api import routes, trace_store
+    from governed_bi.api import routes
 
     # `routes.app` reached a process-global session that no longer exists: upstream
     # removed `_session` at the 2026-08-11 restructure in favour of this constructor.
-    return TestClient(routes.make_app(session, None, trace_store))
+    return TestClient(routes.make_app(session, None))
 
 
 def test_a_live_deferred_clarification_survives_open_then_folds_through_the_offline_route(
@@ -135,7 +135,11 @@ def test_a_live_deferred_clarification_survives_open_then_folds_through_the_offl
     assert paused.get("__interrupt__"), "precondition: ask_user paused the turn"
 
     done = resume_clarification(graph, config=config, identity={"token": token}, answer={"defer": True})
-    assert done["answer"]["outcome"] in {"answered", "clarification"}, done["answer"]
+    # `no_sql`, not only `answered`: the no-model stub executes no governed statement, and
+    # since 2026-08-18 `stamp` no longer hardcodes `has_sql=True` for a finished loop with an
+    # empty ledger (ADR 0014). The property under test -- deferring lets the turn continue and
+    # downgrades its reliability -- holds on either outcome.
+    assert done["answer"]["outcome"] in {"answered", "clarification", "no_sql"}, done["answer"]
     assert done["answer"]["reliability"] is not None, "defer must downgrade this turn's reliability"
 
     records = load_clarifications(tmp_path)

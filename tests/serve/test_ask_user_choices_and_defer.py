@@ -333,7 +333,11 @@ def test_ask_user_defer_lets_the_turn_continue_with_a_downgraded_reliability_cav
     done = resume_clarification(
         graph, config=config, identity={"token": token}, answer={"defer": True}
     )
-    assert done["answer"]["outcome"] in {"answered", "clarification"}, done["answer"]
+    # `no_sql`, not only `answered`: the no-model stub executes no governed statement, and
+    # since 2026-08-18 `stamp` no longer hardcodes `has_sql=True` for a finished loop with an
+    # empty ledger (ADR 0014). The property under test -- deferring downgrades reliability --
+    # holds on either outcome.
+    assert done["answer"]["outcome"] in {"answered", "clarification", "no_sql"}, done["answer"]
     reliability = done["answer"]["reliability"]
     assert reliability is not None, "a deferred clarification must downgrade the answer's reliability"
     assert reliability["status"] == "suspect"

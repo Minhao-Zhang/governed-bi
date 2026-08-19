@@ -263,8 +263,10 @@ def test_a_run_concurrently_crash_never_reaches_the_classifier(tmp_path: Path) -
         def invoke(self, *_args, **_kwargs):
             raise RuntimeError("provider went away")
 
-    original = harness.compile_graph
-    harness.compile_graph = lambda *a, **k: _Exploding()  # type: ignore[assignment]
+    # `compile_durable`, not `compile_graph`: ADR 0014 gave the harness a durable checkpointer,
+    # opened on the graph's own pinned loop, and renamed the compiler that opens it along with it.
+    original = harness.compile_durable
+    harness.compile_durable = lambda *a, **k: _Exploding()  # type: ignore[assignment]
     try:
         rows = harness.run_arm(
             [{"question_id": "q1", "question": "how many customers", "db_id": "main"}],
@@ -273,6 +275,6 @@ def test_a_run_concurrently_crash_never_reaches_the_classifier(tmp_path: Path) -
             connector_factory=lambda: connector,
         )
     finally:
-        harness.compile_graph = original  # type: ignore[assignment]
+        harness.compile_durable = original  # type: ignore[assignment]
 
     assert rows[0]["error_type"] == "RuntimeError"

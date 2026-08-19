@@ -1,7 +1,7 @@
 """GET /trust-loop/metrics (utku-ai-trust-loop-plan.md, task C) -- does the loop turn, and where
-does it stop. Same fixture shapes as ``test_raised_route.py`` (session builders) and
-``test_audit_surface.py`` (turn-log fixture + record helper), since this route shares both
-routers' dependencies.
+does it stop. Same fixture shapes as ``test_raised_route.py``, including its in-memory
+``_FakeTurnLog`` double for ``api/thread_turns.ThreadTurnLog`` (ADR 0014 deleted
+``api/trace_store.py``), since this route shares that router's dependency on the turn log.
 """
 
 from __future__ import annotations
@@ -35,13 +35,35 @@ def _session(tmp_path: Path, *, corpus_root: Path | None) -> Any:
     )
 
 
-def _turn_log(monkeypatch, tmp_path: Path) -> Any:
-    """Redirect the turn log to ``tmp_path``. Call before any log write in a test -- see
-    ``test_raised_route.py``'s own ordering note for why."""
-    from governed_bi.api import trace_store
+class _FakeTurnLog:
+    """See ``test_raised_route.py``'s own copy of this double for the full rationale."""
 
-    monkeypatch.setattr(trace_store, "TURN_LOG_DIR", tmp_path / "serve")
-    return trace_store
+    TURN_LOG_DIR = Path("/nowhere")
+    SUMMARY_FIELDS: tuple[str, ...] = ("turn_id", "outcome")
+
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+
+    def append_turn(self, record: dict[str, Any], *, question: str, answer_text: str) -> None:
+        self.rows.append(
+            {"record": record, "question": question, "answer_text": answer_text,
+             "outcome": record.get("outcome")}
+        )
+
+    def list_turns(self, limit: int = 50, thread_id: str | None = None) -> list[dict[str, Any]]:
+        from governed_bi.api.thread_turns import summarise_turn
+
+        rows = [r for r in self.rows if thread_id is None or r["record"].get("thread_id") == thread_id]
+        return [summarise_turn(r) for r in rows[:limit]]
+
+    def get_turn(self, turn_id: str) -> dict[str, Any] | None:
+        return next((r for r in self.rows if r["record"].get("turn_id") == turn_id), None)
+
+
+def _turn_log(monkeypatch, tmp_path: Path) -> Any:
+    """A fresh :class:`_FakeTurnLog`. Kept as a function so every test reads the same as it did
+    against the old ``trace_store`` fixture."""
+    return _FakeTurnLog()
 
 
 def _client(trace_store: Any, session: Any):
@@ -49,7 +71,7 @@ def _client(trace_store: Any, session: Any):
 
     from governed_bi.api import routes
 
-    return TestClient(routes.make_app(session, None, trace_store))
+    return TestClient(routes.make_app(session, trace_store))
 
 
 def _record(turn_id: str, *, outcome: str, db_id: str = _DB_ID, **extra: Any) -> dict[str, Any]:

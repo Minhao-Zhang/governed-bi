@@ -47,7 +47,11 @@ def _model() -> ScriptedChatModel:
                 tool_calls=[
                     {
                         "name": "ask_user",
-                        "args": {"question": "which year?"},
+                        # `basis` is required in this fork: the tool routes the answer by it, so
+                        # a call without it never reaches the interrupt (see
+                        # `tests/api/test_http_contract.py::
+                        # test_a_clarification_interrupt_carries_an_id_and_a_reason`).
+                        "args": {"question": "which year?", "basis": "data_definition"},
                         "id": "c1",
                         "type": "tool_call",
                     }

@@ -56,9 +56,9 @@ def _session_without_corpus_root() -> Any:
 def _client(monkeypatch, session):
     from fastapi.testclient import TestClient
 
-    from governed_bi.api import routes, trace_store
+    from governed_bi.api import routes
 
-    return TestClient(routes.make_app(session, None, trace_store))
+    return TestClient(routes.make_app(session, None))
 
 
 def _seed(tmp_path: Path, *records) -> None:

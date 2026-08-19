@@ -54,11 +54,11 @@ def _session_without_corpus_root() -> Any:
 def _client(monkeypatch, session):
     from fastapi.testclient import TestClient
 
-    from governed_bi.api import routes, trace_store
+    from governed_bi.api import routes
 
     # `routes.app` reached a process-global session that no longer exists: upstream
     # removed `_session` at the 2026-08-11 restructure in favour of this constructor.
-    return TestClient(routes.make_app(session, None, trace_store))
+    return TestClient(routes.make_app(session, None))
 
 
 def _seed(tmp_path: Path, *records) -> None:

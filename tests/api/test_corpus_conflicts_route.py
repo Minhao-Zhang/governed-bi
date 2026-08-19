@@ -41,12 +41,12 @@ def _session_with_corpus_root(tmp_path: Path, db_id: str = _DB_ID) -> Any:
 def _client(monkeypatch, tmp_path: Path, db_id: str = _DB_ID):
     from fastapi.testclient import TestClient
 
-    from governed_bi.api import routes, trace_store
+    from governed_bi.api import routes
 
     session = _session_with_corpus_root(tmp_path, db_id)
     # `routes.app` reached a process-global session that no longer exists: upstream
     # removed `_session` at the 2026-08-11 restructure in favour of this constructor.
-    return TestClient(routes.make_app(session, None, trace_store))
+    return TestClient(routes.make_app(session, None))
 
 
 def _write_certified_term(tmp_path: Path, asset_id: str, summary: str, *, db_id: str = _DB_ID) -> Any:

@@ -35,9 +35,9 @@ pytestmark = needs("D")
 def _client(monkeypatch, corpus_root: Path) -> Any:
     from fastapi.testclient import TestClient
 
-    from governed_bi.api import routes, trace_store
+    from governed_bi.api import routes
 
-    return TestClient(routes.make_app(_session(corpus_root), None, trace_store))
+    return TestClient(routes.make_app(_session(corpus_root), None))
 
 
 def _session(corpus_root: Path) -> Any:

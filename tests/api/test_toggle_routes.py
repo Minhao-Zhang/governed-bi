@@ -37,7 +37,7 @@ def _isolated_store(tmp_path: Path, monkeypatch) -> None:
 def _client(tmp_path: Path) -> Any:
     from fastapi.testclient import TestClient
 
-    from governed_bi.api import routes, trace_store
+    from governed_bi.api import routes
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.retrieve.structure import CorpusStructure
     from governed_bi.serve.session import Session
@@ -52,7 +52,7 @@ def _client(tmp_path: Path) -> Any:
         prompt_set_hash="p", knobs_resolved={}, db_id="app_store", run_id="r",
         corpus_root=tmp_path,
     )
-    return TestClient(routes.make_app(session, None, trace_store))
+    return TestClient(routes.make_app(session, None))
 
 
 def test_listing_reports_every_toggleable_knob_with_its_source(tmp_path: Path) -> None:

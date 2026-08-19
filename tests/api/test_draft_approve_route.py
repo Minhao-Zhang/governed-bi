@@ -32,12 +32,12 @@ def _session_with_corpus_root(tmp_path: Path) -> Any:
 def _client(monkeypatch, tmp_path: Path):
     from fastapi.testclient import TestClient
 
-    from governed_bi.api import routes, trace_store
+    from governed_bi.api import routes
 
     session = _session_with_corpus_root(tmp_path)
     # `routes.app` reached a process-global session that no longer exists: upstream
     # removed `_session` at the 2026-08-11 restructure in favour of this constructor.
-    return TestClient(routes.make_app(session, None, trace_store))
+    return TestClient(routes.make_app(session, None))
 
 
 def test_approve_certifies_a_submitted_draft_end_to_end(monkeypatch, tmp_path: Path) -> None:

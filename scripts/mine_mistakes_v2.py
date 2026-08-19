@@ -21,7 +21,10 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +37,54 @@ def _enhancer_model(name: str) -> Any:
     from langchain.chat_models import init_chat_model
 
     return init_chat_model(name, model_provider="openai", use_responses_api=True)
+
+
+def _archived_turns(limit: int) -> Iterator[dict[str, Any]]:
+    """Turns from an **archived** JSONL log, newest file and newest line first.
+
+    Reads the files itself rather than importing a reader from ``api/``. Three reasons, and the
+    first is the one that forced it:
+
+    * ``api/trace_store.py`` no longer exists. Upstream's ADR 0014 ("one conversation store")
+      deleted it and ``runs/serve/*.jsonl`` with it: the audit surface now reads **thread state**
+      through ``api/thread_turns.py``, whose reader raises ``InProcessServerRequired`` outside a
+      live Agent server. An offline admin script is, by definition, outside one — so the store
+      this script used to read is not reachable from where this script runs.
+    * Mining is a read over *history*. An archived log is a legitimate and complete input for it,
+      and this repository still has one; what changed is where *new* turns land, not whether old
+      ones can be mined.
+    * The dependency was inverted anyway. A script in ``scripts/`` reaching into the HTTP layer's
+      store module was never the right direction.
+
+    So this is the script's own input format, documented here: one JSON object per line, with
+    ``question`` at the top level and the register record under ``record`` (``turn_id``,
+    ``schemas``, ``execution``). ``GOVERNED_BI_TURN_LOG_DIR`` names the directory, defaulting to
+    ``runs/serve``, matching what wrote those files. A truncated final line is skipped rather
+    than allowed to hide every turn behind it.
+    """
+    root = Path(os.environ.get("GOVERNED_BI_TURN_LOG_DIR") or "runs/serve")
+    if not root.is_dir():
+        return
+    seen = 0
+    for path in sorted(root.glob("*.jsonl"), reverse=True):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            yield parsed
+            seen += 1
+            if seen >= max(1, int(limit)):
+                return
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -49,7 +100,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    from governed_bi.api.trace_store import get_turn, list_turns
     from governed_bi.corpus.drafts import submit_draft
     from governed_bi.corpus.store import load
     from governed_bi.curator.enhancer import apply as enhancer_apply
@@ -57,22 +107,15 @@ def main(argv: list[str] | None = None) -> int:
 
     enhancer_model = _enhancer_model(args.enhancer_model) if args.enhancer_model else None
 
-    turns = list_turns(limit=args.limit)
     mined = 0
     skipped = 0
     scanned = 0
-    for row in turns:
+    for entry in _archived_turns(limit=args.limit):
         scanned += 1
-        turn_id = row.get("turn_id")
-        question = row.get("question")
-        if not question or not turn_id:
-            continue
-        # list_turns() returns SUMMARY_FIELDS only; the full record (execution.attempts)
-        # is on the detail row.
-        entry = get_turn(str(turn_id))
-        if entry is None:
-            continue
         record = entry.get("record") or {}
+        question = entry.get("question")
+        if not question or not record.get("turn_id"):
+            continue
         execution = record.get("execution") or {}
         schemas = record.get("schemas") or [args.schema]
         if args.schema not in schemas:

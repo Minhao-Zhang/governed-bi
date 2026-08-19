@@ -1,16 +1,14 @@
 """GET /threads/{thread_id}/raised (utku-ai-trust-loop-plan.md, task B-1) -- given a thread,
 what did it raise, and what became of it. Reads both ``feedback.jsonl`` (task H) and the
 refusal-sourced slice of ``clarifications.jsonl`` (task A), correlated to a thread through the
-turn log (``api/trace_store.py``).
+turn log (``api/thread_turns.ThreadTurnLog`` since ADR 0014; ``api/trace_store.py`` is deleted).
 
-Session fixture shape mirrors ``tests/api/test_feedback_routes.py``/``test_drafts_route.py``; the
-turn-log fixture mirrors ``tests/api/test_audit_surface.py``'s own ``turn_log`` fixture, since
-this route -- unlike every other curation-family router -- reads it too.
-
-**Ordering note.** ``_turn_log`` redirects ``trace_store.TURN_LOG_DIR`` to ``tmp_path`` and must
-be called *before* ``_log_turn`` in every test -- ``append_turn``/``get_turn`` both read the
-module-level ``TURN_LOG_DIR`` at call time, so a turn logged before the redirect lands in the
-repository's own ``runs/serve/`` instead of this test's ``tmp_path``.
+Session fixture shape mirrors ``tests/api/test_feedback_routes.py``/``test_drafts_route.py``.
+``_turn_log`` returns an in-memory double rather than a real ``ThreadTurnLog`` (which reads
+thread state through the Agent server's in-process transport and cannot resolve outside it,
+per that class's own ``InProcessServerRequired``) -- this route's whole dependency on it is
+``get_turn``/``list_turns`` (see ``trust_loop_routes.make_raised_router``'s docstring), so a
+double needs only those two reader methods, seeded directly rather than through a file.
 """
 
 from __future__ import annotations
@@ -61,13 +59,37 @@ def _session_without_corpus_root() -> Any:
     )
 
 
-def _turn_log(monkeypatch, tmp_path: Path) -> Any:
-    """Redirect the turn log to ``tmp_path`` and return the ``trace_store`` module. Call before
-    any ``_log_turn``/``_client`` call in a test -- see the module docstring."""
-    from governed_bi.api import trace_store
+class _FakeTurnLog:
+    """In-memory stand-in for ``api.thread_turns.ThreadTurnLog``, seeded directly. Provides only
+    the two reader methods this route calls (``get_turn``/``list_turns``) plus ``append_turn``
+    for this file's own seeding helper -- see the module docstring."""
 
-    monkeypatch.setattr(trace_store, "TURN_LOG_DIR", tmp_path / "serve")
-    return trace_store
+    TURN_LOG_DIR = Path("/nowhere")
+    SUMMARY_FIELDS: tuple[str, ...] = ("turn_id", "outcome")
+
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+
+    def append_turn(self, record: dict[str, Any], *, question: str, answer_text: str) -> None:
+        self.rows.append(
+            {"record": record, "question": question, "answer_text": answer_text,
+             "outcome": record.get("outcome")}
+        )
+
+    def list_turns(self, limit: int = 50, thread_id: str | None = None) -> list[dict[str, Any]]:
+        from governed_bi.api.thread_turns import summarise_turn
+
+        rows = [r for r in self.rows if thread_id is None or r["record"].get("thread_id") == thread_id]
+        return [summarise_turn(r) for r in rows[:limit]]
+
+    def get_turn(self, turn_id: str) -> dict[str, Any] | None:
+        return next((r for r in self.rows if r["record"].get("turn_id") == turn_id), None)
+
+
+def _turn_log(monkeypatch, tmp_path: Path) -> Any:
+    """A fresh :class:`_FakeTurnLog`. Kept as a function (over constructing one inline) so every
+    test reads the same as it did against the old ``trace_store`` fixture."""
+    return _FakeTurnLog()
 
 
 def _client(trace_store: Any, session: Any):
@@ -75,7 +97,7 @@ def _client(trace_store: Any, session: Any):
 
     from governed_bi.api import routes
 
-    return TestClient(routes.make_app(session, None, trace_store))
+    return TestClient(routes.make_app(session, trace_store))
 
 
 def _log_turn(trace_store: Any, turn_id: str, thread_id: str, **extra: Any) -> None:

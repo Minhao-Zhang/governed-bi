@@ -35,9 +35,10 @@ def test_a_later_question_reaches_on_row_before_an_earlier_slow_one(
             assert fast_ready.wait(timeout=5), "fast question never signalled -- test is broken"
         return {"question_id": question["question_id"]}
 
-    # `run_index` calls `worker_state()`, which calls `compile_graph()`, before it calls
-    # `_run_one` -- stub it too, or this test builds a real LangGraph.
-    monkeypatch.setattr(harness, "compile_graph", lambda *_a, **_k: object())
+    # `run_index` calls `worker_state()`, which calls `compile_durable()` (renamed from
+    # `compile_graph` by ADR 0014, which gave the harness a durable checkpointer), before it
+    # calls `_run_one` -- stub it too, or this test builds a real LangGraph.
+    monkeypatch.setattr(harness, "compile_durable", lambda *_a, **_k: object())
     monkeypatch.setattr(harness, "_run_one", fake_run_one)
 
     seen: list[str] = []

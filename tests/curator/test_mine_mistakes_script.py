@@ -1,7 +1,16 @@
-"""scripts/mine_mistakes_v2.py end to end: log a turn, mine it, find the draft on disk."""
+"""scripts/mine_mistakes_v2.py end to end: write an archived turn, mine it, find the draft.
+
+The turn is written as **plain JSONL**, not through a logger. It used to go through
+``api/trace_store.append_turn``, which upstream's ADR 0014 deleted along with ``runs/serve``:
+the audit surface reads thread state now, and its reader refuses to run outside a live Agent
+server. So the miner reads archived logs itself (``_archived_turns``), and this test writes that
+format directly — which also makes the file format the miner accepts the thing under test,
+rather than a detail borrowed from a module that no longer exists.
+"""
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -18,12 +27,6 @@ def test_script_mines_a_logged_fail_then_pass_turn(monkeypatch, tmp_path: Path) 
     corpus_dir = tmp_path / "corpus"
     monkeypatch.setenv("GOVERNED_BI_TURN_LOG_DIR", str(turn_log_dir))
 
-    import importlib
-
-    from governed_bi.api import trace_store
-
-    importlib.reload(trace_store)  # pick up the env var set above
-
     record = {
         "turn_id": "t1",
         "schemas": ["beer_factory"],
@@ -38,7 +41,17 @@ def test_script_mines_a_logged_fail_then_pass_turn(monkeypatch, tmp_path: Path) 
             "guardrail_errors": 0,
         },
     }
-    trace_store.append_turn(record, question="how many customers?", answer_text="42")
+    turn_log_dir.mkdir(parents=True, exist_ok=True)
+    (turn_log_dir / "2026-08-18.jsonl").write_text(
+        json.dumps({
+            "question": "how many customers?",
+            "answer_text": "42",
+            "outcome": "answered",
+            "asked_at": "2026-08-18T00:00:00+00:00",
+            "record": record,
+        }) + "\n",
+        encoding="utf-8",
+    )
 
     import subprocess
 
