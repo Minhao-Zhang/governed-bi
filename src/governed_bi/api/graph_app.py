@@ -147,6 +147,7 @@ def session_from_environment() -> Session:
             effort=os.environ.get(MODEL_EFFORT_VAR) or None,
             timeout=_timeout(TIMEOUT_VAR, "llm_timeout_s"),
             max_retries=_retries(),
+            max_output_tokens=_max_output_tokens(),
             tools=True,
         )
 
@@ -291,6 +292,18 @@ def _retries() -> int:
 
     raw = os.environ.get(RETRIES_VAR)
     return int(raw) if raw else int(knob_default("llm_max_retries"))
+
+
+def _max_output_tokens() -> int:
+    """Agent output ceiling from the knob. No environment variable, on purpose.
+
+    Every other knob here has one because an operator needs to move it per deployment; this
+    one exists to stop a client default from truncating a turn, and a per-machine override is
+    how two arms come to differ on it silently. Move the knob if it needs moving.
+    """
+    from governed_bi.register.knobs import knob_default
+
+    return int(knob_default("llm_max_output_tokens"))
 
 
 def _timeout(var: str, knob: str) -> float:

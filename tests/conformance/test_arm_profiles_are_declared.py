@@ -23,6 +23,14 @@ from governed_bi.register.arm_profiles import (
 )
 from governed_bi.register.knobs import comparability_keys
 
+ROOT = Path(__file__).resolve().parent.parent.parent
+
+#: The three shipped arms' question set, in the ``question_subset`` knob's format. Every fixture
+#: below declares one because :func:`reconcile`'s second lock refuses a profile without one —
+#: and a fixture is exactly where the *last* unreconcilable profile was invented, so the fixtures
+#: paying the same price as the shipped file is the mechanism working, not friction.
+SUBSET = "1351:423a3f4b65fb"
+
 
 def _write(tmp_path: Path, body: str) -> Path:
     path = tmp_path / "arms.toml"
@@ -91,7 +99,11 @@ def test_an_unknown_arm_raises_rather_than_returning_an_empty_treatment() -> Non
 def test_reconcile_catches_an_artifact_labelled_with_the_wrong_corpus() -> None:
     """The point of writing a claim down is that it can be checked against what ran."""
     profile = ArmProfile(
-        name="x", description="", treatment=frozenset(), corpus_content_hash="86ed1dbf"
+        name="x",
+        description="",
+        treatment=frozenset(),
+        corpus_content_hash="86ed1dbf",
+        question_subset=SUBSET,
     )
 
     assert reconcile(profile, {"corpus_content_hash": "86ed1dbf"}) == ()
@@ -110,7 +122,11 @@ def test_reconcile_reads_the_row_and_not_the_knob_mapping() -> None:
     reader that fell back to the knob mapping would still satisfy the first half.
     """
     profile = ArmProfile(
-        name="x", description="", treatment=frozenset(), corpus_content_hash="86ed1dbf"
+        name="x",
+        description="",
+        treatment=frozenset(),
+        corpus_content_hash="86ed1dbf",
+        question_subset=SUBSET,
     )
 
     row = {"corpus_content_hash": "deadbeef", "knobs_resolved": {"corpus_content_hash": "86ed1dbf"}}
@@ -130,7 +146,11 @@ def test_reconcile_compares_the_digest_and_never_the_git_ref() -> None:
     could not match on any real artifact and therefore never fired.
     """
     git_only = ArmProfile(
-        name="x", description="", treatment=frozenset(), corpus="30872d3"
+        name="x",
+        description="",
+        treatment=frozenset(),
+        corpus="30872d3",
+        question_subset=SUBSET,
     )
     problems = reconcile(git_only, {"corpus_content_hash": "86ed1dbfef8b"})
     assert problems and "no corpus_content_hash" in problems[0], (
@@ -143,6 +163,7 @@ def test_reconcile_compares_the_digest_and_never_the_git_ref() -> None:
         treatment=frozenset(),
         corpus="30872d3",
         corpus_content_hash="86ed1dbfef8b",
+        question_subset=SUBSET,
     )
     assert reconcile(both, {"corpus_content_hash": "86ed1dbfef8b"}) == ()
     assert reconcile(both, {"corpus_content_hash": "30872d3abc"}), (
@@ -155,7 +176,11 @@ def test_a_prefix_of_the_declared_digest_is_not_the_declared_digest() -> None:
     characters. Equality, because a content hash is either the one that was measured or it is
     not."""
     profile = ArmProfile(
-        name="x", description="", treatment=frozenset(), corpus_content_hash="86ed1dbfef8b325e"
+        name="x",
+        description="",
+        treatment=frozenset(),
+        corpus_content_hash="86ed1dbfef8b325e",
+        question_subset=SUBSET,
     )
     assert reconcile(profile, {"corpus_content_hash": "86ed1dbf"})
 
@@ -230,6 +255,175 @@ def test_a_turn_that_abstained_before_routing_does_not_contradict_the_profile() 
     identical complaints into every report of a correct run.
     """
     profile = ArmProfile(
-        name="x", description="", treatment=frozenset(), corpus_content_hash="86ed1dbf"
+        name="x",
+        description="",
+        treatment=frozenset(),
+        corpus_content_hash="86ed1dbf",
+        question_subset=SUBSET,
     )
     assert reconcile(profile, {"corpus_content_hash": None, "outcome": "clarification"}) == ()
+
+
+# ── the question set: the same rule, one field over ───────────────────────────
+
+
+def test_the_loader_refuses_an_arm_that_declares_no_question_set(tmp_path: Path) -> None:
+    """The hole `corpus_content_hash` closed for the corpus and not for the questions.
+
+    Found 2026-08-14 by a downstream fork that needed to know which questions the three
+    published arms ran, and had to recover it by filtering four historical versions of
+    `BIRD-Data-Obfuscation:eval_dataset/test_final.jsonl` against the 57 schemas
+    `BIRD-corpus@30872d3` covers. Until this field existed, a rerun on a replaced dataset
+    produced the same n = 1 351, a substantially different population, and passed every
+    quotability gate -- because the gates compare the corpus digest and the knobs, and both
+    matched. `corpus` alone does not satisfy it and neither does `dataset`: both are git refs,
+    and comparing a git ref against a recorded digest is the original defect.
+    """
+    path = _write(tmp_path, '''
+        [arm.no_questions]
+        treatment = ["prompt_set"]
+        corpus = "30872d3"
+        corpus_content_hash = "86ed1dbf"
+        dataset = "22fe2a6"
+    ''')
+    with pytest.raises(ValueError, match="no question_subset"):
+        load_arm_profiles(path)
+
+
+def test_reconcile_catches_an_arm_rerun_on_a_replaced_dataset() -> None:
+    """**The defect this field exists for**, as a comparison that now fails.
+
+    Same corpus digest, same knobs, same n -- and a different question population. That pair
+    was indistinguishable from a replicate, which is what makes it worse than an obviously
+    broken run.
+    """
+    profile = ArmProfile(
+        name="v4",
+        description="",
+        treatment=frozenset(),
+        corpus_content_hash="86ed1dbf",
+        question_subset=SUBSET,
+    )
+    same_corpus_other_questions = {
+        "corpus_content_hash": "86ed1dbf",
+        "knobs_resolved": {"question_subset": "1351:0000deadbeef"},
+    }
+
+    problems = reconcile(profile, same_corpus_other_questions)
+
+    assert problems and "1351:0000deadbeef" in problems[0]
+    assert "question_subset" in problems[0]
+
+
+def test_reconcile_reads_the_question_set_out_of_the_knob_mapping_where_it_lives() -> None:
+    """The mirror image of ``test_reconcile_reads_the_row_and_not_the_knob_mapping``, and it
+    has to be, because the two fields live in different places.
+
+    ``corpus_content_hash`` is a ``RecordField`` and sits at the top of the row;
+    ``question_subset`` is a ``Role.scope`` knob written by
+    ``eval/provenance.py::scope_identity`` and sits in ``knobs_resolved`` -- observed in
+    ``runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl``, which records
+    ``1351:423a3f4b65fb`` there and nothing at the top level. The 2026-08-11 defect was reading
+    a field where it never is, not reading the knob mapping as such; a reader who "corrects"
+    this branch to match the corpus branch recreates that defect pointing the other way, and
+    this test is what says so.
+    """
+    profile = ArmProfile(
+        name="x",
+        description="",
+        treatment=frozenset(),
+        corpus_content_hash="86ed1dbf",
+        question_subset=SUBSET,
+    )
+    row = {"corpus_content_hash": "86ed1dbf", "knobs_resolved": {"question_subset": "9:aaaa"}}
+    assert reconcile(profile, row), "the knob mapping was not read"
+
+    agreeing = {"corpus_content_hash": "86ed1dbf", "knobs_resolved": {"question_subset": SUBSET}}
+    assert reconcile(profile, agreeing) == ()
+
+    # The bare-mapping fallback, which is what lets the driver ask the same question of a
+    # session that has no knob mapping yet.
+    assert reconcile(profile, {"corpus_content_hash": "86ed1dbf", "question_subset": "9:aaaa"})
+
+    silent = {"corpus_content_hash": "86ed1dbf"}
+    assert reconcile(profile, silent) == (), (
+        "a row that names no question set cannot contradict the profile -- the seven proxy_* "
+        "artifacts predate the writer and refusing per row would strand all of them"
+    )
+
+
+def test_a_profile_with_no_question_set_says_so_instead_of_agreeing() -> None:
+    """The second lock, on the new field. ``ArmProfile`` is constructible directly and a
+    fixture is where the last unreconcilable profile came from."""
+    profile = ArmProfile(
+        name="x", description="", treatment=frozenset(), corpus_content_hash="86ed1dbf"
+    )
+
+    problems = reconcile(profile, {"corpus_content_hash": "86ed1dbf"})
+
+    assert problems and "no question_subset" in problems[0]
+
+
+def test_the_shipped_profiles_name_the_question_set_their_artifacts_carry() -> None:
+    """Measured, not reconstructed, and pinned as a literal so a silent relabelling fails here.
+
+    Read on 2026-08-20 off the artifacts in ``runs/eval/``, which are gitignored -- hence the
+    literal. The 1 351 ``question_id`` values in each of ``proxy_v3_fold_...``, ``proxy_v4_...``
+    and ``proxy_v5_...`` are set-equal to the 1 351 in
+    ``BIRD-Data-Obfuscation@22fe2a6:eval_dataset/test_final.jsonl`` -- zero extra, zero missing,
+    covering exactly the 57 schemas ``BIRD-corpus@30872d3`` holds. Cross-checked against a value
+    the harness produced for itself: ``live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl``
+    records ``question_subset = "1351:423a3f4b65fb"``.
+    """
+    for name in ("v3_fold", "v4", "v5"):
+        assert arm_profile(name).question_subset == SUBSET
+        assert arm_profile(name).dataset == "22fe2a6", "the git ref is kept, and is not the digest"
+
+
+def test_every_shipped_arm_declares_a_question_set() -> None:
+    """``v3_fold`` is the arm that had no corpus digest while the check said it was fine. The
+    same omission on the same arm is what this asserts cannot recur one field over."""
+    for name in load_arm_profiles():
+        profile = arm_profile(name)
+        assert profile.question_subset, f"[arm.{name}] cannot have its question set reconciled"
+        assert reconcile(
+            profile, {"knobs_resolved": {"question_subset": "1351:0000deadbeef"}}
+        ), f"[arm.{name}] accepts a question set it did not run"
+
+
+def test_the_declared_question_set_is_the_dataset_commit_it_names() -> None:
+    """The literal above, checked against the repository it claims to come from.
+
+    Skipped where ``../BIRD-Data-Obfuscation`` is absent, which is the same precondition that
+    keeps ``tools/check_corpus_conformance.py`` out of CI -- so this proves the pin only on a
+    machine that holds the dataset. That is still worth having: ``SUBSET`` and ``dataset`` are
+    two claims about one fact, and nothing else in the tree can catch them drifting apart.
+
+    Verified 2026-08-20: ``22fe2a6:eval_dataset/test_final.jsonl`` holds 1 351 questions over
+    exactly the 57 schemas ``BIRD-corpus@30872d3`` covers, and their ids hash to
+    ``423a3f4b65fb``.
+    """
+    import json
+    import subprocess
+
+    from governed_bi.eval.provenance import short_digest
+
+    repo = ROOT.parent / "BIRD-Data-Obfuscation"
+    if not (repo / ".git").exists():
+        pytest.skip(f"{repo} is not on this machine; the dataset repository is a sibling")
+
+    for name in load_arm_profiles():
+        profile = arm_profile(name)
+        blob = subprocess.run(
+            ["git", "-C", str(repo), "cat-file", "-p",
+             f"{profile.dataset}:eval_dataset/test_final.jsonl"],
+            capture_output=True, encoding="utf-8", errors="replace",
+        )
+        assert blob.returncode == 0, (
+            f"[arm.{name}] names dataset {profile.dataset!r}, which {repo} cannot resolve"
+        )
+        ids = {str(json.loads(line)["question_id"]) for line in blob.stdout.splitlines() if line}
+        assert profile.question_subset == f"{len(ids)}:{short_digest(ids)}", (
+            f"[arm.{name}] declares question_subset {profile.question_subset!r}, but "
+            f"{profile.dataset}'s test split hashes to {len(ids)}:{short_digest(ids)}"
+        )

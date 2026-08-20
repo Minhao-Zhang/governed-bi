@@ -140,9 +140,16 @@ def aws_region() -> str | None:
 
 
 def _openai_kwargs(
-    *, effort: str | None, timeout: float | None, max_retries: int | None, tools: bool
+    *,
+    effort: str | None,
+    timeout: float | None,
+    max_retries: int | None,
+    max_output_tokens: int | None,
+    tools: bool,
 ) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
+    if max_output_tokens is not None:
+        kwargs["max_tokens"] = int(max_output_tokens)
     if tools:
         # Responses API is what carries tools and reasoning_effort together.
         kwargs["use_responses_api"] = True
@@ -156,15 +163,26 @@ def _openai_kwargs(
 
 
 def _bedrock_kwargs(
-    *, effort: str | None, timeout: float | None, max_retries: int | None, tools: bool
+    *,
+    effort: str | None,
+    timeout: float | None,
+    max_retries: int | None,
+    max_output_tokens: int | None,
+    tools: bool,
 ) -> dict[str, Any]:
-    """Bedrock's spelling of the same three intents. ``tools`` is unused: Converse is native.
+    """Bedrock's spelling of the same four intents. ``tools`` is unused: Converse is native.
 
     Timeout and retries go through ``botocore``'s ``Config`` rather than the constructor,
     because ``ChatBedrockConverse`` accepts ``max_tokens`` and friends but hands transport
     settings to the boto client. ``max_attempts`` counts the *first* try, so the engine's
     "retries after the first" becomes ``max_retries + 1``; getting that wrong silently
     halves or doubles a comparability knob.
+
+    **``max_tokens`` is passed explicitly because this client defaults it to 4096.** Unset,
+    an agent at effort ``xhigh`` spends that whole budget inside an adaptive-thinking block
+    whose text is omitted, and the turn ends on ``stopReason: max_tokens`` having said
+    nothing -- measured on two of eleven served questions, 2026-08-19. The OpenAI path caps
+    nothing by default, so leaving this to each client would make one knob mean two things.
     """
     from botocore.config import Config  # noqa: PLC0415 (lazy: needs boto3)
 
@@ -176,6 +194,8 @@ def _bedrock_kwargs(
         config["retries"] = {"max_attempts": int(max_retries) + 1, "mode": "adaptive"}
 
     kwargs: dict[str, Any] = {}
+    if max_output_tokens is not None:
+        kwargs["max_tokens"] = int(max_output_tokens)
     if config:
         kwargs["config"] = Config(**config)
     region = aws_region()
@@ -288,6 +308,7 @@ def chat_model(
     effort: str | None = None,
     timeout: float | None = None,
     max_retries: int | None = None,
+    max_output_tokens: int | None = None,
     tools: bool = False,
     **extra: Any,
 ) -> Any:
@@ -312,7 +333,13 @@ def chat_model(
         )
 
     translate = _TRANSLATORS[name]
-    kwargs = translate(effort=effort, timeout=timeout, max_retries=max_retries, tools=tools)
+    kwargs = translate(
+        effort=effort,
+        timeout=timeout,
+        max_retries=max_retries,
+        max_output_tokens=max_output_tokens,
+        tools=tools,
+    )
     if name == "bedrock" and effort:
         # Re-derive with the id in hand: the Nova/Anthropic split cannot be seen without it.
         kwargs["additional_model_request_fields"] = _bedrock_reasoning(effort, model_id)

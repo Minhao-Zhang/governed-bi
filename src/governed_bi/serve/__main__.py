@@ -88,8 +88,17 @@ def _model(name: str, creds: Any, effort: str | None = None) -> Any:
         )
     # tools=True: this agent binds tools, which on OpenAI selects the Responses API -- the
     # only transport there that carries tools and reasoning_effort together.
+    from ..register.knobs import knob_default
+
     return provider_mod.chat_model(
-        name, surface="agent", provider=chosen, effort=effort or None, tools=True
+        name,
+        surface="agent",
+        provider=chosen,
+        effort=effort or None,
+        # Same ceiling the server uses. Unset, ChatBedrockConverse's own 4096 truncates an
+        # xhigh turn inside its thinking block and prints an empty answer.
+        max_output_tokens=int(knob_default("llm_max_output_tokens")),
+        tools=True,
     )
 
 

@@ -277,18 +277,20 @@ def test_an_arm_with_no_profile_still_reads_as_nobody_said_what_changed(
     undeclared arm. A well-formed file that simply has no entry for this arm is ``KeyError``,
     which is exactly "nobody wrote a profile".
 
-    "Well-formed" now includes a ``corpus_content_hash`` on every entry: an arm that declares
-    none cannot be reconciled and the loader refuses the file for it, because the alternative
-    was ``v3_fold`` silently exempting itself from the only check ``reconcile`` performs. The
-    fixture carries one so that this test still exercises the *absent-entry* path and not the
-    malformed-file path above it.
+    "Well-formed" now includes a ``corpus_content_hash`` **and a ``question_subset``** on every
+    entry: an arm that declares neither cannot be reconciled and the loader refuses the file for
+    it, because the alternative was ``v3_fold`` silently exempting itself from the only check
+    ``reconcile`` performs -- and, one field over, every arm exempting itself from the question
+    set entirely. The fixture carries both so that this test still exercises the *absent-entry*
+    path and not the malformed-file path above it.
     """
     from governed_bi.eval.report import summarise
     from governed_bi.register import arm_profiles
 
     fine = tmp_path / "arms.toml"
     fine.write_text(
-        '[arm.somebody_else]\ntreatment = ["prompt_set"]\ncorpus_content_hash = "abc123"\n',
+        '[arm.somebody_else]\ntreatment = ["prompt_set"]\n'
+        'corpus_content_hash = "abc123"\nquestion_subset = "2:abc123abc123"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(arm_profiles, "ARMS_FILE", fine)

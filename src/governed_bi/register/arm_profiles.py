@@ -26,7 +26,14 @@ from typing import Any, Mapping
 
 from .knobs import comparability_keys
 
-__all__ = ["ARMS_FILE", "ArmProfile", "arm_profile", "load_arm_profiles", "reconcile"]
+__all__ = [
+    "ARMS_FILE",
+    "ArmProfile",
+    "arm_profile",
+    "load_arm_profiles",
+    "reconcile",
+    "recorded_question_subset",
+]
 
 #: Beside this module, because the register owns arm profiles. It lived at the repo root until
 #: 2026-08-11, reached by climbing four parents out of the package — which resolves only from a
@@ -50,6 +57,14 @@ class ArmProfile:
     corpus: str | None = None
     #: The corpus **content digest** the rows must carry. This is what :func:`reconcile` reads.
     corpus_content_hash: str | None = None
+    #: The question dataset's **git ref** in ``../BIRD-Data-Obfuscation``, for a human who wants
+    #: to check it out. Nothing in a measurement row carries it, so nothing reconciles against
+    #: it — the same split as :attr:`corpus` against :attr:`corpus_content_hash`, kept because
+    #: collapsing the two is what made the corpus check vacuous for a year.
+    dataset: str | None = None
+    #: The question set the rows must carry, in the ``question_subset`` scope knob's own format
+    #: and under its own name. This is what :func:`reconcile` reads.
+    question_subset: str | None = None
     notes: str = ""
 
 
@@ -89,6 +104,21 @@ def _parse_profiles(data: Mapping[str, Any], *, source: str) -> dict[str, ArmPro
                 "would report agreement from a check that examined nothing. Read the digest "
                 "off any row of the arm's artifact; `corpus` is the git ref and is not it."
             )
+        # **Mandatory for the same reason, one field over.** This file pinned the corpus twice
+        # and the question set not at all, so a rerun on a replaced dataset produced the same
+        # n = 1 351, a different population, and passed every gate — the corpus digest and the
+        # knobs both matched. Recovering which questions the shipped arms ran took a
+        # schema-filtered count across four versions of another repository (see arms.toml's
+        # header); the field is mandatory so the next arm cannot cost that again.
+        if not body.get("question_subset"):
+            raise ValueError(
+                f"{source}: [arm.{name}] declares no question_subset. The corpus is pinned "
+                "twice here and the question set would be pinned not at all, so an arm rerun "
+                "on a different dataset would agree with this profile on everything it "
+                "compares. Read it off any row's knobs_resolved['question_subset'], or hash "
+                "the arm's question ids the way eval/provenance.py::scope_identity does; "
+                "`dataset` is the git ref and is not it."
+            )
         out[name] = ArmProfile(
             name=name,
             description=str(body.get("description", "")),
@@ -96,6 +126,8 @@ def _parse_profiles(data: Mapping[str, Any], *, source: str) -> dict[str, ArmPro
             compare_to=body.get("compare_to"),
             corpus=body.get("corpus"),
             corpus_content_hash=body.get("corpus_content_hash"),
+            dataset=body.get("dataset"),
+            question_subset=body.get("question_subset"),
             notes=str(body.get("notes", "")),
         )
     return out
@@ -155,6 +187,22 @@ def reconcile(profile: ArmProfile, row: Mapping[str, Any]) -> tuple[str, ...]:
     told every row agreed. ``load_arm_profiles`` now refuses such a file, and this is the second
     lock, because :class:`ArmProfile` can be constructed directly and a test fixture is exactly
     where an unreconcilable profile gets invented.
+
+    **``question_subset`` is read out of ``knobs_resolved``, which is the opposite of the rule
+    above, and the difference is the whole point.** The 2026-08-11 defect was not "the knob
+    mapping is the wrong place to look" — it was looking somewhere the field never is.
+    ``corpus_content_hash`` is a ``RecordField`` and lives at the top of the row;
+    ``question_subset`` is a ``Role.scope`` knob resolved by
+    ``eval/provenance.py::scope_identity`` and lives in the row's knob mapping, verified on
+    ``runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl``, where it reads
+    ``1351:423a3f4b65fb``. So each field is read from its own home. A reader who "fixes" this
+    to match the corpus branch reintroduces the vacuous lookup in the other direction, and the
+    test that catches that is
+    ``test_reconcile_reads_the_question_set_out_of_the_knob_mapping_where_it_lives``.
+
+    A top-level ``question_subset`` is accepted as a fallback so that a caller holding a bare
+    identity mapping — the driver's pre-flight, which has no knob mapping — can be asked the
+    same question. No real row is in that shape.
     """
     problems: list[str] = []
     if profile.corpus_content_hash is None:
@@ -172,4 +220,44 @@ def reconcile(profile: ArmProfile, row: Mapping[str, Any]) -> tuple[str, ...]:
             f"profile claims corpus_content_hash {profile.corpus_content_hash!r}, "
             f"row records {recorded!r}"
         )
+    if profile.question_subset is None:
+        problems.append(
+            f"profile {profile.name!r} declares no question_subset, so this row's question set "
+            "cannot be reconciled. The corpus is pinned twice in arms.toml and the question set "
+            "would be pinned not at all — which is how the same n over a replaced dataset "
+            "passed every gate."
+        )
+    else:
+        subset = recorded_question_subset(row)
+        # Absent reads as "did not say", not as "disagrees", for the reason the corpus branch
+        # gives one field up. Here the absent case has a *different* cause: the seven
+        # ``proxy_*`` artifacts in ``runs/eval/`` predate ``scope_identity``'s writer
+        # (2026-08-12) and carry ``None`` on all 1 351 rows. Refusing per row would strand
+        # every artifact on disk, which is the reason ``provenance._knob_problem`` already
+        # gives for warning rather than refusing in the same situation. The artifact-level
+        # answer is ``provenance.reconciliation_lines``, which can see all the rows at once
+        # and derives the set from the ids they carry.
+        if subset is not None and str(subset) != str(profile.question_subset):
+            problems.append(
+                f"profile claims question_subset {profile.question_subset!r}, "
+                f"row records {subset!r}"
+            )
     return tuple(problems)
+
+
+def recorded_question_subset(row: Mapping[str, Any]) -> Any:
+    """``question_subset`` as this row records it, or ``None``.
+
+    Membership rather than ``.get()``, and it is load-bearing on the artifacts on disk:
+    ``_resolved_knobs`` writes **every** declared knob, flattening ``UNSET`` to ``None``, so all
+    1 351 rows of ``runs/eval/proxy_v4_corpus30872d3.jsonl`` do carry the key — with a ``None``
+    value, measured 2026-08-20. A ``.get()`` chain would read that as "the knob mapping has
+    nothing" and fall through to the top level, which is a different question. Both states still
+    reach the caller as ``None``, because "recorded nothing" and "declined to say" are equally
+    unable to contradict a profile; what the membership test protects is that the fallback fires
+    only when there is genuinely no knob mapping to read.
+    """
+    knobs = row.get("knobs_resolved")
+    if isinstance(knobs, Mapping) and "question_subset" in knobs:
+        return knobs["question_subset"]
+    return row.get("question_subset")

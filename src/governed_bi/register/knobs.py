@@ -219,6 +219,19 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "operational because retries move crash_rate. This is NOT LangGraph RetryPolicy "
        "(banned: node retry resamples after seeing failure) and not ModelRetryMiddleware; "
        "it is the ChatModel/httpx layer. Keep it identical across arms"),
+    _k("llm_max_output_tokens", 32_000, Role.comparability,
+       "ceiling on ONE agent response, thinking included. Comparability and not "
+       "operational: a truncated turn is a lost answer, so this moves the outcome mix "
+       "directly. **Measured 2026-08-19 on us.anthropic.claude-sonnet-5 at effort xhigh**, "
+       "where `ChatBedrockConverse`'s own default of 4096 was in force because nothing "
+       "here set one: two of eleven served questions came back `stopReason: max_tokens` at "
+       "exactly 4096 output tokens with a single `reasoning_content` block whose text was "
+       "empty -- adaptive thinking spent the entire budget and the turn ended without one "
+       "visible character. `narrate` then correctly declined to invent a sentence, so the "
+       "reader got an empty answer card and the record said `no_sql`. The OpenAI path has "
+       "no equivalent default, which is why this surfaced only when the agent surface moved "
+       "to Bedrock. Sonnet 5 accepts up to 128K; 32K is well clear of the observed spend "
+       "and still a backstop rather than a licence"),
     _k("llm_timeout_s", 300.0, Role.comparability,
        "wall clock for one AGENT call. Separate from the retry count and from the "
        "utility timeout because the three answer different questions. The product is "
@@ -356,6 +369,28 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "rate on rows carrying a gold verdict: a retry loop built on a reflector that "
        "cannot tell right from wrong re-rolls a draw after seeing it. Node RetryPolicy "
        "is banned for that reason; n_re_served is a frozen always-0 field, not a gate"),
+
+    _k("enable_structured_percentage_check", True, Role.comparability,
+       "the post-execution percentage-scale hint (serve/structured_check.py), ON. It appends "
+       "one line to run_query's reply when the question says 'percent' and the executed "
+       "statement carries no *100/100* factor -- it cannot refuse, so what it changes is what "
+       "the model reads next. Comparability and not operational because that text is agent "
+       "input: it can move which statement the turn ends on, and therefore the outcome mix. "
+       "ON, where the fork this is ported from (utkuai/detentai-fork) registers it OFF and "
+       "exposes it through POST /settings/toggles -- whose own handoff document admits the "
+       "route stores the override IN-PROCESS ONLY, with no env path, so every fresh server "
+       "start switched the check back off and the feature 'looks like it does not work rather "
+       "than like it is switched off'. A default-off knob with no persistence is a feature "
+       "nobody ever runs, and that route is declined here for a second reason (runtime-mutable "
+       "knobs make knobs_resolved stop being session identity, which is what the quotability "
+       "gates rest on -- docs/analysis/adopting-the-downstream-fork-2026-08-19.md). "
+       "PRICE OF THE KEY, verified: eval/report.py::knobs_comparable compares every "
+       "comparability knob except the declared treatment, and absent stays apart from None ('a "
+       "key missing from the mapping is the arm declining to say'). So an arm measured before "
+       "this key existed and one measured after CANNOT be compared. That price is already "
+       "being paid on this branch -- llm_max_output_tokens was added the same way this week -- "
+       "so this knob costs nothing additional; it is written down because the next reader must "
+       "be able to see that it costs something at all"),
 
     # ── operational: recorded, never a comparability key ────────────────────
     _k("git_sha", None, Role.operational,

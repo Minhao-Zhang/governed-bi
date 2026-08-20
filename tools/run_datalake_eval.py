@@ -271,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         arm_startup_refusal,
         harness_knobs,
         resume_identity_problem,
+        scope_identity,
         truncation_notice,
     )
     from governed_bi.govern.policy import GovernancePolicy
@@ -325,12 +326,6 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  compares against: {profile.compare_to}", flush=True)
         if profile.notes:
             print(f"  notes: {profile.notes}", flush=True)
-        mislabelled = arm_startup_refusal(
-            profile, {"corpus_content_hash": session.corpus_content_hash}
-        )
-        if mislabelled:
-            print(mislabelled, file=sys.stderr)
-            return 5
 
     dataset_file = args.dataset / "test_final.jsonl"
     questions = load_questions(
@@ -345,6 +340,39 @@ def main(argv: list[str] | None = None) -> int:
     # what is left. `question_subset` must name the same set on the first attempt and the
     # resume, or the scope key would report drift on every resume and mean nothing.
     covered_qids = {str(q["question_id"]) for q in questions}
+
+    # **Both locks, at the first line where both are knowable.** The print above moved apart from
+    # this check on 2026-08-20, when the profile gained a second reconcilable field: the corpus
+    # digest was already knowable at the print, the question set is not knowable until
+    # `covered_qids` exists, and checking each identity in a different place is how one of them
+    # ends up unchecked. This is still ahead of everything that costs or destroys anything --
+    # `append_refusal` and `--truncate` are below, and the first paid question is far below.
+    #
+    # Until this line existed the pre-flight passed the corpus alone, so `--arm v4` against a
+    # different `--dataset` agreed with the profile on everything compared and was caught at
+    # *report* time, over the finished artifact, which is after the money is spent. The two keys
+    # go in one mapping with no `knobs_resolved`, which is the shape `recorded_question_subset`
+    # falls through for.
+    #
+    # `scope_identity` is called here and again inside `harness_knobs` below. That is the same
+    # producer twice, deliberately, not a second copy of the rule: the pre-flight must compare
+    # exactly the value the rows will carry, and the only way to guarantee that is to derive it
+    # from the same function on the same three arguments.
+    if profile is not None:
+        mislabelled = arm_startup_refusal(
+            profile,
+            {
+                "corpus_content_hash": session.corpus_content_hash,
+                "question_subset": scope_identity(
+                    schemas=schemas,
+                    question_ids=covered_qids,
+                    dataset_file=dataset_file,
+                )["question_subset"],
+            },
+        )
+        if mislabelled:
+            print(mislabelled, file=sys.stderr)
+            return 5
 
     # The retrieval channel is in the tag because it is an arm, not a detail: lexical and
     # embedded runs have different coverage ceilings, so a tag that hid which one ran would

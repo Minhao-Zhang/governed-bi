@@ -40,7 +40,9 @@ from governed_bi.serve.ledger import (
     pipeline_error_attempt,
 )
 from governed_bi.serve.resume import ResumeRejected, authorise_resume
-from governed_bi.serve.runtime import configurable, prompt_variants
+from governed_bi.serve.runtime import bool_knob, configurable, prompt_variants
+from governed_bi.serve.schema_term_guard import find_schema_leak
+from governed_bi.serve.structured_check import percentage_scale_suffix
 
 __all__ = [
     "analyst_prompt",
@@ -385,9 +387,20 @@ def build_tools(
             )
         _emit_attempt(runtime, attempt, number=attempt_number, payload=payload)
         table = _result_table(payload)
+        # **What was executed, not what the model asked for.** `sql` is the tool argument;
+        # `executed_sql` is the statement `govern.prepare` actually ran, and the two differ
+        # whenever a layer rewrote or refused one -- checking the argument would hint about a
+        # statement no database saw. The hint rides the reply text only: it is computed after
+        # `_emit_attempt` and `_result_table` on purpose, so neither the stream event's status
+        # nor the structured `result_table` the answer card reads carries this prose.
+        suffix = ""
+        if bool_knob(state, "enable_structured_percentage_check"):
+            suffix = percentage_scale_suffix(
+                state.get("question"), attempt_field(attempt, "executed_sql")
+            )
         return _reply(
             runtime,
-            payload,
+            payload + suffix,
             attempts_by_call={call_id: attempt},
             **({"result_table": table} if table is not None else {}),
         )
@@ -417,7 +430,14 @@ def build_tools(
 
     @tool
     async def ask_user(question: str, runtime: ToolRuntime, why: str = "") -> Command:
-        """Pause and ask the human a clarifying question (HITL interrupt)."""
+        """Pause and ask the human a clarifying question (HITL interrupt).
+
+        ``question`` and ``why`` reach a business reader, never an engineer: write them in plain
+        language, with no ``table.column`` paths and no snake_case or camelCase identifiers. A
+        leaked identifier is rejected before the turn pauses -- rephrase and call again. (Said
+        here as well as enforced below because the enforcement costs a round trip; it is not
+        the control. The control is the code.)
+        """
         if pending_clarification:
             # Refused, not queued, and no interrupt: the model gets a tool reply it can act on
             # while the first question is still outstanding. Checked and set with no `await`
@@ -427,6 +447,34 @@ def build_tools(
                 "Only one clarifying question may be outstanding at a time, and this turn "
                 "already has one. Ask the single question whose answer most changes the SQL; "
                 "if more are needed, ask them after this one is answered.",
+            )
+        # **A retry, and the code is what decided that** (`serve/schema_term_guard.py` for why
+        # the guard exists at all). Returning here gives *this* `tool_use` its `ToolMessage` on
+        # the same pass -- the identical shape as the one-outstanding refusal directly above --
+        # so nothing is stranded: the latch has not been taken, `interrupt()` has not run, and
+        # the model can rephrase immediately. That ordering is the whole reason retry is
+        # affordable here; a thread carrying a dangling `tool_use` is permanently unreplayable
+        # on Bedrock, which is the most expensive mistake available in this function.
+        #
+        # The alternative -- pause anyway and *record* the leak -- is what the code does not
+        # support, and not merely what we preferred. It would have to interrupt first, which
+        # means the leaked text has already been shown to the reader this guard exists to
+        # protect, and the verdict would then need somewhere to live: `clarifications_by_call`
+        # is a declared channel with a declared shape, so a new field there is a state-channel
+        # plus record-field plus projector change (`check_declared_is_consumed`'s S1 and R1),
+        # and a verdict nothing reads is the "declared, no consumer" defect that gate exists to
+        # count. `why` is checked too because it is rendered beside the question, not logged.
+        #
+        # Only `question`/`why`: our `ask_user` has no `basis`/`choices` arguments (the fork's
+        # does), so there is no third string to check and no malformed-choice branch to port.
+        leak = find_schema_leak(question, why)
+        if leak is not None:
+            return _reply(
+                runtime,
+                f"ask_user rejected: {leak!r} looks like a raw schema identifier, not plain "
+                "business language, and this question is shown to a business reader. Rephrase "
+                "question/why without table.column paths, snake_case, or camelCase "
+                "identifiers, then call ask_user again.",
             )
         digest = hashlib.sha256(f"{turn_id}\x1f{question}".encode()).hexdigest()[:12]
         clarification_id = f"clar-{turn_id}-{digest}"

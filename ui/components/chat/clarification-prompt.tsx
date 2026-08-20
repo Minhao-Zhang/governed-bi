@@ -4,6 +4,7 @@ import { useState } from "react";
 import { MessageCircleQuestion } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ModelMarkdown } from "@/components/common/model-markdown";
 import type { ClarificationRequest, ClarificationResponse } from "@/lib/clarification";
 import { cn } from "@/lib/utils";
 
@@ -44,8 +45,15 @@ export function ClarificationPrompt({
       <div className="flex items-start gap-2">
         <MessageCircleQuestion className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
         <div className="min-w-0 flex-1 space-y-2">
-          <p className="text-sm font-medium">{request.question}</p>
-          <p className="text-xs text-muted-foreground">{request.why}</p>
+          {/* Both of these are model-written — `ask_user`'s own arguments — so they get the
+              same renderer as the answer card rather than a bare `<p>`, which showed a
+              backtick-quoted column name as three literal characters in the one sentence
+              whose job is telling a reader what they are being asked. */}
+          <ModelMarkdown text={request.question} className="font-medium" />
+          <ModelMarkdown
+            text={request.why}
+            className="text-xs text-muted-foreground"
+          />
 
           {hasChoices && (
             <div className="flex flex-col gap-1.5">

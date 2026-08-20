@@ -30,11 +30,12 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ..register.arm_profiles import reconcile
+from ..register.arm_profiles import reconcile, recorded_question_subset
 
 __all__ = [
     "append_refusal",
     "arm_startup_refusal",
+    "derived_question_set",
     "flag_conflict",
     "git_provenance",
     "harness_knobs",
@@ -518,13 +519,84 @@ def arm_startup_refusal(profile: Any, session_identity: Mapping[str, Any]) -> st
     mislabelled = reconcile(profile, session_identity)
     if not mislabelled:
         return None
-    lines = [f"--arm {profile.name} does not match this corpus:"]
+    # "this corpus" until 2026-08-20, when the profile gained a second reconcilable field and
+    # the sentence started naming the wrong one: a question-set mismatch was reported as a
+    # corpus mismatch and sent the reader to --corpus-dir. Two identifiers named by one word is
+    # how `corpus` and `corpus_content_hash` came to be compared against each other.
+    lines = [f"--arm {profile.name} does not match this run's identity:"]
     lines += [f"  {problem}" for problem in mislabelled]
     lines.append(
-        "  Fix arms.toml or point --corpus-dir at the corpus the profile names. A run labelled "
-        "with an arm it did not measure is worse than an unlabelled one."
+        "  Fix arms.toml, or point --corpus-dir / --dataset at what the profile names. A run "
+        "labelled with an arm it did not measure is worse than an unlabelled one."
     )
     return "\n".join(lines)
+
+
+def derived_question_set(rows: Sequence[Mapping[str, Any]]) -> str | None:
+    """The question set an artifact *contains*, in ``question_subset``'s format, or ``None``.
+
+    **This is the method the fork had to invent, written down so nobody invents it again.** The
+    three published arms' artifacts predate ``scope_identity``'s writer, so no row of them
+    records a ``question_subset`` — and identifying which questions they ran cost a downstream
+    fork a schema-filtered count across four versions of ``BIRD-Data-Obfuscation``. It did not
+    have to: every row carries its own ``question_id``, so the set is *in* the artifact, and
+    hashing it the way the knob is hashed produces a value comparable to the profile's claim.
+
+    ``question_id`` is ``Absence.never`` in the record register, so a real row always has one.
+    ``None`` here therefore means "not an artifact of measurement rows" — a fixture, or an empty
+    file — and not "an artifact whose questions cannot be determined".
+
+    **What it is not.** This is what the artifact *holds*, and the knob is what the run *set out
+    to cover*. They differ on a part-done run: 900 rows of a 1 351-question arm derive a
+    different value, correctly, because 900 rows are not that population. So this is the
+    fallback for artifacts with no recorded knob, never a second opinion about one that has it —
+    :func:`reconciliation_lines` uses it only when no row recorded the knob.
+    """
+    ids = [row.get("question_id") for row in rows]
+    if not ids or any(qid is None for qid in ids):
+        return None
+    unique = {str(qid) for qid in ids}
+    return f"{len(unique)}:{short_digest(unique)}"
+
+
+def _question_set_from_the_ids(
+    rows: Sequence[Mapping[str, Any]], profile: Any
+) -> tuple[str | None, str | None]:
+    """``(problem, note)`` for an artifact that records no ``question_subset`` knob.
+
+    ``reconcile`` cannot make this call from one row — one row names one question — so the
+    artifact-level check lives here, which is also the only place that can distinguish "this
+    artifact predates the writer" from "this row abstained".
+
+    An agreeing derivation returns a **note**, not silence: the reader has to be able to tell
+    "the harness recorded the arm's question set" from "the harness recorded nothing and the ids
+    were hashed after the fact", and printing the same sentence for both is how a weaker check
+    gets read as the stronger one.
+    """
+    declared = getattr(profile, "question_subset", None)
+    if declared is None:
+        return None, None  # `reconcile` already refuses the profile outright.
+    if any(recorded_question_subset(row) is not None for row in rows):
+        return None, None  # The per-row check did the work.
+    derived = derived_question_set(rows)
+    if derived is None:
+        return (
+            "  no row records a question_subset and no row names a question, so this artifact "
+            "cannot be shown to be the arm's question set",
+            None,
+        )
+    if derived != str(declared):
+        return (
+            f"  the artifact holds a different question set:\n"
+            f"    arms.toml: {declared}\n"
+            f"    on disk  : {derived}  (derived from the question ids, since no row records "
+            f"the knob)",
+            None,
+        )
+    return None, (
+        f"  no row records question_subset (the writer postdates this artifact); the "
+        f"{derived.split(':')[0]} question ids it holds hash to the declared {declared}"
+    )
 
 
 def reconciliation_lines(rows: Sequence[Mapping[str, Any]], profile: Any) -> list[str]:
@@ -542,12 +614,22 @@ def reconciliation_lines(rows: Sequence[Mapping[str, Any]], profile: Any) -> lis
     for row in rows:
         for problem in reconcile(profile, row):
             counts[problem] = counts.get(problem, 0) + 1
-    if not counts:
-        return [f"arm {profile.name}: every row agrees with the profile in arms.toml"]
+    derived_problem, derived_note = _question_set_from_the_ids(rows, profile)
+    if not counts and derived_problem is None:
+        lines = [f"arm {profile.name}: every row agrees with the profile in arms.toml"]
+        return lines + [derived_note] if derived_note else lines
     total = sum(counts.values())
-    lines = [f"arm {profile.name}: {total} row(s) contradict arms.toml"]
+    # The header counts rows, and the derived finding is not about a row — it is about the
+    # artifact as a whole. Saying "0 row(s) contradict" above a real contradiction is the
+    # reading the header must not permit.
+    if counts:
+        lines = [f"arm {profile.name}: {total} row(s) contradict arms.toml"]
+    else:
+        lines = [f"arm {profile.name}: contradicts arms.toml"]
     lines += [
         f"  {problem}   ({n} rows)"
         for problem, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     ]
+    if derived_problem is not None:
+        lines.append(derived_problem)
     return lines

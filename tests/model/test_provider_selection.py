@@ -77,19 +77,24 @@ def test_the_default_matches_the_knob_default() -> None:
 
 
 def test_openai_keeps_its_own_spelling() -> None:
-    kwargs = P._openai_kwargs(effort="high", timeout=300.0, max_retries=3, tools=True)
+    kwargs = P._openai_kwargs(
+        effort="high", timeout=300.0, max_retries=3, max_output_tokens=32_000, tools=True
+    )
     assert kwargs == {
         "use_responses_api": True,
         "reasoning_effort": "high",
         "timeout": 300.0,
         "max_retries": 3,
+        "max_tokens": 32_000,
     }
 
 
 @needs_bedrock
 def test_bedrock_never_receives_openai_keywords() -> None:
     """``use_responses_api`` raises on ``ChatBedrockConverse``; the other two are dropped."""
-    kwargs = P._bedrock_kwargs(effort="high", timeout=300.0, max_retries=3, tools=True)
+    kwargs = P._bedrock_kwargs(
+        effort="high", timeout=300.0, max_retries=3, max_output_tokens=32_000, tools=True
+    )
     assert not {"use_responses_api", "reasoning_effort", "timeout", "max_retries"} & set(kwargs)
 
 
@@ -100,7 +105,9 @@ def test_bedrock_retries_count_the_first_attempt() -> None:
     Off by one here silently halves or doubles a comparability knob, which is the whole
     reason the translation is centralised.
     """
-    config = P._bedrock_kwargs(effort=None, timeout=90.0, max_retries=3, tools=False)["config"]
+    config = P._bedrock_kwargs(
+        effort=None, timeout=90.0, max_retries=3, max_output_tokens=None, tools=False
+    )["config"]
     assert config.retries["max_attempts"] == 4
     assert config.read_timeout == 90.0 and config.connect_timeout == 90.0
 
@@ -244,3 +251,36 @@ def test_a_bedrock_models_cache_directory_can_actually_be_created(
 def test_the_default_embedding_model_differs_by_provider() -> None:
     """A shared default would silently embed a Bedrock arm with an id Bedrock does not serve."""
     assert P.default_embedding_model("bedrock") != P.default_embedding_model("openai")
+
+
+def test_both_gateways_carry_the_output_ceiling() -> None:
+    """The knob has to reach the client, and both spellings of it are ``max_tokens``.
+
+    Measured on 2026-08-19: unset, ``ChatBedrockConverse`` defaults to 4096, and an agent at
+    effort ``xhigh`` spent all 4096 inside an adaptive-thinking block whose text is omitted --
+    ``stopReason: max_tokens``, one ``reasoning_content`` block, no visible character, and an
+    empty answer card. Two of eleven served questions ended that way. The parameter is
+    required rather than defaulted so a gateway added later cannot quietly omit it.
+    """
+    for translate in (P._openai_kwargs, P._bedrock_kwargs):
+        kwargs = translate(
+            effort=None, timeout=None, max_retries=None, max_output_tokens=32_000, tools=False
+        )
+        assert kwargs["max_tokens"] == 32_000, translate.__name__
+        # None means "leave the client's own default alone", which is a different statement
+        # from 0 and must not send the key at all.
+        bare = translate(
+            effort=None, timeout=None, max_retries=None, max_output_tokens=None, tools=False
+        )
+        assert "max_tokens" not in bare, translate.__name__
+
+
+def test_the_output_ceiling_is_above_what_truncated_a_turn() -> None:
+    """A regression on the *value*, not just the wiring.
+
+    4096 is the number that truncated a real turn. A knob default at or under it would pass
+    the wiring test above and reproduce the defect, so the floor is asserted here.
+    """
+    from governed_bi.register.knobs import knob_default
+
+    assert int(knob_default("llm_max_output_tokens")) > 4096

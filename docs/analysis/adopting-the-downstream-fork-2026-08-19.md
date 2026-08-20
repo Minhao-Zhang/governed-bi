@@ -371,6 +371,123 @@ commits after it.
 
 ---
 
+## What shipped in round three, 2026-08-20
+
+**Nothing new appeared upstream.** The fork's PR is `12c3e15` plus one rename commit
+(`c1e3bf0`, *UtkuAI → DetentAI*) — `git log 12c3e15..detentai-fork` is one line. So this round
+took four things from the deferred list above, and one thing from the fork's *prose* that is
+worth more than any of its code.
+
+Three parallel agents, disjoint file sets, so the three landed independently and were verified
+together at the end rather than one at a time.
+
+**The two `serve/` guards** (deferred above, now taken). `serve/structured_check.py` and
+`serve/schema_term_guard.py`, hand-ported, with two decisions made here rather than copied:
+
+- `enable_structured_percentage_check` is registered `Role.comparability` with default
+  **`True`**, and `POST /settings/toggles` is **not** ported. The fork's own handoff records that
+  its override is stored in-process only, with no bool env path — so every fresh server start ran
+  the check off, and a default-off knob with no persistence is a feature nobody ever runs. The
+  cost is stated in the knob's own description: `knobs_comparable` keeps absent and `None` apart,
+  so an arm measured before this key and one measured after cannot be compared. That price was
+  already paid this week by `llm_max_output_tokens`; it is written down so the next reader can see
+  it cost something at all.
+- The schema guard is **ungated**, and it is a **retry**. `find_schema_leak` sits above
+  `pending_clarification.append` and above `interrupt()`, returning through `_reply` — the same
+  shape as the one-outstanding refusal directly above it — so the `tool_use` gets its
+  `ToolMessage` on the same pass, the latch is never taken, and the resume path is untouched. That
+  ordering is what makes retry affordable: a thread carrying a dangling `tool_use` is permanently
+  unreplayable on Bedrock. Recording instead would have to `interrupt()` first, which means the
+  leaked prose has already reached the reader the guard exists to protect, and the verdict would
+  then need a home — a new field on `clarifications_by_call` is a state-channel plus record-field
+  plus projector change, and a verdict nothing reads is the "declared, no consumer" defect
+  `check_declared_is_consumed` exists to count.
+- One divergence found by running it: `percentage_scale_suffix` returns `""` on a falsy `sql`
+  where the fork returns the hint. `None` reaches it only on a governance refusal or a pre-verdict
+  crash, so un-diverged the port appends engine advice to the text of a *governance verdict* —
+  measured, `'run_query refused: … does not license'` followed by advice to multiply by 100.
+
+**`ask_user` has no per-tool cap.** `_CapEndsTheTurn` is constructed `tool_name="run_query"` only,
+so the retry above is bounded by `agent_recursion_limit` and nothing nearer. The one-outstanding
+refusal it copies has the same property, so this is a pre-existing shape rather than a new defect
+— but the guard adds a second path to it. Not fixed; recorded.
+
+**A tool docstring is agent input that enters no identity hash.** Six lines were added to
+`ask_user`'s docstring, which is the model-facing tool description. `prompt_set_hash` digests
+`PROMPT_REGISTRY` and nothing digests tool descriptions, so that edit changes what the agent reads
+and no field records it. Pre-existing, not introduced here, and the reason it is written down: it
+is the same shape as the defect this repository has fixed twice already in other fields.
+
+**`terminalLabel` and the catalog glimpse** (`ui/lib/answer-delivery.ts`, `answer-card.tsx`). At
+`business` the `terminal` token reached a reader only as a raw `ledger:` string at `engineer`, so
+an answer that queried the database and one recited out of a corpus definition looked identical.
+`terminalLabel` translates all six declared terminals — the fork translates four, so a `crashed`
+turn fell through to the raw word — and splits `no_sql` on whether the attempt ledger is empty,
+which is the fork's own 2026-08-16 finding.
+
+**This is preventive and says so.** Twelve answered turns measured 2026-08-19/20 against the
+facilities corpus all recorded `attempts=1` with `reason_code=passed`: zero recitation observed.
+What makes it worth taking now is that the served corpus carries hard figures in its prose
+(`177,714`, `$83,521,791`, `613,685`), so recitation-without-query is a live risk rather than a
+hypothetical.
+
+`refused` is deliberately **excluded** from the translation, and that is correctness rather than
+taste: `stamp.py::_execution` records `no_sql` "whether it was guard-blocked, declined or
+stubbed", so a guard-blocked refusal carries `terminal: no_sql` with an empty ledger and
+`NO_SQL_LABEL.untouched` would describe a refusal as an answer.
+
+The glimpse went from the fork's one refusal reason to **four** — `no_schema_matched`,
+`nothing_licensed`, `empty_context`, `guard` — on the rule that a glimpse belongs on a refusal
+whose *meaning is a claim about coverage*, because then the table list is either orientation or a
+visible contradiction. Nine reasons are excluded with a stated reason each; `negative_example` is
+excluded because a curator's deliberate "do not answer this from this data" is undercut by a
+catalog. `guard` is the measured case: 2026-08-19, two SOW questions refused at `Stage.guard` in
+6.6–6.7 s on ~191 tokens, **one of them documented-answerable** against a 67,040-row table. The
+fork additionally gates the glimpse on `text === null`, which `serve/nodes/guard.py` makes always
+false — copying that gate would have excluded the one case this port exists for.
+
+**`ui/` has no test runner at all** — no vitest, no jest, no `test` script — and the two existing
+`ui/scripts/check-*.ts` files are not run by CI, by an explicit comment in the workflow. The new
+`check-answer-delivery.ts` (35 assertions) follows that convention and inherits that gap.
+
+**Dataset identity** — `docs/analysis/dataset-identity-2026-08-20.md`, and the one thing here that
+came from the fork's prose rather than its code. `arms.toml` pinned the corpus twice and the
+question set not at all, so a rerun on a replaced dataset produced the same *n*, a different
+population, and **passed every quotability gate**. `ArmProfile.question_subset` is now mandatory,
+reconciled out of `knobs_resolved` (where the knob actually is — the opposite of the corpus rule,
+which is the point), and the pre-flight supplies it before anything is paid for or destroyed.
+
+**And the fork's reconstruction was verified rather than attributed, because the artifacts are on
+this machine.** The fork could not check its own conclusion — `runs/` is gitignored and theirs was
+elsewhere — and this document's own brief repeated that. It is wrong here: `runs/eval/proxy_v3_fold_*`,
+`proxy_v4_*` and `proxy_v5_*` all exist, and each carries **exactly** the 1,351 question ids of
+`BIRD-Data-Obfuscation@22fe2a6`, set-equal, 0 extra and 0 missing, checked per arm. `1351:423a3f4b65fb`
+recomputes from that commit through `scope_identity` and equals what `arms.toml` now declares. So
+the three published arms carry a **measured** dataset identity, not a reconstructed one.
+
+Nine test fixtures broke on the new mandatory field. Every one of them was inventing an
+unreconcilable profile — which is where the *last* one came from — so they declare a question set
+now, like the shipped file does.
+
+### Verification, round three
+
+```
+1646 passed, 17 xfailed, 1 warning        (1610 before the three agents; +36 tests, none deleted)
+ruff clean · import layering clean (131 files) · singletons 7/0 · file length OK
+check_declared_is_consumed: the same 5 findings, over 60 knobs / 42 record fields / 41 channels
+check_citations · check_measurement_locality · check_no_benchmark_discriminators clean
+tsc clean · eslint 0 errors (the same 3 pre-existing warnings) · production build clean
+```
+
+**Round two's `1557 passed, 39 skipped` does not reproduce here, and the reason is in that
+section already:** the skips are credential-gated and this machine has the credentials, and
+`9a7a20c` landed tests after that record was written. The sum is what compares, as it says.
+
+Two things this round did **not** do. `tools/mutation_catalogue_data_2.py` gained no entry for the
+new `question_subset` branch (worth adding: mutate it to read the top level unconditionally).
+And `tests/conformance/test_arm_profiles_are_declared.py` is now 429 lines, over the 400 **soft**
+cap — not fatal, and 69 files are already there.
+
 ## Deferred, with entry conditions
 
 **Eval instrumentation is no longer deferred** — it shipped in round two, above. It was held for one
@@ -380,15 +497,12 @@ condition was backwards. Two of the three modules are called by nothing yet in e
 (`require_power`, `snapshot`), and the point of both is to be callable *before* the run that wants
 them.
 
-**The two `serve/` guards** — `serve/schema_term_guard.py` (a shape-based block on dotted paths,
-snake_case and camelCase in `ask_user`'s `question`/`why`, retried rather than flagged) and
-`serve/structured_check.py` (a "percentage" question whose executed SQL never scales by 100).
-Deferred, not declined, and cheap: 102 lines of source and 96 of tests, and `serve/runtime.py` already
-carries the `bool_knob` the second one needs. What they cost is a hand-port — `serve/tools.py` has
-diverged by 320 lines on the fork's side, most of it the curation write-back, so neither hunk
-cherry-picks. The guard is also the more interesting of the two here: the third owner decision above
-says a *refusal* may name a table, and `ask_user`'s question is a different surface — prose written
-for a reader, not a verdict.
+**The two `serve/` guards are no longer deferred** — both shipped in round three above. The
+estimate held: the hand-port was the whole cost, and it was smaller here than the fork's own
+figure suggested, because our `ask_user` takes no `basis`/`choices` and so has only two strings to
+check. The interesting half was the one predicted: the third owner decision above says a *refusal*
+may name a table, and `ask_user`'s question is a different surface — prose written for a reader,
+not a verdict — so the guard is scoped to `ask_user` alone and says so in its own docstring.
 
 **A turn-level `reliability` caveat** — 40 lines in `serve/nodes/stamp.py` reusing
 `corpus/schema.py`'s `Reliability`/`ReliabilityStatus` at the turn level, so a turn whose

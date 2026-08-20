@@ -43,6 +43,7 @@ import type {
   AuditTurns,
 } from "@/lib/types";
 import { QueryState } from "@/components/common/query-state";
+import { ModelMarkdown } from "@/components/common/model-markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -422,7 +423,14 @@ function TraceBody({ trace }: { trace: AuditTrace }) {
         <Card>
           <CardHeader>
             <CardTitle className="text-sm font-normal">{trace.question}</CardTitle>
-            {trace.answer_text && <CardDescription>{trace.answer_text}</CardDescription>}
+            {/* The answer is model prose and renders as markdown, same as the answer card.
+                `trace.question` above stays literal: it is what the *reader* typed, and
+                rendering a user's own words as markup is a separate decision nobody made. */}
+            {trace.answer_text && (
+              <CardDescription>
+                <ModelMarkdown text={trace.answer_text} />
+              </CardDescription>
+            )}
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap items-center gap-2">

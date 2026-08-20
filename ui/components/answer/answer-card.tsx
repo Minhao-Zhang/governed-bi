@@ -3,12 +3,15 @@
 import { AlertTriangle, Info } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
+import { ModelMarkdown } from "@/components/common/model-markdown";
 import { ReliabilityStamp } from "@/components/answer/reliability-stamp";
 import { SqlBlock } from "@/components/answer/sql-block";
 import { ProvenanceDrawer } from "@/components/answer/provenance-drawer";
 import { AgentTimeline } from "@/components/chat/agent-timeline";
+import { useSchemaSummary } from "@/hooks/queries";
 import {
   attemptsOf,
+  catalogGlimpse,
   corpusVersionLabel,
   deriveDelivery,
   displayText,
@@ -16,7 +19,9 @@ import {
   refusalSentence,
   routedSchemasLabel,
   sqlOf,
+  terminalLabel,
   terminalOf,
+  wantsCatalogGlimpse,
   whyLines,
 } from "@/lib/answer-delivery";
 import { atLeast, useDisplayMode } from "@/lib/display-mode";
@@ -35,6 +40,12 @@ import type { AnswerView } from "@/lib/types";
  * the SQL, the step trace, the record drawer. A reader in `business` is never shown a turn as
  * having answered when it refused. See `lib/display-mode.ts`, including why this is display and not
  * permission.
+ *
+ * Two things are *translated* rather than widened, and both go the direction the mode implies:
+ * `business` gets `terminalLabel`'s sentence where `engineer` gets the raw `ledger: <token>`
+ * badge, and a coverage-claim refusal gets `catalogGlimpse` in every mode. Neither adds or removes
+ * a fact — the inputs are `execution.terminal`, the attempt ledger, `refused_by` and the catalog
+ * route, all of them things the engine produced.
  */
 export function AnswerCard({
   answer,
@@ -49,6 +60,34 @@ export function AnswerCard({
   const why = whyLines(provenance);
   const schemasNote = routedSchemasLabel(provenance);
   const corpusNote = corpusVersionLabel(provenance);
+  const attempts = attemptsOf(answer);
+  const refusedBy = answer.refused_by ?? null;
+  // The ledger's terminal in plain language, for `business` only. `analyst` and `engineer` are
+  // untouched by this: they keep the raw `ledger: <token>` badge, which `reliability-stamp.tsx`
+  // gates to `engineer` and which someone who reads ledgers can use. Null above `business` so
+  // the token and the sentence can never both be on screen saying the same thing twice.
+  const terminalNote = atLeast(mode, "analyst")
+    ? null
+    : terminalLabel(terminalOf(answer), attempts);
+  // Lazily — `enabled` is the whole point. Every other card (every refusal reason outside
+  // `CATALOG_GLIMPSE_REFUSALS`, and every answer) leaves this query disabled, so an unconditional
+  // fetch on every rendered answer never happens. The key is the same one the schema browser
+  // uses, so a reader who has opened that tab already has this cached.
+  const needsCatalogGlimpse =
+    delivery === "refused" && wantsCatalogGlimpse(refusedBy);
+  const schemaSummary = useSchemaSummary(undefined, {
+    enabled: needsCatalogGlimpse,
+  });
+  const glimpse = needsCatalogGlimpse
+    ? catalogGlimpse(
+        (schemaSummary.data?.items ?? [])
+          // Excluded tables are filtered out here, not in `catalogGlimpse`: the exclusion is a
+          // property of the corpus row, and a table the model never sees must not be offered as
+          // coverage.
+          .filter((table) => !table.excluded)
+          .map((table) => table.physical_name),
+      )
+    : null;
   // `semantic_assurance` does not exist in the v2 engine, so the mild-uncertainty banner
   // has no input. Not defaulted to `false` under the old name: that would read as "we
   // checked and it is fine" when nothing checked. The banner is simply gone until something
@@ -73,8 +112,8 @@ export function AnswerCard({
         <ReliabilityStamp
           outcome={answer.outcome}
           terminal={terminalOf(answer)}
-          attempts={attemptsOf(answer)}
-          refusedBy={answer.refused_by ?? null}
+          attempts={attempts}
+          refusedBy={refusedBy}
           mode={mode}
           sentence={refusalSentence(answer)}
         />
@@ -87,19 +126,55 @@ export function AnswerCard({
                   engine has no such field, and inventing a sentence here would be the
                   interface speaking for a system that said nothing. */}
               {text ?? "This question can't be answered as asked."}
+              {/* What the corpus *can* see, on the refusals whose meaning is a coverage claim
+                  (see `CATALOG_GLIMPSE_REFUSALS` for the set and the measurement behind it).
+                  In every mode, not just `business`: withholding it from a reader would make
+                  the refusal *less* informative for the person who asked than for the person
+                  auditing it. Naming tables at `business` is an explicit owner decision —
+                  `docs/analysis/adopting-the-downstream-fork-2026-08-19.md`, third decision:
+                  "a refusal may name tables" — so this is not a withholding rule this
+                  repository has declined to make, it is one it made the other way. */}
+              {glimpse && ` ${glimpse}`}
             </p>
           </div>
         ) : (
           <>
+            {/* The stamp's missing half at `business`. On a clean delivery `refusalSentence`
+                returns null, so a business reader was told nothing at all about where the
+                number came from — and this is the mode whose whole brief is "the answer and
+                whether it consulted your data" (`lib/display-mode.ts`). Grouped with the stamp
+                and styled like its sentence, because on this delivery it *is* the stamp.
+
+                A standalone line only on `clean`; `no_statement` carries the same phrase inside
+                its own panel below. `graded` and `refused` do not get it at all: for `graded`
+                `refusalSentence` already says a query ran, and for `refused` the phrase would be
+                *wrong* — `serve/nodes/stamp.py::_execution` records `no_sql` "whether it was
+                guard-blocked, declined or stubbed", so a guard-blocked refusal carries
+                `terminal: no_sql` with an empty ledger and `NO_SQL_LABEL.untouched` would call
+                it an answer. */}
+            {delivery === "clean" && terminalNote && (
+              <p className="text-sm text-muted-foreground">
+                This turn {terminalNote}.
+              </p>
+            )}
+
             {delivery === "no_statement" && (
               // Informational, not a warning: nothing refused this turn and nothing failed. What
               // a reader needs is that the prose below has no statement under it, which is the
               // one thing the record actually says (`register/stages.py::Outcome.no_sql`).
               <div className="flex gap-3 rounded-md border border-tier-lineage/30 bg-tier-lineage/5 p-3">
                 <Info className="mt-0.5 size-4 shrink-0 text-tier-lineage" />
+                {/* At `business`, `terminalNote` replaces this copy rather than joining it. It
+                    is strictly more precise — it says whether the agent touched the data before
+                    answering from a definition, which `no_sql` alone does not (see
+                    `NO_SQL_LABEL`) — and it drops "governed statement", which is engine
+                    vocabulary this mode exists to keep off the screen. Replacing rather than
+                    adding also keeps the count of sentences saying "no query ran" where it was:
+                    `refusalSentence` already says it above, in every mode. */}
                 <p className="text-sm">
-                  This turn ran no query, so there is no governed statement
-                  behind the text below.
+                  {terminalNote
+                    ? `This turn ${terminalNote}.`
+                    : "This turn ran no query, so there is no governed statement behind the text below."}
                 </p>
               </div>
             )}
@@ -126,7 +201,11 @@ export function AnswerCard({
               </div>
             )}
 
-            {text && <Narration text={text} />}
+            {/* Model prose, rendered as markdown — see {@link ModelMarkdown} for what that
+                does and does not include. `narrate` adopts the agent's own last message on an
+                uncapped turn, so this text is structured the way the agent wrote it: headings,
+                code spans and pipe tables, none of which the narrate prompt constrains. */}
+            {text && <ModelMarkdown text={text} />}
             {/* No result table. The v2 record does not carry the rows: the engine returns them
                 to the model inside the turn and records the statement, not the result set.
                 Rendering an empty table would say "the query returned nothing", which is a
@@ -164,190 +243,5 @@ export function AnswerCard({
         )}
       </CardContent>
     </Card>
-  );
-}
-
-/** One `| a | b |` row, split into trimmed cells with the outer pipes dropped. */
-function cellsOf(line: string): string[] {
-  return line
-    .replace(/^\||\|$/g, "")
-    .split("|")
-    .map((cell) => cell.trim());
-}
-
-/** `|---|:--|--:|` — the row that makes the line above it a header. */
-const TABLE_RULE = /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$/;
-
-/**
- * Renders the narration's block structure: paragraphs, the `- ` lists a model writes when the
- * answer enumerates rows, and pipe tables. Inline formatting is {@link Emphasised} — bold only.
- *
- * The reason this exists at all is that a one-`<p>` render collapses every newline, so an answer
- * shaped as a list arrives as one run-on line with the hyphens still in it. The blank-line and
- * bullet structure the model wrote is the answer's structure; dropping it is a misread, not a
- * simplification.
- *
- * **Tables are here because the card is the only place a result can appear.** The record does
- * not carry the rows (see the comment at the call site), so a model asked for the answer to a
- * question with a result set writes it as a pipe table into `answer_text` — there is no other
- * channel. Without this branch that arrived as `| zip_code | / |---:| / | 652 |`, four literal
- * pipes on the most-read line of the app.
- *
- * **Still not a markdown renderer,** for the reason in {@link Emphasised}: paragraphs, bullets,
- * bold, tables. Each is a construct models actually emit here, hand-rendered, and cells go
- * through `Emphasised` like every other run of text, so a table cell is no more a rendering
- * surface than a paragraph is. Line breaks inside a paragraph are preserved rather than folded
- * the way markdown folds them, so a construct this doesn't know — a numbered list, an indented
- * note — at least keeps the shape the model gave it instead of being run together.
- */
-function Narration({ text }: { text: string }) {
-  type Block =
-    | { kind: "ul"; items: string[] }
-    | { kind: "p"; lines: string[] }
-    | {
-        kind: "table";
-        head: string[];
-        rows: string[][];
-        align: ("left" | "right")[];
-      };
-  const blocks: Block[] = [];
-  let open: Block | null = null;
-  const lines = text.trim().split("\n");
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i].trim();
-    // A blank line ends whatever was open; the next content starts a fresh block.
-    if (!line) {
-      open = null;
-      continue;
-    }
-    // A header row is only a header if the next line is the rule; otherwise `| a | b |` is
-    // ordinary prose that happens to contain pipes, and stays prose.
-    const next = (lines[i + 1] ?? "").trim();
-    if (open?.kind !== "table" && line.includes("|") && TABLE_RULE.test(next)) {
-      const head = cellsOf(line);
-      blocks.push(
-        (open = {
-          kind: "table",
-          head,
-          rows: [],
-          // `--:` means the column is numeric, which is most of them here.
-          align: cellsOf(next).map((c) => (c.endsWith(":") ? "right" : "left")),
-        }),
-      );
-      i += 1;
-      continue;
-    }
-    if (open?.kind === "table") {
-      if (line.includes("|")) {
-        open.rows.push(cellsOf(line));
-        continue;
-      }
-      open = null;
-    }
-    const bullet = /^[-*+]\s+(.*)$/.exec(line);
-    if (bullet) {
-      if (open?.kind !== "ul") blocks.push((open = { kind: "ul", items: [] }));
-      open.items.push(bullet[1]);
-    } else {
-      if (open?.kind !== "p") blocks.push((open = { kind: "p", lines: [] }));
-      open.lines.push(line);
-    }
-  }
-
-  return (
-    <div className="space-y-2 text-sm leading-relaxed">
-      {blocks.map((block, b) => {
-        if (block.kind === "ul") {
-          return (
-            <ul key={b} className="list-disc space-y-1 pl-5">
-              {block.items.map((item, i) => (
-                <li key={i}>
-                  <Emphasised text={item} />
-                </li>
-              ))}
-            </ul>
-          );
-        }
-        if (block.kind === "table") {
-          return (
-            <div key={b} className="overflow-x-auto">
-              <table className="w-auto border-collapse text-sm tabular-nums">
-                <thead>
-                  <tr className="border-b">
-                    {block.head.map((cell, i) => (
-                      <th
-                        key={i}
-                        className={`px-3 py-1.5 font-medium text-muted-foreground ${
-                          block.align[i] === "right"
-                            ? "text-right"
-                            : "text-left"
-                        }`}
-                      >
-                        <Emphasised text={cell} />
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {block.rows.map((row, r) => (
-                    <tr key={r} className="border-b last:border-0">
-                      {row.map((cell, i) => (
-                        <td
-                          key={i}
-                          className={`px-3 py-1.5 ${
-                            block.align[i] === "right"
-                              ? "text-right"
-                              : "text-left"
-                          }`}
-                        >
-                          <Emphasised text={cell} />
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          );
-        }
-        return (
-          <p key={b} className="whitespace-pre-line">
-            <Emphasised text={block.lines.join("\n")} />
-          </p>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
- * Renders `**bold**` and nothing else.
- *
- * The narration is model prose, and a model answering "how many restaurants are there" writes
- * *"There are **9,590 restaurants** in total."* — it bolds the number that answers the
- * question, which is the most useful emphasis in the app and rendered as four literal
- * asterisks on the single most-read line.
- *
- * **Bold only, deliberately, and not a markdown renderer.** A general one is a dependency and a
- * surface: this text comes from a model, so every construct a renderer supports is a construct
- * the model can emit into the answer card — links, images, headings, HTML. The narrate prompt
- * asks for one or two sentences, and the one piece of formatting that actually appears in them
- * is bold. Anything else stays literal, which is visible and harmless, where a silently
- * rendered anchor would not be.
- */
-function Emphasised({ text }: { text: string }) {
-  // Split on the delimiter and keep it, so odd-indexed parts are the bolded runs. An unmatched
-  // `**` therefore lands on an even index and renders as text, which is the right failure.
-  const parts = text.split(/\*\*(.+?)\*\*/g);
-  return (
-    <>
-      {parts.map((part, i) =>
-        i % 2 === 1 ? (
-          <strong key={i}>{part}</strong>
-        ) : (
-          <span key={i}>{part}</span>
-        ),
-      )}
-    </>
   );
 }

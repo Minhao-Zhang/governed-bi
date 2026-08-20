@@ -25,6 +25,42 @@
 # the baseline v4 is measured against — declared no digest, so `reconcile` skipped its only
 # comparison and the driver printed "every row agrees with the profile in arms.toml" from a check
 # that examined nothing. An arm that cannot be reconciled must say so, not report agreement.
+#
+# `dataset` and `question_subset` are the same two-identifier split, one field over, and they are
+# here because this file enforced the rule above for the corpus **completely and for the question
+# set not at all**. Found 2026-08-14 by a downstream fork that needed to know which questions the
+# three arms below ran and could not read it anywhere: it recovered the answer by filtering four
+# historical versions of `BIRD-Data-Obfuscation:eval_dataset/test_final.jsonl` against the 57
+# schemas `BIRD-corpus@30872d3` covers and cross-checking the surviving candidate against prose in
+# `docs/failure-modes.md`. That is a schema-filtered count across four repository versions to
+# recover one fact; it should have been one field. Until it was, a rerun on a *replaced* dataset
+# produced the same n = 1 351, a substantially different question population, and passed every
+# quotability gate — because the gates compare the corpus digest and the knobs, and both matched.
+#
+# `dataset` is the ref a human checks out in `../BIRD-Data-Obfuscation`; `question_subset` is what
+# a measurement row carries, and is the only one `reconcile` can compare. Same relationship as
+# `corpus` to `corpus_content_hash`, deliberately, so a reader learns the shape once.
+#
+# `question_subset` is **mandatory** for the reason `corpus_content_hash` is: an optional field
+# that silences a check is a check with an off switch nobody labelled. Its value is verbatim what
+# the `question_subset` scope knob records — `"<count>:<12 hex of sha256 over the sorted question
+# ids>"`, resolved by `eval/provenance.py::scope_identity`. The profile field carries the knob's
+# *name* as well as its format so that the corpus defect cannot recur here: comparing two
+# identifiers from two namespaces is what made `reconcile` vacuous, and one name in one format
+# cannot be confused with a git ref.
+#
+# **What a question-id digest cannot detect**, stated because a gate whose blind spot is unwritten
+# gets read as covering it: a dataset that edited a question's text, its evidence, or its gold SQL
+# while keeping the ids is invisible to this field. `1711248` → `22fe2a6` moved ids, so this field
+# would have caught it; a gold correction in place would not move it. `gold_fingerprint`
+# (`eval/datalake.py::attach_gold_fingerprints`) is the field for that, and this one does not
+# subsume it. Twelve hex characters is 48 bits, sized for drift between two attempts at one run
+# and not against an adversary who wants a collision.
+#
+# **And this is a per-arm declaration, not a cross-arm gate.** `eval/report.py::knobs_comparable`
+# compares `comparability_keys()`, and `question_subset` is `Role.scope`, so nothing stops two
+# arms measured on two question sets from both being quotable. What the field buys is that each
+# arm's rows are now checked against a claim a reader can diff, so such a pair has to say so here.
 
 [arm.v3_fold]
 description = "ANALYST v3 with the fold prompt, routing pinned."
@@ -35,6 +71,22 @@ corpus = "30872d3"
 # `None` — the zero-licensed clarifications of open-work §3.6a, which never reach the stamp. It is
 # the same digest v4 and v5 record, which is what a shared corpus is supposed to look like.
 corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
+# **Measured from the artifact, on 2026-08-20, not reconstructed.** The three `proxy_*` artifacts
+# in `runs/eval/` are gitignored but they are on the maintainer's machine, which the fork's
+# write-up assumed they were not — so the question set did not have to be inferred. The 1 351
+# `question_id` values in `runs/eval/proxy_v3_fold_opus_high_corpus30872d3.jsonl` are **set-equal**
+# to the 1 351 in `BIRD-Data-Obfuscation@22fe2a6:eval_dataset/test_final.jsonl`: zero extra, zero
+# missing, and those questions cover exactly the 57 schemas `BIRD-corpus@30872d3` holds, with no
+# schema on either side unmatched. `423a3f4b65fb` is `short_digest` of that id set. Independent
+# check on the same value: `runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl` — a
+# later run, produced after `scope_identity` gained a writer — records
+# `question_subset = "1351:423a3f4b65fb"` from the harness itself.
+#
+# The fork reached `22fe2a6` independently and by a different route (the schema-filtered count
+# across four dataset versions, plus "73 declines + 1 278 committed = 1 351" from
+# `docs/failure-modes.md`). Two methods, one answer; the digest here is the one read off the rows.
+dataset = "22fe2a6"
+question_subset = "1351:423a3f4b65fb"
 notes = "The baseline v4 is measured against. Its own treatment is relative to v3, not recorded here."
 
 [arm.v4]
@@ -43,6 +95,11 @@ treatment = ["prompt_set"]
 compare_to = "v3_fold"
 corpus = "30872d3"
 corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
+# Same check, run separately against `runs/eval/proxy_v4_corpus30872d3.jsonl`: set-equal to
+# `22fe2a6`'s test split, zero extra, zero missing. Not copied from v3_fold — the point of the
+# field is that a shared question set is an assertion two artifacts can be found to disagree on.
+dataset = "22fe2a6"
+question_subset = "1351:423a3f4b65fb"
 
 [arm.v5]
 description = "v4 plus the projection ablation, which priced ~4 points of EX as shape-matching."
@@ -50,3 +107,6 @@ treatment = ["prompt_set"]
 compare_to = "v4"
 corpus = "30872d3"
 corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
+# Same check against `runs/eval/proxy_v5_corpus30872d3.jsonl`: set-equal, zero extra, zero missing.
+dataset = "22fe2a6"
+question_subset = "1351:423a3f4b65fb"
