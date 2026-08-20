@@ -39,6 +39,17 @@ cover and the engine says so, or pauses and asks you, instead of computing a pla
 whatever tables happened to be nearby. [Failure modes](docs/failure-modes.md) is what it does
 instead, per class, with the numbers.
 
+**A paused turn outlives the process.** When the engine needs to ask you something it stops
+mid-turn and checkpoints, so killing the server and starting a fresh one leaves the question where
+it was — answering it resumes that same turn rather than beginning the work again. Three bounds
+travel with that. It rests on one hand-run observation, on 2026-08-19, and **no test**: every
+human-in-the-loop test runs on an in-memory saver, so nothing automated drives a real pause and
+resume across a process boundary. The resumable state and the browsable history are two different
+files, and only the first is the durable one. And the 90-day retention this deployment configures
+cannot fire on the runtime it runs, so the store only grows.
+[ADR 0014](docs/adr/0014-one-conversation-store.md) is the design;
+[open work](docs/open-work.md) keeps the gaps.
+
 **Permissions withhold, they do not only refuse.** A grant hides an asset from everything a caller
 sees — the model's prompt, its tools, and every route that serves one. Never showing a column is a
 stronger property than refusing a statement that names it. The shipped adapter authorizes
@@ -79,6 +90,7 @@ the `docker compose` in that repo) and the
 
 ```bash
 uv sync                       # the engine
+uv sync --extra bedrock       # instead, if the provider is Bedrock
 npm --prefix ui ci            # the web client, optional
 ```
 
@@ -105,9 +117,11 @@ and [the usage guide](docs/usage.md#serve-langgraph-server) says so in full. Do 
 anywhere but `127.0.0.1`. Copy [`ui/.env.example`](ui/.env.example) to `ui/.env.local` to point
 the client at the engine.
 
-Chat is one of five views. The others show the semantic layer as an ER diagram and a knowledge
-graph, page through every corpus asset, list past conversations, and replay any served turn stage
-by stage. Leave `NEXT_PUBLIC_LANGGRAPH_URL` unset and the client runs on mock fixtures with no
+Chat is one of six views. The others show the semantic layer as an ER diagram and a knowledge
+graph, page through every corpus asset, list past conversations, replay any served turn stage by
+stage, and hold the questions the engine asked that nobody came back to answer — a clarification
+whose reader closed the tab leaves no trace in the thread's own channels, so that queue is read
+out of the platform's interrupt state and is the only place an abandoned one is visible. Leave `NEXT_PUBLIC_LANGGRAPH_URL` unset and the client runs on mock fixtures with no
 engine attached.
 
 Everything else — every environment variable, both API surfaces, and the UI's own quirks — is in
@@ -119,7 +133,15 @@ Measured on [BIRD](https://bird-bench.github.io/), a public text-to-SQL benchmar
 obfuscated variant linked above: 1,351 questions across 57 schemas. *EX* is the benchmark's own
 score — the query ran and its result matched the reference answer. A configuration is fixed and
 named before a run so two of them can be compared; this one is `v4`, engine `3c0079a`, corpus
-[`BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus) @ `30872d3`.
+[`BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus) @ `30872d3`, questions
+[`BIRD-Obfuscation`](https://github.com/Minhao-Zhang/BIRD-Obfuscation) @ `22fe2a6`.
+
+**That last identifier is here because the count is not one.** That test split has had four
+versions and only one of them holds 1,351 questions, so a rerun against a replaced dataset would
+report the same *n* over a different population — and pass every quotability gate, because the
+gates compare the corpus digest and the knobs and both would match. Every arm now declares its
+question set in [`arms.toml`](src/governed_bi/register/arms.toml) and the driver refuses a
+mismatch before the first paid question.
 
 | | |
 | --- | ---: |

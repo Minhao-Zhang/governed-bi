@@ -865,6 +865,29 @@ a configuration reading are not the same claim.
 argument is sound and the code says so at the line. It is still not the thing the flag's name
 promises, and nothing re-checks it per process.
 
+**And nothing automated drives the observed half.** Every human-in-the-loop test compiles through
+`compile_graph`, whose saver is `InMemorySaver`, and
+`tests/serve/test_the_durable_saver_survives_a_process.py` reaches the saver through `update_state`
+because that file is about persistence rather than the serve graph. So no test drives a real
+`ask_user` interrupt and resume across a process boundary through `AsyncSqliteSaver` — one hand-run
+observation is the whole of the evidence, and closing this needs a live server and a kill, not a
+unit test.
+
+**The store has no ceiling, and the risk runs the way round nobody expects.** `langgraph.json` sets
+`checkpointer.ttl` to `strategy: delete` at `default_ttl: 129600` — minutes, so 90 days — and that
+sweep **cannot fire on the runtime this deployment runs**: `langgraph-runtime-inmem`'s
+`Threads.sweep_ttl` is `return (0, 0)` ("Not implemented for inmem server") and nothing in
+`site-packages` calls it; the only `sweep_ttl` callers are the sqlite *store*'s. Measured
+2026-08-20: `runs/conversations.sqlite` at 92.7 MB with **0 freelist pages**, so nothing has ever
+been deleted, and the file grows monotonically with no operator-visible signal. What makes this an
+open item rather than a note is the inversion: `langgraph-runtime-inmem` was an undeclared
+transitive dependency until 2026-08-20, and a minor release that *implements* the sweep would
+silently start deleting 90-day-old threads — under a deployment that reads thread state as durable
+history. It is bounded `<0.33` in `[tool.uv] constraint-dependencies` now, which buys a deliberate
+upgrade rather than a fix. The repair is a retention decision somebody has to make: either prune on
+purpose, or say in the glossary that this store is append-only forever. `docs/glossary.md` and
+[ADR 0014 §4](adr/0014-one-conversation-store.md) carry the corrected account; neither picks.
+
 No consumer is misled either way: `ui/lib/schemas.ts`'s `capabilitiesSchema` declares neither field,
 so zod strips both and nothing in `ui/` reads them. That is what keeps this out of §1, and it is also
 why the remaining half has never cost anything.
