@@ -1,7 +1,7 @@
 # Decisions taken while working the 2026-08-10 audit
 
-Every call made without asking, with the reasoning and what would reverse it. Findings live in
-[audit-2026-08-10.md](audit-2026-08-10.md); this page is only the *choices*, so that a reviewer can
+Every call made without asking, with the reasoning and what would reverse it. The 2026-08-10
+audit that occasioned these choices is gone; this page is the *choices*, so a reviewer can
 disagree with one without re-deriving it.
 
 ## D-1 — A dead embedder drops the semantic channel rather than degrading to another text's vector
@@ -336,7 +336,7 @@ whether the scoring path uses them. That is exactly how the import-time constant
 An independent verification of `774b0d5` found 17 record defects and none in the code. The commit
 message is already on `origin/main`.
 
-**Chosen:** correct them in `audit-2026-08-10.md`, in a named section that lists what the message got
+**Chosen:** correct them in the tree, in a named place that lists what the message got
 wrong, and leave the message alone.
 
 **Rejected:** `git push --force` with an amended message. A published commit is a fact other people

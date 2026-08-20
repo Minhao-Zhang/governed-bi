@@ -55,9 +55,8 @@ is the part worth reading before proposing an alternative:
   **162 right answers to gain 8.1 accuracy points**
   ([selective delivery](../analysis/selective-delivery-v4.md) §4).
 
-So a graded `certainty` field is what
-[the strategy checkpoint](../analysis/strategy-checkpoint-2026-08-11.md) §5.6 calls confidence
-theatre, and these are the measurements that make the word fair rather than rude.
+So a graded `certainty` field is confidence theatre, and these are the measurements that
+make the word fair rather than rude.
 
 **The gap is not a score. It is that the decision is nowhere declared.**
 

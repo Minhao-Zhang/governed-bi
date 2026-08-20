@@ -372,7 +372,7 @@ def capabilities_for(session: Any) -> dict[str, Any]:
         # as a separate belief. The behaviour *was* watched end to end on 2026-08-19: a
         # clarification paused, the process was killed with nothing left listening, a fresh one
         # re-mounted the prompt from checkpointed interrupt state, and answering it resumed the
-        # turn to a correct answer (`docs/analysis/audit-2026-08-10.md` A10 and
+        # turn to a correct answer (
         # `docs/analysis/adopting-the-downstream-fork-2026-08-19.md`). That is one hand-run
         # observation and **no test coverage**: every HITL test runs on `InMemorySaver`, and
         # `tests/serve/test_the_durable_saver_survives_a_process.py` reaches the saver through

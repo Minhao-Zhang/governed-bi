@@ -11,7 +11,7 @@ declared. It reports the false-refusal rate whether or not it is zero.
 the expectations live in the TOML rather than in these functions, so a disagreement between the
 code and the criterion is a diff in a data file.
 
-**This file has positive controls, for audit-2026-08-10 D13.** That finding is that six
+**This file has positive controls, for D13.** That finding is that six
 conformance sweeps assert ``not offenders`` with no positive control, so a typo'd regex passes.
 Two things answer it here. The loader tests below plant a case that must fail to load and check
 that it does — a suite that silently accepted a malformed case would report a perfect score over

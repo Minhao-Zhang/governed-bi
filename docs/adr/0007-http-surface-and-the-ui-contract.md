@@ -16,8 +16,8 @@ dependency surface survived the deletion and the code did not.
 
 `docs/openapi.json` is still tracked and is, at the time of this decision, v1's spec for all
 twelve routes. It is the spec-of-record for the rebuild, not a historical artifact. (It has
-since been rewritten: it carries `"version": "2"` and the fifteen paths the app actually
-mounts, `AnswerResponse` included.)
+since been rewritten: it carries `"version": "2"` and the fourteen GET paths the app actually
+mounts. `AnswerResponse` left with `POST /chat` on 2026-08-18.)
 
 ## The decisions
 
@@ -245,21 +245,17 @@ configured — re-decided the next day, and [ADR 0009](0009-browsing-and-filteri
 what `capabilities_for` computes now: `can_stream and agent_model is not None`, because the flag
 is the switch that mounts the prompt and the REST transport has no prompt to mount —
 `can_scope` true, `can_search` false, and the two durability flags
-`checkpoint_durable` / `hitl_survives_process_restart`, both false because pause/resume does not
-survive a process restart on either transport.
+`checkpoint_durable` / `hitl_survives_process_restart`, both derived from whether
+`langgraph.json` mounts a durable checkpointer ([ADR 0014](0014-one-conversation-store.md) §3a).
 
-> **The two durability flags are now stale, 2026-08-18 ([ADR 0014](0014-one-conversation-store.md)).**
-> They are still hardcoded `False` in `capabilities_for`, under a comment that explains them by
-> `POST /chat`'s `InMemorySaver` — a route that no longer exists. What does exist is a durable
-> checkpointer named by `langgraph.json`, verified by killing the server and reading the thread
-> back. So the section's own rule is being broken in the direction it did not anticipate: a flag
-> reporting `false` about a capability that is built is as wrong as one reporting `true` about a
-> capability that is not, and "false is a legitimate answer" is not a licence to leave a literal
-> behind. `hitl_survives_process_restart` additionally needs an *observation* before it flips —
-> a paused clarification answered after a restart — and under `langgraph dev` the thread index
-> still lives in `.langgraph_ops.pckl` with a ten-second flush, which is a second thing that has
-> to hold. Tracked in [`docs/open-work.md`](../open-work.md). `can_clarify`'s expression is
-> unchanged and still right; the transport it excluded is simply gone.
+> **The two durability flags, 2026-08-18 then 2026-08-19 ([ADR 0014](0014-one-conversation-store.md)).**
+> They used to be hardcoded `False` under a comment that explained them by `POST /chat`'s
+> `InMemorySaver` — a route that no longer exists. `capabilities_for` now calls
+> `durable_checkpointer_configured()` and both report true when `langgraph.json` names a
+> factory that is on disk. That is a configuration reading, not a live handle, and
+> `hitl_survives_process_restart` additionally rests on one hand-run observation
+> (2026-08-19). Tracked in [`docs/open-work.md`](../open-work.md) §4.4. `can_clarify`'s
+> expression is unchanged and still right; the transport it excluded is simply gone.
 
 Reporting a capability **false** is not a defeat. `can_search` is false and the UI degrades to a
 client-side index over what it already has, which is a route we do not have to build to get end

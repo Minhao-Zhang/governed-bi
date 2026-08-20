@@ -137,8 +137,8 @@ a second belief — an `ask_user` interrupt *is* checkpoint state. What was veri
 landed is thread state surviving a hard kill. The clarification half **was** watched end to end later, on
 2026-08-19: a turn paused on `ask_user`, the process was killed with nothing left listening, a
 fresh one re-mounted the prompt from checkpointed interrupt state, and answering it resumed the
-turn to a correct answer (`docs/analysis/audit-2026-08-10.md` A10, and
-`docs/analysis/adopting-the-downstream-fork-2026-08-19.md`). That is **one hand-run observation
+turn to a correct answer
+(`docs/analysis/adopting-the-downstream-fork-2026-08-19.md`). That is **one hand-run observation
 and no test coverage**: every HITL test compiles through `compile_graph`, whose saver is
 `InMemorySaver`, and `tests/serve/test_the_durable_saver_survives_a_process.py` reaches the saver
 through `update_state` because that file is about persistence rather than the serve graph. So

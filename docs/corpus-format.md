@@ -22,14 +22,10 @@ tree, so a number is reproducible only if the corpus commit is known. Quote the 
 any figure, and write nothing into that checkout except assets — anything else becomes part of
 the corpus's identity.
 
-The corpus is versioned and **not rebuildable**. `tools/corpus_rebuild/01–03` are the only scripts
-that write into it, and they write the mechanical half — schema, table and column structure, join
-edges, few-shots — leaving every summary as a `TODO <identifier>` marker. `04–07` write nothing
-into the corpus either: they stage BIRD's evidence clauses, column documentation and column value
-samples into `tools/corpus_rebuild/_build/` and split them into one packet per schema, as *input*
-for whoever writes the prose. The prose half — every summary, body and rule, and every term and
-metric asset — has no producer anywhere in this repository. Versioned and
-reproducible-from-source are different guarantees, and only the first one holds.
+The corpus is versioned and **not rebuildable from this repository**. This engine loads the
+sibling checkout; producing that tree is not this project's job. Mechanical structure and
+prose both live there. Versioned and reproducible-from-source are different guarantees, and
+only the first one holds.
 
 ## Layout
 
@@ -49,8 +45,8 @@ loader and the asset ids both use the field name `schema`.
 
 **The subtrees are a convention, not a rule.** `corpus/store.py::load` walks the whole tree and
 reads every `.yaml` it finds wherever it sits, and `corpus/store.py::write` writes
-`<root>/<namespace>/<id>.yaml` with no subdirectory at all — so the layout above is what
-`tools/corpus_rebuild/` produced, and nothing on the read path checks it. What the loader does
+`<root>/<namespace>/<id>.yaml` with no subdirectory at all — so the layout above is the
+convention the served checkout uses, and nothing on the read path checks it. What the loader does
 enforce is per asset: `corpus/identity.py::validate_asset_id` on every id, because an id becomes a
 filename. The namespace directory is validated on the **write** path only
 (`identity.py::validate_path_component`, a bare identifier), and the manifest passed to `load`

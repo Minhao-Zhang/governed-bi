@@ -27,7 +27,7 @@ talks to.
   retrieval facets → route → assemble → the agent loop → check → execute →
   narrate; the engine's `register/stages.py` is the vocabulary), and get an answer
   card. The card reports only what the engine **observed**: the `outcome`
-  (`answered` / `refused` / `clarification` / `capped` / `crashed`), the attempt
+  (`answered` / `refused` / `clarification` / `capped` / `crashed` / `no_sql`), the attempt
   ledger's terminal state and how many statements passed or were blocked by
   governance, the answer text, read-only (highlighted) SQL, and a provenance/audit
   drawer. There is no reliability tier and no `safety_clearance` /
@@ -39,7 +39,7 @@ talks to.
   - **Relationships** — a column-level ER diagram (tables, columns, FK edges with
     cardinality).
   - **Semantic graph** — the full corpus as a typed, filterable knowledge graph
-    (metrics, terms, joins, notes, few-shots, negatives).
+    (metrics, terms, joins, few-shots, negatives).
   - **Tables** — a plain, auditable table/column browser with governance flags.
 - **Corpus** — every asset the engine loaded, by type (server-filtered, sorted and
   paginated) or by ranked search, with provenance and exclusion state. Corpus
@@ -49,6 +49,8 @@ talks to.
 - **Audit** — every turn the server has served, and one turn's record stage by
   stage: the governance ledger, the licensed set, and which required register
   fields are absent.
+- **Pending** — clarifications the engine asked that nobody answered.
+- **Settings** — client display preferences.
 
 Governance outcome is the one "loud" color channel (green/amber/red = what the
 engine observed, not a score it assigned); everything else stays neutral, so color

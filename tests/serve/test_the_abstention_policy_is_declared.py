@@ -135,7 +135,7 @@ def test_the_verdict_carries_no_trust_signal() -> None:
     """The line between a ledger and theatre, asserted over the **source**.
 
     Reporting *why* the engine withheld is the ledger. Scoring *how sure it is* is theatre —
-    `docs/analysis/strategy-checkpoint-2026-08-11.md` §5.6's word, and the measurements behind
+    ADR 0013's word, and the measurements behind
     it are in open-work.md §3.11. A behavioural test that no verdict carries a score passes for
     every input it happens to try; this one fails when someone adds the field.
 

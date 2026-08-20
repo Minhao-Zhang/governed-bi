@@ -455,12 +455,10 @@ one level too wide.
 under its alias, because Postgres hides the table name behind one; and if a handle points at two
 tables anywhere in the tree, discard it and fall back to the old behaviour.
 
-> **The resolver has two confirmed defects of its own, still unfixed** (see
-> [open work](open-work.md) §3.2a). It cannot see derived sources, so a handle that is both a
-> subquery alias and a base-table alias elsewhere is judged tree-unambiguous and rewritten against
-> the wrong table. And a self-colliding table fails to poison its own bare name. Both have zero
-> hits on this arm — all 1,342 statements and all 656 tables were scanned — so the numbers below
-> are unaffected. That is a property of this dataset, not of the code.
+> **Those two resolver defects were fixed 2026-08-12** (open-work recorded the repair; both
+> had zero hits on this arm — all 1,342 statements and all 656 tables were scanned — so the
+> numbers below are unaffected). A later CTE-scope hole of the same family is
+> [binding-scope-and-statement-timeout-2026-08-19](analysis/binding-scope-and-statement-timeout-2026-08-19.md).
 
 **Result** (v3-pinned → v3-fold, same prompt):
 

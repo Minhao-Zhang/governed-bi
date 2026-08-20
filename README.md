@@ -117,7 +117,7 @@ and [the usage guide](docs/usage.md#serve-langgraph-server) says so in full. Do 
 anywhere but `127.0.0.1`. Copy [`ui/.env.example`](ui/.env.example) to `ui/.env.local` to point
 the client at the engine.
 
-Chat is one of six views. The others show the semantic layer as an ER diagram and a knowledge
+Chat is one of seven views. The others show the semantic layer as an ER diagram and a knowledge
 graph, page through every corpus asset, list past conversations, replay any served turn stage by
 stage, and hold the questions the engine asked that nobody came back to answer — a clarification
 whose reader closed the tab leaves no trace in the thread's own channels, so that queue is read
@@ -166,20 +166,20 @@ carry all three in full.
 
 What the governance layers themselves are worth is a separate measurement, and unlike the above it
 costs nothing to reproduce: the stack is deterministic, so it needs no credential, no database and
-no model call. The suite is 95 cases — 49 attacks and 46 ordinary analytics statements — carried
+no model call. The suite is 115 cases — 62 attacks and 53 ordinary analytics statements — carried
 as data in [`govern/adversarial.toml`](src/governed_bi/govern/adversarial.toml).
 
 | | |
 | --- | ---: |
-| Attacks that reached executable SQL | **0** (of 49) |
-| Attacks refused, but by the wrong layer or rule | **0** (of 49) |
-| Ordinary statements wrongly refused | **0** (of 46) |
-| Cases where a layer crashed instead of deciding | **0** (of 95) |
+| Attacks that reached executable SQL | **0** (of 62) |
+| Attacks refused, but by the wrong layer or rule | **0** (of 62) |
+| Ordinary statements wrongly refused | **0** (of 53) |
+| Cases where a layer crashed instead of deciding | **0** (of 115) |
 | Per-layer recall, over the attacks each layer owns | **1.000** (all six layers) |
 
-Read that with its bound, which is not small: 49 is the number of attacks somebody sat down and
-wrote, so zero bypasses is a fact about those 49, not a claim about attacks nobody thought of. The
-same holds in reverse for the 46 benign statements. Reproduce with
+Read that with its bound, which is not small: 62 is the number of attacks somebody sat down and
+wrote, so zero bypasses is a fact about those 62, not a claim about attacks nobody thought of. The
+same holds in reverse for the 53 benign statements. Reproduce with
 `uv run --frozen python tools/govern_bench.py`.
 
 ## Documentation

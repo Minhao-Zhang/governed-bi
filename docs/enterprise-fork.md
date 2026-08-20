@@ -5,8 +5,8 @@ exists — an IdP, groups, a data catalogue with owners, maybe Postgres row-leve
 this engine's governed text-to-SQL path, and you want it to answer *for a particular person*.
 
 **What this repository is.** A research engine with **no transport authentication at all**, one
-principal, and a deterministic seven-layer gate between the model's SQL and the database
-([ADR 0006](adr/0006-execution-time-governance.md)).
+principal, and a deterministic six-layer gate between the model's SQL and the database
+([ADR 0006](adr/0006-execution-time-governance.md); `COST` is declared and off).
 It has a **seam** for authorization ([ADR 0012](adr/0012-access-seam-principal-and-authorization.md)) —
 ports, a default adapter that changes nothing, and one reference adapter.
 
@@ -360,7 +360,7 @@ Stated here rather than discovered by you:
   bigger on 2026-08-18: what escapes is now every prior turn's record, not the newest one, because
   the turn accumulates on state ([ADR 0014](adr/0014-one-conversation-store.md)). **A6 is retired
   rather than fixed**: the route it named, `POST /chat/resume`, is deleted. See
-  [`docs/analysis/audit-2026-08-10.md`](analysis/audit-2026-08-10.md).
+  [open work](open-work.md) §4.3.
 - **A5 is closed (2026-08-18), and closing it is what makes step 0 pay off.** `serve/accept.py`
   stores the transport-authenticated caller as the turn's `identity`, and
   `serve/resume.py::authorise_resume` — called from `ask_user` where `interrupt()` returns —

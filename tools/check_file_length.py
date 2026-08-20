@@ -31,16 +31,15 @@ HARD_LIMIT = 1000
 #: in flight teaches people to bypass it. This tier's job is to be *read*.
 WARN_LIMIT = 900
 
-#: Roots scanned. ``scripts`` was a fourth root until 2026-08-11, holding the one-shot corpus
-#: rebuild kit — listed here because leaving it out would have made "move it to scripts/" a way
-#: to leave the checks. The kit now lives at ``tools/corpus_rebuild/``, so that escape is closed
-#: by there being no second root to move to rather than by this tuple remembering one.
+#: Roots scanned. ``scripts`` was a fourth root until 2026-08-11, holding a one-shot
+#: corpus rebuild kit — listed here because leaving it out would have made "move it to
+#: scripts/" a way to leave the checks. That kit is gone; the escape is closed by there
+#: being no second root to move to rather than by this tuple remembering one.
 ROOTS: tuple[str, ...] = ("src", "tools", "tests")
 
 #: Directory names skipped wherever they appear: generated or vendored trees are not code
 #: anyone reads, and ``__pycache__`` holds no ``.py`` files but costs a walk. ``_build`` is
-#: the corpus-rebuild kit's gitignored staging area — throwaway audit scripts, not a length
-#: anyone should act on.
+#: generated staging (Sphinx, extract dumps) — not a length anyone should act on.
 SKIP_DIRS: frozenset[str] = frozenset(
     {"__pycache__", ".venv", "venv", "node_modules", "_build"}
 )

@@ -11,14 +11,11 @@ re-verified were dropped, not demoted.
 
 Binding design lives in the [ADRs](adr/). This is a work list, not a decision record.
 
-The 2026-08-10 implementation audit is a separate page, because it is a one-time systematic sweep
-with its own phased remediation order rather than an accumulating list:
-[audit-2026-08-10](analysis/audit-2026-08-10.md). Items migrate from there to here as phases close.
-
-Its **calls** are separate again, in [decisions-2026-08-10](analysis/decisions-2026-08-10.md) — 30
-choices taken while working it, each with the alternative that was rejected and what would reverse it.
-Read it before re-opening any of them: four entries retract their own earlier reasoning in place, so
-the argument you are about to make may already be there with the measurement that killed it.
+Calls taken while working the 2026-08-10 audit live in
+[decisions-2026-08-10](analysis/decisions-2026-08-10.md) — 30 choices, each with the alternative
+that was rejected and what would reverse it. Read it before re-opening any of them: four entries
+retract their own earlier reasoning in place, so the argument you are about to make may already
+be there with the measurement that killed it.
 
 ---
 
@@ -189,74 +186,18 @@ arm since has passed it; it costs nothing.
 
 ### 3.2 The corpus is versioned and still not rebuildable
 
-`../BIRD-corpus` is in git and still cannot be regenerated from anything committed — but not
-for the reason this entry used to give. `tools/corpus_rebuild/01–03` **are** in the tree and
-**do** write assets: schema, table and column structure, join edges, few-shots. What has no
-producer anywhere is the prose half — every summary, term, metric and note — which those
-scripts leave as `TODO <identifier>` for a writing agent to fill in per schema.
+`../BIRD-corpus` is in git and cannot be regenerated from this repository. This engine
+loads a versioned tree; it does not write one. Mechanical structure and prose both live
+in that sibling checkout. Versioned is not reproducible-from-source, and no document
+may describe it as such.
 
-So the mechanical half is rebuildable and the corpus is not. Versioned is not
-reproducible-from-source, and no document may describe it as such.
+### 3.2a Closed: two resolver defects, 2026-08-12
 
-### 3.2a `r_ambiguous_fold`'s resolver admits statements it must refuse
-
-**Two confirmed governance defects, both reproduced, both fixed 2026-08-12.** They are here rather
-than in §1 because they are properties of the checker, not of the model's answers. Neither had
-fired in the field, so no measurement is affected.
-
-**`_sources` is blind to derived sources.** It walks `exp.Table` and excludes only CTE names, so
-it has no notion of a subquery, `LATERAL` or `VALUES` alias. `binding.py::_classify_sources`
-registers those as `kind="derived"`. A handle that is a derived source in one scope and a
-base-table alias in another is therefore *tree-unambiguous* by `_sources`'s conflict test — there
-is nothing for it to conflict with — while `binding.py` resolves it to the derived source. The
-two resolvers disagree, which is the exact condition the rule exists to detect. Reproduced:
-
-```sql
-SELECT p.name
-FROM (SELECT o.name, x.name FROM s.places AS o JOIN s.people AS x ON o.id = x.id) AS p
-WHERE EXISTS (SELECT 1 FROM s.people AS p WHERE p.id = 1)
-```
-
-With `s.places.name` and `s.people.Name` both licensed, this returns `passed: True` and emits
-`p."Name"` — the derived source exposes both spellings, so the statement is valid, executes, and
-reads a different column of a different table. `bind()` marks `p.name` as `opaque: derived:p`, so
-the column layer never inspects it and nothing downstream can catch it. Before the narrowing this
-refused with `r_ambiguous_fold`.
-
-**Fixed by the second option, and the first was tried and withdrawn.** Absorbing every derived
-alias into a tree-wide set closes the defect and costs false refusals in a shape its own controls
-could not see: a handle that is a derived alias in one scope loses per-table spelling in *every*
-scope, so `SELECT r."Name" FROM sales.regions AS r WHERE EXISTS (SELECT 1 FROM (SELECT 1 AS z) AS r)`
-refused `r_ambiguous_fold` for a reference naming exactly one table. Measured on the adversarial
-suite: false-refusal 2/46 under the tree-wide rule, 0/46 under the per-scope one.
-`pipeline._column_sources` now resolves each reference in its own scope and then its ancestors —
-`binding.py::_lookup`'s walk over the same `scope.selected_sources` mapping — so the two resolvers
-agree by construction. (Both read `scope.sources` until 2026-08-19, when that mapping turned out to
-merge every visible CTE into every scope and both moved off it together; see
-[the binding-scope fix](analysis/binding-scope-and-statement-timeout-2026-08-19.md).) Both spellings of the false-refusal shape are benign cases in
-`govern/adversarial.toml`.
-
-One consequence is a widening, not a narrowing: a handle reused for two different tables in two
-different scopes now resolves correctly in each rather than refusing.
-`tests/govern/test_guard_pipeline_ledger.py::test_a_handle_reused_for_two_tables_is_spelled_from_each_scope_s_own`
-pins the spelling, which is what a refusal-only assertion could not.
-
-**A self-colliding table fails to poison its bare name.** The `own_ambiguous` guard returns
-before the cross-schema poison write, so a table whose own columns collide by case neither
-registers nor poisons its bare key, and another schema's table of the same name takes sole
-ownership of it. Two more early returns — an absent corpus entry, and a table with no
-`physical_name` — reach the same state. Fix: move the poison write above the guard. Fixed; the
-poison write now runs above the guard, and `a_spelling_self_colliding_table_keeps_its_bare_handle`
-is the case.
-
-**Field reachability, measured.** Zero of 1 342 parsed statements on the v3-fold arm contain a
-derived-source alias that collides with a table handle, and zero of the 656 tables in
-`../BIRD-corpus` @ `30872d3` collide with themselves by case. The +5.3pp attributed to the
-narrowing is therefore not contaminated. The 28 bare table names that *are* shared across schemas
-do exercise the poison path, so only the ordering hole is unreached.
-
-**A corpus rebuild can widen both.** Re-check both properties before trusting the resolver on a
-rebuilt corpus.
+Both 
+_ambiguous_fold holes (derived-source alias; self-colliding bare name) were fixed.
+A later CTE-scope hole of the same family is in
+[binding-scope-and-statement-timeout-2026-08-19](analysis/binding-scope-and-statement-timeout-2026-08-19.md).
+Re-check both properties before trusting the resolver on a rebuilt corpus.
 
 ### 3.3 The char budget is not the binding constraint
 
@@ -367,32 +308,6 @@ v3-fold's **capped** turns hold 24 `sample`-path attempts, 21 passing and the sa
 the whole arm it is 132 attempts, 129 passing. A histogram of *failed* attempts never counted the
 passing ones on either slice.
 
-### 3.8 The knobs that could not reach the run they name — closed
-
-**Both halves are fixed; the entry stays because the shape recurs and the artifacts still
-predate it.**
-
-`w_lexical`, `w_semantic` and `semantic_scale_ceiling` were module constants built from
-`knob_default` at import, so no request could move them: an arm could declare `w_lexical: 0.9`,
-move its config hash, and behave identically. They now travel as one frozen
-`serve/runtime.py::ChannelScale`, resolved per turn by `channel_scale` through `float_knob` — the
-same state → `knobs_resolved` → register precedence every other knob uses — and passed into
-`combine_channels`, which has no default for it. There is no `FUSE_WEIGHTS` constant left.
-Decision and alternatives: [decisions-2026-08-10](analysis/decisions-2026-08-10.md) D-22.
-
-`GOVERNED_BI_RAIL_NODE_TIMEOUT_S`, `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` and
-`GOVERNED_BI_AGENT_RECURSION_LIMIT` still outrank the register at their readers — that is the
-intended precedence — but the record no longer publishes the default underneath them.
-`register/knobs.py::env_override` is the recording half, applied last in
-`session._resolved_knobs`, and it copies the readers' two parsing rules (blank is unset; the
-declared default decides the cast) so the record cannot disagree with the reader.
-`tests/serve/test_the_record_follows_the_knob.py` asserts each **on its value**.
-
-What is not claimed is that either has been exercised in anger: no arm on disk carries anything
-but the default weights, and no run configuration in this repository exports the three
-variables. Several tests under `tests/serve/` do, which is the point — they are what keeps the
-wire alive.
-
 ### 3.9 The eight tests that could not fail are pinned rather than repaired-and-forgotten
 
 All eight are covered by the nine declared mutations under the `s39-` prefix in
@@ -474,18 +389,17 @@ at all. It also carries `git_sha`, `git_main_sha`, `working_tree_dirty`, `diff_s
 is the only evidence on disk that the eight closed above actually reach a row. Two rows is not a
 measurement and nothing here is quoted from it. There is no `runs/index.jsonl` on this tree.
 
-**The gate is still not a CI step**, and the reason has changed. It exits 1 on the six findings
-in the table above, so a step would fail every commit, and waiving six genuine findings to go
-green is the lie it was written to catch. Three of the six need a *decision* rather than a wire:
+**The gate is still not a CI step**, and the reason has changed. It exits 1 on the five findings
+in the table above, so a step would fail every commit, and waiving five genuine findings to go
+green is the lie it was written to catch. Two of the five need a *decision* rather than a wire:
 `expand_hops` and
-`negative_tau` are comparability knobs whose readers would live in `retrieve/`, and
-`clarifications` is a question about the clarification protocol.
+`negative_tau` are comparability knobs whose readers would live in `retrieve/`.
 
 What did land is the half that was missing either way:
 `test_the_declared_but_unconsumed_set_does_not_grow` runs the gate on **every commit** against
-the six findings pinned by name, so a seventh fails the build with the offending name, and
+the five findings pinned by name, so a sixth fails the build with the offending name, and
 closing one fails it too — because a shrinking list nobody updates is how a stale count survives.
-Names and not a count: six findings and six *different* findings are the same integer.
+Names and not a count: five findings and five *different* findings are the same integer.
 
 Its own docstring states the blind spot: rule K1 credits any occurrence of a knob's name, so a
 coincidental string literal launders one. That is why the eight closed above are also asserted on
@@ -738,8 +652,7 @@ intended pressure and not a defect.
 **`reconcile` is wired**, to `--arm`: the driver looks the profile up before the first paid
 question and refuses a run labelled with an arm whose declared corpus is not the one the session
 loaded, then reconciles every row again in the report. Fixing the wire also found the function
-was vacuous — see the D9 row in [the audit](analysis/audit-2026-08-10.md) for the two namespaces
-it was comparing.
+was vacuous — reconcile compared two namespaces that could never match.
 
 **That fix was itself incomplete until 2026-08-12, for the arm that mattered most.** `v3_fold`
 declared no `corpus_content_hash`, so the repaired guard was never entered: a run launched
@@ -789,8 +702,7 @@ What is still owed:
 `GOVERNED_BI_API_KEY` was removed on 2026-08-13 with the middleware and the `Auth` plumbing that
 read it ([ADR 0007](adr/0007-http-surface-and-the-ui-contract.md) Amendment 3). No route asks for
 a credential; reaching the port is sufficient. The two findings the key closed on 2026-08-12 are
-therefore live again in the words they were written in
-([audit-2026-08-10](analysis/audit-2026-08-10.md)):
+therefore live again in the words they were written in:
 
 - **A1** — every route is unauthenticated, so anything that can open a socket to `:2024` can post
   a turn and execute governed SQL against the configured database.
@@ -958,14 +870,13 @@ decision, not a patch.
 Separately, six UI files cite a handoff document that was deleted from this repository, at eight
 sites (`components/corpus/asset-edit-sheet.tsx`, `components/schema/column-related.tsx`,
 `hooks/use-stream-chat.ts` ×2, `lib/api-client.ts` ×2, `lib/capabilities.ts`,
-`lib/mock/fixtures.ts`). Twelve cite `D15` as a design decision, and `docs/design-decisions.md`
-carries no numbered decisions at all — the only surviving mentions in `docs/` are ADR 0002 and
-ADR 0005, both of which cite it *as* a design-decisions.md entry that is not there. So the
-citation is dead on both sides of the merge, not only the client's.
+`lib/mock/fixtures.ts`). Twelve cite `D15` as a design decision.
+`docs/design-decisions.md` is an ADR index and carries no numbered D-entries, so those
+client citations are dead. Cross-schema joins themselves are still a live retrieval
+property (ADR 0005); only the D15 label is gone from `docs/`.
 
 The split these drifted across is closed — the UI is `ui/` in this tree since `506ad9b` — but no
 gate reads it. `check_citations.py`'s `STRICT_ROOTS` is `("src", "tools", "docs", "tests")` and
 its `SEARCH_SUFFIXES` does not include `.ts` or `.tsx`, so every citation above is still
 unchecked by anything. Whether to extend the gate over `ui/` is the open call, and it is now a
-one-tree question rather than a cross-repository one. Background in
-[the strategy checkpoint](analysis/strategy-checkpoint-2026-08-11.md).
+one-tree question rather than a cross-repository one.

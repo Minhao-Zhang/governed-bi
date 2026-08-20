@@ -12,7 +12,9 @@ Two instruments. The mechanical one is the six artifacts this sweep ran over, 1,
 on corpus `86ed1dbf…` (`../BIRD-corpus` @ `30872d3`): a field constant across all 8,106 rows of
 all six arms is evidence of no writer, which is how `facet_degraded` and `git_sha` were originally
 caught. The static one is `tools/check_declared_is_consumed.py`, written in the same pass. It
-found 27 of the items below when it was written, 14 on 2026-08-10, and finds **6** now. The rule for
+found 27 of the items below when it was written, 14 on 2026-08-10, and finds **5** now
+(`expand_hops`, `negative_tau`, `facet_model`, `rewrite_model`, `build_workers`).
+`clarifications` closed 2026-08-19. The rule for
 that last number is the checker's own output — `uv run --frozen python
 tools/check_declared_is_consumed.py` prints one line per violation and the four-rule breakdown is
 [at the bottom of this page](#the-checker) — so it is re-derivable in one command rather than by
@@ -45,14 +47,13 @@ until one exists the sections below are the correct description of every number 
 **What it unblocks, and what it does not.** The condition
 `tests/conformance/test_the_lint_gates_fire_on_a_synthetic_violation.py` names for putting the gate
 in CI was "tier 1 clear",
-and it is. The gate still exits 1 on the six findings in tiers 2–3, so a CI step would fail every
-commit — and waiving six genuine findings to go green is the lie the gate exists to catch. The
+and it is. The gate still exits 1 on the five findings in tiers 2–3, so a CI step would fail every
+commit — and waiving five genuine findings to go green is the lie the gate exists to catch. The
 half that was actually missing is now there:
 `test_the_declared_but_unconsumed_set_does_not_grow` runs the gate on every commit against a
-pinned set of six names, so a **seventh** fails the build and closing one fails it too. Three of
-the six need a decision rather than a wire (`expand_hops` and `negative_tau` in `retrieve/`,
-`clarifications` on the clarification protocol), which is why the ratchet is the honest step and
-a CI step is not yet.
+pinned set of five names, so a **sixth** fails the build and closing one fails it too. Two of
+the five need a decision rather than a wire (`expand_hops` and `negative_tau` in `retrieve/`),
+which is why the ratchet is the honest step and a CI step is not yet.
 
 ---
 
@@ -233,9 +234,6 @@ has no writer.
   note argues at length for being separate from `facet_model`; neither is wired, and
   `llm_utility_model` is what both call sites actually use.
 - **`negative_tau`** — no reader. `serve/nodes/negative.py:24` hard-codes `"tau": None`.
-- **`clarifications` state channel** — `Annotated[list, operator.add]`, written by `agent_core`,
-  read by nothing in `src/` or `tools/`. It accumulates across turns under a checkpointer, so it
-  is pure checkpoint growth. Caught by rule S1 (the only S1 hit).
 - **`live_capture_keys()` and the `reconstructable` column on `RecordField`** — zero readers
   anywhere, tests included. Two fields carry `reconstructable=True` and nothing asks.
 - **`config_hash_keys()`** — still no reader, and the name is the finding. `register/knobs.py`'s

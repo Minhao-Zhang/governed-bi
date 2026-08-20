@@ -36,9 +36,9 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tools"))
 
 #: Everything printed after the last question is graded, in its own module: this file reached the
-#: 1 000-line hard cap, and the report half needs no database, model or corpus. The plan / execute
-#: / report seam of ``docs/analysis/architecture-review-2026-08-11.md`` C2, cut at report first
-#: because it is the third that already had no I/O of its own.
+#: 1 000-line hard cap, and the report half needs no database, model or corpus. The plan /
+#: execute / report split, cut at report first because it is the third that already had no I/O
+#: of its own.
 from datalake_report import print_report  # noqa: E402  (needs the path insert above)
 
 #: The corpus, in its own repository as of 2026-08-07 (D13). Derived from this file's location,

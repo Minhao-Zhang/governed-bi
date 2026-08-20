@@ -157,10 +157,10 @@ configure and nothing for a client to send:
 curl localhost:2024/capabilities
 ```
 
-**That re-opens two audit findings, and the honest thing is to say which.**
-[A1 and A7](analysis/audit-2026-08-10.md) — "~82 routes with no authentication" and
-"`/audit/turns` and `/audit/turns/{id}/trace` return every thread's SQL, full records, and an
-absolute log path, unauthenticated" — were closed on 2026-08-12 by requiring a shared key. The key
+**That re-opens two findings, and the honest thing is to say which.**
+A1 and A7 — every route unauthenticated, and `/audit/turns` plus
+`/audit/turns/{id}/trace` return every thread's SQL, full records, and an
+absolute path to the conversation database — were closed on 2026-08-12 by requiring a shared key. The key
 was removed on 2026-08-13 and both findings are live again, in exactly the terms they were written
 in: anything that can reach this port can post a turn, execute governed SQL against the configured
 database, and read every past turn out of `/audit/turns` — or out of the platform's own
@@ -193,7 +193,9 @@ Serving a turn is `POST /threads/{id}/runs/stream` with
 ([ADR 0010](adr/0010-live-stage-events.md)), and **there is no second way**: `POST /chat` and
 `POST /chat/resume` were deleted on 2026-08-18 ([ADR 0014](adr/0014-one-conversation-store.md)).
 They kept their own `InMemorySaver`, so degrading to them silently lost the conversation they
-were meant to rescue. Every route `api/routes.py` mounts is now a read.
+were meant to rescue. Every custom route this app mounts is now a read, including
+`GET /clarifications/pending` — unanswered `ask_user` prompts, oldest first, out of interrupt
+state.
 
 A clarification is answered by posting a run with `{"command": {"resume": …}}` on the same thread.
 `serve/resume.py::authorise_resume` refuses one whose caller is not the caller that was asked
@@ -205,14 +207,17 @@ Conversations are durable as of 2026-08-18: `langgraph.json` mounts an `AsyncSql
 startup, and a thread survives a restart. Two limits come with it. `keep_latest` retention is not
 available — `AsyncSqliteSaver` does not implement `aprune`, and the server names the missing
 methods at startup — so `checkpointer.ttl` **deletes** a thread 90 days after its last update,
-  **Inert under `langgraph dev`:** the in-memory runtime's `sweep_ttl` returns `(0, 0)`
-  ("Not implemented for inmem server") and nothing calls it, so nothing is deleted locally and a
-  long-lived thread grows without bound. The setting takes effect on a deployed runtime only.
-with no "keep the summary, expire the trace" middle state. And `checkpointer.path` replaces the
-*checkpoint* store only: under `langgraph dev` the thread, run and assistant index still lives in
-`.langgraph_api/.langgraph_ops.pckl`, which has no config knob. `/capabilities` has not caught up
-and still reports `checkpoint_durable: false`; read `langgraph.json`, not the flag
-([`open-work.md`](open-work.md)).
+with no "keep the summary, expire the trace" middle state.
+
+**Inert under `langgraph dev`:** the in-memory runtime's `sweep_ttl` returns `(0, 0)`
+("Not implemented for inmem server") and nothing calls it, so nothing is deleted locally and a
+long-lived thread grows without bound. The setting takes effect on a deployed runtime only.
+
+And `checkpointer.path` replaces the *checkpoint* store only: under `langgraph dev` the thread, run and assistant index still lives in
+`.langgraph_api/.langgraph_ops.pckl`, which has no config knob. `/capabilities` reports
+`checkpoint_durable` from that same `langgraph.json` reading; both durability flags are
+true on this deployment. They are a configuration reading, not a live handle
+([`open-work.md`](open-work.md) §4.4).
 
 Serve expects Postgres.
 
@@ -313,8 +318,7 @@ normally through the server. Fixed 2026-08-19.
 uv run --frozen pytest -q -rs
 ```
 
-That is what CI runs: 1,483 tests (1,466 plus 17 `xfail`) in around two minutes, peaking around
-1.4 GB of working set — counted 2026-08-13, after the transport-auth test file was deleted. `-rs` prints
+That is what CI runs. `-rs` prints
 every skip with its reason — the Postgres and OpenAI-backed contracts skip
 without credentials, and a silent skip reads as a pass.
 

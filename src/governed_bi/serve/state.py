@@ -517,7 +517,7 @@ def settle_failure(left: Any, right: Any) -> Any:
 class ServeInput(TypedDict, total=False):
     """Everything a client is allowed to write into the graph. Deliberately one key.
 
-    The write half of the trust boundary — audit-2026-08-10 §A2/§A3, which measured a client
+    The write half of the trust boundary — A2/A3, which measured a client
     forging ``licensed``, ``corpus_content_hash`` and ``identity`` straight into ``ServeState``.
 
     ``trust()`` forces run constants over a caller's ``configurable``, but the graph's own
@@ -543,7 +543,7 @@ class ServeOutput(TypedDict, total=False):
     Two keys, matching what the interface consumes: the transcript the SDK reconciles, and the
     turn's whole result. Adding a key here is the deliberate act.
 
-    **``output_schema`` narrows ``invoke``**, and audit-2026-08-10 §B1 is about what it does *not*
+    **``output_schema`` narrows ``invoke``**, and B1 is about what it does *not*
     narrow. Two measurements on langgraph 1.2.11, of two different things, and the difference
     matters:
 

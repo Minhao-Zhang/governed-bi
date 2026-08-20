@@ -13,7 +13,7 @@ abstainer was measured and failed (OOF AUC 0.597, worse than counting the agent'
 and its "unsure" bucket as likely to be right as its "correct" one — open-work.md §3.11), every
 risk-coverage curve reads 0.7144 at the engine's own coverage, and ADR 0007 forbids a trust field
 on the answer card. Reporting *why* the engine withheld is the ledger. Scoring *how sure it is*
-is theatre, and `docs/analysis/strategy-checkpoint-2026-08-11.md` §5.6 already named it that.
+is theatre, and ADR 0013 already named it that.
 
 So every rule here is a **deterministic predicate over state the turn already recorded**. Each
 one can be re-checked by a person reading the artifact, which is the property a score does not

@@ -20,7 +20,7 @@ Three rules the caller cannot opt out of, each from a defect already shipped her
   :meth:`RiskCoverage.policy_at_most` will not realise a set that splits one.
 * **Two things are only compared through** :func:`~.stats.mcnemar`. ``AGENTS.md``
   forbids subtracting two rates and calling it a result, and
-  ``docs/analysis/audit-2026-08-10.md`` E1-E3 are three tools that did it anyway.
+  E1-E3 are three tools that did it anyway.
 * **Declines are priced in** :mod:`.abstention`, **not here.** The two questions --
   how well a ranking separates right from wrong, and what the engine's own declines
   would have been worth -- have different denominators, and §4.1's is a subset the
@@ -512,7 +512,7 @@ class NestedPolicies:
     The substantive claim survives and is worth making: the trade costs 162 right answers.
     That is a count, and this object reports it as one. What is dropped is the inferential
     dress, because a reader who sees a p-value is entitled to think a null was tested.
-    ``docs/analysis/audit-2026-08-10.md`` E1-E3 name the neighbouring defect -- two rates
+    E1-E3 name the neighbouring defect -- two rates
     subtracted and called a result -- and this is its mirror image: a real test performed
     on a comparison that could not have come out any other way.
     """

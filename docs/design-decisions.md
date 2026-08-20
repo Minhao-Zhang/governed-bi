@@ -5,10 +5,10 @@ Do not re-author ADR content here.
 
 | Topic | ADR |
 |---|---|
-| LangGraph Server + streaming chat | [0001](adr/0001-langgraph-server-chat-runtime.md) |
-| Governed agentic serve runtime | [0002](adr/0002-governed-agentic-serve-runtime.md) |
-| Notes and tri-modal retrieval | [0003](adr/0003-governed-notes-tri-modal-retrieval.md) |
-| Local-first turn / run logging | [0004](adr/0004-local-first-conversation-run-logging.md) |
+| LangGraph Server + streaming chat | [0001](adr/0001-langgraph-server-chat-runtime.md) (superseded; transport holds) |
+| Governed agentic serve runtime | [0002](adr/0002-governed-agentic-serve-runtime.md) (superseded; topology thesis holds) |
+| Notes and tri-modal retrieval | [0003](adr/0003-governed-notes-tri-modal-retrieval.md) (reversed by 0005) |
+| Local-first turn / run logging | [0004](adr/0004-local-first-conversation-run-logging.md) (superseded in part by 0014) |
 | Memory layer and faceted retrieval | [0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) |
 | Execution-time governance (the layer stack) | [0006](adr/0006-execution-time-governance.md) |
 | HTTP surface and UI contract | [0007](adr/0007-http-surface-and-the-ui-contract.md) |
@@ -18,6 +18,7 @@ Do not re-author ADR content here.
 | Two-model split and facet rewriting | [0011](adr/0011-two-model-split-and-facet-query-rewriting.md) |
 | The access seam: principal, authorization, Layer 6 split | [0012](adr/0012-access-seam-principal-and-authorization.md) |
 | The declared abstention policy | [0013](adr/0013-the-declared-abstention-policy.md) |
+| One conversation store | [0014](adr/0014-one-conversation-store.md) |
 
 Non-ADR judgements that still matter in code:
 

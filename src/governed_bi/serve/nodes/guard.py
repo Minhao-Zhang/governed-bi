@@ -121,7 +121,7 @@ async def _bi_scope(
     enabled and errored on every turn is still fully quotable. The sibling field one row down
     (``negative``) *is* gated, which is what the wording here used to claim for this one. Inert
     while every eval arm passes ``guard_rules_enabled={}``; a trap for the first arm that does
-    not. See ``docs/analysis/parsed-model-output.md`` §5.1.
+    not. See ``tests/serve/test_guard_bi_scope.py``.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 

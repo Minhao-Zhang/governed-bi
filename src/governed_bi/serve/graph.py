@@ -164,12 +164,12 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
 
     # `input_schema` / `output_schema` only when `accept` is present. That flag *is* the trust
     # boundary: with it a turn is derived from a client conversation, so nothing else the client
-    # sends may reach state (audit-2026-08-10 §A2/§A3) and `invoke` returns only what the
+    # sends may reach state (A2/A3) and `invoke` returns only what the
     # interface reads. The read half is narrower than it looks — `output_schema` does not reach
     # `values` frames or `get_state` (§B1, open); see `ServeInput` / `ServeOutput`. Without the
-    # flag the caller is `serve/__main__`, `eval/` or
-    # `/chat`, which build the turn in-process and pass and read the whole of ServeState on
-    # purpose — the eval harness projects its record out of channels no client sees.
+    # flag the caller is `serve/__main__` or `eval/`, which build the turn in-process
+    # and pass and read the whole of ServeState on purpose — the eval harness
+    # projects its record out of channels no client sees.
     graph = (
         StateGraph(ServeState, input_schema=ServeInput, output_schema=ServeOutput)
         if accept is not None

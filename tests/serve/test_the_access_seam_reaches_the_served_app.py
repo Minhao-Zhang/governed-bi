@@ -394,7 +394,7 @@ def _seen_by_the_model(model: ScriptedChatModel) -> str:
 
     **Not** read off the ``delivery`` channel, and the difference is the point: ``ServeOutput``
     keeps ``delivery`` out of what ``invoke`` returns (so :func:`_serve` cannot see it — the
-    ``values`` frames still carry it, audit-2026-08-10 §B1), and asserting on a channel would
+    ``values`` frames still carry it, B1), and asserting on a channel would
     leave open whether the block the renderer built is the block the model got.
     ``assemble`` deliberately keeps the context out of ``messages`` and ``agent_core`` passes
     it as an ephemeral message, so this is the only place the two claims meet.

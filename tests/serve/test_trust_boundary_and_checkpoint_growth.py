@@ -10,7 +10,7 @@ omission as an omission.
   context block) among them. ``output_schema=ServeOutput`` closed the ``invoke`` half **only**,
   which is where these tests stop: re-measured on langgraph 1.2.11, ``stream_channels_asis`` is
   still all 47 channels (46 before ``turns``), so ``values`` frames and ``get_state`` are
-  unchanged. That remainder is audit-2026-08-10 §B1 and is open — nothing below asserts
+  unchanged. That remainder is B1 and is open — nothing below asserts
   otherwise.
 * ``compile_graph`` defaults to an ``InMemorySaver`` that nothing ever empties, and
   ``eval/harness.py`` keeps one compiled graph per worker for a whole arm.

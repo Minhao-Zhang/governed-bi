@@ -275,6 +275,11 @@ said twelve. It is deleted ([0007](0007-http-surface-and-the-ui-contract.md) Ame
 `/audit/corpus` projected the same session fields, and the survivor is the one that keeps `fatal`
 apart from `degradations`. The heading is now the count.
 
+> **Added 2026-08-19.** `GET /clarifications/pending` is a fourteenth read: unanswered
+> `ask_user` prompts, oldest first, out of interrupt state
+> (`api/clarification_routes.py`). `/corpus/assets` was already mounted beside the twelve.
+> The heading above is the 2026-08-18 count, not the current one.
+
 `GET /search` is deliberately **not** built: `can_search: false` is the honest answer and the
 client's index over the lean catalog works. `GET /corpus/assets` survives unbounded, on notice:
 its three consumers filter it locally over 2.25 MB, and `/corpus/rows` already filters, sorts and

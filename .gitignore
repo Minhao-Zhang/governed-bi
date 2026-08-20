@@ -78,10 +78,6 @@ instance/
 # Sphinx documentation
 docs/_build/
 
-# Staging for the one-shot corpus rebuild scripts (docs/corpus-rebuild-brief.md §3).
-# Extracts of BIRD's shipped documentation and evidence clauses -- regenerable, and large.
-tools/corpus_rebuild/_build/
-
 # PyBuilder
 .pybuilder/
 target/
@@ -277,8 +273,7 @@ _generated/
 # Not history worth carrying in the repo, and large enough to make a clone painful.
 _archive/
 
-# One-off slices written while debugging the rebuild packets. The packets themselves are
-# already ignored under tools/corpus_rebuild/_build/; these are hand-cut copies of them.
+# One-off JSON slices written while debugging. Not source.
 scratch_*.json
 
 # The frontend under `ui/` carries its own nested .gitignore, which is where node_modules,

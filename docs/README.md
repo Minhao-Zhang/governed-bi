@@ -12,7 +12,7 @@ SQLite is the offline test/CI substrate.
    measurement row carries, and what makes a number quotable.
 4. [Corpus format](corpus-format.md) — where the corpus is, its layout and field
    tiers.
-5. [ADRs](adr/) — binding decisions (start with 0005 and 0006).
+5. [ADRs](adr/) — binding decisions (start with 0005, 0006, then 0014).
 6. [Design decisions](design-decisions.md) — short index into the ADRs.
 7. [Glossary](glossary.md) — canonical terms.
 8. [Open work](open-work.md) — what is unfinished, and the evidence for each.
@@ -28,15 +28,14 @@ was reasoning toward the wrong answer.
 What *is* edited is everything around the decision. A superseded ADR is rewritten as a
 reversal record: what was decided, what is true instead, and what was learned. It does not
 keep coordinates into files that no longer exist, and its Status line does not describe a
-build in the present tense after that build was deleted. ADR 0003 and ADR 0004 were rewritten
-that way on 2026-08-12, having drifted into 121 citations of v1 modules between them.
+build in the present tense after that build was deleted.
 
 | ADR | Title |
 |---|---|
-| [0001](adr/0001-langgraph-server-chat-runtime.md) | Chat via LangGraph Server + `useStream` |
-| [0002](adr/0002-governed-agentic-serve-runtime.md) | Serve runtime as a governed agentic core |
+| [0001](adr/0001-langgraph-server-chat-runtime.md) | Chat via LangGraph Server + `useStream` — **superseded**; transport still holds |
+| [0002](adr/0002-governed-agentic-serve-runtime.md) | Serve runtime as a governed agentic core — **superseded**; governance-as-topology still holds |
 | [0003](adr/0003-governed-notes-tri-modal-retrieval.md) | Governed notes and tri-modal retrieval — **reversed in full by 0005** |
-| [0004](adr/0004-local-first-conversation-run-logging.md) | Local-first conversation + run logging — the turn log, and its withdrawal of the durable checkpointer. **Superseded in part by 0014**: the log is deleted and the checkpointer is built |
+| [0004](adr/0004-local-first-conversation-run-logging.md) | Local-first conversation + run logging — **superseded in part by 0014**: the log is deleted and the checkpointer is built |
 | [0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) | Memory layer and faceted retrieval |
 | [0006](adr/0006-execution-time-governance.md) | Execution-time governance |
 | [0007](adr/0007-http-surface-and-the-ui-contract.md) | HTTP surface and the UI contract |
@@ -64,8 +63,8 @@ Git history is the record of what changed.
 | [Risk coverage on `v4`](analysis/risk-coverage-v4.md) | whether a better operating point exists at all: out-of-fold precision on delivered answers under a coverage constraint, with bootstrapped intervals — arm `v4`, corpus `30872d3`, replicated on `v3-fold` |
 | [Selective delivery on `v4`](analysis/selective-delivery-v4.md) | whether any signal the artifact records beats the engine's own operating point: risk-coverage curves, AURC against an oracle and a no-ranking reference, and what each trade costs in right answers — arm `v4`, corpus `30872d3`, replicated across all seven artifacts in `runs/eval/` |
 | [Declared machinery with no consumer](analysis/declared-not-consumed.md) | a sweep for the knobs, record fields, state channels and env vars that something declares and nothing reads — six artifacts, 1,351 rows each, corpus `30872d3` |
+| [Which questions the published arms ran](analysis/dataset-identity-2026-08-20.md) | the question set behind every published *n*=1,351, and the pre-flight that now refuses a mismatch — closed for the three shipped arms |
 | [Open work](open-work.md) | the unfinished items those findings imply, re-verified against the current tree |
-| [Strategy checkpoint 2026-08-11](analysis/strategy-checkpoint-2026-08-11.md) | temporary checkpoint for the repository as a portfolio artifact: what is true, what it declines to be, and the work queue — not an ADR; replace when superseded |
 
 ## Audits and reviews
 
@@ -74,10 +73,8 @@ in all of them have drifted**: resolve a citation by symbol.
 
 | Doc | What it covers |
 |---|---|
-| [Implementation audit 2026-08-10](analysis/audit-2026-08-10.md) | findings and remediation plan at tree `c625da8`, including the memory-profile rows — read P3 before trusting any diagnosis in them |
-| [Decisions taken working that audit](analysis/decisions-2026-08-10.md) | every call made without asking, with the reasoning and what would reverse it, so a reviewer can disagree with one without re-deriving it |
-| [Architecture review 2026-08-11](analysis/architecture-review-2026-08-11.md) | ten deepening candidates across `serve/`, `eval/`, `api/` and the `ui/` seam, at tree `506ad9b`, each marked verified-here or reported |
-| [Hand-parsed model replies](analysis/parsed-model-output.md) | every place `src/` parses a model reply by hand, and the two fail-open defects that found — both fixed at `95e3b07` |
+| [Decisions taken working the 2026-08-10 audit](analysis/decisions-2026-08-10.md) | every call made without asking, with the reasoning and what would reverse it, so a reviewer can disagree with one without re-deriving it |
+| [A false ambiguity, and the 25-minute turn](analysis/binding-scope-and-statement-timeout-2026-08-19.md) | CTE-scope false `r_ambiguous_reference` plus `run_query` having no statement timeout, at tree `031b955` |
 | [Adopting from the downstream fork 2026-08-19](analysis/adopting-the-downstream-fork-2026-08-19.md) | what was taken from the `governed-bi-utkuai` fork, what was rebuilt because its designs predate ADR 0014, and what was declined — with the measurement showing why a clarification ledger must not live under `corpus_root` |
 
 ## Frontend, and external data

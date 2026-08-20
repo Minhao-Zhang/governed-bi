@@ -783,6 +783,64 @@
           }
         }
       }
+    },
+    "/clarifications/pending": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Pending Clarifications",
+        "description": "Questions the engine asked via `ask_user` that nobody answered, oldest first. Read from LangGraph interrupt state (ADR 0014), not from the `clarifications` channel — an unanswered prompt writes nothing into thread state, so this is the only place an abandoned one is visible. Read-only: answering from here would resume a thread the operator was not the one asked (ADR 0006 B9).\n\n`meta.truncated` is load-bearing (ADR 0009): a silently short list reads as everything. `meta.threads_scanned` distinguishes an empty queue from a store that was not read.",
+        "operationId": "pending_clarifications_clarifications_pending_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 500,
+              "title": "Limit"
+            },
+            "description": "Max rows. Rejected outside 1..500."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingClarificationsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1357,6 +1415,130 @@
           "meta"
         ],
         "title": "AuditTurnsResponse"
+      },
+      "PendingClarificationRowResponse": {
+        "properties": {
+          "asked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asked At"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          },
+          "clarification_id": {
+            "type": "string",
+            "title": "Clarification Id"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          },
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "asked_at",
+          "question",
+          "why",
+          "clarification_id",
+          "turn_id",
+          "thread_id"
+        ],
+        "title": "PendingClarificationRowResponse"
+      },
+      "PendingClarificationsMetaResponse": {
+        "properties": {
+          "n": {
+            "type": "integer",
+            "title": "N"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "description": "True when more rows exist than this page returned. A silently short list reads as everything (ADR 0009)."
+          },
+          "threads_scanned": {
+            "type": "integer",
+            "title": "Threads Scanned",
+            "description": "How many interrupted threads were read to build this page. Distinguishes an empty queue from a store that was not scanned."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Columns",
+            "description": "Display order of `PENDING_FIELDS`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "n",
+          "truncated",
+          "threads_scanned",
+          "limit",
+          "offset",
+          "columns"
+        ],
+        "title": "PendingClarificationsMetaResponse"
+      },
+      "PendingClarificationsResponse": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/PendingClarificationRowResponse"
+            },
+            "type": "array",
+            "title": "Rows",
+            "description": "Oldest first."
+          },
+          "meta": {
+            "$ref": "#/components/schemas/PendingClarificationsMetaResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "meta"
+        ],
+        "title": "PendingClarificationsResponse"
       },
       "BoundaryEdgeResponse": {
         "properties": {

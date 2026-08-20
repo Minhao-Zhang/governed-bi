@@ -24,10 +24,9 @@
   §8's table "the licensed set" is now two sets with two meanings; §12's Consequences said row-level
   security and per-user identity were out of scope for the "enterprise fork" — the *seam* for both
   is in scope as of this ADR and the *product* is not.
-- **Reverses** [`docs/analysis/strategy-checkpoint-2026-08-11.md`](../analysis/strategy-checkpoint-2026-08-11.md)
-  §2.2, which locked "not an enterprise permission product; no RLS/RBAC stack; permissions stop at
-  the connection role." That section is amended in place rather than overwritten — a reversed
-  decision is recorded here.
+- **Reverses** the 2026-08-11 portfolio lock that said "not an enterprise permission
+  product; no RLS/RBAC stack; permissions stop at the connection role." That lock is
+  recorded here rather than in a deleted checkpoint.
 
 ---
 
@@ -55,10 +54,10 @@ falsifiable later.
 
 ### The decision that was reversed, and why
 
-The strategy checkpoint of 2026-08-11 is a portfolio document, and against that goal §2.2 was
-right: an enterprise permission product is a different product, and half of one is positioning
-pollution. The goal changed on 2026-08-12 — this repository is to be a **fork-ready base for an
-enterprise deployment where PII, RLS and RBAC are handled**.
+The strategy checkpoint of 2026-08-11 was a portfolio document, and against that goal the
+lock was right: an enterprise permission product is a different product, and half of one is
+positioning pollution. The goal changed on 2026-08-12 — this repository is to be a **fork-ready
+base for an enterprise deployment where PII, RLS and RBAC are handled**.
 
 That is not the same as becoming a permission product, and the difference is the whole content of
 this ADR:
@@ -73,9 +72,9 @@ this ADR:
 | a column denial rule | SELECT-level masking, tokenisation, differential privacy |
 | a declared row predicate, and a refusal when it cannot be enforced | statement rewriting to inject `WHERE` |
 
-The audit dispositions in the checkpoint's §3 stand unchanged: A5, A6 and B1 are still unfixed and
-still for the reason given, because closing them needs the per-caller token infrastructure that is
-in the right column above.
+A5 closed 2026-08-18 (`authorise_resume`); A6 retired with `POST /chat/resume`; B1 is still
+open and wider since 0014, because a `values` frame now carries every prior turn. Closing B1
+needs the per-caller token infrastructure that is in the right column above.
 
 ---
 
@@ -117,10 +116,8 @@ class AccessPolicy(Protocol):          # ports.py
 ```
 
 The obvious shape is three getters — `authorized_tables()`, `denied_columns()`,
-`row_predicate(table)`. It is rejected. Measured the way
-[`docs/analysis/architecture-review-2026-08-11.md`](../analysis/architecture-review-2026-08-11.md)
-measures depth — *behaviour a caller gets per unit of interface learned* — three getters are
-almost pure interface. Every integrator would have to learn, and could get wrong:
+`row_predicate(table)`. It is rejected. Measured as depth — behaviour a caller gets per unit of interface learned —
+three getters are almost pure interface. Every integrator would have to learn, and could get wrong:
 
 1. **When they are called.** Per statement? Per tool call? A policy that can change inside a turn
    is a policy the ledger cannot describe.

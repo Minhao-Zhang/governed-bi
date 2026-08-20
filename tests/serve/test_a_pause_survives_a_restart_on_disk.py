@@ -8,7 +8,7 @@ halves had each been tested and their *join* had not: nothing drove a real inter
 ``AsyncSqliteSaver`` and then answered it from a graph that had not written it. That join is what
 ``README.md`` claims on the front page and what ``hitl_survives_process_restart`` reports, and until
 2026-08-20 its whole evidence was one hand-run observation (2026-08-19, recorded in
-``docs/analysis/audit-2026-08-10.md`` A10).
+``docs/analysis/adopting-the-downstream-fork-2026-08-19.md``).
 
 **What "restart" means here, and what it does not.** Each test closes the first graph and calls
 :func:`compile_durable` again on the same file. That is a new ``asyncio`` loop, a new

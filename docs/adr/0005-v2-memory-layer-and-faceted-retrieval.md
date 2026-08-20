@@ -1,8 +1,7 @@
 # 0005: The v2 memory layer and faceted retrieval
 
-- **Status:** Accepted in part (2026-08-03). `register/`, `corpus/`, and
-  `measure/` are on the `v2` branch; retrieval, serve, eval and curator are not.
-  The deleting first commit has landed.
+- **Status:** Accepted (2026-08-03). `register/`, `corpus/`, `measure/`, `retrieve/`,
+  `serve/` and `eval/` are on `main`. The curator is still absent from `src/`.
 - **Deciders:** project owner + design session (2026-08-02)
 - **Scope:** the memory layer (asset schema, corpus) and the retrieval + serve
   graph. **Execution-time governance — the guardrail layers, the function
@@ -16,31 +15,20 @@
   - [0002](0002-governed-agentic-serve-runtime.md) — the agentic serve core.
     Its *shape* survives; its safety spine is superseded by 0006.
   - [0004](0004-local-first-conversation-run-logging.md) — the write-only run
-    log, unchanged.
-  - [design-decisions.md](../design-decisions.md) — D6 human gate, D9 corpus
-    file structure, D15 multi-schema, D16 agentic core.
+    log; superseded in part by [0014](0014-one-conversation-store.md).
+  - [design-decisions.md](../design-decisions.md) — index into the ADRs.
 - **Supersedes:** ADR 0003 in full (`NoteAsset`, `NoteKind`, `NoteActivation`,
   `NormativeForce`, `Trigger`/PIN, the "tri-modal" framing); the `RVGD` name;
   the `description` field name.
 
-> **Status note, re-checked 2026-08-12.** *The Status line above is the
-> 2026-08-03 reading and is left as written; it now understates what shipped.*
-> `retrieve/`, `serve/` and `eval/` have all landed, and the `v2` branch has been merged
-> into `main` and deleted — `src/governed_bi/retrieve/` (index, lexical, semantic, fuse,
-> route, resolve, connect, structure, vectors), `src/governed_bi/serve/` (the §3.1 graph,
-> plus six nodes §3.1 does not list) and `src/governed_bi/eval/`.
+> **This repository does not produce the served corpus.** The curator is absent from
+> `src/`, and there is no rebuild kit. The semantic layer is the sibling
+> [BIRD-corpus](https://github.com/Minhao-Zhang/BIRD-corpus) checkout; this engine
+> loads it. Versioned is not reproducible-from-this-tree.
 >
-> **Curator is still absent from `src/`, and "absent" no longer means "nothing rebuilds
-> the corpus".** `tools/corpus_rebuild/01_structure.py`, `02_joins.py` and `03_few_shots.py`
-> write the *mechanical* half — ids, structure, join edges — leaving every summary as a
-> `TODO <identifier>` marker; `04`–`06` stage evidence, BIRD docs and sampled values for a
-> writing agent and produce no assets. Nothing in the package imports them and the prose
-> half has no producer here at all, which is the precise sense in which the corpus is
-> versioned but not rebuildable.
->
-> The §3.1 topology has drifted from `serve/graph.py`. See the topology note there —
-> it is the discrepancy most likely to mislead, because three shipped nodes run between
-> `assemble` and `stamp` that the diagram does not draw.
+> The §3.1 topology has drifted from `serve/graph.py`. Use
+> [architecture.md](../architecture.md) or the graph itself: `abstain`, `reflect`,
+> `narrate`, `accept`, `fanout` and `record` run and the diagram does not draw them.
 
 ---
 
@@ -1150,7 +1138,7 @@ its value is directly measurable: *of the tables gold SQL uses, how many entered
 neither by facet hit nor by Steiner path?* Measure before enabling. (v1's default
 was 1, not 0.)
 
-**Cross-schema: allowed, bounded, accounted.** D15 cross-schema joins are
+**Cross-schema: allowed, bounded, accounted.** Cross-schema joins are
 executable and a hard boundary would make answerable questions unanswerable.
 Every crossing emits a governance event, marks the out-of-schema table in the
 render, and counts against `max_crossings`. `route` bounds *scoring*, not
@@ -2128,8 +2116,8 @@ the reasons differ enough that "in progress" would hide them:
   shipped, the red-team corpus does not exist, graded delivery is declared and unwired, and
   §11's redactor is withdrawn rather than pending. The B1–B10 gate itself is met.
 - **Steps 16 and 17 are untouched and blocked on the same kind of thing.** There is no
-  curator in `src/`; `tools/corpus_rebuild/` writes the mechanical half of the corpus and
-  leaves the prose half as `TODO`. `negative_gate` still ships disabled with
+  curator in `src/`, and no rebuild kit. The served corpus is a sibling repository.
+  `negative_gate` still ships disabled with
   `negative_tau` `UNSET`, waiting on a negative corpus.
 
 **A standing rule from L-R5:** the paid ladder is confirmation, never screening.

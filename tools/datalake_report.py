@@ -1,7 +1,6 @@
 """Everything ``run_datalake_eval.py`` prints after the last question is graded.
 
-The **report** third of the plan / execute / report split the architecture review asks for
-(``docs/analysis/architecture-review-2026-08-11.md`` C2). Split out because the driver reached
+The **report** third of the plan / execute / report split. Split out because the driver reached
 the 1 000-line hard cap ``tools/check_file_length.py`` enforces, and because this half needs no
 database, no model and no corpus: it reads the artifact off disk and prints. ``print_report`` is
 handed ``observed_tokens`` and ``table_coverage`` rather than importing them, so the driver still

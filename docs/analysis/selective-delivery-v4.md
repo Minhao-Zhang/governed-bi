@@ -158,7 +158,7 @@ is the one worth making: the trade costs 162 right answers.
 Pricing abstentions at zero is a choice and it is the choice
 `docs/measurement.md` already makes for the grade. A comparison on accuracy alone —
 0.7956 against 0.7144, "+8.1 points" — is exactly the subtraction
-[audit E1–E3](audit-2026-08-10.md) flagged in three other tools, and it would have
+audit findings E1–E3 flagged in three other tools, and it would have
 reported this trade as a win.
 
 ## 5. The governance ledger cannot express an operating point

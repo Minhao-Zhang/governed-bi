@@ -238,7 +238,7 @@ def test_the_usage_row_and_the_knob_report_the_same_model(
     )
 
 
-# --- The other caller-writable channel: the graph's own `input` (audit-2026-08-10 §A2/§A3) ---
+# --- The other caller-writable channel: the graph's own `input` (A2/A3) ---
 #
 # `trust()` above closes `configurable`. It was the only one closed. `langgraph_api` forwards
 # the client's `input` dict to the graph unfiltered, `PER_TURN_RESET` does not clear
