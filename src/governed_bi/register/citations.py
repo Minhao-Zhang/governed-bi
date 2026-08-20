@@ -232,6 +232,23 @@ class RetiredClaim:
 
 RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
     RetiredClaim(
+        # Negative lookbehind because `43.9 MB` is a *different*, live figure (the LanceDB
+        # retained-connection leak, `retrieve/vectors.py`). A bare `3\.9\s*MB` matched it in
+        # five places on the first attempt.
+        pattern=r"(?<![0-9])3\.9\s*MB",
+        observed="a turn costs ~3.9 MB of checkpoint",
+        why="turn *one*'s checkpoint cost read as a per-turn constant, and measured on the "
+            "dev server's pickle store -- which keys blobs per channel, so it does not "
+            "transfer to the SQLite saver ADR 0014 mounts. Registered because it has already "
+            "come back once: ADR 0014's Consequences retracted it on 2026-08-14 and it was "
+            "still live in `serve/checkpointer.py`'s module docstring on 2026-08-20, six days "
+            "later, arguing for a real design decision (two databases). No declared pattern "
+            "covered it, so the gate had nothing to say either time.",
+        replaced_by="82.5 KB per checkpoint blob in runs/conversations.sqlite and 76.6 KB in "
+        "runs/harness-checkpoints.sqlite, measured 2026-08-20; ~2.1 MB for a whole "
+        "single-turn thread, and 11.4 MB at five turns (ADR 0014)",
+    ),
+    RetiredClaim(
         pattern=r"15\.0{1,2}\s*[,/]\s*75\.0{1,2}",
         observed='"Claude-Opus-4.8": (15.0, 75.0, 1.50)',
         why="v1's Opus 4.8 price, 3x the published 5.00/25.00/0.50 "

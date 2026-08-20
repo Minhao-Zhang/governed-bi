@@ -19,6 +19,9 @@ Usage::
     # no model: the graph runs, retrieval and governance are real, the answer is the stub
     uv run --frozen python -m governed_bi.serve --schema gbi_demo_sales -q "..." --no-model
 
+    # a named thread: its checkpoint is kept, so a later invocation can reach the same turn
+    uv run --frozen python -m governed_bi.serve --schema gbi_demo_sales -q "..." --thread-id t-1
+
 Credentials come from the environment or the git-ignored ``.env`` and are never printed.
 """
 
@@ -107,6 +110,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-q", "--question", required=True)
     parser.add_argument("--schema", help="schema to seed from, or the manifest entry to load")
     parser.add_argument("--corpus-dir", help="a corpus already on disk; omit to seed from --schema")
+    # No `default=`: the only honest one is "a thread nobody named", and spelling that as a
+    # constant would make the id look nameable when it is a fresh uuid per process. Absent is
+    # absent, and `_forget_thread` reads it that way.
+    parser.add_argument(
+        "--thread-id",
+        help="name the durable thread, so a later invocation can reach this turn; omit and the "
+        "turn's checkpoints are deleted once it has printed",
+    )
     parser.add_argument(
         "--model",
         help="chat model id; omit to read "
@@ -204,12 +215,22 @@ def main(argv: list[str] | None = None) -> int:
     graph = compile_durable()
     # One question, one thread. `configurable()` supplies no `thread_id` -- a thread is per
     # conversation, not a run constant, and defaulting it collapsed conversations together --
-    # so the caller names it, and here the run id is the honest answer.
+    # so the caller names it. `--thread-id` is what makes the durability above *reachable*:
+    # without it the id is `session.run_id`, a fresh `uuid4().hex[:16]` per process, and no
+    # later invocation could ask for it. That is why the unnamed case is evicted below.
+    thread_id = args.thread_id or session.run_id
     config = session.configurable(question=args.question)
-    config["configurable"]["thread_id"] = session.run_id
+    config["configurable"]["thread_id"] = thread_id
     try:
-        out = graph.invoke(session.turn(args.question), config)
+        # The same id into the state channel, not only the config: `Session.turn` folds
+        # `thread_id` into `turn_id` and writes it as the turn's own identity, so passing it in
+        # one place leaves the record naming a thread the checkpoint is not under.
+        out = graph.invoke(session.turn(args.question, thread_id=thread_id), config)
     finally:
+        # Evicted before the close, because eviction needs the loop the close tears down. Also
+        # inside `finally`: a turn that raised left the same unreachable checkpoints behind.
+        if not args.thread_id:
+            _forget_thread(graph, thread_id)
         # Closed here rather than at the end: everything below only reads `out`, and the point
         # of a durable saver is that the checkpoint is on disk, not that the handle stays open.
         # `_SyncApp.close` says why leaving it open would stop the process from exiting at all.
@@ -223,11 +244,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nThe turn is paused on a clarification: {pending.get('question')}", file=sys.stderr)
         print(f"why: {pending.get('why')}", file=sys.stderr)
         print(
-            "This entry point serves one turn and has nowhere to send an answer. Use "
-            "LangGraph Server's own resume: post a run carrying "
-            "{'command': {'resume': …}} to the thread this turn paused on.",
+            "This entry point serves one turn and has nowhere to send an answer. Resume by "
+            # `...` rather than `…` for the reason given below: cp1252 cannot encode it, and a
+            # message that raises while explaining how to resume is worse than a plain one.
+            "posting a run carrying {'command': {'resume': ...}} against this thread.",
             file=sys.stderr,
         )
+        # Which thread, and whether it is still there. Naming it is the point: the previous
+        # wording said "the thread this turn paused on" and printed no id, for a thread whose
+        # id was a per-process uuid -- advice that could not be followed.
+        if args.thread_id:
+            print(f"thread: {thread_id} (checkpoint kept)", file=sys.stderr)
+        else:
+            print(
+                # ASCII only: this goes to a Windows console under cp1252, where a printed
+                # em-dash raises UnicodeEncodeError and turns the message into a traceback.
+                f"thread: {thread_id} - discarded, because an unnamed thread is unreachable. "
+                "Re-run the question with --thread-id to keep the paused turn.",
+                file=sys.stderr,
+            )
         return 4
 
     answer = out.get("answer") or {}
@@ -258,6 +293,31 @@ def main(argv: list[str] | None = None) -> int:
     if not args.json:
         print("record   : complete (every required field present)")
     return 0
+
+
+def _forget_thread(graph: Any, thread_id: str) -> None:
+    """Delete a thread nobody can ask for again. Never raises; housekeeping is not the turn.
+
+    Why anything has to: :func:`compile_durable`'s saver is a **file**, and with no
+    ``--thread-id`` the thread is ``session.run_id`` -- a fresh ``uuid4().hex[:16]`` per process
+    (``serve/session.py``). Measured 2026-08-20: ``runs/harness-checkpoints.sqlite`` was 4.6 MB
+    holding **two** such threads, ~1.8 MB and 62 channels each, retained for a resume no
+    invocation could name. So each question stranded a private database.
+
+    The **async** method, on the app's pinned loop. ``AsyncSqliteSaver.delete_thread`` is not
+    merely unimplemented -- it calls ``run_coroutine_threadsafe(...).result()`` against the
+    saver's own loop (``langgraph/checkpoint/sqlite/aio.py:257``), which is not running here, so
+    it blocks forever instead of raising. ``adelete_thread`` (``aio.py:602``) does the deletes.
+    Deliberately *no* sync fallback: silently doing nothing would look identical to working.
+    """
+    saver = getattr(graph, "checkpointer", None)
+    adelete = getattr(saver, "adelete_thread", None)
+    if adelete is None:
+        return
+    try:
+        graph.run_coro(adelete(thread_id))
+    except Exception:  # noqa: BLE001 -- a saver that cannot evict is a leak, not a failed turn
+        pass
 
 
 def _pending_clarification(state: dict[str, Any]) -> dict[str, Any] | None:

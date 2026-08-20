@@ -57,8 +57,18 @@ dependencies = [
     "langgraph-cli[inmem]>=0.4,<0.5",
     # The durable conversation store. See the note below on why it is declared now.
     "langgraph-checkpoint-sqlite>=3.1,<4",
-    "langchain>=1.0",
-    "langchain-openai>=1.0",
+    # **Bounded on 2026-08-20, and it was the only unbounded one of the group.** The three
+    # `langgraph` pins above carry a long rationale about the wire protocol; none of it was
+    # extended to `langchain`, which is where the *deepest* coupling actually lives:
+    # `create_agent`, `AgentMiddleware`, `ToolCallLimitMiddleware`, `hook_config`, and the
+    # `__can_jump_to__` contract that `serve/nodes/agent_core.py::_CapEndsTheTurn` depends on
+    # — a contract only derivable from `langchain/agents/factory.py::_get_can_jump_to`, a
+    # private function reading a dunder. Its failure mode is silent: if that lookup changes,
+    # the conditional edge to `end` stops registering and the attempt cap stops ending the
+    # turn, with nothing raising. `uv.lock` is committed and CI runs `--frozen`, so this bound
+    # only bites on a deliberate `uv lock`/`uv sync -U` — which is exactly when it should.
+    "langchain>=1.0,<2",
+    "langchain-openai>=1.0,<2",
     # No `langchain-aws` here: it pulls a boto3/botocore tree that the OpenAI and proxy arms
     # never touch, and the base install is what every model-free test runs against. It is an
     # extra — `uv sync --extra bedrock` — and every import of it is inside the function that
@@ -116,7 +126,8 @@ dependencies = [
 # to a reader — `botocore.config.Config` is what carries the timeout and retry knobs onto a
 # Bedrock client, and `model/provider.py` imports it directly.
 bedrock = [
-    "langchain-aws>=1.0",
+    # Same bound and the same reason as `langchain` above; this is the Bedrock gateway.
+    "langchain-aws>=1.0,<2",
     "boto3>=1.34",
 ]
 
@@ -168,6 +179,26 @@ packages = ["src/governed_bi"]
 constraint-dependencies = [
     "langgraph-api>=0.12,<0.13",
     "langgraph-sdk>=0.4.2,<0.5",
+    # **Added 2026-08-20.** Three more transitive packages this repository reaches into and
+    # that nothing declared. Each is here for a named behaviour, not for tidiness:
+    #
+    # `langgraph-runtime-inmem` is what makes `langgraph.json`'s 90-day `checkpointer.ttl`
+    # **inert**: its `Threads.sweep_ttl` is `return (0, 0)` ("Not implemented for inmem
+    # server") and nothing calls it, so threads never expire and the store grows
+    # monotonically (measured 2026-08-20: 0 freelist pages). The risk runs the *unexpected*
+    # way round — a minor release that **implements** the sweep would silently start
+    # deleting 90-day-old threads, and this deployment reads thread state as durable
+    # history. See ADR 0014 §4 and `docs/glossary.md`.
+    #
+    # `langgraph-checkpoint` is `AsyncSqliteSaver`'s base class. Bounded `<5` already, but
+    # only via `langgraph-checkpoint-sqlite`'s own requirement — a bound that moves when
+    # that package does. Declared here so the floor is visible where the ceiling is.
+    #
+    # `langgraph-prebuilt` arrives under `langgraph` and carries the agent scaffolding the
+    # nested `create_agent` is built on.
+    "langgraph-runtime-inmem>=0.32,<0.33",
+    "langgraph-checkpoint>=4.1,<5",
+    "langgraph-prebuilt>=1.1,<2",
 ]
 
 # --- Tooling (AUDIT T5) -------------------------------------------------------

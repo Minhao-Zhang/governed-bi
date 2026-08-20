@@ -4,6 +4,11 @@ Lives in ``register/`` so :mod:`.record` can recognise unmeasured values in the
 presence test without importing upward. Three states: measured, not_measured,
 not_applicable. Truthiness and arithmetic are refused; format only via
 :meth:`Measured.render`.
+
+**Before renaming anything in here, read :data:`CHECKPOINT_PICKLED_NAMES` at the bottom.** The
+three class names in this module are written into ``.langgraph_api/.langgraph_ops.pckl`` on every
+served turn, and a rename deletes the whole thread registry on the next boot. The guard below
+refuses to import rather than let that happen quietly.
 """
 
 from __future__ import annotations
@@ -18,6 +23,9 @@ __all__ = [
     "Relation",
     "Measured",
     "NotMeasured",
+    "CHECKPOINT_PICKLED_NAMES",
+    "RENAME_DELETES_THE_THREAD_REGISTRY",
+    "renamed_pickled_classes",
 ]
 
 T = TypeVar("T")
@@ -234,3 +242,94 @@ def _assert_absence_cannot_carry_a_value() -> None:
 
 
 _assert_absence_cannot_carry_a_value()
+
+
+# ── these three names are on disk, so renaming one destroys the thread registry ────────────
+
+#: The names of this module's classes **as they are written inside every persisted thread row**,
+#: and therefore names that cannot be changed by an ordinary rename.
+#:
+#: Why these three and not the whole module: they are the only ``governed_bi``-owned types that
+#: reach a checkpoint. Verified two ways on 2026-08-20 — statically,
+#: ``langgraph._internal._serde.build_serde_allowlist(schemas=[ServeState])`` derives 18 entries
+#: of which exactly these 3 are ours; dynamically, walking ``checkpoint["values"]`` after real
+#: refuse / decline / no-statement turns finds exactly these 3 and nothing else. ``State`` and
+#: ``Relation`` are not extras: they are :class:`Measured`'s field types, so a pickled absence
+#: names all three. Every other declared channel type (``GuardVerdict``, ``ExecutionRecord``,
+#: ``RetrievalResult``, ``FacetResult`` …) is a ``TypedDict`` — a plain ``dict`` at runtime, with
+#: no class name in the pickle — and the ``Any``-typed holes carry plain JSON today
+#: (``facets[*]["hits"]`` and ``retrieved["selected"]`` are dicts built with ``asset_type.value``,
+#: never :class:`~governed_bi.retrieve.result.Hit` objects).
+#:
+#: **What a rename costs.** ``langgraph.json`` mounts a custom checkpointer, so
+#: ``langgraph_api.config.USE_CUSTOM_CHECKPOINTER`` is true and
+#: ``langgraph_runtime_inmem/ops.py::_get_checkpointer`` returns on that branch *before* it can
+#: pass ``unpack_hook=_msgpack_ext_hook_to_json`` — the sanitiser that flattens these to JSON on
+#: the built-in path. So live instances land in ``checkpoint["values"]``, get copied verbatim
+#: onto the thread row (``Threads.set_status`` / ``set_joint_status``) and are pickled **by
+#: reference** into ``.langgraph_api/.langgraph_ops.pckl`` (``PersistentDict.dump``, protocol 2).
+#: On the next boot ``PersistentDict.load`` raises — measured: ``AttributeError`` for a rename in
+#: place, ``ModuleNotFoundError`` for a move — and ``database.py::start_pool`` catches *both*
+#: (``except ModuleNotFoundError`` and a bare ``except Exception``) and ``os.remove``\\ s the
+#: file. That deletes the **entire thread registry**, not the one unreadable row.
+#:
+#: The damage is silent and asymmetric: ``runs/conversations.sqlite`` survives untouched, so
+#: every paused turn is still resumable while nothing can list it — the pending-clarification
+#: queue reports empty and ``/audit/turns`` goes blank. Nothing reconciles the registry from the
+#: checkpointer at startup (``start_pool`` only back-fills empty lists).
+#:
+#: The module path is **not** checked here, because a move deletes this file and takes the guard
+#: with it. ``tests/conformance/test_a_rename_deletes_the_thread_registry.py`` pins
+#: ``governed_bi.register.quantity`` from the outside and holds that half.
+CHECKPOINT_PICKLED_NAMES: tuple[str, ...] = ("Measured", "State", "Relation")
+
+#: Shown when the guard below fires. A comment would not have been enough: a prose rule in a
+#: reader's context was measurably ignored this week, and the conclusion recorded was that an
+#: obligation needs a mechanism. This is the mechanism — the module does not import at all until
+#: the reader has dealt with the message.
+RENAME_DELETES_THE_THREAD_REGISTRY = """\
+{renamed} no longer resolves under that name in governed_bi.register.quantity, and that name is
+on disk: it is pickled by reference into .langgraph_api/.langgraph_ops.pckl on every served turn
+(see CHECKPOINT_PICKLED_NAMES above for the full chain and its evidence).
+
+On the next `langgraph dev` boot the unpickle raises, and langgraph_runtime_inmem/database.py
+:start_pool catches every exception and os.remove()s the file. That deletes the
+WHOLE THREAD REGISTRY, not the unreadable row -- every interrupted thread goes with it.
+runs/conversations.sqlite survives, so the paused turns stay resumable while nothing can list
+them: the pending-clarification queue reports an empty queue and /audit/turns goes blank.
+Nothing rebuilds the registry from the checkpointer.
+
+To rename anyway, in one commit:
+  1. stop the server;
+  2. deal with .langgraph_api/.langgraph_ops.pckl -- either delete it yourself, having accepted
+     that the open threads are gone, or migrate it with a pickle.Unpickler whose find_class()
+     maps the old (module, name) to the new one and re-dump it;
+  3. update CHECKPOINT_PICKLED_NAMES here;
+  4. update tests/conformance/test_a_rename_deletes_the_thread_registry.py, which pins the
+     module path this guard cannot see and the set of types that may reach a checkpoint.\
+"""
+
+
+def renamed_pickled_classes(namespace: dict[str, Any]) -> tuple[str, ...]:
+    """Which of :data:`CHECKPOINT_PICKLED_NAMES` ``namespace`` no longer binds to a class of
+    that name.
+
+    Takes the namespace rather than reading ``globals()`` itself so the negative case is
+    testable: a guard nobody has watched fail cannot be told from one that was never wired up.
+    ``__qualname__`` is compared and not just presence, because ``Measured = Quantity`` — the
+    alias a considerate renamer leaves behind — keeps the *binding* working and still writes
+    ``Quantity`` into the pickle, which is the whole defect.
+    """
+    return tuple(
+        name
+        for name in CHECKPOINT_PICKLED_NAMES
+        if not isinstance(bound := namespace.get(name), type) or bound.__qualname__ != name
+    )
+
+
+_renamed = renamed_pickled_classes(globals())
+if _renamed:  # pragma: no cover - import-time guard; the test drives the function directly
+    raise AssertionError(
+        RENAME_DELETES_THE_THREAD_REGISTRY.format(renamed=" / ".join(_renamed))
+    )
+del _renamed

@@ -13,7 +13,16 @@ from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
 from governed_bi.register.stages import Outcome
 from governed_bi.serve.graph import compile_durable
 
-__all__ = ["run_arm", "run_comparison", "project_turn"]
+__all__ = ["EvictionWouldHang", "run_arm", "run_comparison", "project_turn"]
+
+
+class EvictionWouldHang(RuntimeError):
+    """Raised when the only remaining way to evict a thread would block the arm forever.
+
+    Named rather than swallowed because a hang is the worst failure a measurement run has: no
+    rows, no traceback, no partial output, and ``except Exception`` cannot see it. See
+    :func:`_evict`.
+    """
 
 
 def run_arm(
@@ -204,7 +213,7 @@ def _turn_knobs(question: Mapping[str, Any], session: Any) -> dict[str, Any] | N
 
 
 def _evict(compiled: Any, thread_id: str) -> None:
-    """Drop this question's checkpoints. Never raises; an arm must not die over housekeeping.
+    """Drop this question's checkpoints. Raises only where the alternative is a hang.
 
     A worker holds one compiled graph for the whole arm and nothing else empties its saver —
     roughly 100 KB of checkpoint per question (``usage`` and ``answer`` accumulate and every
@@ -214,15 +223,15 @@ def _evict(compiled: Any, thread_id: str) -> None:
     Called **after** the row is projected: a resumed clarification does read the checkpoint,
     so evicting earlier would trade a memory bound for a lost measurement. Per *thread*, not
     a blunt clear — with ``workers > 1`` several questions share the saver.
+
+    A saver that *fails* to evict is swallowed: that is a leak, not a failed turn. A saver that
+    would **block forever** is not, and :class:`EvictionWouldHang` says why.
     """
     saver = getattr(getattr(compiled, "_app", compiled), "checkpointer", None)
     if saver is None:
         return
-    # A durable saver is async-only: `AsyncSqliteSaver.delete_thread` *exists* and raises
-    # `NotImplementedError`, so probing for the attribute and swallowing the failure would
-    # silently stop evicting and grow the harness database without bound. Prefer the async
-    # method, driven on the graph's own pinned loop -- which is the only loop its connection
-    # will answer on.
+    # The durable saver is async-only in practice, so prefer the async method, driven on the
+    # graph's own pinned loop -- the only loop its connection will answer on.
     run_coro = getattr(compiled, "run_coro", None)
     adelete = getattr(saver, "adelete_thread", None)
     if run_coro is not None and adelete is not None and getattr(compiled, "_loop", None) is not None:
@@ -231,6 +240,26 @@ def _evict(compiled: Any, thread_id: str) -> None:
         except Exception:  # noqa: BLE001 — a saver that cannot evict is a leak, not a failed turn
             return
         return
+    # No arm reaches this today -- `run_arm` compiles durable and takes the branch above. It is
+    # the *designated* fallback, and on a loop-bound saver it is a trap:
+    # `AsyncSqliteSaver.delete_thread` is a sync bridge -- `run_coroutine_threadsafe(...).result()`
+    # onto `self.loop` -- and `_SyncApp`'s loop is not running between calls, so the call never
+    # resolves and never raises (probed at `langgraph-checkpoint-sqlite` 3.1.1: still blocked after
+    # 5 s). An older comment here claimed it raised `NotImplementedError`; `aio.py` contains no
+    # `NotImplementedError` at all -- those are on the *sync* `SqliteSaver`'s *async* methods
+    # (`langgraph/checkpoint/sqlite/__init__.py:592,608,624`). So the trap is refused by name:
+    # `except Exception` cannot catch a hang, and an arm that hangs on question one produces no
+    # output, no traceback and no partial rows.
+    if getattr(saver, "loop", None) is not None:
+        raise EvictionWouldHang(
+            f"{type(saver).__name__} carries its own event loop, so its synchronous "
+            f"`delete_thread` bridges onto that loop and blocks forever when it is not running "
+            f"-- which is this harness between calls. The async `adelete_thread` is the only "
+            f"usable eviction and it was not reachable (adelete_thread="
+            f"{adelete is not None}, run_coro={run_coro is not None}, "
+            f"pinned_loop={getattr(compiled, '_loop', None) is not None}). Failing here rather "
+            f"than hanging: an arm that blocks on question one writes no rows and no traceback."
+        )
     delete = getattr(saver, "delete_thread", None)
     if delete is None:
         return

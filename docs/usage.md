@@ -283,7 +283,20 @@ already a 400. The *default* CORS branch has the same gap, so this is not someth
 uv run python -m governed_bi.serve --schema <schema> -q "…"
 uv run python -m governed_bi.serve --corpus-dir <path> -q "…"
 uv run python -m governed_bi.serve --schema <schema> -q "…" --no-model
+uv run python -m governed_bi.serve --schema <schema> -q "…" --thread-id t-1
 ```
+
+### `--thread-id`, and what happens without it
+
+The CLI checkpoints to a durable SQLite file, so a turn that pauses on a clarification survives
+the process that raised it. `--thread-id` is what makes that reachable: it names the thread, and
+the checkpoint is kept for a later invocation to resume.
+
+Omit it and the thread id is the run id — a fresh random value per process, which no later
+command could ask for. Those checkpoints are **deleted** after the turn prints, because a
+checkpoint nobody can name is not durability, it is a leak. Measured 2026-08-20:
+`runs/harness-checkpoints.sqlite` had grown to 4.6 MB holding two such orphans, roughly 1.8 MB
+per question asked. Nothing about the answer, the record or the exit code changes.
 
 The model comes from `GOVERNED_BI_MODEL`, the same variable the server reads, and `--model`
 overrides it for one run. There is no default: with neither set the command exits 2 naming the

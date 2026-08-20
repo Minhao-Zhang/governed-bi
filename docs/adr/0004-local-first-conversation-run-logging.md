@@ -197,7 +197,7 @@ if a turn matters, it needs a second home.
 > now goes through the SDK. The plaintext-sensitivity bullet transfers intact to
 > `runs/conversations.sqlite` — still verbatim, still protected by nothing but the filesystem, and
 > reachable over `/audit/turns` and `/threads/*` with no credential (audit A7, open). Two costs
-> are new rather than transferred: a turn costs ~3.9 MB of checkpoint, because every super-step
+> are new rather than transferred: a turn costs ~3.9 MB of checkpoint, because every super-step  [retired]
 > persists the whole state; and a `values` frame or a `get_state` now returns *every* prior turn's
 > record rather than one (audit B1, open). "Two write sites" retires with §3. The linear scan
 > survives the change of store.

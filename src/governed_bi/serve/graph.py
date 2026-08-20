@@ -404,8 +404,14 @@ def compile_graph(*, checkpointer: Any | None = None) -> _SyncApp:
     two-schema corpus: 101 KB after one turn, 844 KB after six, because ``usage`` and ``answer``
     accumulate and every superstep re-serialises them with ``knobs_resolved``. ``eval/harness.py``
     holds one compiled graph per worker for a whole arm, so a 1,351-question run retains on the
-    order of 135 MB per worker unless it calls ``InMemorySaver.delete_thread`` — which it does,
-    per question.
+    order of 135 MB per worker unless something evicts per question.
+
+    **That worker does not reach this saver, and the sentence above used to imply it did.**
+    ``eval/harness.py::run_arm`` compiles through :func:`compile_durable`, so its eviction
+    goes through ``AsyncSqliteSaver.adelete_thread`` and never through
+    ``InMemorySaver.delete_thread``. The bound still describes *this* function's saver, and
+    the caller that actually has it is ``eval/datalake.py``'s routing loop — which had no
+    eviction at all until 2026-08-20, for exactly the reason stated here.
     """
     if checkpointer is False:
         return as_sync(build_graph().compile())

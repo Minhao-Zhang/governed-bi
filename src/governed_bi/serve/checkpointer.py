@@ -2,16 +2,48 @@
 
 The served store replaces the dev server's default saver -- pickle shards under
 ``.langgraph_api/`` flushed by a daemon thread every ten seconds -- with a SQLite database the
-server opens and closes on its lifespan. It is what makes a conversation survive a restart, and
-therefore what lets the audit surface read turns out of thread state rather than out of a second
-JSONL log. Mounted by ``langgraph.json``'s ``checkpointer.path``; LangGraph Server owns its
-lifecycle.
+server opens and closes on its lifespan. Mounted by ``langgraph.json``'s ``checkpointer.path``;
+LangGraph Server owns its lifecycle.
+
+**Its job is one thing: a conversation survives a restart.** It does *not* feed the audit surface,
+and an earlier version of this docstring drew that consequence anyway. ``Threads.search`` never
+reaches a checkpointer -- the source of ``langgraph_runtime_inmem.ops.Threads.search`` contains no
+such reference (verified 2026-08-20 at ``langgraph-runtime-inmem`` 0.32.3) -- so ``/audit/turns``
+reads the *thread row's* ``values``, which that runtime copies out of ``checkpoint["values"]`` at
+run completion (``ops.py:1184``, ``:1282``) into ``.langgraph_api/.langgraph_ops.pckl``, a
+``PersistentDict`` flushed by a daemon thread every ten seconds (``_persistence.py:17``, ``:53``)
+and on ``stop_pool``. Thread ``status`` and ``interrupts`` live in the same pickle, so the pending
+clarification queue reads it too. ``api/thread_turns.ThreadTurnLog.TURN_LOG_DIR`` is the account of
+this; these two must agree.
+
+**The durable half and the read half are different halves**, which is what a reader needs next.
+Measured 2026-08-20: ``runs/conversations.sqlite`` holds 88.4 MB of checkpoints nothing on the audit
+path opens, while the 2.7 MB ``.langgraph_ops.pckl`` it does read is a *disposable cache* to its
+owner -- ``GLOBAL_STORE.load()`` deletes it on ``ModuleNotFoundError`` **and** on a bare
+``Exception`` (``database.py:167-184``; the log text names "Renamed or moved classes"). The two
+failures point opposite ways: a hard kill inside the ten-second flush window loses a paused
+clarification from the thread registry while its checkpoint is already durable here, and a module
+rename destroys the audit history while these checkpoints survive unread. Nothing expires either --
+``langgraph.json`` configures ``checkpointer.ttl``, but ``langgraph_runtime_inmem``'s ``sweep_ttl``
+is ``return (0, 0)`` and no caller exists in ``site-packages``, so this file grows monotonically
+(``runs/conversations.sqlite``: 0 freelist pages, measured 2026-08-20). ADR 0014 §4.
+
+That a conversation survives a restart was watched by hand on 2026-08-19: a clarification paused,
+the process was killed with nothing left listening, a fresh one re-mounted the prompt from
+checkpointed interrupt state, and answering it resumed the turn to a correct answer
+(``docs/analysis/adopting-the-downstream-fork-2026-08-19.md``). **No test drives that path.** The
+suite's HITL tests all run on ``InMemorySaver``, and the one file that opens this saver for real
+uses ``update_state`` rather than a turn.
 
 **Two databases, one mechanism.** :data:`CONVERSATION_DB` holds served conversations. The CLI and
-eval get :data:`HARNESS_DB` instead, because their traffic is measurement: 131 questions at ~3.9 MB
-of checkpoint each would make the conversation store mostly benchmark, which is the same
-contamination that put 116 ``t-transport`` turns into the old JSONL log with no field to tell them
-apart.
+eval get :data:`HARNESS_DB` instead, because their traffic is measurement. Measured 2026-08-20: a
+checkpoint blob averages 82.5 KB here (900 checkpoints, 36 threads, 88.4 MB) and 76.6 KB in
+``runs/harness-checkpoints.sqlite``, where one single-turn thread is 23 checkpoints and ~2.1 MB --
+so a 131-question arm is ~275 MB, three times the whole conversation store as it stands, and one
+file would be mostly benchmark. That is the same contamination that put 116 ``t-transport`` turns
+into the old JSONL log with no field to tell them apart. (This docstring used to price the arm at
+"~3.9 MB of checkpoint each"; ADR 0014's Consequences retracted that as turn one's cost read as a  [retired]
+constant, and measured off the dev server's per-channel pickle rather than this saver.)
 
 **Neither is ever the analytics warehouse.** :func:`assert_not_a_warehouse` refuses a value that
 looks like a libpq DSN or a database URL rather than trusting an operator to keep two settings

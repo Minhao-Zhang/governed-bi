@@ -133,8 +133,17 @@ names both a factory and a file that exists, so removing the declaration flips t
 editing the line (ADR 0009 D4). It does not claim to see a *live* saver: the platform injects the
 saver into the compiled graph and this custom app never holds that graph, so a live handle is
 genuinely unobservable from here. `hitl_survives_process_restart` is the same observation rather than
-a second belief — an `ask_user` interrupt *is* checkpoint state. What was verified is thread state
-surviving a hard kill; a clarification answered *after* a restart has not been watched end to end.
+a second belief — an `ask_user` interrupt *is* checkpoint state. What was verified when this ADR
+landed is thread state surviving a hard kill. The clarification half **was** watched end to end later, on
+2026-08-19: a turn paused on `ask_user`, the process was killed with nothing left listening, a
+fresh one re-mounted the prompt from checkpointed interrupt state, and answering it resumed the
+turn to a correct answer (`docs/analysis/audit-2026-08-10.md` A10, and
+`docs/analysis/adopting-the-downstream-fork-2026-08-19.md`). That is **one hand-run observation
+and no test coverage**: every HITL test compiles through `compile_graph`, whose saver is
+`InMemorySaver`, and `tests/serve/test_the_durable_saver_survives_a_process.py` reaches the saver
+through `update_state` because that file is about persistence rather than the serve graph. So
+nothing automated drives a real `ask_user` interrupt and resume across a process boundary
+through `AsyncSqliteSaver`.
 
 ### 4. Retention is a TTL that **deletes**, and there is no gentler option
 
@@ -204,7 +213,7 @@ graph's own loop.
   per turn — once per super-step — and carries every prior turn each time. Measured: 1 turn =
   91 KB, 5 turns = **11.4 MB**, marginal cost ~1.1 MB per extra turn and rising. A 20-turn
   conversation writes ~25 MB for its last turn alone. An earlier draft of this ADR said "a turn
-  costs ~3.9 MB", which was the cost of turn *one* read as a constant; that measurement came from
+  costs ~3.9 MB", which was the cost of turn *one* read as a constant; that measurement came from  [retired]
   the dev server's pickle store, which **does** key blobs per channel, and does not transfer to
   the saver this ADR mounts. Upstream also warns this saver is "not recommended for production
   workloads due to limitations in SQLite's write performance".

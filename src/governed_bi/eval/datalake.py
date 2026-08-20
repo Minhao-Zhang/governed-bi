@@ -315,6 +315,13 @@ def routing_recall(
     from governed_bi.serve.graph import compile_graph
 
     graph = compile_graph()
+    # The saver, held once so the loop can empty it. `compile_graph()` defaults to an
+    # `InMemorySaver` and nothing in it expires: `serve/graph.compile_graph`'s docstring measures
+    # 101 KB after one turn and 844 KB after six, so one thread per question over a pooled run
+    # retains on the order of 135 MB for state no later question reads. This driver is the one
+    # most likely to be run at full scale on a laptop, because retrieval measurement is free --
+    # the vector cache is warm and a stub-answer arm calls no provider.
+    saver = getattr(graph, "checkpointer", None)
     rows: list[dict[str, Any]] = []
     for index, question in enumerate(questions):
         turn = session.turn(str(question["question"]), turn_index=1)
@@ -323,7 +330,8 @@ def routing_recall(
         config = session.configurable(question=str(question["question"]))
         # One thread per question: a shared thread would carry the previous question's
         # per-turn channels into this one, which is the defect `PER_TURN_RESET` exists for.
-        config["configurable"]["thread_id"] = f"routing-{index}-{question['question_id']}"
+        thread_id = f"routing-{index}-{question['question_id']}"
+        config["configurable"]["thread_id"] = thread_id
         out = graph.invoke(turn, config)
 
         selected = [str(s) for s in (out.get("schemas") or ())]
@@ -354,6 +362,16 @@ def routing_recall(
                 "terminal_reason": out.get("terminal_reason"),
             }
         )
+        # After the row, not before: every field above comes out of the returned state, and a
+        # future resumed question would read the checkpoint itself.
+        #
+        # Sync, and that is checked rather than assumed: `InMemorySaver.delete_thread` is a plain
+        # `def` over three dicts (`langgraph/checkpoint/memory/__init__.py:505`), so no loop is
+        # involved. The async spelling `eval/harness._evict` reaches for is required by the
+        # *durable* saver, whose sync `delete_thread` blocks forever here; getting the two
+        # backwards is how a housekeeping call becomes a hang.
+        if saver is not None:
+            saver.delete_thread(thread_id)
     return rows
 
 

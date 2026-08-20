@@ -12,9 +12,12 @@ run:
 - Its worker thread is not a daemon and CPython joins non-daemon threads *before* ``atexit``, so a
   graph that is never closed stops the interpreter from exiting. A leak here does not fail an
   assertion; it hangs the suite.
-- ``AsyncSqliteSaver.delete_thread`` exists **and raises**, which is why ``eval/harness._evict``
-  prefers ``adelete_thread``. A saver that cannot evict grows the harness database without bound,
-  silently, because that function swallows.
+- ``AsyncSqliteSaver.delete_thread`` exists and **blocks forever** rather than raising: it is a
+  ``run_coroutine_threadsafe(..., self.loop).result()`` bridge, and a caller-owned loop is not
+  running between calls (probed at ``langgraph-checkpoint-sqlite`` 3.1.1 — still blocked after
+  5 s, no raise). ``aio.py`` contains no ``NotImplementedError`` at all; those are on the *sync*
+  ``SqliteSaver``'s *async* methods. So ``eval/harness._evict`` prefers ``adelete_thread`` and
+  now raises ``EvictionWouldHang`` rather than falling through to the bridge.
 
 Each test bounds itself with ``pytest.mark.timeout``-free plain code and its own ``tmp_path``
 database, so a hang is a hung test rather than a poisoned session, and no test touches
@@ -147,8 +150,11 @@ def test_closing_twice_is_harmless_and_a_default_graph_has_nothing_to_close() ->
 def test_a_thread_can_be_evicted_through_the_async_method(tmp_path: Path) -> None:
     """``eval/harness._evict`` depends on this and swallows failures, so nothing else would notice.
 
-    ``delete_thread`` (sync) exists on this saver and raises; ``adelete_thread`` is the one that
-    works. Pinned because a saver that cannot evict makes an arm's database grow without bound.
+    ``adelete_thread`` is the only usable eviction: the sync ``delete_thread`` on this saver
+    bridges onto the saver's own loop and blocks when that loop is not running, which is why
+    ``_evict`` refuses it by name rather than falling through
+    (``tests/eval/test_eviction_fails_loudly_rather_than_hanging.py``). Pinned because a saver
+    that cannot evict makes an arm's database grow without bound.
     """
     graph = compile_durable(path=tmp_path / "evict.sqlite")
     try:

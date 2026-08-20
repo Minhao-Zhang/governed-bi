@@ -119,7 +119,12 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
         # facts are independent. See :func:`_run`. Stamp still re-reads ``execution.terminal``
         # when ``path_kind`` is ``answered`` (capped / all-refused).
         "path_kind": "crashed" if failure is not None else "answered",
-        "messages": fresh,
+        # **Sealed, not raw.** A loop that died with a tool call pending commits an ``AIMessage``
+        # whose ``tool_use`` nothing ever answered, and this write is the single point all three
+        # ways of dying pass through — so the repair is here and not three times over. It does
+        # not change what this turn *reports* (still ``crashed``, same ``failure``, same ledger);
+        # it stops the turn from taking the whole thread with it. See :func:`_sealed`.
+        "messages": _sealed(fresh, failure, paused=bool(result.get("__interrupt__"))),
         "usage": usage,
         "delivery": delivery,
         "clarification_requested": False,
@@ -472,6 +477,10 @@ class _CapEndsTheTurn(ToolCallLimitMiddleware):
     call in the same batch. The docstring's confidence is what let
     :func:`_unanswered_tool_calls` ship keyed on the tool's *name*, which strands a second call
     to the capped tool and kills the thread. Read that function before changing this one.
+
+    It answers them through :func:`_stranded_replies`, which :func:`_sealed` also uses: this was
+    the *only* enforcer of the invariant for a while, and a loop that died with a call pending
+    reached the same corruption by a path that never came through here.
     """
 
     def __init__(self, cap: int) -> None:
@@ -490,15 +499,11 @@ class _CapEndsTheTurn(ToolCallLimitMiddleware):
         blocked = [m for m in (update or {}).get("messages") or () if isinstance(m, ToolMessage)]
         if not update or not blocked:
             return update
-        stranded = [
-            ToolMessage(
-                content=f"Not executed: the turn ended at the {self.tool_name} attempt cap.",
-                tool_call_id=call["id"],
-                name=call.get("name"),
-                status="error",
-            )
-            for call in _unanswered_tool_calls(state, {m.tool_call_id for m in blocked})
-        ]
+        stranded = _stranded_replies(
+            state,
+            {m.tool_call_id for m in blocked},
+            f"Not executed: the turn ended at the {self.tool_name} attempt cap.",
+        )
         final = AIMessage(
             f"Stopped: {self.tool_name} reached its attempt limit of {self.thread_limit}."
         )
@@ -539,6 +544,98 @@ def _unanswered_tool_calls(state: Any, answered: Container[str]) -> list[Any]:
         if isinstance(message, AIMessage):
             return [tc for tc in message.tool_calls or () if tc.get("id") not in answered]
     return []
+
+
+def _stranded_replies(state: Any, answered: Container[str], content: str) -> list[ToolMessage]:
+    """One ``status="error"`` reply per call :func:`_unanswered_tool_calls` reports stranded.
+
+    Shared by the two enforcers that end a turn without running tools it had already asked for
+    — the attempt cap, and a loop that died mid-turn. One builder and not two, because the
+    obligation is identical both times: the call's own ``id`` (never its name — see the function
+    above), ``status="error"`` so a replayed history does not read as a result the tool produced,
+    and text a model can act on rather than a marker only a human can interpret.
+    """
+    return [
+        ToolMessage(content=content, tool_call_id=call["id"], name=call.get("name"), status="error")
+        for call in _unanswered_tool_calls(state, answered)
+    ]
+
+
+#: What a call that was asked for and never ran is told. ``{why}`` is the failure's
+#: ``error_type``, i.e. an exception *class* name — ADR 0006 §11 keeps ``str(exc)`` out of
+#: anything recorded because driver text echoes the statement and its literals — so a replayed
+#: history can say what happened without quoting the exception.
+_ENDED_BEFORE_THE_TOOL_RAN = (
+    "Not executed: the turn ended before this tool ran ({why}). Nothing ran and there is no "
+    "result; call it again if the current question still needs it."
+)
+
+
+def _sealed(fresh: list[Any], failure: Mapping[str, Any] | None, *, paused: bool) -> list[Any]:
+    """``fresh``, with an error reply for any ``tool_use`` the turn left unanswered.
+
+    **The invariant belongs here because this is where the ways of dying meet.** Each of them
+    returns through :func:`_run`'s ``last`` — the last *committed* values frame — and that frame
+    is very often a post-model one: an ``AIMessage`` carrying ``tool_calls`` with no
+    ``ToolMessage`` yet. ``agent_core_node`` commits it to the outer ``messages`` channel, and
+    the *next* turn's inbound is that channel, so the dangling block is replayed at the head of
+    every later turn, forever. Bedrock rejects a history with an unanswered ``tool_use``, which
+    means the failure is not the turn but the **thread**.
+
+    This repo has already paid for that once by the other route into it: measured on thread
+    ``01a01bb8`` (2026-08-19), 12 ``tool_use`` against 11 ``tool_result``, and every subsequent
+    turn raised ``ValidationException`` before reaching a single attempt. What makes this route
+    worse is that the damaging turn stamps an ordinary ``crashed`` and reads like a normal
+    failure. Three paths reach it, all probed:
+
+    1. ``agent_node_timeout_s`` — a live production knob. The soft wall is checked **between**
+       frames (:func:`_run` says why it must be), so it fires exactly in the window after the
+       model asked for a tool and before the tools super-step yields a frame.
+    2. Any exception out of the nested agent with a call pending. Including
+       ``GovernanceUsageError``, which ``serve/tools.py::_fetch`` deliberately re-raises instead
+       of converting to a tool reply, and ``GraphRecursionError`` from the exploration tools
+       ``_CapEndsTheTurn`` does not count.
+    3. ``ResumeRejected`` from ``serve/resume.py``, raised on the line ``ask_user``'s
+       ``interrupt()`` returns on — latent while there is one principal, live the moment a fork
+       has two.
+
+    **A paused turn must not be "repaired".** A turn stopped at ``interrupt()`` has an unanswered
+    ``tool_use`` *by design*: answering it is exactly what would break resume, the feature this
+    surface exists for. On the checkpointed path — the server, and every path that can actually
+    resume — the structure already decides that: :func:`_run` re-raises ``GraphInterrupt``
+    untouched and ``agent_core_node`` calls ``_run`` inside no ``try``, so a pause propagates out
+    of the node and this function is never reached (measured through ``compile_graph``: the node
+    writes nothing and the outer ``messages`` channel is still empty while the turn is paused).
+
+    ``paused`` covers the configuration where that is *not* true, which is why it is a parameter
+    and not an assertion. With **no checkpointer** — the eval and CLI shape :func:`_run` is built
+    for — the nested Pregel does not re-raise: it ends the stream and returns the pause in the
+    frame, as ``__interrupt__`` beside the ``tool_use`` (measured). The frame saying a pause is
+    pending is the authoritative signal, so it is the one taken. Nothing is lost by not sealing
+    there: without a saver the state does not outlive the invocation, so there is no later turn to
+    replay the block into — and ``Session.turn`` seeds ``messages`` empty regardless.
+
+    ``tests/serve/test_a_dying_loop_answers_its_tool_calls.py`` asserts the untouched pause both
+    ways round. A later refactor that caught ``GraphInterrupt`` inside the node would silently
+    turn this repair into a resume-breaker, and those tests are the only thing that would notice.
+
+    **Scoped to ``fresh``, so it repairs only the frame this write commits.** A reply is valid
+    only immediately after the ``tool_use`` it answers, so appending can heal a call at the end
+    of the list and nothing further back — a ``tool_result`` that does not follow its
+    ``tool_use`` is rejected in its own right, and would trade one broken history for another.
+    Damage already in ``history`` is therefore not this write's to undo.
+
+    Runs on the clean path too, where it finds nothing. A no-op costs one set comprehension and
+    is worth more than a rule about when the invariant applies.
+    """
+    if paused:
+        return fresh
+    answered = {str(getattr(m, "tool_call_id", "")) for m in fresh if isinstance(m, ToolMessage)}
+    why = str((failure or {}).get("error_type") or "the loop stopped")
+    replies = _stranded_replies(
+        {"messages": fresh}, answered, _ENDED_BEFORE_THE_TOOL_RAN.format(why=why)
+    )
+    return [*fresh, *replies] if replies else fresh
 
 
 def _stub(state: dict) -> dict:

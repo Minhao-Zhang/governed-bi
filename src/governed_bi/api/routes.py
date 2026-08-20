@@ -369,8 +369,16 @@ def capabilities_for(session: Any) -> dict[str, Any]:
         # One observation, not two: an `ask_user` interrupt *is* checkpoint state, and the
         # resume reads it back out of the same store through the platform's `Command(resume=…)`.
         # So this cannot be true while `checkpoint_durable` is false, and it must not be reported
-        # as a separate belief. What ADR 0014 verified is thread state surviving a hard kill and
-        # a restart; a clarification answered *after* one has not been watched end to end.
+        # as a separate belief. The behaviour *was* watched end to end on 2026-08-19: a
+        # clarification paused, the process was killed with nothing left listening, a fresh one
+        # re-mounted the prompt from checkpointed interrupt state, and answering it resumed the
+        # turn to a correct answer (`docs/analysis/audit-2026-08-10.md` A10 and
+        # `docs/analysis/adopting-the-downstream-fork-2026-08-19.md`). That is one hand-run
+        # observation and **no test coverage**: every HITL test runs on `InMemorySaver`, and
+        # `tests/serve/test_the_durable_saver_survives_a_process.py` reaches the saver through
+        # `update_state` because that file is about persistence rather than the serve graph. So
+        # nothing automated drives a real `ask_user` interrupt and resume across a process
+        # boundary through `AsyncSqliteSaver`.
         "hitl_survives_process_restart": durable,
     }
 
