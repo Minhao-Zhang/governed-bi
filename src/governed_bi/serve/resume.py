@@ -157,7 +157,33 @@ def resume_clarification(
 
 
 def _stored_identity(graph: Any, config: Mapping[str, Any]) -> str | None:
-    snap = graph.get_state(config)
+    """The ``identity`` this thread was paused under, read the way the graph can be read.
+
+    **The read has to go through the async method on a durable graph, and until 2026-08-20 it did
+    not.** ``graph.get_state`` on a ``_SyncApp`` is not one of the wrapper's own methods, so
+    ``__getattr__`` forwards it to the compiled ``Pregel``'s *synchronous* ``get_state``, which
+    calls the saver's ``get_tuple``. On ``AsyncSqliteSaver`` that is
+    ``run_coroutine_threadsafe(self.aget_tuple(...), self.loop).result()``
+    (``langgraph/checkpoint/sqlite/aio.py``) against a loop that is **not running** between
+    ``invoke`` calls -- so it does not raise, it blocks forever. The identical mechanism, one method
+    over, is why ``eval/harness._evict`` refuses the sync ``delete_thread``.
+
+    That made every durable resume unreachable: ``serve/__main__.py``'s ``--thread-id`` exists so a
+    later invocation can answer a turn paused on ``ask_user``, and this line is the first thing that
+    invocation reaches. It was never caught because every human-in-the-loop test compiles through
+    ``compile_graph``, whose ``InMemorySaver`` implements its sync methods for real --
+    ``tests/serve/test_a_pause_survives_a_restart_on_disk.py`` is the test that found it, on its
+    first run, by resuming over a real file.
+
+    ``run_coro`` is the discriminator rather than the saver's type, because it is exactly the
+    property that matters: a graph carrying one is a ``_SyncApp`` that owns a loop nothing is
+    driving right now, and it is also the only thing that can drive one. A plain compiled graph has
+    no such loop and its sync read is the correct one.
+    """
+    if hasattr(graph, "run_coro"):
+        snap = graph.run_coro(graph.aget_state(config))
+    else:
+        snap = graph.get_state(config)
     values = getattr(snap, "values", None) or {}
     if isinstance(values, Mapping):
         return identity_token(values.get("identity"))
