@@ -61,6 +61,16 @@
       "port": 2124
     },
     {
+      "name": "ui-mock-3200",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "ui", "run", "dev", "--", "--port", "3200"],
+      "port": 3200,
+      "env": {
+        "NEXT_DIST_DIR": ".next-mock",
+        "NEXT_PUBLIC_LANGGRAPH_URL": ""
+      }
+    },
+    {
       "name": "ui-live-3100",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
@@ -81,5 +91,6 @@
   ],
   "_why_api_verify": "A second server on its own port, so a wire-protocol change can be verified against a fresh process without evicting whatever is already on 2024. It exists for the same reason as ui-verify: the thing being checked is what a freshly started process does, and --no-reload means an already-running one is still on the packages it imported at boot. Both hold a Postgres connection and pay the ~90s corpus load, so do not leave this one running.",
   "_why_no_reload": "langgraph dev watches the project directory. An eval run appends to runs/, which watchfiles reads as a source change, so the server restarts every few seconds and never finishes seeding the corpus -- measured: '4 changes detected' on a 10s loop and port 2024 never bound. --no-reload also removes the opposite trap, where the reloader claims to have picked up a src/ change and has not, so a fix gets verified against old code. Restart the server deliberately instead.",
+  "_why_ui_mock_3200": "The one entry the set was missing: `ui` reads ui/.env.local, which points at 2024, so a UI-only change could not be looked at without booting the engine and paying the ~90s corpus load and a Postgres connection. An empty NEXT_PUBLIC_LANGGRAPH_URL in the process env beats the .env.local value, which is what flips lib/env.ts's USE_MOCKS and renders the whole app off lib/mock/fixtures.ts. Its own dist dir so it does not fight `ui` or `ui-verify` over .next. Use it for layout and rendering only -- ui/.env.example already names the trap, which is mistaking a complete, plausible mock render for live data.",
   "_why_ui_live_3100": "A second `next dev` against the engine *already running* on 2024, for when 3000 is occupied by a person's own server. `ui-verify` is the wrong entry for that: it points at 2124, and standing up `api-verify` to answer it pays the ~90s corpus load and a second Postgres connection for a UI-only change. 3100 is in langgraph.json's CORS allow_origins, which is why this port and not an arbitrary one."
 }

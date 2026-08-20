@@ -78,6 +78,10 @@ class GovernedAgentState(AgentState):
     #: Last successful query's result table. Reduced, not LastValue: see :func:`keep_newest`.
     result_table: Annotated[dict[str, Any] | None, keep_newest]
 
+    #: Set by ``ask_user`` on a fail-closed decline/cancel so the inner loop can end
+    #: and ``agent_core`` can lift it onto ``ServeState`` for ``classify_outcome``.
+    clarification_requested: bool
+
 
 def _chargeable(committed: Mapping[str, Any] | None) -> set[str]:
     """The committed ledger keys that are ``run_query`` attempts, and only those.

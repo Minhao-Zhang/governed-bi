@@ -60,7 +60,11 @@ export function PendingQueueSurface() {
 
           {data.rows.map((row) => (
             <Card
-              key={row.clarification_id ?? `${row.thread_id}-${row.asked_at}`}
+              key={
+                row.clarification_id ??
+                row.report_id ??
+                `${row.thread_id}-${row.asked_at}`
+              }
               className="p-4"
             >
               <div className="flex gap-3">
@@ -88,6 +92,15 @@ export function PendingQueueSurface() {
                         turn {row.turn_id.slice(0, 8)}
                       </Badge>
                     )}
+                    {row.source && (
+                      <Badge variant="outline" className="text-xs">
+                        {row.source === "interrupt"
+                          ? "clarification"
+                          : row.source === "from_refusal"
+                            ? "flagged refusal"
+                            : "flagged answer"}
+                      </Badge>
+                    )}
                   </div>
                 </div>
               </div>
@@ -95,10 +108,14 @@ export function PendingQueueSurface() {
           ))}
 
           {/* Distinguishes "nothing is waiting" from "the store was not read", which otherwise
-              look identical -- the reason the route reports it. */}
+              look identical -- the reason the route reports it.
+
+              Not "paused conversations" any more: the reader walks the paused threads *and*
+              then the whole store, because an open note lives on a thread of any status. The
+              number is distinct threads across both walks. */}
           {atLeast(mode, "analyst") && (
             <p className="text-muted-foreground text-xs">
-              {data.meta.threads_scanned} paused conversation
+              {data.meta.threads_scanned} conversation
               {data.meta.threads_scanned === 1 ? "" : "s"} read.
             </p>
           )}

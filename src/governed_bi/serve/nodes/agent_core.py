@@ -65,6 +65,7 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
         middleware=[
             *_context_middleware(state, model),
             _CapEndsTheTurn(policy_from_config(config).run_query_attempt_cap),
+            _ClarificationEndsTheTurn(),
         ],
     )
 
@@ -110,8 +111,7 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     # where the one consumer that wants it reads it, named for what it is.
     generated_sql = _last_executed_sql(attempts)
     delivery = DeliveryTracker(delivered).merge_into(state.get("delivery"))
-    usage = [usage_row(stage="agent_core", model=model, messages=fresh,
-                       turn_index=state.get("turn_index", 1))]
+    usage = [usage_row(stage="agent_core", model=model, messages=fresh, turn_index=state.get("turn_index", 1))]
     execution = execution_from_attempts(attempts)
 
     update: dict[str, Any] = {
@@ -127,7 +127,7 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
         "messages": _sealed(fresh, failure, paused=bool(result.get("__interrupt__"))),
         "usage": usage,
         "delivery": delivery,
-        "clarification_requested": False,
+        "clarification_requested": bool(result.get("clarification_requested")),
         "execution": execution,
     }
     if failure is not None:
@@ -339,9 +339,7 @@ def _question_message(state: dict, history: list[Any]) -> HumanMessage | None:
     if not question:
         return None
     asked = any(
-        str(getattr(m, "type", "")) == "human"
-        and str(getattr(m, "content", "")).strip() == question
-        for m in history
+        str(getattr(m, "type", "")) == "human" and str(getattr(m, "content", "")).strip() == question for m in history
     )
     if asked:
         return None
@@ -391,12 +389,8 @@ def _context_middleware(state: dict, model: Any = None) -> list[AgentMiddleware]
     # ``NotImplementedError: Asynchronous implementation of awrap_model_call is not available``.
     # ``_run`` cannot tell that from a provider error, so it surfaces as the turn crashing.
     @wrap_model_call
-    async def deliver_context(
-        request: ModelRequest, handler: Callable[[ModelRequest], Any]
-    ) -> ModelResponse:
-        return await handler(
-            request.override(messages=_with_block(request.messages, block, cache_point))
-        )
+    async def deliver_context(request: ModelRequest, handler: Callable[[ModelRequest], Any]) -> ModelResponse:
+        return await handler(request.override(messages=_with_block(request.messages, block, cache_point)))
 
     return [deliver_context]
 
@@ -504,9 +498,7 @@ class _CapEndsTheTurn(ToolCallLimitMiddleware):
             {m.tool_call_id for m in blocked},
             f"Not executed: the turn ended at the {self.tool_name} attempt cap.",
         )
-        final = AIMessage(
-            f"Stopped: {self.tool_name} reached its attempt limit of {self.thread_limit}."
-        )
+        final = AIMessage(f"Stopped: {self.tool_name} reached its attempt limit of {self.thread_limit}.")
         emit(
             kind="tool",
             step="cap",
@@ -520,6 +512,23 @@ class _CapEndsTheTurn(ToolCallLimitMiddleware):
             "messages": [*update["messages"], *stranded, final],
             "attempts_by_call": {CAP_LEDGER_KEY: cap_attempt()},
         }
+
+
+class _ClarificationEndsTheTurn(AgentMiddleware):
+    """End the inner loop after a fail-closed decline or ranking cancel.
+
+    The tool writes ``clarification_requested`` onto nested state and does not
+    ``Command(goto=END)``: an inner jump to the outer ``END`` would skip
+    ``stamp``. This hook is what actually stops the nested agent —
+    ``before_model`` fires after the tool returns and before another SQL guess,
+    and ``jump_to: "end"`` is the inner graph's end, not the parent.
+    """
+
+    @hook_config(can_jump_to=["end"])
+    def before_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        if not (state or {}).get("clarification_requested"):
+            return None
+        return {"jump_to": "end"}
 
 
 def _unanswered_tool_calls(state: Any, answered: Container[str]) -> list[Any]:
@@ -632,9 +641,7 @@ def _sealed(fresh: list[Any], failure: Mapping[str, Any] | None, *, paused: bool
         return fresh
     answered = {str(getattr(m, "tool_call_id", "")) for m in fresh if isinstance(m, ToolMessage)}
     why = str((failure or {}).get("error_type") or "the loop stopped")
-    replies = _stranded_replies(
-        {"messages": fresh}, answered, _ENDED_BEFORE_THE_TOOL_RAN.format(why=why)
-    )
+    replies = _stranded_replies({"messages": fresh}, answered, _ENDED_BEFORE_THE_TOOL_RAN.format(why=why))
     return [*fresh, *replies] if replies else fresh
 
 
@@ -678,5 +685,3 @@ def _last_executed_sql(attempts: Any) -> str | None:
         if sql:
             last = str(sql)
     return last
-
-

@@ -295,8 +295,23 @@ def _is_pre_routing_abstention(row: Mapping[str, Any]) -> bool:
     That matters here because a guard that warns on **every** legitimate resume is the shape
     that teaches a reader to ignore a warning. These rows are counted and reported as a number,
     not as a caution.
+
+    **Three conditions, since ``outcome: clarification`` stopped implying "before ``stamp``".** A
+    reader who declines a question ``ask_user`` asked ends a turn that reaches ``stamp`` and is
+    stamped ``clarification`` (``register/stages.Outcome``), and it may hold no licence — the
+    abstention policy is a knob and need not have run. Such a row carrying a null identity is
+    ``unstamped``, the thing this function must not launder into a counted number, so both
+    treatment identities have to be absent as well. Its caller has already established that the
+    field it is examining is null, so the added test is the *other* one; on the artifacts on disk
+    the two are null together on every one of the rows counted above, which is why the number
+    does not move.
     """
-    return str(row.get("outcome")) == "clarification" and not (row.get("licensed") or ())
+    return (
+        str(row.get("outcome")) == "clarification"
+        and not (row.get("licensed") or ())
+        and row.get("corpus_content_hash") is None
+        and row.get("prompt_set_hash") is None
+    )
 
 
 def _identity_problem(

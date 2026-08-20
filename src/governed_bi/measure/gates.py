@@ -14,10 +14,10 @@ from typing import Callable, Mapping
 
 from ..register.knobs import resume_drift_keys
 from ..register.quantity import Measured
-from ..register.record import GATE_CONDITIONS
-from ..register.stages import Outcome
+from ..register.record import GATE_CONDITIONS, RECORD_REGISTER, Absence
+from ..register.stages import Outcome, Stage
 from .degradation import channel_anomalies
-from .population import Population
+from .population import Population, TurnRow
 
 __all__ = ["Verdict", "GateResult", "GATE_IMPLEMENTATIONS", "evaluate", "quotable"]
 
@@ -216,6 +216,49 @@ def _context_hash_gate(arm: Population) -> GateResult:
     )
 
 
+#: The **other** treatment identity, used as the witness that ``stamp`` ran on a row.
+#:
+#: Both hashes are declared ``Absence.never`` and owned by ``Stage.stamp``, and ``Session``
+#: mints the pair together, so a row carrying neither was never stamped and a row carrying one
+#: but not the other is the partial-instrumentation failure the gate exists to fail. Using the
+#: gated field itself as its own denominator test would be circular — every arm would pass over
+#: the rows that already have it — which is why the witness has to be a different field.
+#: :func:`_assert_the_stamp_witness_is_still_a_stamp_field` holds the premise.
+_STAMP_WITNESS_FIELD = "prompt_set_hash"
+
+
+def _paused_before_stamp(row: TurnRow) -> bool:
+    """Did this row end at ``ask_user`` **without** reaching ``stamp``?
+
+    Two conditions, and the conjunction is the whole point. ``outcome: clarification`` has meant
+    two different endings since ``ask_user`` learned to fail closed (see
+    ``register/stages.Outcome``): a turn that paused and was never resumed, which no node ever
+    stamped, and a turn whose reader declined or cancelled, which *is* stamped and carries every
+    field ``stamp`` writes. The first must leave the corpus gate's denominator and the second
+    must not, and the outcome alone cannot tell them apart.
+
+    So the second condition asks the row directly: a turn that reached ``stamp`` names its prompt
+    set, because that is written by the same node from the same ``Session`` identity as the corpus
+    hash. Measured over ``runs/eval/`` on 2026-08-20: on the five instrumented artifacts every row
+    with a null ``corpus_content_hash`` is a clarification whose ``prompt_set_hash`` is null too
+    (6, 8, 4, 13 and 5 rows), and no other row has either null — so this predicate selects exactly
+    the rows the outcome test used to, and stops selecting the one case it was wrong about. On the
+    two runs of the null replicate neither key exists at all, so their clarifications drop and the
+    remaining 2 688 rows keep the arms at ``cannot_evaluate``, unchanged.
+
+    **What it still cannot see:** a stamped decline in a run that recorded *neither* identity.
+    That row is dropped, and its null corpus hash with it. Every field the drop could have been
+    keyed on is written by the same node in the same dict, so no row-local test separates "never
+    stamped" from "stamped by a run that recorded no identity at all"; what does is
+    ``register/arm_profiles.reconcile``, which the driver runs against the arm's declared digest
+    before the first paid question.
+    """
+    return (
+        str(row.get("outcome")) == Outcome.clarification.value
+        and row.get(_STAMP_WITNESS_FIELD) is None
+    )
+
+
 def _corpus_content_hash_gate(arm: Population) -> GateResult:
     """One corpus per arm, and it is named. D7.
 
@@ -243,15 +286,23 @@ def _corpus_content_hash_gate(arm: Population) -> GateResult:
     others, or that changed corpus mid-run, cannot be identified (``failed``).
 
     **Stage-conditional, like ``facet_channels``.** ``stamp`` is what writes this field, and a
-    turn paused on ``ask_user`` never reaches it — so a clarification legitimately carries no
-    corpus hash. Measured on the arms on disk: every null row in the five instrumented artifacts
-    is ``outcome: clarification`` (4 to 13 per arm). Judging those as missing instrumentation
-    would fail every arm that ever asked a question, which is a gate nobody can keep green and
-    therefore a preference rather than a gate. The denominator is turns that reached ``stamp``,
-    published; zero such turns is ``cannot_evaluate``, never a pass.
+    turn that paused on ``ask_user`` and was never resumed never reaches it — so such a row
+    legitimately carries no corpus hash. Judging those as missing instrumentation would fail
+    every arm that ever asked a question, which is a gate nobody can keep green and therefore a
+    preference rather than a gate. The denominator is turns that reached ``stamp``, published;
+    zero such turns is ``cannot_evaluate``, never a pass.
+
+    Which rows those are is :func:`_paused_before_stamp`'s question, **not**
+    ``outcome == clarification``'s. This gate read the outcome alone until 2026-08-20 under the
+    label "reached stamp", and that stopped being the same fact when ``ask_user`` gained a
+    fail-closed decline: such a turn ends the agent loop, *reaches* ``stamp``, is stamped
+    ``outcome: clarification`` and carries a full record — so the outcome test dropped a row that
+    both belongs in the denominator and would have failed it if its hash were null.
     """
     field = "corpus_content_hash"
-    arm = arm.restrict(lambda r: r.get("outcome") != Outcome.clarification.value, "reached stamp")
+    arm = arm.restrict(
+        lambda r: not _paused_before_stamp(r), "excluded turns that paused before `stamp`"
+    )
     if arm.n == 0:
         return _result(
             field,
@@ -411,4 +462,33 @@ def _assert_every_declared_gate_is_implemented() -> None:
         )
 
 
+def _assert_the_stamp_witness_is_still_a_stamp_field() -> None:
+    """Import-time: :data:`_STAMP_WITNESS_FIELD` and the gated field are one node's writes.
+
+    :func:`_paused_before_stamp` drops rows from the corpus gate's denominator on the strength of
+    one claim — that ``stamp`` writes both treatment identities or neither. That claim lives in
+    ``register/record.py`` as a pair of ``RecordField`` declarations, so it can be read here
+    instead of restated: if either field stops being ``Absence.never`` or stops being owned by
+    ``Stage.stamp``, the witness witnesses nothing and the drop becomes a silent exclusion. The
+    version of this rule that shipped before was a sentence in a docstring, which is how a
+    stamped clarification came to be dropped from the denominator without anything noticing.
+    """
+    declared = {f.name: f for f in RECORD_REGISTER}
+    for name in (_STAMP_WITNESS_FIELD, "corpus_content_hash"):
+        field = declared.get(name)
+        if field is None:  # pragma: no cover - import-time guard
+            raise AssertionError(
+                f"{name!r} is not in RECORD_REGISTER, so the corpus gate's denominator rests on "
+                "a field the register does not declare."
+            )
+        if field.absence is not Absence.never or field.owner is not Stage.stamp:
+            raise AssertionError(  # pragma: no cover - import-time guard
+                f"{name!r} is declared owner={field.owner.value} absence={field.absence.value}; "
+                "the corpus gate reads a null prompt_set_hash as 'this turn never reached "
+                "stamp', which holds only while both treatment identities are written by "
+                "`stamp` on every terminal path."
+            )
+
+
 _assert_every_declared_gate_is_implemented()
+_assert_the_stamp_witness_is_still_a_stamp_field()

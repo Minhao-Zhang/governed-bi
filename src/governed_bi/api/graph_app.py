@@ -34,13 +34,20 @@ from governed_bi.serve.session import Session
 from governed_bi.serve.state import TurnEntry
 
 __all__ = [
-    "build_serve_graph",
-    "record_node",
-    "make_graph",
-    "session_from_environment",
-    "SCHEMA_VAR",
+    "ACCESS_POLICY_VAR",
+    "CORPORA_DIR",
     "CORPUS_DIR_VAR",
+    "MODEL_EFFORT_VAR",
     "MODEL_VAR",
+    "SCHEMA_VAR",
+    "SEED_DIR_VAR",
+    "TIMEOUT_VAR",
+    "UTILITY_MODEL_VAR",
+    "build_serve_graph",
+    "make_graph",
+    "record_node",
+    "serve_policy",
+    "session_from_environment",
 ]
 
 #: Schema to serve. Changing corpus requires a restart.
@@ -421,11 +428,7 @@ def record_node() -> Any:
                 # ``append_turn``'s own fallback, applied here instead of relying on it: the
                 # value below is what the log will store (it prefers a non-None argument), so
                 # resolving it once is what keeps the two rows equal rather than nearly equal.
-                "outcome": (
-                    answer.get("outcome")
-                    if answer.get("outcome") is not None
-                    else record_dict.get("outcome")
-                ),
+                "outcome": (answer.get("outcome") if answer.get("outcome") is not None else record_dict.get("outcome")),
                 "record": dict(record_dict),
             }
         except Exception:  # noqa: BLE001 — a turn that answered is not a turn that failed
@@ -453,6 +456,9 @@ def build_serve_graph(session: Session) -> Any:
     over two sessions gets the second one's constants, and ``trust()`` with no argument clears.
 
     No checkpointer — the server supplies its own (needed for ``/threads``).
+    ``POST /turns/{id}/raised`` must not call this Pregel: a saver-less
+    ``aupdate_state`` raises, and even a later copy would leave the thread row
+    that pending/trace read stale. That write lives in ``api/raised_write.py``.
     """
     trust(dict(session.configurable()["configurable"]))
     return build_graph(accept=accept_node(session), record=record_node()).compile()

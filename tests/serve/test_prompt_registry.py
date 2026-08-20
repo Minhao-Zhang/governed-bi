@@ -155,6 +155,22 @@ def test_a_selected_variant_actually_reaches_the_analyst() -> None:
     )
 
 
+def test_ask_first_is_selectable_and_is_not_the_default() -> None:
+    """Serve stays v4 until a measured arm exists. Selection is ``--prompt-variant``."""
+    from governed_bi.serve.tools import analyst_prompt
+
+    assert select()["analyst"] == "v4"
+    assert select({"analyst": "ask_first"})["analyst"] == "ask_first"
+    assert prompt_set_hash({"analyst": "ask_first"}) != prompt_set_hash()
+    text = prompt_text("analyst", {"analyst": "ask_first"})
+    assert text != prompt_text("analyst")
+    assert "ranking_ambiguity" in text
+    assert "sample_rows" in text
+    assert "schema.table" in text
+    sent = analyst_prompt({"configurable": {"prompt_variants": {"analyst": "ask_first"}}})
+    assert sent == text
+
+
 def test_the_session_hashes_the_variants_it_also_sends() -> None:
     """The hash and the configurable must come from **one** selection.
 

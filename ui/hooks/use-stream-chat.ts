@@ -114,12 +114,12 @@ interface ClarificationFact {
   question: string;
   why: string;
   /** Absent while the graph is still waiting on the human. */
-  resolution?: { declined: boolean; answer?: string };
+  resolution?: { declined: boolean; deferred?: boolean; answer?: string };
 }
 
 function clarificationFact(
   request: ClarificationRequest,
-  resolution?: { declined: boolean; answer?: string },
+  resolution?: { declined: boolean; deferred?: boolean; answer?: string },
 ): ClarificationFact {
   return {
     clarification_id: request.clarification_id,
@@ -342,19 +342,23 @@ export function useStreamChat(
   // SDK this is `submit(null, { command: { resume } })` — equivalent to the
   // contract's `stream.respond(response)` (contract §2). The engine accepts either
   // a bare string or this structured reply, and reads `declined` before
-  // `answer`/`choice_id` (`serve/tools.py::_clarification_answer`).
+  // `answer`/`choice_id` (`serve/clarification.py::parse_resume`). `cancelled` lands in
+  // that same fail-closed branch; no button here sends it, but the wire still takes it.
   const respondClarification = (response: ClarificationResponse) => {
     // Record what was asked and what the user said. The engine's resolve event
     // carries neither, so this is the only place either exists on the client.
     if (clarification) {
-      const declined = "declined" in response && response.declined === true;
+      const declined =
+        ("declined" in response && response.declined === true) ||
+        ("cancelled" in response && response.cancelled === true);
+      const deferred = "deferred" in response && response.deferred === true;
       const answered =
         "choice_id" in response
           ? (clarification.choices?.find((c) => c.id === response.choice_id)?.label ?? response.choice_id)
           : "answer" in response
             ? response.answer
             : undefined;
-      const fact = clarificationFact(clarification, { declined, answer: answered });
+      const fact = clarificationFact(clarification, { declined, deferred, answer: answered });
       setClarified((prev) => new Map(prev).set(fact.clarification_id, fact));
     }
     // `SUBMIT_OPTIONS` spread first: the resume needs the same stream modes and

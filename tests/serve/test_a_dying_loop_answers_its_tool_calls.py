@@ -55,7 +55,7 @@ def _ask_user(*ids: str) -> AIMessage:
         tool_calls=[
             {
                 "name": "ask_user",
-                "args": {"question": f"which year, take {n}?"},
+                "args": {"question": f"which year, take {n}?", "basis": "data_definition"},
                 "id": call_id,
                 "type": "tool_call",
             }

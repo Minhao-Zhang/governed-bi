@@ -5,6 +5,7 @@ import { AlertTriangle, Info } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { ModelMarkdown } from "@/components/common/model-markdown";
 import { ReliabilityStamp } from "@/components/answer/reliability-stamp";
+import { RaiseNote } from "@/components/answer/raise-note";
 import { SqlBlock } from "@/components/answer/sql-block";
 import { ProvenanceDrawer } from "@/components/answer/provenance-drawer";
 import { AgentTimeline } from "@/components/chat/agent-timeline";
@@ -94,6 +95,8 @@ export function AnswerCard({
   // observes uncertainty and records it.
   const sql = sqlOf(answer);
   const text = displayText(answer);
+  const turnId =
+    typeof answer.record?.turn_id === "string" ? answer.record.turn_id : null;
   // The governed trace, kept on the finished answer so it doesn't vanish: the
   // captured live trace if present, else rebuilt from the ledger (live == audit).
   const timeline =
@@ -231,6 +234,13 @@ export function AnswerCard({
               </div>
             )}
           </>
+        )}
+
+        {turnId && (
+          <RaiseNote
+            turnId={turnId}
+            kind={delivery === "refused" ? "from_refusal" : "wrong_answer"}
+          />
         )}
 
         {/* Governed step trace in the main thread — starts expanded so routing /

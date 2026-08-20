@@ -140,12 +140,25 @@ dev = [
     "pytest-randomly>=3.15",
     # Optional local/CI coverage runs (`uv run pytest --cov=governed_bi`); not gated.
     "pytest-cov>=5.0",
-    # No `httpx` and no `numpy`. Both were declared for a named consumer that does not
-    # exist: `TestClient` appears nowhere in `tests/` (the API is tested through its
-    # shaping functions, because the routes build a Postgres connector), and
-    # `DeterministicFakeEmbedding` appears nowhere either — `model/deterministic_embedder.py`
-    # is ours and imports no numpy. A dependency justified by a comment naming a caller
-    # is only as true as the caller.
+    # No `httpx` and no `numpy`, for two different reasons now.
+    #
+    # `numpy` was declared for a consumer that does not exist: `DeterministicFakeEmbedding`
+    # appears nowhere in `tests/`, and `model/deterministic_embedder.py` is ours and imports
+    # no numpy. A dependency justified by a comment naming a caller is only as true as the
+    # caller — which is why the other half of this note had to be rewritten.
+    #
+    # `httpx` has a caller. Five files under `tests/api/` build a `fastapi.testclient`
+    # `TestClient`, which is Starlette's, which needs `httpx`; the earlier claim that
+    # `TestClient` appears nowhere was false on this tree. It is undeclared and the tests
+    # pass anyway because `httpx` is a runtime requirement of `langgraph-api`,
+    # `langgraph-cli` and `langgraph-sdk`, so it arrives transitively with the server stack
+    # this repository cannot run without. **Accepted, not overlooked.** The failure mode if
+    # that path ever went away is an `ImportError` at collection — loud, immediate, and
+    # attributable — not a wrong answer, and CI installs `--frozen` so the lock pins which
+    # `httpx` shows up. Declare it the day the API tests are expected to run without the
+    # LangGraph stack installed, or the day Starlette's own preference bites: it already
+    # warns on import that using `httpx` with `starlette.testclient` is deprecated in favour
+    # of `httpx2`, which is a choice this file is currently not making.
     "ruff>=0.16.0",
     "mypy>=2.3.0",
 ]

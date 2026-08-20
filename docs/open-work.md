@@ -42,15 +42,6 @@ frozen-literal gold. The `refused` and `capped` rows are where those two overlap
 outcome buckets — 19 of the 20 refusals had partial or no coverage and the twentieth
 had a tableless gold, and 26 of the 49 capped turns were not fully covered either.
 
-### 1.2 The agent budgets its attempts blind
-
-`run_query` is capped at `run_query_attempt_cap` (5). A governance-refused attempt **consumes
-one**; only an infrastructure exception refunds. The agent is told the cap exists only once it
-has already hit it, so it spends attempts on single-table probes (`LIMIT 3`, `LIMIT 5`) against
-a budget it cannot see.
-
-Returning "attempt 2 of 5" in the tool reply costs nothing. `serve/tools.py`.
-
 ### 1.3 Four turns licensed nothing at all
 
 Four of 1 351 turns routed zero schemas and licensed zero tables. All four asked a
@@ -218,10 +209,6 @@ to *repeat* calls specifically is an average, not a measurement.
 
 ### 3.4 Held back on purpose
 
-**Telling the agent its remaining attempt budget** (§1.2) is a cheap fix and is *not* applied,
-because it changes behaviour and would become a second variable in the next arm. Apply it with
-its own A/B, not alongside something else.
-
 1. **Comparability: run1, run2 and v3-pinned ran on `ba8cef2` or earlier.** `r_ambiguous_fold`
    was narrowed after them and it moves ~119 turns, so those three are **not** paired-comparable
    with anything measured since on what the fold touches. **v4 is the control for new arms**,
@@ -230,6 +217,17 @@ its own A/B, not alongside something else.
    ledger.** A turn killed between `execute` and the ledger write records no attempt for SQL
    the database actually ran. Rare, and it makes the ledger under-count rather than invent —
    but "the ledger is the record of what ran" is a property this repository leans on.
+3. **Comparability: the `run_query` tool reply now names the attempt budget, on the default
+   arm, and no field records that.** This entry used to say the opposite — that telling the
+   agent its remaining budget was a cheap fix held back because it "would become a second
+   variable in the next arm", to be applied with its own A/B. It was applied anyway, on
+   2026-08-20, as an accepted confound rather than an oversight: `serve/tools.py::_attempt_budget`
+   appends `attempt N of M` to every `run_query` reply. Tool replies are outside the prompt
+   registry, so `prompt_set_hash` is byte-identical across the change. **`v4` measured before
+   2026-08-20 is therefore not paired-comparable with `v4` measured after**, and the artifact
+   cannot tell you which side of the line a row is on — only its commit can. Treat the earlier
+   `v4` artifacts as a separate arm. See
+   [measurement — what `prompt_set_hash` does not cover](measurement.md#what-prompt_set_hash-does-not-cover).
 
 
 ### 3.5 Cost per arm is not in the artifact

@@ -29,9 +29,24 @@ __all__ = ["project_turn"]
 
 #: Abstentions that carry a statement, so the decline can be priced (see ``project_turn``)
 #: without ever being counted. Narrower than "the engine abstained": a ``clarification`` is an
-#: abstention too and has no statement to re-execute, so it is absent here and still reported
-#: as one by the driver. Two questions, two sets -- merging them would either invent a
+#: abstention too and is absent here, so it is priced by nothing and still reported as an
+#: abstention by the driver. Two questions, two sets -- merging them would either invent a
 #: fingerprint for a turn that ran nothing or drop a decline from the abstention rate.
+#:
+#: ``clarification``'s exclusion used to be justified as structural ("it has no statement to
+#: re-execute"), and that has stopped being a fact. It was one while every clarification ended
+#: *before* routing -- ``eval/provenance._is_pre_routing_abstention`` measured 6, 8, 4, 5 and 13
+#: such rows across the 2026-08-09 artifacts, all with nothing licensed -- so ``last_proposed_sql``
+#: had nothing to find. A fail-closed decline of ``ask_user`` (``register/stages.Outcome``) ends a
+#: turn that may already have proposed and been refused a ``run_query``, and it is stamped
+#: ``clarification`` too, so a proposal can now be sitting in the transcript.
+#:
+#: It stays out anyway, as a **decision** rather than a structural fact: pricing values what the
+#: turn's terminal decision discarded, and this turn's was to ask a question, not to withhold that
+#: statement. The asymmetry that buys is worth stating -- an identical proposal is priced when the
+#: turn ends ``refused`` and is not when the reader declines afterwards -- and it is the cheaper
+#: error of the two, because the alternative spends a database execution per declined
+#: clarification to value a statement the engine had already stopped pursuing.
 #:
 #: ``no_sql`` is absent for the ``clarification`` reason, and structurally so: the turn reached
 #: this state *because* the ledger holds no answering attempt, and ``last_proposed_sql`` reads
@@ -305,6 +320,13 @@ def project_turn(
     # A paused turn is not a crashed one. `ask_user` interrupts and no node writes `answer`,
     # so defaulting to "crashed" reports a question asked of the analyst as an engine crash
     # with no stage and no exception class. (`python -m governed_bi.serve` exit code 4.)
+    #
+    # **This is the writer of the unstamped half of `Outcome.clarification`**, and the only one in
+    # `eval/`. `no answer` is exactly "no node stamped this turn", so every field below that reads
+    # `record` comes out null on these rows -- both treatment identities included, which is what
+    # `measure/gates._paused_before_stamp` reads to keep them out of a denominator they cannot
+    # satisfy. The other half of the member is written by `stamp` itself, on a turn whose reader
+    # declined, and that row is fully populated: same `outcome`, opposite instrumentation state.
     interrupted = bool(state.get("__interrupt__")) and not answer
     if interrupted:
         outcome = Outcome.clarification.value
@@ -434,6 +456,13 @@ def project_turn(
         # boolean, so a run's summary could not tell "needed a live clarification" apart from
         # "refused" apart from "answered and wrong". `eval/report.py::outcome_rates` is the
         # reader.
+        #
+        # True for both endings the member covers -- the pause written above and a reader's
+        # fail-closed decline, which reaches `stamp` (`register/stages.Outcome`). That is the
+        # intended reading: the rate answers "how often did this arm need the reader", and both
+        # needed the reader. It is therefore *not* a witness that the row went unstamped; the
+        # gate that needs that distinction reads a stamped field instead
+        # (`measure/gates._paused_before_stamp`).
         "clarified": outcome == Outcome.clarification.value,
         "refused": outcome == Outcome.refused.value,
         "crashed": crashed,

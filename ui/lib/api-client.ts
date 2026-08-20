@@ -286,6 +286,21 @@ export const api = {
       MOCK_PENDING_QUEUE,
     ),
 
+  /** File a reader note on a finished turn (`POST /turns/{id}/raised`). */
+  raiseTurn: (
+    turnId: string,
+    body: { kind: "from_refusal" | "wrong_answer"; note?: string },
+  ): Promise<{ ok: boolean; row: Record<string, unknown> }> => {
+    if (USE_MOCKS) {
+      return Promise.resolve({ ok: true, row: { kind: body.kind, note: body.note ?? "" } });
+    }
+    return post(
+      `/turns/${encodeURIComponent(turnId)}/raised`,
+      body,
+      z.object({ ok: z.boolean(), row: z.record(z.string(), z.unknown()) }),
+    );
+  },
+
   /** One turn, grouped by the pipeline stage that produced each recorded field
    * (GET /audit/turns/{id}/trace). The grouping is derived from the engine's
    * record register, so a new field appears here with no change to this app. */

@@ -111,6 +111,11 @@ def grade_turn(
             detail="refused",
         )
     if outcome == "clarification":
+        # Both endings the member covers, on purpose: a turn that paused on `ask_user` and one a
+        # reader declined fail-closed, which reaches `stamp` (`register/stages.Outcome`). Neither
+        # delivered a governed answer and neither has a prediction, so both are `False` with the
+        # same `detail` — the distinction between them is about instrumentation, not about score,
+        # and the consumer that needs it reads a stamped field (`measure/gates`).
         return GradeResult(
             correct=False,
             gold_fingerprint=gold_fingerprint,

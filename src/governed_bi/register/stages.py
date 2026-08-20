@@ -143,6 +143,20 @@ class Outcome(str, Enum):
     available?"), and a prose decline. Naming the member after the one property all three share
     is the only claim the ledger can back; a "does this prose look like a refusal" heuristic
     would be a declaration with no enforcer, which is what this register exists to refuse.
+
+    :attr:`clarification` is **one member over two endings**, and that is a deliberate limit on
+    what it may be used for. The engine asked the reader something and got no usable answer,
+    either because the turn paused on ``ask_user`` and nothing resumed it — no node ever stamped
+    that turn — or because the reader declined or cancelled and ``ask_user`` failed closed, which
+    ends the agent loop and *does* reach ``stamp`` with a full record. Both are the same fact
+    about delivery (no governed answer ran, and the reader owes one), so they are counted together
+    by ``measure/selective.DECLINED``, ``eval/grade.grade_turn`` and ``eval/projection``'s
+    ``clarified`` — splitting the member would split those three counts for no measurement
+    question, and would put a value in the artifacts that ``ui/lib/schemas.ts``'s closed outcome
+    enum drops on the floor. What the member therefore **cannot** answer is whether the row was
+    stamped. A consumer needing that must read a field ``stamp`` writes;
+    ``measure/gates._paused_before_stamp`` is the one that does, and carries the write-up of what
+    reading the outcome instead cost. The two writers are named in :func:`classify_outcome`.
     """
 
     answered = "answered"
@@ -254,6 +268,11 @@ def classify_outcome(
     other refused_by → SQL present ⇒ answered → the ledger's own ``no_sql`` ⇒
     :attr:`Outcome.no_sql`, else crashed.
 
+    ``clarification_requested`` reaches this function on exactly one path — a reader who declined
+    or cancelled a question ``ask_user`` asked — and the branch below traces the writer, says why
+    it sits where it does, and names the one ``refused_by`` it outranks. A turn that *paused* on
+    ``ask_user`` never calls this function.
+
     ``terminal`` is ``govern.ledger.ExecutionRecord``'s field, and it is read in the **last two
     lines only**. That ordering is load-bearing: a guard-blocked or declined turn also carries
     an empty ledger, so ``terminal == "no_sql"`` is true of it, and reading the ledger any
@@ -272,9 +291,35 @@ def classify_outcome(
     if refused_by == ATTEMPT_CAP_REFUSED_BY:
         return Outcome.capped
     if clarification_requested:
-        # Serve never sets this True: ask_user pauses via GraphInterrupt before stamp.
-        # Transport surfaces clarification via __interrupt__ / HTTP outcome instead.
-        # Kept so a test or future writer can still classify a stamped clarification.
+        # **Live, and only ever on the stamped path.** This branch was dead, and the comment here
+        # said so ("Serve never sets this True: ask_user pauses via GraphInterrupt before stamp").
+        # It is now written: ``serve/tools.py::ask_user`` returns ``clarification_requested=True``
+        # when ``parse_resume`` reads a decline or a ranking cancel, ``_ClarificationEndsTheTurn``
+        # ends the inner loop on it, ``agent_core`` lifts it onto ``ServeState``, and ``stamp``
+        # hands it here. So reaching this line means *the engine asked, the reader refused to
+        # answer, and the turn ended at ``stamp`` with a full record* — including the two
+        # treatment identities. The pause itself never reaches this function at all: it raises
+        # ``GraphInterrupt``, and the ``clarification`` on such a row is written by the transport
+        # (``api/``) or by ``eval/projection.py`` when no ``answer`` exists.
+        #
+        # Which is why :attr:`Outcome.clarification` is **not** a witness of "never reached
+        # ``stamp``" and must not be read as one. ``measure/gates.py`` was reading it as exactly
+        # that — its corpus-hash denominator filter was labelled "reached stamp" — and so dropped
+        # these rows, which do carry the hash, out of the population that checks it.
+        #
+        # **Tested before the general ``refused_by``, and the combination is reachable.**
+        # ``clarification_requested`` is only ever true with ``path_kind == "answered"``
+        # (``agent_core`` is its one writer, and a crash there writes ``crashed`` instead), and on
+        # that path ``stamp::_path_signals`` returns a ``refused_by`` whenever no answering
+        # attempt passed. Of the three values it can return there, two already outrank this branch
+        # above — ``guardrail_error`` is our bug and ``attempt_cap`` is the cap — so the single
+        # masked pair is ``guardrail``: a layer refused every attempt, then the model asked and
+        # the reader declined. The decline wins deliberately. It is a decision something took on
+        # this turn, while ``guardrail`` here is a summary derived from "nothing passed", and this
+        # register puts a decision above a derived summary — the same rule that makes ``terminal``
+        # the last thing read. What that costs is worth naming: the row keeps ``refused_by`` and
+        # its per-attempt ``attempts`` trace, so the layer refusal is readable, but it leaves
+        # ``eval/report.refusal_histogram``, which counts rows classified ``refused``.
         return Outcome.clarification
     if refused_by:
         return Outcome.refused

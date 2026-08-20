@@ -615,6 +615,10 @@ class ServeState(TypedDict, total=False):
     usage: Annotated[list[UsageRecord], operator.add]
     clarifications: Annotated[list[dict[str, Any]], operator.add]
     clarification_requested: bool
+    #: Reader-filed notes on a finished turn (from a refusal, or a wrong delivered
+    #: answer). Accumulates; each row carries ``turn_id`` / ``thread_id``. Written only
+    #: through the unattached ``raise_note`` node via in-process ``aupdate_state``.
+    raised: Annotated[list[dict[str, Any]], operator.add]
     #: Every finished turn of this thread, appended by ``api/graph_app.record_node``. This is the
     #: channel that makes a checkpoint hold the **whole conversation's** audit trail rather than
     #: only the newest turn: ``answer``, ``execution`` and ``generated_sql`` are all in
@@ -701,7 +705,9 @@ PER_TURN_RESET: dict[str, Any] = {
 }
 
 #: Channels that accumulate across turns (each row carries turn identity).
-ACCUMULATING: frozenset[str] = frozenset({"messages", "usage", "clarifications", "turns"})
+ACCUMULATING: frozenset[str] = frozenset(
+    {"messages", "usage", "clarifications", "turns", "raised"}
+)
 
 #: Written by ``turn()`` itself — turn identity and run claims.
 TURN_IDENTITY: frozenset[str] = frozenset({

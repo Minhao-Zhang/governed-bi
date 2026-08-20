@@ -3,7 +3,7 @@
   "info": {
     "title": "governed-bi",
     "summary": "Corpus browsing, relationship graphs, and the turn audit surface, as JSON.",
-    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\n**Every route here is a read, and none of them serves a turn.** `POST /chat` and `POST /chat/resume` were deleted on 2026-08-18 (ADR 0014): they were a second serve topology with a checkpointer of their own, so falling back to them lost the conversation they were meant to rescue. A turn is served by the graph `langgraph.json` mounts, over the platform's `POST /threads/{thread_id}/runs/stream`, which is not described here. The answer, clarification and result-table shapes that `AnswerResponse` documented here until then are the streamed contract now: ADR 0007 \u00a72\u2013\u00a74 and \u00a76 own them, and `ui/lib/schemas.ts` (`resultTableSchema`, the answer schema) is the client's copy.\n\nEvery handler is annotated `-> dict[str, Any]`, so FastAPI neither validates nor filters a response against the schemas here: they document what the handlers build. Paths, parameters and operation ids in this file are taken from the running app.\n\n**No route requires a credential, and that is why there is no security scheme and no 401 in this file.** Reaching the port is sufficient \u2014 on every route, including `/audit/turns` and `/audit/turns/{turn_id}/trace`, which return every thread's SQL, the full turn records, and an absolute path to the conversation database. The shared key that guarded these routes until 2026-08-13 is gone, and audit findings A1 and A7 are live again with it; `docs/usage.md` records why (LangGraph Studio's bootstrap calls carry no header) and what it costs. This engine expects to be reachable only on 127.0.0.1.\n\n`api/auth.py` survives and is still wired, but what it enforces is not authentication: `threads.update` and `threads.create_run` refuse a client-supplied state-writing `command` (audit A2/A3/A4). Those are LangGraph Server's own routes and are not described here.\n\nServing needs a live Postgres connector and a corpus; there is no offline mode.",
+    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\n**Most routes here are reads, and none of them serves a turn.** `POST /chat` and `POST /chat/resume` were deleted on 2026-08-18 (ADR 0014). `POST /turns/{turn_id}/raised` is the one write: it files a reader note onto checkpointed thread state and does not resume a run. A turn is served by the graph `langgraph.json` mounts, over the platform's `POST /threads/{thread_id}/runs/stream`, which is not described here.",
     "version": "2"
   },
   "paths": {
@@ -790,7 +790,7 @@
           "audit"
         ],
         "summary": "Pending Clarifications",
-        "description": "Questions the engine asked via `ask_user` that nobody answered, oldest first. Read from LangGraph interrupt state (ADR 0014), not from the `clarifications` channel — an unanswered prompt writes nothing into thread state, so this is the only place an abandoned one is visible. Read-only: answering from here would resume a thread the operator was not the one asked (ADR 0006 B9).\n\n`meta.truncated` is load-bearing (ADR 0009): a silently short list reads as everything. `meta.threads_scanned` distinguishes an empty queue from a store that was not read.",
+        "description": "Open questions, oldest first: unanswered `ask_user` interrupts union open `raised` notes (`from_refusal` / `wrong_answer`). Interrupt rows come from LangGraph interrupt state (ADR 0014). Raised rows come from `ServeState.raised`. Answering an interrupt from here would resume a thread the operator was not the one asked (ADR 0006 B9) and is still refused.\n\n**Two walks of the thread store per request.** Interrupts are read with `status=interrupted`, a handful of threads at any volume. Notes are filed on *finished* turns, so that walk sends **no** status filter at all: a thread sits in `idle`, in `error` after a crashed run, or in `busy` while a later question runs, and filtering on `idle` hid a filed note for as long as it sat elsewhere -- permanently under `error`, which nothing moves a thread out of. So no note is hidden by its thread's status; the price is that the note walk projects `values.raised` off every thread in the store, up to 20 pages of 50, uncached, per request.\n\n`meta.truncated` is load-bearing (ADR 0009) and covers three losses without saying which: the page window, and either walk stopping on the 1000-thread bound. Both walks sort `updated_at` ascending, so past that bound the threads dropped are the most recently touched and the newest note is the first one missing -- `truncated` is the only signal that it happened. `meta.threads_scanned` is the count of **distinct** threads read across both walks (a paused thread is fetched twice and counted once); it distinguishes an empty queue from a store that was not read, and it now spans the whole store rather than only the paused conversations.",
         "operationId": "pending_clarifications_clarifications_pending_get",
         "parameters": [
           {
@@ -838,6 +838,62 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/turns/{turn_id}/raised": {
+      "post": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Raise On Turn",
+        "description": "File a reader note on a finished turn. Body `{kind: from_refusal|wrong_answer, note?}`. Server resolves `thread_id` from the turn envelope and appends `ServeState.raised` via in-process `aupdate_state(as_node=raise_note)`, then copies the checkpoint onto the thread row pending/trace read. Does not resume a turn and does not go through LangGraph `command.update` or `POST /threads/{id}/state`. 409 when the thread is paused or has an in-flight run: that `as_node` would consume the live interrupt, and a runtime whose run table this server cannot read is refused the same way rather than assumed idle. `note` is stripped (whitespace-only becomes empty) and capped at 4000 characters; the row lands in an accumulating channel on a store whose TTL sweep is a no-op, so an unbounded note would be a way to grow the store without limit. Nothing on this route authenticates (audit A7 open), so any caller reaching the port can file against any turn.",
+        "operationId": "raise_on_turn_turns__turn_id__raised_post",
+        "parameters": [
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Turn Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["from_refusal", "wrong_answer"]
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 4000
+                  }
+                },
+                "required": ["kind"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The row that was appended."
+          },
+          "404": {
+            "description": "Turn not found, or the envelope has no thread_id."
+          },
+          "409": {
+            "description": "The thread is paused, has an in-flight run, or runs on a runtime whose run table this server cannot read. Filing would consume the live interrupt, or would race a run nobody checked."
+          },
+          "422": {
+            "description": "Unknown kind, or a `note` longer than 4000 characters after stripping. The detail names the limit. Checked before the turn is read, so a rejected note never reaches the writer."
           }
         }
       }
@@ -1108,7 +1164,16 @@
             },
             "type": "array",
             "title": "Clarifications",
-            "description": "What this turn asked its reader mid-flight and what they answered: one object per `ask_user` call, `{clarification_id, question, why, answer, turn_id}`. Empty when the turn asked nothing, which is a read and not a shrug \u2014 the reader read the channel either way.\n\n**Added 2026-08-19.** The `clarifications` channel had two writers and no reader, so a turn whose SQL a *person* selected showed no sign of having asked. Read beside the envelope and not joined into it: `get_turn` returns the five keys the record node stored, and a test holds it to them. The unanswered half of the same pair is `GET /clarifications/pending`, which reads interrupt state instead \u2014 between them they cover every clarification asked."
+            "description": "What this turn asked its reader mid-flight and what they answered: one object per `ask_user` call, `{clarification_id, question, why, answer, turn_id, basis, deferred, resolution}`. Empty when the turn asked nothing, which is a read and not a shrug \u2014 the reader read the channel either way.\n\n**Added 2026-08-19.** The `clarifications` channel had two writers and no reader, so a turn whose SQL a *person* selected showed no sign of having asked. Read beside the envelope and not joined into it: `get_turn` returns the five keys the record node stored, and a test holds it to them. The unanswered half of the same pair is `GET /clarifications/pending`."
+          },
+          "raised": {
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "type": "array",
+            "title": "Raised",
+            "description": "Reader-filed notes on this turn (`from_refusal` | `wrong_answer`). Empty when nobody filed. Sibling of `clarifications`, not a record field."
           },
           "ledger": {
             "items": {
@@ -1445,7 +1510,14 @@
             "title": "Why"
           },
           "clarification_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Clarification Id"
           },
           "turn_id": {
@@ -1462,6 +1534,35 @@
           "thread_id": {
             "type": "string",
             "title": "Thread Id"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "`interrupt` | `from_refusal` | `wrong_answer`."
+          },
+          "basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basis",
+            "description": "`data_definition` or `ranking_ambiguity` on interrupt rows; null on raised notes."
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id",
+            "description": "The `raised` note this row came from; null on interrupt rows. Declared in `meta.columns` because the client keys a note's card on it -- a note has no `clarification_id`."
           }
         },
         "type": "object",
@@ -1471,7 +1572,10 @@
           "why",
           "clarification_id",
           "turn_id",
-          "thread_id"
+          "thread_id",
+          "source",
+          "basis",
+          "report_id"
         ],
         "title": "PendingClarificationRowResponse"
       },
@@ -1484,12 +1588,12 @@
           "truncated": {
             "type": "boolean",
             "title": "Truncated",
-            "description": "True when more rows exist than this page returned. A silently short list reads as everything (ADR 0009)."
+            "description": "True when this page is not everything: more rows than the window returned, or a walk that stopped on the 1000-thread bound. A silently short list reads as everything (ADR 0009)."
           },
           "threads_scanned": {
             "type": "integer",
             "title": "Threads Scanned",
-            "description": "How many interrupted threads were read to build this page. Distinguishes an empty queue from a store that was not scanned."
+            "description": "Distinct threads read to build this page, across both walks -- the whole store, not only the interrupted ones, and not a count of reads. Distinguishes an empty queue from a store that was not scanned."
           },
           "limit": {
             "type": "integer",

@@ -43,6 +43,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# A throwaway dev-server build dir (NEXT_DIST_DIR), used to verify a UI change in a
+# Throwaway dev-server build dirs (NEXT_DIST_DIR), used to verify a UI change in a
 # browser beside the primary dev server. Two `next dev` processes cannot share `.next`.
+# `.next-mock` is the mock-mode entry's (`ui-mock-3200` in .claude/launch.json), which
+# runs with NEXT_PUBLIC_LANGGRAPH_URL empty and needs no engine.
 .next-verify
+.next-mock

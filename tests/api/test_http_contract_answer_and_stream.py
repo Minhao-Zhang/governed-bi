@@ -430,7 +430,7 @@ def test_a_clarification_interrupt_carries_an_id_and_a_reason() -> None:
         responses=[
             AIMessage(
                 content="",
-                tool_calls=[{"name": "ask_user", "args": {"question": "which year?"},
+                tool_calls=[{"name": "ask_user", "args": {"question": "which year?", "basis": "data_definition"},
                              "id": "c1", "type": "tool_call"}],
             ),
             AIMessage(content="ok: 2020"),
@@ -456,3 +456,4 @@ def test_a_clarification_interrupt_carries_an_id_and_a_reason() -> None:
     )
     assert payload["question"] == "which year?"
     assert payload["why"], "the prompt renders a reason and this one would be blank"
+    assert payload["basis"] in {"data_definition", "ranking_ambiguity"}

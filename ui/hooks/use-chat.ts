@@ -31,6 +31,7 @@ import {
   MOCK_AGENT_EVENTS,
   MOCK_ANSWER,
   MOCK_CLARIFICATION,
+  MOCK_CLARIFICATION_CLOSED,
   MOCK_CLARIFIED_ANSWER,
   MOCK_GRADED_ANSWER,
   MOCK_REFUSAL,
@@ -241,17 +242,17 @@ export function useChat(): UseChatResult {
     [clearTimer, isRunning, resolve],
   );
 
-  // Resume the paused turn once the user answers (or declines) the clarification.
-  // A decline fails closed to a refusal (contract §4 / D3); an answer folds the
-  // `ask_user` resolution into the trace and continues to the answer.
+  // Resume the paused turn once the user answers, defers, or declines.
+  // Decline fails closed (`outcome: clarification`); defer and answer continue to the
+  // scripted answer. `cancelled` is still folded into decline: no button here sends it,
+  // but the wire accepts it, so the mock stays a faithful stand-in for the server.
   const respondClarification = useCallback(
     (response: ClarificationResponse) => {
       if (!clarification) return;
-      const declined = "declined" in response && response.declined === true;
-      // Resolve the "Asked a question" row into the recorded interaction: the
-      // question, the WHY, and what the user actually answered (a chosen option's
-      // label, or their freeform text). reduceSteps deep-merges this onto the
-      // start row so the finished trace shows the whole Q&A.
+      const declined =
+        ("declined" in response && response.declined === true) ||
+        ("cancelled" in response && response.cancelled === true);
+      const deferred = "deferred" in response && response.deferred === true;
       const answered =
         "choice_id" in response
           ? (clarification.choices?.find((c) => c.id === response.choice_id)?.label ?? response.choice_id)
@@ -268,13 +269,13 @@ export function useChat(): UseChatResult {
           clarification_id: clarification.clarification_id,
           question: clarification.question,
           why: clarification.why,
-          ...(declined ? { declined: true } : { answer: answered }),
+          ...(declined ? { declined: true } : deferred ? { deferred: true } : { answer: answered }),
         },
       };
       const trace = reduceSteps(clarifyStepsRef.current, resolution);
       setSteps(trace);
       setClarification(null);
-      resolve(declined ? MOCK_REFUSAL : MOCK_CLARIFIED_ANSWER, trace);
+      resolve(declined ? MOCK_CLARIFICATION_CLOSED : MOCK_CLARIFIED_ANSWER, trace);
     },
     [clarification, resolve],
   );

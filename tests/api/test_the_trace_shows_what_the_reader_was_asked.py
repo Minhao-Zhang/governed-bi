@@ -130,6 +130,17 @@ _THREAD = [
             "clarifications": [
                 _clarification(TURN_ASKED, "Employees ranked by total sales revenue, top 5.")
             ],
+            "raised": [
+                {
+                    "kind": "wrong_answer",
+                    "report_id": f"rpt-{TURN_ASKED}-aaaaaaaaaaaa",
+                    "turn_id": TURN_ASKED,
+                    "thread_id": "t-1",
+                    "reported_at": "2026-08-19T09:50:00Z",
+                    "note": "top 5 is the wrong ranking",
+                    "open": True,
+                }
+            ],
         },
     }
 ]
@@ -265,6 +276,21 @@ def test_the_trace_reports_no_clarifications_for_a_turn_that_asked_none() -> Non
     log, _ = _log(_THREAD)
 
     assert trace_for(log, TURN_QUIET)["clarifications"] == []
+
+
+def test_the_trace_carries_raised_notes_beside_clarifications() -> None:
+    log, client = _log(_THREAD)
+
+    trace = trace_for(log, TURN_ASKED)
+
+    assert [r["kind"] for r in trace["raised"]] == ["wrong_answer"]
+    assert trace["raised"][0]["note"] == "top 5 is the wrong ranking"
+    assert any(
+        (call.get("extract") or {}) == {"raised": "values.raised"}
+        for call in client.threads.calls
+    )
+    quiet = trace_for(log, TURN_QUIET)
+    assert quiet["raised"] == []
 
 
 def test_a_missing_turn_never_reaches_the_clarification_read() -> None:

@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from typing import Any, NamedTuple
 
 from ..register.quantity import Measured
@@ -99,9 +99,7 @@ def summarise_turn(entry: Mapping[str, Any]) -> dict[str, Any]:
     # for **every** row in the response. Null is also the honest reading: unmeasured is not a
     # number. This is not formatting -- `Measured.render` still owns that.
     for name, value in list(summary.items()):
-        if isinstance(value, Measured) or (
-            isinstance(value, Mapping) and "why" in value and "state" in value
-        ):
+        if isinstance(value, Measured) or (isinstance(value, Mapping) and "why" in value and "state" in value):
             summary[name] = None
     summary["asked_at"] = entry.get("asked_at")
     summary["question"] = entry.get("question")
@@ -115,6 +113,7 @@ def summarise_turn(entry: Mapping[str, Any]) -> dict[str, Any]:
     summary["incomplete_fields"] = len(missing_required(record))
     return summary
 
+
 #: Threads fetched per ``threads.search`` page. A page is a round trip and every caller's budget
 #: is counted in *turns*, so this trades one for the other; 50 covers the whole store at this
 #: repository's volume in a single call. Pages are pulled on demand (:func:`_threads` is a
@@ -122,9 +121,11 @@ def summarise_turn(entry: Mapping[str, Any]) -> dict[str, Any]:
 _THREAD_PAGE = 50
 
 #: Hard bound on threads scanned for one request, so a store that grows cannot turn the audit
-#: list into an unbounded read. **Nothing reports when it bites**, which is a known gap and
-#: not a design: `/audit/turns` has no truncation field on the wire (ADR 0009 D2 argues one
-#: is owed), and adding one means changing the shape this swap deliberately keeps identical.
+#: list into an unbounded read. On `/audit/turns` **nothing reports when it bites**, which is a
+#: known gap and not a design: that route has no truncation field on the wire (ADR 0009 D2 argues
+#: one is owed), and adding one means changing the shape this swap deliberately keeps identical.
+#: The pending queue *does* report it -- :attr:`PendingPage.truncated` -- and :func:`_pending_async`
+#: is where what that flag can and cannot tell a reader is written down.
 _MAX_THREADS = 1000
 
 #: The list read's projection. ``extract`` rather than ``select=["values"]`` for the reason
@@ -138,6 +139,13 @@ _EXTRACT: dict[str, str] = {"turns": "values.turns"}
 #: it for one thread it can already name. Widening the paged read to serve the narrow one is how a
 #: 2.42 MB projection got measured in the first place.
 _CLARIFICATION_EXTRACT: dict[str, str] = {"clarifications": "values.clarifications"}
+
+#: The ``raised`` channel's projection, for two reads with opposite economics.
+#: :meth:`ThreadTurnLog.raised_of` wants it for one thread it can already name; the pending queue's
+#: note walk wants it off **every** thread in the store and -- unlike the case
+#: :data:`_CLARIFICATION_EXTRACT` argues against -- does look at what it pays for, because an open
+#: note *is* the row. :func:`_pending_async` carries the cost of that walk.
+_RAISED_EXTRACT: dict[str, str] = {"raised": "values.raised"}
 
 #: Stands for "this server exposes no such attribute", which is not the same as ``None``. Used
 #: once, by :func:`_in_process_client`.
@@ -171,9 +179,13 @@ class ThreadTurnLog:
     a reader whose rules go untested.
     """
 
-    def __init__(self, client_factory: Any | None = None) -> None:
+    def __init__(self, client_factory: Any | None = None, state_writer: Any | None = None) -> None:
         self._client_factory = client_factory
         self._client: Any | None = None
+        #: In-process append of ``raised``. Tests inject a callable
+        #: ``(thread_id, row) -> None``; production hops onto the server loop and
+        #: files through ``api/raised_write.py`` (checkpointer + thread-row copy).
+        self._state_writer = state_writer
 
     summarise = staticmethod(summarise_turn)
     #: Read off the instance by ``routes.turns_page`` to build ``meta.columns``.
@@ -211,10 +223,7 @@ class ThreadTurnLog:
         newer one.
         """
         wanted = max(1, int(limit))
-        out = [
-            self.summarise(entry)
-            for entry in self._entries(limit=wanted, thread_id=thread_id)
-        ]
+        out = [self.summarise(entry) for entry in self._entries(limit=wanted, thread_id=thread_id)]
         out.sort(key=lambda row: str(row.get("asked_at") or ""), reverse=True)
         return out[:wanted]
 
@@ -271,14 +280,51 @@ class ThreadTurnLog:
             return _answered_clarifications_of(thread).get(str(turn_id)) or []
         return []
 
+    def raised_of(self, thread_id: str, turn_id: str) -> list[dict[str, Any]]:
+        """Reader-filed notes on this turn, from the ``raised`` channel.
+
+        Clone of :meth:`clarifications_of`: one keyed read, ``[]`` when the turn has none.
+        """
+        client = self._client_once()
+        threads = _blocking(
+            client.threads.search(
+                ids=[str(thread_id)],
+                limit=1,
+                select=["thread_id", "metadata"],
+                extract=_RAISED_EXTRACT,
+            )
+        )
+        for thread in threads or ():
+            return [
+                dict(row)
+                for row in _channel_of(thread, "raised")
+                if isinstance(row, Mapping) and str(row.get("turn_id") or "") == str(turn_id)
+            ]
+        return []
+
+    def append_raised(self, thread_id: str, row: Mapping[str, Any]) -> None:
+        """Append one ``raised`` row via in-process ``aupdate_state(as_node="raise_note")``.
+
+        Not ``threads.update`` and not ``command.update``: both are client-writable surfaces
+        ``api/auth.py`` denies. The unattached ``raise_note`` node is the only legal writer.
+        Production does not use the saver-less Pregel ``make_graph`` compiled: that graph
+        has no checkpointer, and a checkpoint write that never copies the thread row is
+        invisible to pending and trace. See ``api/raised_write.py``.
+        """
+        payload = dict(row)
+        if self._state_writer is not None:
+            self._state_writer(str(thread_id), payload)
+            return
+        from governed_bi.api.raised_write import append_raised_on_thread
+
+        append_raised_on_thread(str(thread_id), payload)
+
     # ── the store ────────────────────────────────────────────────────────────
 
     def _entries(
         self, *, limit: int | None, thread_id: str | None, turn_id: str | None = None
     ) -> Iterator[dict[str, Any]]:
-        for entry in _collect(
-            limit=limit, thread_id=thread_id, turn_id=turn_id, client=self._client_once()
-        ):
+        for entry in _collect(limit=limit, thread_id=thread_id, turn_id=turn_id, client=self._client_once()):
             yield entry
 
     def _client_once(self) -> Any:
@@ -368,12 +414,8 @@ def _blocking(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
-def _collect(
-    *, limit: int | None, thread_id: str | None, turn_id: str | None, client: Any
-) -> list[dict[str, Any]]:
-    return _blocking(
-        _collect_async(limit=limit, thread_id=thread_id, turn_id=turn_id, client=client)
-    )
+def _collect(*, limit: int | None, thread_id: str | None, turn_id: str | None, client: Any) -> list[dict[str, Any]]:
+    return _blocking(_collect_async(limit=limit, thread_id=thread_id, turn_id=turn_id, client=client))
 
 
 async def _collect_async(
@@ -506,9 +548,7 @@ def _answered_clarifications_of(thread: Any) -> dict[str, list[dict[str, Any]]]:
             continue
         # `turn_id` off the row, with the id as the fallback for a row written before `ask_user`
         # carried one — `clarification_id` has always contained it (:func:`turn_of_clarification`).
-        turn_id = str(row.get("turn_id") or "") or turn_of_clarification(
-            str(row.get("clarification_id") or "")
-        )
+        turn_id = str(row.get("turn_id") or "") or turn_of_clarification(str(row.get("clarification_id") or ""))
         if not turn_id:
             continue
         grouped.setdefault(turn_id, []).append(dict(row))
@@ -524,6 +564,13 @@ def _answered_clarifications_of(thread: Any) -> dict[str, list[dict[str, Any]]]:
 
 #: List-view columns for the pending queue, in display order. Same role as `SUMMARY_FIELDS`:
 #: `meta.columns` is on the wire and the client renders from it.
+#:
+#: **Some of these are null on half the rows, which is the shape and not a defect.** The queue
+#: unions two populations -- an unanswered interrupt and an open ``raised`` note -- so
+#: `clarification_id`/`basis` are null on every note and `report_id` on every interrupt. The rule
+#: is that a *declared* column is present and null where it does not apply, never absent: a client
+#: forced to tell "no value" from "no such key" ends up guessing which kind of row it holds.
+#: `source` says which, and is the one column never null.
 PENDING_FIELDS: tuple[str, ...] = (
     "asked_at",
     "question",
@@ -531,6 +578,13 @@ PENDING_FIELDS: tuple[str, ...] = (
     "clarification_id",
     "turn_id",
     "thread_id",
+    "source",
+    "basis",
+    # Declared rather than carried, unlike `interrupt_id`/`task_id`, because the client
+    # *consumes* it: `ui/components/clarifications/pending-queue.tsx` keys a note's card on it,
+    # and a note has no `clarification_id` to key on instead. A column the client renders from
+    # and `meta.columns` does not name is a contract that happens to work.
+    "report_id",
 )
 
 #: Prefix ``serve/tools.py`` builds a clarification id with: ``f"clar-{turn_id}-{digest}"``.
@@ -543,6 +597,15 @@ class PendingPage(NamedTuple):
     ``truncated`` is not cosmetic. ADR 0009 D2/D9 exist because a silently short list reads as
     "this is everything" -- and here the consequence is a reader whose question is waiting and an
     operator who cannot see it. The route puts this on the wire.
+
+    Three different losses raise it and the flag does not say which: the window (``offset+limit``
+    landed short of the rows built), and either walk stopping on :data:`_MAX_THREADS`.
+    :func:`_pending_async` records what each one costs a reader. One flag for three causes is
+    deliberate -- all three mean "this is not everything", which is the only thing the caller can
+    act on -- but it is the reason ``threads_scanned`` travels beside it.
+
+    ``threads_scanned`` counts **distinct threads read**, not reads: a paused thread is fetched by
+    both walks and counted once.
     """
 
     rows: list[dict[str, Any]]
@@ -581,13 +644,18 @@ class PendingClarifications:
     platform's own interrupt state, which ADR 0014's durable checkpointer made survive a restart;
     before that this reader could not have existed.
 
-    So the queue is one ``threads.search(status="interrupted", ...)``. No ledger file, no new
-    table, no write path. ``clarification_id`` carries the ``turn_id``
+    So that half of the queue is one ``threads.search(status="interrupted", ...)``. No ledger file,
+    no new table, no write path. ``clarification_id`` carries the ``turn_id``
     (:func:`turn_of_clarification`), which is the join back to the turn that asked -- no separate
     link field is needed.
 
     ``interrupts`` is *selected* rather than ``extract``ed: it is a first-class
     ``ThreadSelectField``, so none of ``extract``'s ten-path budget is spent on it.
+
+    **The other half is not read-free.** A note a reader files on a finished card lands in
+    ``ServeState.raised``, which is state rather than interrupt state, and finding it means paging
+    the store unfiltered. :func:`_pending_async` is where that walk's cost, its bound, and what the
+    bound hides are written down; this class is only the client.
 
     **Read-only, deliberately.** Answering from here would mean resuming another caller's thread,
     and ``serve/resume.py::authorise_resume`` refuses that by design (ADR 0006 B9). The owner's
@@ -633,46 +701,110 @@ def _pending(*, limit: int, offset: int, client: Any) -> PendingPage:
 
 
 async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage:
-    """Flatten every interrupted thread's ``interrupts`` into one row per open question.
+    """One row per thing waiting, unioned from interrupt state and the ``raised`` channel.
 
     ``interrupts`` is ``{task_id: [Interrupt, ...]}`` and one thread can in principle hold more
     than one, so the window is taken over **rows** rather than threads -- the same reason
-    ``_collect_async`` counts turns rather than threads.
+    ``_collect_async`` counts turns rather than threads. Only ``kind == "clarification"`` is
+    reported from interrupt state; an open ``raised`` note joins the same queue with ``source`` of
+    ``from_refusal`` / ``wrong_answer``, and a finished refusal is never rewritten as an interrupt.
 
-    Only ``kind == "clarification"`` is reported. Nothing else in this engine calls
-    ``interrupt()`` today, but an interrupt of some future kind is not a pending question, and
-    rendering it as one would put a shape the client cannot parse into an operator's queue.
+    **Two walks, because the populations want opposite queries.** Paused questions are
+    ``status="interrupted"`` with ``interrupts`` selected and no ``raised`` path: that population is
+    a handful at any volume, so this half stays complete and cannot be pushed past
+    :data:`_MAX_THREADS` by a store that grew for unrelated reasons, and reading ``raised`` here too
+    would report every note on a paused thread twice.
+
+    **Notes take no status filter at all, and that is the coverage decision.** A note is filed on a
+    *finished* turn, and a thread's status when an operator opens the queue is whatever its last run
+    left: ``idle`` normally, ``error`` when it crashed -- exactly the turn a reader reaches for the
+    flag button on -- ``busy`` while a later question runs. Asking only for ``idle`` hid a filed
+    note for as long as its thread sat elsewhere, and *permanently* under ``error``, since nothing
+    moves a thread out of it. Enumerating all four is the same read with a hole left for the status
+    the platform adds next, so the filter is dropped; :func:`_open_raised_of`'s ``kind``/``open``
+    check is what narrows.
+
+    **What that costs, unwritten until now.** The note walk projects ``values.raised`` off *every*
+    thread in the store, so the queue's price is proportional to the store rather than to the paused
+    handful: ``ceil(threads / _THREAD_PAGE)`` round trips, capped at ``_MAX_THREADS/_THREAD_PAGE``
+    = 20 per walk and so 40 for one request, uncached, every time.
+    ``extract`` is what holds a row to one channel instead of the whole of ``ServeState`` -- the
+    2.42 MB :func:`_threads` measured.
+
+    **So :data:`_MAX_THREADS` can now actually bite**, which it could not when only interrupted
+    threads were paged, and the direction of the loss is the unhelpful one: both walks sort
+    ``updated_at`` ascending, so the bound keeps the least recently touched threads and drops the
+    most recently touched. Past :data:`_MAX_THREADS` threads a note filed today is the first one
+    missing. Sorting the other way does not fix it -- a thread's ``updated_at`` tracks its latest
+    turn, not its note's age -- so the loss is reported instead, and ``truncated`` is the whole of
+    that report. **No status is excluded, so no note is structurally invisible; the notes this
+    reader can fail to show are the ones past the bound, and ``truncated`` is true exactly then.**
+
+    ``threads_scanned`` counts **distinct** threads read, keyed on ``thread_id`` (in every ``select``
+    here). Summing the walks would double-count each paused thread and make the number mean "reads",
+    which answers nothing a caller asks. It still answers what it was added for -- "was the store
+    read at all", separating an empty queue from an unread store -- and now says it about the whole
+    store rather than the interrupted slice.
     """
     rows: list[dict[str, Any]] = []
-    scanned = 0
-    truncated = False
-    page_offset = 0
-    while page_offset < _MAX_THREADS:
-        page = await client.threads.search(
-            status="interrupted",
-            limit=_THREAD_PAGE,
-            offset=page_offset,
-            sort_by="updated_at",
-            sort_order="asc",
-            select=["thread_id", "updated_at", "interrupts", "metadata"],
-        )
-        if not page:
-            break
-        for thread in page:
-            scanned += 1
-            rows.extend(_open_questions_of(thread))
-        page_offset += len(page)
-        if len(page) < _THREAD_PAGE:
-            break
-    else:
-        # Left the loop on ``_MAX_THREADS`` with pages still arriving: the store holds more
-        # interrupted threads than this reader pages through, so the queue is short and says so.
-        truncated = True
+    seen: set[str] = set()
 
+    async def _walk(
+        *,
+        status: str | None,
+        select: list[str],
+        extract: dict[str, str] | None,
+        rows_of: Callable[[Any], list[dict[str, Any]]],
+    ) -> bool:
+        """Page one population into ``rows``. ``True`` iff the walk stopped on the bound.
+
+        Only one of the three exits is a short list: an empty page and a short page both mean the
+        store is exhausted, while falling out of the ``while`` means :data:`_MAX_THREADS` stopped a
+        walk the data had not. A store exhausted at *exactly* the bound also reports ``True`` --
+        indistinguishable without another round trip, and over-reporting "you may not have
+        everything" is the safe direction for this flag.
+        """
+        page_offset = 0
+        while page_offset < _MAX_THREADS:
+            page = await client.threads.search(
+                status=status,
+                limit=_THREAD_PAGE,
+                offset=page_offset,
+                sort_by="updated_at",
+                sort_order="asc",
+                select=select,
+                extract=extract,
+            )
+            if not page:
+                return False
+            for thread in page:
+                if isinstance(thread, Mapping):
+                    seen.add(str(thread.get("thread_id") or ""))
+                rows.extend(rows_of(thread))
+            page_offset += len(page)
+            if len(page) < _THREAD_PAGE:
+                return False
+        return True
+
+    paused_bound = await _walk(
+        status="interrupted",
+        select=["thread_id", "updated_at", "interrupts", "metadata"],
+        extract=None,
+        rows_of=_open_questions_of,
+    )
+    notes_bound = await _walk(
+        status=None,
+        select=["thread_id", "updated_at", "metadata"],
+        extract=_RAISED_EXTRACT,
+        rows_of=_open_raised_of,
+    )
+    truncated = paused_bound or notes_bound
+
+    rows.sort(key=lambda row: str(row.get("asked_at") or ""))
     window = rows[offset : offset + limit]
     if offset + limit < len(rows):
         truncated = True
-    return PendingPage(rows=window, truncated=truncated, threads_scanned=scanned)
+    return PendingPage(rows=window, truncated=truncated, threads_scanned=len(seen))
 
 
 def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
@@ -692,10 +824,10 @@ def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
     thread_id = thread.get("thread_id")
     asked_at = thread.get("updated_at")
     out: list[dict[str, Any]] = []
-    for task_id, raised in interrupts.items():
-        if not isinstance(raised, list):
+    for task_id, items in interrupts.items():
+        if not isinstance(items, list):
             continue
-        for item in raised:
+        for item in items:
             if not isinstance(item, Mapping):
                 continue
             value = item.get("value")
@@ -710,6 +842,11 @@ def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
                     "clarification_id": clarification_id or None,
                     "turn_id": turn_of_clarification(clarification_id),
                     "thread_id": thread_id,
+                    "source": "interrupt",
+                    "basis": value.get("basis"),
+                    # Null because an interrupt is not a report, not because it went missing --
+                    # see :data:`PENDING_FIELDS` on why a declared column is never absent.
+                    "report_id": None,
                     # ``interrupt_id`` and ``task_id`` are what a resume would have to name.
                     # Carried because withholding them would make this surface un-actionable the
                     # day the provenance gate lands, and they identify nothing a reader could not
@@ -718,4 +855,46 @@ def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
                     "task_id": task_id,
                 }
             )
+    return out
+
+
+def _open_raised_of(thread: Any) -> list[dict[str, Any]]:
+    """Open ``raised`` rows on ``thread``, shaped for the pending queue.
+
+    Not an interrupt: a finished refusal cannot be resumed, so these rows carry ``source``
+    of ``from_refusal`` / ``wrong_answer`` and a ``report_id`` rather than a fake
+    ``clarification_id``. ``thread`` arrives from an **unfiltered** walk, so it may be in any
+    status; this function is the only narrowing, and it narrows on the row (``open``, ``kind``)
+    rather than on the conversation's state.
+
+    ``interrupt_id`` and ``task_id`` are absent rather than null, unlike the columns
+    :data:`PENDING_FIELDS` declares: they name a resume, and there is nothing here to resume.
+    """
+    if not isinstance(thread, Mapping):
+        return []
+    thread_id = thread.get("thread_id")
+    out: list[dict[str, Any]] = []
+    for row in _channel_of(thread, "raised"):
+        if not isinstance(row, Mapping) or row.get("open") is False:
+            continue
+        kind = str(row.get("kind") or "")
+        if kind not in {"from_refusal", "wrong_answer"}:
+            continue
+        note = str(row.get("note") or "")
+        question = note or (
+            "A reader flagged this refusal." if kind == "from_refusal" else "A reader flagged this answer as wrong."
+        )
+        out.append(
+            {
+                "asked_at": row.get("reported_at") or thread.get("updated_at"),
+                "question": question,
+                "why": note or None,
+                "clarification_id": None,
+                "turn_id": row.get("turn_id"),
+                "thread_id": thread_id,
+                "source": kind,
+                "basis": None,
+                "report_id": row.get("report_id"),
+            }
+        )
     return out

@@ -192,7 +192,7 @@ def _build_app(get_session: Callable[[], Any], turn_log: Any, pending: Any) -> F
     app.include_router(make_router(_DeferredSession(get_session)))
     # No `_Deferred` wrapper: the pending reader builds its client on first read already, so it
     # costs nothing at import and holds no session.
-    app.include_router(make_clarification_router(pending))
+    app.include_router(make_clarification_router(pending, turn_log))
     return app
 
 
@@ -639,6 +639,11 @@ def trace_for(turn_log: Any, turn_id: str) -> dict[str, Any]:
     clarifications = (
         turn_log.clarifications_of(str(thread_id), turn_id) if thread_id else []
     )
+    raised = (
+        turn_log.raised_of(str(thread_id), turn_id)
+        if thread_id and hasattr(turn_log, "raised_of")
+        else []
+    )
 
     by_stage: dict[str, list[dict[str, Any]]] = {}
     for field in RECORD_REGISTER:
@@ -676,6 +681,7 @@ def trace_for(turn_log: Any, turn_id: str) -> dict[str, Any]:
         # the statement above was chosen *because* of the answer below, so a trace without it
         # cannot explain the SQL it is showing.
         "clarifications": clarifications,
+        "raised": raised,
         "ledger": (record.get("execution") or {}).get("attempts") or [],
         "terminal": (record.get("execution") or {}).get("terminal"),
         "missing_required": sorted(absent),

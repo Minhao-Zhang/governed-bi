@@ -47,7 +47,7 @@ def _model() -> ScriptedChatModel:
                 tool_calls=[
                     {
                         "name": "ask_user",
-                        "args": {"question": "which year?"},
+                        "args": {"question": "which year?", "basis": "data_definition"},
                         "id": "c1",
                         "type": "tool_call",
                     }

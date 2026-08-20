@@ -138,7 +138,9 @@ def test_a_leaked_identifier_is_rejected_with_a_tool_reply_and_records_nothing()
     is stranded. Recording instead would mean pausing first, which shows the reader the text the
     guard exists to keep away from them, and then needing a channel for the verdict.
     """
-    command = asyncio.run(_ask_user().coroutine(question=LEAKY, runtime=_runtime("c1")))
+    command = asyncio.run(
+        _ask_user().coroutine(question=LEAKY, basis="data_definition", runtime=_runtime("c1"))
+    )
     reply = str(command.update["messages"][0].content)
     assert "ask_user rejected" in reply
     assert "payments.amount" in reply, "a rejection that does not name the word is one the model guesses at"
@@ -157,8 +159,12 @@ def test_a_rejected_question_does_not_consume_the_one_outstanding_slot() -> None
     anything at all.
     """
     ask = _ask_user()
-    first = asyncio.run(ask.coroutine(question=LEAKY, runtime=_runtime("c1")))
-    second = asyncio.run(ask.coroutine(question=LEAKY, runtime=_runtime("c2")))
+    first = asyncio.run(
+        ask.coroutine(question=LEAKY, basis="data_definition", runtime=_runtime("c1"))
+    )
+    second = asyncio.run(
+        ask.coroutine(question=LEAKY, basis="data_definition", runtime=_runtime("c2"))
+    )
     for command in (first, second):
         reply = str(command.update["messages"][0].content)
         assert "ask_user rejected" in reply, reply
@@ -176,6 +182,21 @@ def test_a_plain_question_still_reaches_the_interrupt() -> None:
         asyncio.run(
             _ask_user().coroutine(
                 question="Should cancelled orders be excluded from total revenue?",
+                basis="data_definition",
                 runtime=_runtime("c3"),
             )
         )
+
+
+def test_unknown_basis_is_rejected_before_the_turn_pauses() -> None:
+    command = asyncio.run(
+        _ask_user().coroutine(
+            question="Should cancelled orders be excluded from total revenue?",
+            basis="join_missing",
+            runtime=_runtime("c4"),
+        )
+    )
+    reply = str(command.update["messages"][0].content)
+    assert "ask_user rejected" in reply
+    assert "data_definition" in reply and "ranking_ambiguity" in reply
+    assert list(command.update) == ["messages"]

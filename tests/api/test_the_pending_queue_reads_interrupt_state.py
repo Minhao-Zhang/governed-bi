@@ -8,6 +8,14 @@ platform's interrupt state. That makes the reader's correctness entirely a matte
 one would let a broken query pass. So :class:`_FakeThreads` below honours both, and one test asserts
 the query itself rather than only its result.
 
+**The queue is two walks and they ask opposite questions**, so the query tests come in pairs. Open
+``raised`` notes are filed on *finished* turns, which live under any thread status the platform has
+— ``idle``, ``error`` after a crashed run, ``busy`` while a later question runs — so the note walk
+sends **no** ``status`` at all, and a test that only ever fed the fake ``idle`` threads would not
+notice a filter creeping back in. That is the decision
+:func:`governed_bi.api.thread_turns._pending_async` records, and the tests under "coverage by
+status" are what hold it.
+
 The fixtures use the real id shape (``clar-{turn_id}-{digest}``, both hex) because
 ``turn_of_clarification`` is the join back to the turn and a test on a made-up shape would pin
 nothing.
@@ -33,7 +41,7 @@ def _clar(turn_id: str, digest: str = "0123456789ab") -> str:
     return f"clar-{turn_id}-{digest}"
 
 
-def _interrupt(turn_id: str, question: str, why: str = "ambiguous") -> dict[str, Any]:
+def _interrupt(turn_id: str, question: str, why: str = "ambiguous", basis: str = "data_definition") -> dict[str, Any]:
     """One raised interrupt, in the shape ``_patch_interrupt`` yields: ``{"id", "value"}``."""
     return {
         "id": f"int-{turn_id}",
@@ -42,22 +50,31 @@ def _interrupt(turn_id: str, question: str, why: str = "ambiguous") -> dict[str,
             "clarification_id": _clar(turn_id),
             "question": question,
             "why": why,
+            "basis": basis,
         },
     }
 
 
 def _thread(
-    thread_id: str, updated_at: str, interrupts: dict[str, Any] | None, status: str = "interrupted"
+    thread_id: str,
+    updated_at: str,
+    interrupts: dict[str, Any] | None,
+    status: str = "interrupted",
+    raised: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    # `turns` is present so a reader that forgot to project would be caught by the size of what it
+    # got back rather than by a missing key. `raised` is only set when a test asks for it, so a walk
+    # that stopped extracting the channel fails on the note tests rather than on all of them.
+    values: dict[str, Any] = {"turns": [{"question": "unrelated"}]}
+    if raised is not None:
+        values["raised"] = raised
     return {
         "thread_id": thread_id,
         "updated_at": updated_at,
         "status": status,
         "metadata": {"graph_id": "serve"},
         "interrupts": interrupts if interrupts is not None else {},
-        # Present so a reader that forgot to project would be caught by the size of what it got
-        # back rather than by a missing key.
-        "values": {"turns": [{"question": "unrelated"}]},
+        "values": values,
     }
 
 
@@ -81,6 +98,7 @@ class _FakeThreads:
         sort_by: Any = None,
         sort_order: Any = None,
         select: Any = None,
+        extract: Any = None,
         **_: Any,
     ) -> list[dict[str, Any]]:
         self.calls.append(
@@ -91,6 +109,7 @@ class _FakeThreads:
                 "sort_by": sort_by,
                 "sort_order": sort_order,
                 "select": list(select) if select else None,
+                "extract": dict(extract) if extract else None,
             }
         )
         rows = list(self._threads)
@@ -100,7 +119,16 @@ class _FakeThreads:
             rows.sort(key=lambda t: t["updated_at"], reverse=(sort_order == "desc"))
         out = []
         for thread in rows[offset : offset + limit]:
-            out.append({k: v for k, v in thread.items() if select is None or k in select})
+            projected = {k: v for k, v in thread.items() if select is None or k in select}
+            if extract:
+                current: dict[str, Any] = {}
+                for alias, path in extract.items():
+                    value: Any = thread
+                    for part in str(path).split("."):
+                        value = value.get(part) if isinstance(value, dict) else None
+                    current[alias] = value
+                projected["extracted"] = current
+            out.append(projected)
         return out
 
 
@@ -130,12 +158,16 @@ def test_the_queue_asks_for_interrupted_threads_and_selects_the_interrupts() -> 
     assert client.threads.calls, "the reader never called the store"
     call = client.threads.calls[0]
     assert call["status"] == "interrupted", (
-        "the queue must ask the store for interrupted threads; without it every idle "
+        "the paused-question walk must ask the store for interrupted threads; without it every idle "
         "conversation is reported as an open question"
     )
     assert "interrupts" in (call["select"] or []), (
         "`interrupts` must be selected -- it is a first-class ThreadSelectField, and without it "
         "every row comes back empty"
+    )
+    assert not call["extract"], (
+        "the paused walk must not also project `values.raised`: the note walk reads that channel "
+        "off the same threads, so paying for it twice reports every note on a paused thread twice"
     )
 
 
@@ -181,6 +213,8 @@ def test_a_row_carries_the_question_and_links_back_to_its_turn() -> None:
     assert row["asked_at"] == "2026-08-19T10:00:00Z"
     assert row["interrupt_id"] == f"int-{TURN_A}"
     assert row["task_id"] == "task-7"
+    assert row["source"] == "interrupt"
+    assert row["basis"] == "data_definition"
     assert set(PENDING_FIELDS) <= set(row), "a declared column is missing from the row"
 
 
@@ -256,10 +290,7 @@ def test_a_malformed_or_empty_interrupt_map_yields_no_rows(interrupts: Any) -> N
 
 def test_a_short_page_says_it_is_short() -> None:
     """ADR 0009 D2/D9. A silently truncated queue reads as "nobody is waiting"."""
-    threads = [
-        _thread(f"t-{i}", f"2026-08-19T{i:02d}:00:00Z", {"k": [_interrupt(TURN_A, f"q{i}")]})
-        for i in range(5)
-    ]
+    threads = [_thread(f"t-{i}", f"2026-08-19T{i:02d}:00:00Z", {"k": [_interrupt(TURN_A, f"q{i}")]}) for i in range(5)]
     queue, _ = _queue(threads)
 
     page = queue.pending(limit=2)
@@ -272,10 +303,7 @@ def test_a_short_page_says_it_is_short() -> None:
 
 
 def test_offset_pages_through_without_claiming_truncation_at_the_end() -> None:
-    threads = [
-        _thread(f"t-{i}", f"2026-08-19T{i:02d}:00:00Z", {"k": [_interrupt(TURN_A, f"q{i}")]})
-        for i in range(3)
-    ]
+    threads = [_thread(f"t-{i}", f"2026-08-19T{i:02d}:00:00Z", {"k": [_interrupt(TURN_A, f"q{i}")]}) for i in range(3)]
     queue, _ = _queue(threads)
 
     assert [r["question"] for r in queue.pending(limit=2, offset=0).rows] == ["q0", "q1"]
@@ -299,9 +327,7 @@ def test_offset_pages_through_without_claiming_truncation_at_the_end() -> None:
     ],
     ids=["real", "dashed-turn-id", "no-digest", "empty-turn", "foreign-prefix", "empty"],
 )
-def test_the_turn_id_is_parsed_or_refused_never_guessed(
-    clarification_id: str, expected: str | None
-) -> None:
+def test_the_turn_id_is_parsed_or_refused_never_guessed(clarification_id: str, expected: str | None) -> None:
     """A mangled ``turn_id`` links nowhere, which is worse than an unlinked row."""
     assert turn_of_clarification(clarification_id) == expected
 
@@ -344,7 +370,7 @@ def _app_client(threads: list[dict[str, Any]]) -> Any:
     Not a fake reader: the point of these two tests is the wire envelope, and a stub reader would
     let a route that dropped `truncated` still pass.
     """
-    from starlette.testclient import TestClient
+    from fastapi.testclient import TestClient
 
     from governed_bi.api.routes import make_app
 
@@ -366,9 +392,7 @@ def _app_client(threads: list[dict[str, Any]]) -> Any:
 
 
 def test_the_route_serves_the_queue_with_its_columns() -> None:
-    client = _app_client(
-        [_thread("t-1", "2026-08-19T10:00:00Z", {"k": [_interrupt(TURN_A, "which rating?")]})]
-    )
+    client = _app_client([_thread("t-1", "2026-08-19T10:00:00Z", {"k": [_interrupt(TURN_A, "which rating?")]})])
     body = client.get("/clarifications/pending").json()
 
     assert body["meta"]["n"] == 1
@@ -385,10 +409,7 @@ def test_the_route_puts_truncation_on_the_wire() -> None:
     Without this the queue reports "one person is waiting" when five are, and it reports it in
     exactly the same shape as the truthful answer.
     """
-    threads = [
-        _thread(f"t-{i}", f"2026-08-19T{i:02d}:00:00Z", {"k": [_interrupt(TURN_A, f"q{i}")]})
-        for i in range(5)
-    ]
+    threads = [_thread(f"t-{i}", f"2026-08-19T{i:02d}:00:00Z", {"k": [_interrupt(TURN_A, f"q{i}")]}) for i in range(5)]
     client = _app_client(threads)
 
     short = client.get("/clarifications/pending?limit=2").json()
@@ -408,3 +429,210 @@ def test_the_route_refuses_a_nonsense_window_rather_than_clamping_silently() -> 
     assert client.get("/clarifications/pending?limit=0").status_code == 422
     assert client.get("/clarifications/pending?limit=9999").status_code == 422
     assert client.get("/clarifications/pending?offset=-1").status_code == 422
+
+
+def _note(
+    kind: str = "from_refusal",
+    *,
+    turn_id: str = TURN_A,
+    thread_id: str = "t-idle",
+    note: str = "this refusal is wrong",
+    open_: bool = True,
+    report_id: str = "rpt-abc-0123456789ab",
+) -> dict[str, Any]:
+    """One ``raised`` row in the shape ``serve/raised.raised_row`` mints."""
+    return {
+        "kind": kind,
+        "report_id": report_id,
+        "turn_id": turn_id,
+        "thread_id": thread_id,
+        "reported_at": "2026-08-19T09:00:00Z",
+        "note": note,
+        "open": open_,
+    }
+
+
+def test_an_open_raised_row_on_an_idle_thread_joins_the_queue() -> None:
+    """A finished refusal is not an interrupt; it still belongs on the pending list."""
+    queue, client = _queue([_thread("t-idle", "2026-08-19T10:00:00Z", {}, status="idle", raised=[_note()])])
+    page = queue.pending()
+    assert any(call["status"] is None for call in client.threads.calls), (
+        "the note walk must send no status filter -- see the coverage tests below"
+    )
+    (row,) = page.rows
+    assert row["source"] == "from_refusal"
+    assert row["basis"] is None
+    assert row["turn_id"] == TURN_A
+    assert row["clarification_id"] is None
+    assert row["report_id"] == "rpt-abc-0123456789ab"
+    assert "refusal" in (row["question"] or "").lower() or "wrong" in (row["question"] or "")
+
+
+def test_a_closed_raised_row_is_not_pending() -> None:
+    queue, _ = _queue(
+        [
+            _thread(
+                "t-idle",
+                "2026-08-19T10:00:00Z",
+                {},
+                status="idle",
+                raised=[_note("wrong_answer", note="", open_=False)],
+            )
+        ]
+    )
+    assert queue.pending().rows == []
+
+
+def test_a_ranking_interrupt_carries_its_basis() -> None:
+    queue, _ = _queue(
+        [
+            _thread(
+                "t-1",
+                "2026-08-19T10:00:00Z",
+                {"k": [_interrupt(TURN_A, "which ranking?", basis="ranking_ambiguity")]},
+            )
+        ]
+    )
+    (row,) = queue.pending().rows
+    assert row["basis"] == "ranking_ambiguity"
+    assert row["source"] == "interrupt"
+
+
+def test_an_unanswered_definition_interrupt_stays_pending() -> None:
+    """Definition cancel is UI-only: without a resume the interrupt remains on the queue."""
+    queue, _ = _queue(
+        [
+            _thread(
+                "t-1",
+                "2026-08-19T10:00:00Z",
+                {"k": [_interrupt(TURN_A, "which year?", basis="data_definition")]},
+            )
+        ]
+    )
+    (row,) = queue.pending().rows
+    assert row["source"] == "interrupt"
+    assert row["basis"] == "data_definition"
+
+
+# ── coverage by status ───────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("status", ["idle", "error", "busy", "interrupted"])
+def test_a_note_is_pending_whatever_status_its_thread_is_in(status: str) -> None:
+    """The coverage decision, pinned per status rather than described.
+
+    A note is filed on a *finished* turn, and the thread it hangs off is in whatever state its last
+    run left: ``idle`` normally, ``error`` when that run crashed — the very turn a reader flags —
+    ``busy`` while a later question on the same conversation runs, ``interrupted`` when that later
+    question stopped to ask something. The walk that finds notes therefore filters on no status at
+    all. ``error`` is the case that made this non-negotiable: nothing moves a thread out of it, so a
+    filter naming only ``idle`` hid that note **permanently**.
+    """
+    queue, client = _queue([_thread("t-x", "2026-08-19T10:00:00Z", {}, status=status, raised=[_note(thread_id="t-x")])])
+    page = queue.pending()
+
+    assert [row["source"] for row in page.rows] == ["from_refusal"], (
+        f"a note on a {status!r} thread never reached the queue"
+    )
+    note_walks = [c for c in client.threads.calls if c["status"] is None]
+    assert note_walks, "no walk read the store unfiltered, so some status is now hidden"
+    assert note_walks[0]["extract"] == {"raised": "values.raised"}, (
+        "the unfiltered walk must project `values.raised`; without it the rows come back empty"
+    )
+
+
+def test_a_note_on_a_paused_thread_is_one_row_not_two() -> None:
+    """The two walks overlap on interrupted threads, and only one of them reads ``raised``.
+
+    Both the paused-question walk and the unfiltered note walk see this thread. If the first one
+    also projected the channel, the note would be reported once per walk and the queue would claim
+    two people are waiting where one is.
+    """
+    queue, _ = _queue(
+        [
+            _thread(
+                "t-1",
+                "2026-08-19T10:00:00Z",
+                {"k": [_interrupt(TURN_A, "which rating?")]},
+                status="interrupted",
+                raised=[
+                    _note(turn_id=TURN_B, thread_id="t-1"),
+                ],
+            )
+        ]
+    )
+    page = queue.pending()
+    assert sorted(row["source"] for row in page.rows) == ["from_refusal", "interrupt"]
+    assert page.threads_scanned == 1, (
+        "`threads_scanned` counts distinct threads read, not reads: both walks fetch this thread"
+    )
+
+
+def test_threads_scanned_is_distinct_threads_across_both_walks() -> None:
+    """Two conversations, three thread fetches (the paused one is read by both walks), and the
+    number a caller reads is two."""
+    queue, client = _queue(
+        [
+            _thread("t-open", "2026-08-19T10:00:00Z", {"k": [_interrupt(TURN_A, "open")]}),
+            _thread("t-idle", "2026-08-19T11:00:00Z", {}, status="idle", raised=[_note(thread_id="t-idle")]),
+        ]
+    )
+    page = queue.pending()
+    assert page.threads_scanned == 2
+    assert len(client.threads.calls) >= 2, "one walk cannot cover both populations"
+
+
+# ── the declared row ─────────────────────────────────────────────────────────────────────────
+
+
+def test_report_id_is_declared_and_present_on_both_kinds_of_row() -> None:
+    """A column the client renders from is in ``meta.columns``, and null rather than absent.
+
+    ``pending-queue.tsx`` keys a note's card on ``report_id`` — a note has no ``clarification_id``
+    to key on — so it is a declared column and not a carried one like ``interrupt_id``/``task_id``.
+    Declared means present on **every** row: an interrupt is not a report, so it carries the key
+    with ``None``, the way ``clarification_id`` and ``basis`` are null on a note.
+    """
+    assert "report_id" in PENDING_FIELDS
+    queue, _ = _queue(
+        [
+            _thread("t-1", "2026-08-19T10:00:00Z", {"k": [_interrupt(TURN_A, "which rating?")]}),
+            _thread("t-2", "2026-08-19T11:00:00Z", {}, status="idle", raised=[_note(thread_id="t-2")]),
+        ]
+    )
+    rows = {row["source"]: row for row in queue.pending().rows}
+    interrupt_row, note_row = rows["interrupt"], rows["from_refusal"]
+
+    for row in (interrupt_row, note_row):
+        assert set(PENDING_FIELDS) <= set(row), "a declared column is absent from a row"
+    assert interrupt_row["report_id"] is None
+    assert note_row["report_id"] == "rpt-abc-0123456789ab"
+    assert note_row["clarification_id"] is None
+    assert "interrupt_id" not in note_row, "there is nothing on a filed note to resume"
+
+
+# ── the bound on how much store one request reads ────────────────────────────────────────────
+
+
+def test_a_store_larger_than_the_walk_says_the_list_is_short() -> None:
+    """``_MAX_THREADS`` can bite now that a walk reads every thread, and it is reported.
+
+    It could not before: only interrupted threads were paged and that population is a handful.
+    The note walk reads the whole store, so past the bound notes go missing — and the direction is
+    the unhelpful one, because both walks sort ``updated_at`` **ascending**: the threads dropped are
+    the most recently touched, so the newest note is the first one lost. That is exactly what is
+    built here, and the only thing standing between an operator and a silently empty queue is
+    ``truncated``.
+    """
+    threads = [
+        _thread(f"t-{i:04d}", f"2026-08-19T10:{i // 60:02d}:{i % 60:02d}Z", {}, status="idle") for i in range(1000)
+    ]
+    threads.append(_thread("t-newest", "2026-08-19T23:00:00Z", {}, status="idle", raised=[_note(thread_id="t-newest")]))
+    queue, _ = _queue(threads)
+
+    page = queue.pending()
+    assert page.rows == [], "the fixture's only note is on the thread the bound drops"
+    assert page.truncated is True, (
+        "the walk stopped on _MAX_THREADS with threads still arriving and the page did not say so"
+    )
+    assert page.threads_scanned == 1000

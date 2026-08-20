@@ -238,6 +238,7 @@ def test_run_query_blocks_unlicensed_table(tmp_path: Path) -> None:
     tools = _tools(_state(licensed=["sales.other"]), _config(connector=connector))
     out, update = _call(tools["run_query"], sql="SELECT id FROM customers")
     assert "refused" in out.lower() or "not" in out.lower()
+    assert "attempt 1 of" in out, f"the model cannot see the budget: {out!r}"
     assert list(update["attempts_by_call"]) == ["call-1"], (
         "a governed statement must leave exactly one ledger row, keyed by its call id"
     )
@@ -261,13 +262,18 @@ def test_run_query_attempt_cap(tmp_path: Path) -> None:
     # counted over ids rather than over a list length — which is what makes it idempotent
     # under a replay instead of resetting on one.
     rows: dict[str, Any] = {}
+    first_out = ""
     for i in range(2):
-        _, update = _call(tools["run_query"], call_id=f"rq-{i}", sql="SELECT * FROM nope")
+        out, update = _call(tools["run_query"], call_id=f"rq-{i}", sql="SELECT * FROM nope")
+        if i == 0:
+            first_out = out
         rows.update(update.get("attempts_by_call") or {})
     assert list(rows) == ["rq-0", "rq-1"], rows
+    assert "attempt 1 of 2" in first_out, first_out
 
     capped, update = _call(tools["run_query"], call_id="rq-2", sql="SELECT * FROM nope")
     assert "capped" in capped.lower()
+    assert "attempt 2 of 2" in capped, capped
     assert list(update.get("attempts_by_call") or {}) == [CAP_LEDGER_KEY], (
         "the cap must write its own ledger row. `_run_query` used to return on the cap "
         "*before* appending, so a capped turn carried an empty ledger while `generated_sql` "
@@ -330,6 +336,7 @@ def test_tool_exception_is_not_refuse() -> None:
     # which the real refusal string `run_query refused: id binds to customers.id, which is not
     # allowed` also satisfies — so the test could not fail for the reason it exists (audit M4).
     assert "RuntimeError" in out, f"the driver's failure is not named: {out!r}"
+    assert "attempt 1 of" in out, f"the model cannot see the budget: {out!r}"
     assert "refused" not in out.lower(), f"a driver failure is reported as a refusal: {out!r}"
     assert "refused_by" not in out
     # The statement passed governance and was sent to the driver, so the ledger owes it a row
@@ -399,7 +406,7 @@ def test_ask_user_interrupt_and_identity_resume() -> None:
                 tool_calls=[
                     {
                         "name": "ask_user",
-                        "args": {"question": "which year?"},
+                        "args": {"question": "which year?", "basis": "data_definition"},
                         "id": "c1",
                         "type": "tool_call",
                     }
@@ -488,7 +495,7 @@ def test_the_ledger_survives_the_interrupt() -> None:
         responses=[
             AIMessage(content="", tool_calls=[{**call, "id": "rq-1"}]),
             AIMessage(content="", tool_calls=[
-                {"name": "ask_user", "args": {"question": "which year?"}, "id": "c1",
+                {"name": "ask_user", "args": {"question": "which year?", "basis": "data_definition"}, "id": "c1",
                  "type": "tool_call"},
             ]),
             AIMessage(content="ok: 2020"),
@@ -566,10 +573,18 @@ def test_only_one_clarification_may_be_outstanding_per_turn() -> None:
 
     async def _both() -> tuple[Any, Any]:
         first = asyncio.create_task(
-            ask.coroutine(question="which region?", runtime=_runtime("c1"))
+            ask.coroutine(
+                question="which region?",
+                basis="data_definition",
+                runtime=_runtime("c1"),
+            )
         )
         second = asyncio.create_task(
-            ask.coroutine(question="which year?", runtime=_runtime("c2"))
+            ask.coroutine(
+                question="which year?",
+                basis="data_definition",
+                runtime=_runtime("c2"),
+            )
         )
         done, pending = await asyncio.wait({first, second}, timeout=5)
         for task in pending:
@@ -629,12 +644,14 @@ def test_a_second_question_after_a_resume_is_not_refused_as_still_outstanding() 
             "policy": GovernancePolicy(guard_rules_enabled={}),
             "agent_model": ScriptedChatModel(
                 responses=[
-                    AIMessage(content="", tool_calls=[{"name": "ask_user",
-                                                       "args": {"question": "which year?"},
-                                                       "id": "c1", "type": "tool_call"}]),
-                    AIMessage(content="", tool_calls=[{"name": "ask_user",
-                                                       "args": {"question": "which region?"},
-                                                       "id": "c2", "type": "tool_call"}]),
+                    AIMessage(content="", tool_calls=[
+                        {"name": "ask_user", "args": {"question": "which year?", "basis": "data_definition"},
+                         "id": "c1", "type": "tool_call"},
+                    ]),
+                    AIMessage(content="", tool_calls=[
+                        {"name": "ask_user", "args": {"question": "which region?", "basis": "data_definition"},
+                         "id": "c2", "type": "tool_call"},
+                    ]),
                     AIMessage(content="ok: 2020 EMEA"),
                 ]
             ),
@@ -699,7 +716,7 @@ def test_the_replayed_ask_user_start_reuses_the_row_id_rather_than_opening_a_sec
         "agent_model": ScriptedChatModel(
             responses=[
                 AIMessage(content="", tool_calls=[{"name": "ask_user",
-                                                   "args": {"question": "which year?"},
+                                                   "args": {"question": "which year?", "basis": "data_definition"},
                                                    "id": "c1", "type": "tool_call"}]),
                 AIMessage(content="ok: 2020"),
             ]

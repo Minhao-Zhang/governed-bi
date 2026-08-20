@@ -106,7 +106,22 @@ export function ClarificationPrompt({
             </form>
           )}
 
-          <div className="pt-0.5">
+          {/* Two ways out, and only two, because the server only has two: `deferred` proceeds
+              under the stated why, `declined` ends the turn without a guess. A ranking-only
+              "Cancel" used to sit here as well, and `parse_resume` folds `cancelled` into the
+              same fail-closed branch as `declined` — two buttons, one behaviour, so the reader
+              was being asked to pick between synonyms. The server still accepts `cancelled` for
+              older clients; nothing here sends it. */}
+          <div className="flex flex-wrap gap-2 pt-0.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="text-muted-foreground"
+              onClick={() => onRespond({ clarification_id: id, deferred: true })}
+            >
+              Defer
+            </Button>
             <Button
               type="button"
               variant="ghost"

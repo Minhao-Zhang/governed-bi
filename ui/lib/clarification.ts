@@ -30,6 +30,7 @@ export const clarificationRequestSchema = z.object({
   clarification_id: z.string(), // join key across interrupt, resume, timeline event, provenance
   question: z.string(),
   why: z.string(), // governance transparency: the user always sees WHY they're asked
+  basis: z.enum(["data_definition", "ranking_ambiguity"]).optional(),
   // Absent ⇒ freeform-only. Present ⇒ render the options; `allow_freeform`
   // decides whether a text box is also offered alongside them.
   choices: z.array(clarificationChoiceSchema).optional(),
@@ -40,14 +41,21 @@ export const clarificationRequestSchema = z.object({
 /* ── Client → server: the `resume` value (contract §4) ───────────────────── */
 
 /**
- * Exactly one of `answer` / `choice_id` / `declined:true` is set. Decline fails
- * closed server-side (the agent does not guess) — the safe v1 default is a
- * refusal stamped `clarification_declined`.
+ * Exactly one of `answer` / `choice_id` / `declined` / `deferred` / `cancelled` is set.
+ * `declined` fails closed server-side (the agent does not guess); `deferred` proceeds
+ * under the stated why.
+ *
+ * This client sends only the first four. `cancelled` stays in the union because the
+ * wire still accepts it — `parse_resume` folds it into the same fail-closed branch as
+ * `declined` — but no surface here produces it: a second button doing exactly what
+ * Decline does was a choice between synonyms, so it was removed.
  */
 export type ClarificationResponse =
   | { clarification_id: string; answer: string }
   | { clarification_id: string; choice_id: string }
-  | { clarification_id: string; declined: true };
+  | { clarification_id: string; declined: true }
+  | { clarification_id: string; deferred: true }
+  | { clarification_id: string; cancelled: true };
 
 export type ClarificationChoice = z.infer<typeof clarificationChoiceSchema>;
 export type ClarificationRequest = z.infer<typeof clarificationRequestSchema>;

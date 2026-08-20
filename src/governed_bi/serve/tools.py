@@ -31,6 +31,11 @@ from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.register.prompts import prompt_text
 from governed_bi.serve import fetch
 from governed_bi.serve.agent_state import CAP_LEDGER_KEY, AttemptBook
+from governed_bi.serve.clarification import (
+    interrupt_payload,
+    parse_basis,
+    parse_resume,
+)
 from governed_bi.serve.delivery import payload_digest, tool_bounds_from_state
 from governed_bi.serve.events import emit, tool_event_id
 from governed_bi.serve.ledger import (
@@ -107,6 +112,11 @@ def _reply(runtime: Any, text: str, **updates: Any) -> Command:
     }
     update.update(updates)
     return Command(update=update)
+
+
+def _attempt_budget(text: str, number: int, cap: int) -> str:
+    """Every ``run_query`` reply names the slot it spent, so the model can see the cap."""
+    return f"{text}\nattempt {number} of {cap}"
 
 
 async def _fetch(
@@ -333,7 +343,15 @@ def build_tools(
                     event_id=tool_event_id("cap", call_id),
                     detail={"cap": book.cap},
                 )
-            return _reply(runtime, f"run_query capped: attempt limit {book.cap} reached", **update)
+            return _reply(
+                runtime,
+                _attempt_budget(
+                    f"run_query capped: attempt limit {book.cap} reached",
+                    book.cap,
+                    book.cap,
+                ),
+                **update,
+            )
         attempt_number = book.charged(committed)
         emit(
             kind="tool",
@@ -380,7 +398,11 @@ def build_tools(
             # should be charged for, and the row is what makes the failure countable.
             return _reply(
                 runtime,
-                f"run_query error: {type(exc).__name__}: {exc}",
+                _attempt_budget(
+                    f"run_query error: {type(exc).__name__}: {exc}",
+                    attempt_number,
+                    book.cap,
+                ),
                 attempts_by_call={
                     call_id: pipeline_error_attempt("agent", f"{type(exc).__name__}: {exc}")
                 },
@@ -400,7 +422,7 @@ def build_tools(
             )
         return _reply(
             runtime,
-            payload + suffix,
+            _attempt_budget(payload + suffix, attempt_number, book.cap),
             attempts_by_call={call_id: attempt},
             **({"result_table": table} if table is not None else {}),
         )
@@ -429,7 +451,12 @@ def build_tools(
     pending_clarification: list[str] = []
 
     @tool
-    async def ask_user(question: str, runtime: ToolRuntime, why: str = "") -> Command:
+    async def ask_user(
+        question: str,
+        basis: str,
+        runtime: ToolRuntime,
+        why: str = "",
+    ) -> Command:
         """Pause and ask the human a clarifying question (HITL interrupt).
 
         ``question`` and ``why`` reach a business reader, never an engineer: write them in plain
@@ -437,6 +464,9 @@ def build_tools(
         leaked identifier is rejected before the turn pauses -- rephrase and call again. (Said
         here as well as enforced below because the enforcement costs a round trip; it is not
         the control. The control is the code.)
+
+        ``basis`` is required: ``data_definition`` when the block is which reading of a
+        measure, ``ranking_ambiguity`` when the block is which ranking.
         """
         if pending_clarification:
             # Refused, not queued, and no interrupt: the model gets a tool reply it can act on
@@ -464,9 +494,6 @@ def build_tools(
         # plus record-field plus projector change (`check_declared_is_consumed`'s S1 and R1),
         # and a verdict nothing reads is the "declared, no consumer" defect that gate exists to
         # count. `why` is checked too because it is rendered beside the question, not logged.
-        #
-        # Only `question`/`why`: our `ask_user` has no `basis`/`choices` arguments (the fork's
-        # does), so there is no third string to check and no malformed-choice branch to port.
         leak = find_schema_leak(question, why)
         if leak is not None:
             return _reply(
@@ -476,6 +503,17 @@ def build_tools(
                 "question/why without table.column paths, snake_case, or camelCase "
                 "identifiers, then call ask_user again.",
             )
+        resolved_basis = parse_basis(basis)
+        if resolved_basis is None:
+            return _reply(
+                runtime,
+                "ask_user rejected: basis must be 'data_definition' (which reading of a "
+                "measure) or 'ranking_ambiguity' (which ranking). Unknown value "
+                f"{basis!r}. Call ask_user again with one of those two.",
+            )
+        why_text = why or (
+            "The question is ambiguous and the answer depends on which reading is meant."
+        )
         digest = hashlib.sha256(f"{turn_id}\x1f{question}".encode()).hexdigest()[:12]
         clarification_id = f"clar-{turn_id}-{digest}"
         pending_clarification.append(clarification_id)
@@ -506,12 +544,12 @@ def build_tools(
             detail=started,
         )
         answer = interrupt(
-            {
-                "kind": "clarification",
-                "clarification_id": clarification_id,
-                "question": question,
-                "why": why or "The question is ambiguous and the answer depends on which reading is meant.",
-            }
+            interrupt_payload(
+                clarification_id=clarification_id,
+                question=question,
+                why=why_text,
+                basis=resolved_basis,
+            )
         )
         # **The resume identity gate (ADR 0006 B9), on the first instruction that can hold it.**
         # ``interrupt()`` raises on the initial pass, so everything below runs only on a resume —
@@ -549,40 +587,29 @@ def build_tools(
         # the entry, the check above admits exactly one, and nothing between the two lines
         # ``await``s, so no other frame can have taken it.
         pending_clarification.remove(clarification_id)
-        text = _clarification_answer(answer)
-        declined = bool(answer.get("declined")) if isinstance(answer, Mapping) else False
+        text, resolution, fail_closed = parse_resume(answer, why=why_text)
         emit(
             kind="tool",
             step="ask_user",
-            status="declined" if declined else "ok",
+            status="declined" if fail_closed else "ok",
             event_id=tool_event_id("ask_user", _call_id(runtime)),
             detail=started,
         )
+        row = {
+            "clarification_id": clarification_id,
+            "question": question,
+            "why": why_text,
+            "answer": text,
+            "turn_id": turn_id,
+            "basis": resolved_basis,
+            "deferred": resolution == "deferred",
+            "resolution": resolution,
+        }
         return _reply(
             runtime,
             text,
-            clarifications_by_call={
-                _call_id(runtime): {
-                    "clarification_id": clarification_id,
-                    "question": question,
-                    "why": why,
-                    "answer": text,
-                    "turn_id": turn_id,
-                }
-            },
+            clarification_requested=fail_closed,
+            clarifications_by_call={_call_id(runtime): row},
         )
 
     return [read_body, inspect_schema, sample_rows, run_query, ask_user]
-
-
-def _clarification_answer(resume: Any) -> str:
-    """Human answer from a bare string or structured ``{answer|choice_id|declined}`` reply."""
-    if isinstance(resume, Mapping):
-        if resume.get("declined"):
-            return "The user declined to answer this clarification."
-        for key in ("answer", "choice_id", "text"):
-            value = resume.get(key)
-            if value:
-                return str(value)
-        return ""
-    return str(resume)

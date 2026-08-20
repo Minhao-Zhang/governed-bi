@@ -783,6 +783,7 @@ export const MOCK_CLARIFICATION: ClarificationRequest = {
   clarification_id: "clar_mock01",
   question: "Which definition of “active” did you mean?",
   why: "The corpus has two competing definitions of “active” and the question is ambiguous between them.",
+  basis: "data_definition",
   choices: [
     { id: "opt_login30", label: "Logged in within the last 30 days" },
     { id: "opt_status", label: "Account status = 'active'" },
@@ -809,6 +810,28 @@ export const MOCK_CLARIFIED_ANSWER: AnswerView = {
     outcome: "answered",
     generated_sql: "SELECT r.name AS region, count(c.id) AS customers FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.name;",
     execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", verdict_layer: null, path: "agent" }], guardrail_errors: 0 },
+    licensed: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
+    context_hash: "907e44d8b21c2212f21e01bf79e04737d3bf5305a24aeda98d4b326d54311921",
+    corpus_content_hash: "c1296e937e4d7fe0a1b2c3d4e5f60718",
+    db_id: "gbi_demo_sales",
+    guardrail_errors: 0,
+    n_re_served: 0,
+  },
+};
+
+/** Decline / ranking cancel: fail closed, same outcome the live graph stamps. */
+export const MOCK_CLARIFICATION_CLOSED: AnswerView = {
+  outcome: "clarification",
+  text: "The user declined this clarification. The engine did not guess a reading.",
+  answer_text: null,
+  failed_stage: null,
+  error_type: null,
+  refused_by: null,
+  record: {
+    ...MOCK_RUN_RECORD,
+    outcome: "clarification",
+    generated_sql: null,
+    execution: { terminal: "no_sql", attempts: [], guardrail_errors: 0 },
     licensed: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
     context_hash: "907e44d8b21c2212f21e01bf79e04737d3bf5305a24aeda98d4b326d54311921",
     corpus_content_hash: "c1296e937e4d7fe0a1b2c3d4e5f60718",
@@ -1010,6 +1033,8 @@ export const MOCK_AUDIT_TRACE: AuditTrace = {
   asked_at: null,
   stages: [],
   ledger: [],
+  clarifications: [],
+  raised: [],
   terminal: null,
   missing_required: [],
   undeclared_keys: [],

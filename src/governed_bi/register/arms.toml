@@ -110,3 +110,12 @@ corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0
 # Same check against `runs/eval/proxy_v5_corpus30872d3.jsonl`: set-equal, zero extra, zero missing.
 dataset = "22fe2a6"
 question_subset = "1351:423a3f4b65fb"
+
+[arm.ask_first]
+description = "ANALYST ask_first prompt. Off-default until a measured arm exists; serve stays v4."
+treatment = ["prompt_set"]
+compare_to = "v4"
+corpus = "30872d3"
+corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
+dataset = "22fe2a6"
+question_subset = "1351:423a3f4b65fb"

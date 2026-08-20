@@ -78,6 +78,13 @@ MIN_OPERATING_POINT = 50
 #: exclusion hides the behaviour, and an engine answering without querying is the behaviour a
 #: risk-coverage curve is supposed to price. It abstained from the governed path; that is a
 #: decision, even when the record cannot say which of the three took it.
+#:
+#: ``clarification`` covers two endings and both belong here, which is why the set did not change
+#: when the second one arrived: a turn that paused on ``ask_user`` and a turn whose reader
+#: declined fail-closed (``register/stages.Outcome``) each delivered no answer, so each is
+#: withheld coverage. :func:`_split` is what would have caught a member added for the second —
+#: it raises on an outcome that is in neither set, so a coverage figure cannot quietly acquire a
+#: third kind of ending.
 DECLINED: frozenset[str] = frozenset(
     {
         Outcome.refused.value,

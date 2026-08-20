@@ -200,6 +200,21 @@ Two consequences follow, and both are the point of the flag:
 The driver prints the resolved selection and the resulting hash before the run
 starts.
 
+`ask_first` is an off-default ANALYST variant. Serve stays on `v4` until a measured
+arm exists. Do not run the 1,351-question lake from this change; the command to
+measure it later is:
+
+```bash
+uv run --frozen python tools/run_datalake_eval.py \
+  --model gpt-5.6-luna \
+  --effort xhigh \
+  --workers 2 \
+  --max-retries 8 \
+  --prompt-variant analyst=ask_first \
+  --arm ask_first \
+  --resume
+```
+
 ## Pin the routing
 
 ```bash
@@ -241,7 +256,7 @@ so that `prompt_set_hash` covers the whole set.
 
 | Prompt | Stage | Variants | Default |
 |---|---|---|---|
-| `analyst` | `agent_core` | `v1`–`v5` | `v4` |
+| `analyst` | `agent_core` | `v1`–`v5`, `ask_first` | `v4` |
 | `bi_scope` | `guard` | `v1` | `v1` |
 | `narrate` | `narrate` | `v1` | `v1` |
 | `reflect` | `reflect` | `v1` | `v1` |
@@ -255,6 +270,29 @@ so that `prompt_set_hash` covers the whole set.
 searches the raw question, and the prompt stays in the registry as an unsent
 baseline.
 
+### What `prompt_set_hash` does not cover
+
+It covers the registry, and the registry holds *system* prompts. It does not cover
+**tool replies** — the text a tool returns into the message list, which the model reads
+as instruction the same way it reads a system prompt. `prompt_text` raises on an unknown
+name precisely because "a prompt sent from outside this registry is a treatment the run's
+own `prompt_set_hash` does not cover", and a tool reply is outside it by construction.
+
+**One such treatment is live on the default arm, and was taken deliberately.** Every
+`run_query` reply now ends with `attempt N of M` (`serve/tools.py::_attempt_budget`) —
+the capped reply, the error reply and the successful reply alike. Until 2026-08-20 the
+agent was told the cap existed only once it had already hit it, so it spent attempts on
+single-table probes against a budget it could not see. Telling it costs nothing and it is
+applied unconditionally rather than behind an arm.
+
+The consequence, stated because nothing in the artifact states it: **`v4` before this
+change and `v4` after it are not the same arm**, and no recorded field distinguishes
+them. `prompt_set_hash` is identical across the boundary. Paired comparisons that mix
+`v4` rows measured before 2026-08-20 with `v4` rows measured after are comparing two
+treatments, and the cheapest honest reading is to treat the earlier `v4` artifacts as a
+different arm rather than as the control. See
+[open work §3.4](open-work.md#34-held-back-on-purpose).
+
 ### The ANALYST variants
 
 `analyst` is the SQL-writing agent's system prompt, and the only prompt with
@@ -267,6 +305,7 @@ more than two variants. **`v4` is the default.**
 | `v3` | `v2` byte-for-byte, plus two paragraphs on the shape of the result: select exactly what the question asks for and nothing else, and choose `DISTINCT` on what the question means rather than as a precaution |
 | `v4` | `v3` plus the star rule: name your columns, because a bare `SELECT *` or `t.*` is refused at the `BINDING` layer, with `COUNT(*)` and `COUNT(DISTINCT col)` as the carve-out |
 | `v5` | `v4` minus the projection paragraph, and nothing else. It was written to lose, so that the paragraph's contribution could be priced; it costs 4.07pp. See [failure modes](failure-modes.md#11-the-projection-rule-how-much-of-this-ex-is-shape-matching) |
+| `ask_first` | Off-default. Prefer `ask_user` when the block is which reading, not a missing join; set `basis=data_definition` or `basis=ranking_ambiguity`. Use `sample_rows` for literals, not `run_query LIMIT n`. Serve stays `v4` until a measured arm exists. |
 
 ## The measurement row
 

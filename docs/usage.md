@@ -193,11 +193,16 @@ Serving a turn is `POST /threads/{id}/runs/stream` with
 ([ADR 0010](adr/0010-live-stage-events.md)), and **there is no second way**: `POST /chat` and
 `POST /chat/resume` were deleted on 2026-08-18 ([ADR 0014](adr/0014-one-conversation-store.md)).
 They kept their own `InMemorySaver`, so degrading to them silently lost the conversation they
-were meant to rescue. Every custom route this app mounts is now a read, including
-`GET /clarifications/pending` — unanswered `ask_user` prompts, oldest first, out of interrupt
-state.
+were meant to rescue. Custom routes this app mounts are reads, plus one write that does not
+resume a turn: `POST /turns/{id}/raised` files a reader note onto checkpointed thread state. A paused thread (or an in-flight run) answers 409, because that write's `as_node` would consume the live interrupt.
+`GET /clarifications/pending` is unanswered `ask_user` prompts union those open notes, oldest
+first. Answering a pending interrupt from that page is still refused (ADR 0006 B9).
 
 A clarification is answered by posting a run with `{"command": {"resume": …}}` on the same thread.
+Resume maps: `{answer}` and `{choice_id}` proceed, `{declined: true}` fails closed,
+`{deferred: true}` proceeds under the stated why. The shipped UI sends only those four.
+`{cancelled: true}` is still accepted and folded into the same fail-closed branch as
+`{declined: true}`, for older clients — nothing in this repo's client sends it.
 `serve/resume.py::authorise_resume` refuses one whose caller is not the caller that was asked
 (ADR 0006 §10 B9); with one principal and no transport credential that gate cannot tell two
 callers apart, which is the state [`enterprise-fork.md`](enterprise-fork.md) says to fix first.

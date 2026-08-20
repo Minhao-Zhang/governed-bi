@@ -543,6 +543,9 @@ export const pendingClarificationSchema = z.object({
   clarification_id: z.string().nullable(),
   turn_id: z.string().nullable(),
   thread_id: z.string().nullable(),
+  source: z.enum(["interrupt", "from_refusal", "wrong_answer"]).optional(),
+  basis: z.enum(["data_definition", "ranking_ambiguity"]).nullable().optional(),
+  report_id: z.string().nullable().optional(),
   /** What a resume would have to name. Carried, not used — this surface is read-only until the
    * corpus write path has a provenance gate. */
   interrupt_id: z.string().nullable().optional(),
@@ -621,6 +624,8 @@ export const auditTraceSchema = z.object({
   // this has to be its own key rather than an inference.
   record: z.record(z.string(), z.unknown()).optional(),
   undeclared_keys: z.array(z.string()).optional().default([]),
+  clarifications: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  raised: z.array(z.record(z.string(), z.unknown())).optional().default([]),
 });
 
 /** `GET /audit/corpus` — what the corpus is, and what is wrong with it.

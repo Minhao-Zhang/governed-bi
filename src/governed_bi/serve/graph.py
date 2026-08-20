@@ -28,6 +28,7 @@ from governed_bi.serve.nodes.rewrite import rewrite_node
 from governed_bi.serve.nodes.route_retrieve import connect_node, resolve_node, route_node
 from governed_bi.serve.nodes.stamp import stamp
 from governed_bi.serve.nodes.terminal import decline_node, refuse_node
+from governed_bi.serve.raised import raise_note
 from governed_bi.serve.state import ServeInput, ServeOutput, ServeState
 from governed_bi.serve.wrap import wrap_node
 
@@ -220,6 +221,10 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     rail("decline", decline_node)
     # Unwrapped: nothing after stamp can record a wrap crash.
     graph.add_node("stamp", stamp)
+    # Unattached: no edge from START, never runs during a turn. Exists so
+    # ``aupdate_state(as_node="raise_note")`` can append ``ServeState.raised`` —
+    # ``as_node=None`` only writes ``messages`` (A2/A3).
+    graph.add_node("raise_note", raise_note)
 
     def _fanout_passthrough(state: ServeState) -> dict[str, Any]:
         return {}
@@ -373,6 +378,13 @@ class _SyncApp:
 
     def __exit__(self, *_exc: Any) -> None:
         self.close()
+
+    def update_state(self, config: Any, values: Any, as_node: str | None = None) -> Any:
+        """Apply ``values`` as if ``as_node`` had returned them. See Pregel.aupdate_state."""
+        return self.run_coro(self._app.aupdate_state(config, values, as_node=as_node))
+
+    def get_state(self, config: Any) -> Any:
+        return self.run_coro(self._app.aget_state(config))
 
     def stream(self, *args: Any, **kwargs: Any) -> Any:
         """Drained, then replayed. Order is preserved; incrementality is not.
