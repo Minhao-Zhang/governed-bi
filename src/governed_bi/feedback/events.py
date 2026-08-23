@@ -339,6 +339,11 @@ class Observation:
     generated_sql: str | None = None
     licensed: tuple[str, ...] = ()
     schemas: tuple[str, ...] = ()
+    #: Tables the reference statement reads that the turn was **not** allowed to read. The
+    #: defect itself, rather than a symptom of it — and the reason it is stored instead of
+    #: recomputed is that the review queue groups on it and the reviewer reads it. Recomputing
+    #: would need `sqlglot` in a layer that has no business parsing SQL.
+    missing_tables: tuple[str, ...] = ()
 
     # ── the grader's half, present only on an imported observation ──
     #: The reference statement. The falsifiable claim on an imported row, and stronger than any

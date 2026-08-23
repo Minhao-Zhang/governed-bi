@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS observation (
   generated_sql       TEXT,
   licensed_json       TEXT NOT NULL DEFAULT '[]',
   schemas_json        TEXT NOT NULL DEFAULT '[]',
+  missing_tables_json TEXT NOT NULL DEFAULT '[]',
   gold_sql            TEXT,
   gold_fingerprint    TEXT,
   pred_fingerprint    TEXT,
@@ -149,6 +150,7 @@ CREATE TABLE IF NOT EXISTS observation (
 CREATE INDEX IF NOT EXISTS ix_obs_state    ON observation(state, filed_at);
 CREATE INDEX IF NOT EXISTS ix_obs_turn     ON observation(turn_id);
 CREATE INDEX IF NOT EXISTS ix_obs_category ON observation(category, state);
+CREATE INDEX IF NOT EXISTS ix_obs_cluster  ON observation(db_id, category);
 
 CREATE TABLE IF NOT EXISTS patch (
   patch_id                     TEXT PRIMARY KEY,
@@ -196,6 +198,7 @@ CREATE INDEX IF NOT EXISTS ix_transition_entity ON transition(entity, entity_id,
 _JSON_TUPLES: Mapping[str, str] = {
     "licensed": "licensed_json",
     "schemas": "schemas_json",
+    "missing_tables": "missing_tables_json",
     "quality_flags": "quality_flags_json",
 }
 
@@ -582,6 +585,7 @@ def _observation_from(row: sqlite3.Row) -> Observation:
         generated_sql=row["generated_sql"],
         licensed=tuple(json.loads(row["licensed_json"])),
         schemas=tuple(json.loads(row["schemas_json"])),
+        missing_tables=tuple(json.loads(row["missing_tables_json"])),
         gold_sql=row["gold_sql"],
         gold_fingerprint=row["gold_fingerprint"],
         pred_fingerprint=row["pred_fingerprint"],
