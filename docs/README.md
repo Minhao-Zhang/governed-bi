@@ -17,8 +17,21 @@ SQLite is the offline test/CI substrate.
 7. [Glossary](glossary.md) — canonical terms.
 8. [Open work](open-work.md) — what is unfinished, and the evidence for each.
 9. [Return path](return-path.md) — how reader and engineer feedback becomes a corpus change
-   ([ADR 0015](adr/0015-the-return-path.md), proposed, no code). Chinese pair:
+   ([ADR 0015](adr/0015-the-return-path.md), **steps 0–6 built** on `design/return-path`; the
+   pipeline, T4 and T5 are not). Both pages open with a note on where the design and what shipped
+   differ, and the evidence is in [open work](open-work.md) §3.10a–3.10c. Chinese pair:
    [return-path.zh.md](return-path.zh.md), [ADR 0015 zh](adr/0015-the-return-path.zh.md).
+
+   The tools, in the order a change moves through them:
+
+   | | |
+   |---|---|
+   | `tools/import_eval_failures.py` | an eval artifact's failures become observations. The only row source in this cut |
+   | `tools/verify_patch.py` | the free ladder, T0–T2. Delta gates over the patched tree, in memory |
+   | `tools/reproduce_observation.py` | T3: does this question still miss a gold table? Free, and **run it with `--embed`** |
+   | `tools/export_bundle.py` | a bundle an engineer applies with `git apply`. Two content checks are fatal here and nowhere else |
+   | `tools/check_landed.py` | did it land? Read off the corpus, stored nowhere |
+   | `tools/check_ratchet.py` | the corpus's conformance debt may shrink and may not grow |
 10. [Enterprise fork](enterprise-fork.md) — what an enterprise deployment must implement for
    PII / RLS / RBAC, in what order, and what this repository deliberately does not do for it.
 
@@ -49,7 +62,7 @@ build in the present tense after that build was deleted.
 | [0012](adr/0012-access-seam-principal-and-authorization.md) | The access seam: principal, authorization, and the Layer 6 split |
 | [0013](adr/0013-the-declared-abstention-policy.md) | The declared abstention policy |
 | [0014](adr/0014-one-conversation-store.md) | One conversation store, on a durable LangGraph checkpointer — **supersedes 0004 §5** |
-| [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **Proposed, no code** |
+| [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **Accepted; steps 0–6 built** (the agentic pipeline, T4 and T5 are not) |
 
 ## Measurement findings
 

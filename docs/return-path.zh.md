@@ -1,5 +1,34 @@
 # 回流路径 —— 工作参考
 
+> ## 实际交付了什么，以及与本页的差异（2026-08-23）
+>
+> 第 **0-6 步已建成，在 `design/return-path` 分支上**。本页是当初商定的设计；有六处在实测后结果不同，
+> 按本页而不是按本注记去做的读者，每一处都会做错。证据在 `docs/open-work.md` §3.10a-3.10c。
+>
+> 1. **`tools/check_closed_domains.py` 不存在，且 T2 不需要数据库。** §11 把 metric expression 解析器
+>    放在活体 catalog 后面。它不需要：corpus 自己声明了表、列和 join，而 expression 必须与*那些*一致
+>    —— 仓库（warehouse）是 serve 时 `govern/` 的事。T2 就是打过补丁的树上的一致性规则 **V17b**，离线且
+>    免费。
+> 2. **V18 砍掉了。** 五条新规则，不是六条。它没有活体样本、也没有校准过的误报率，上线只会是一条谁也
+>    没法定量的规则。
+> 3. **实测发现数，这也是这些规则与凭直觉写出来的规则的区别所在：** V17a **107 条，分布在 478 个
+>    metric 中的 94 个**（设计里的 28 出自一个只做解析的原型 —— `DIVIDE(a, b)` 作为 SQL 能解析通过，
+>    而它命名的函数任何 dialect 都没有，所以上线的规则还会去问
+>    `govern/functions.py::PERMITTED_FUNCTIONS`）；V17b **17**；V19 **0**；V21 **1**，正是设计里点名的
+>    那个文件；V23 **0**。棘轮（ratchet）钉住了 **101** 个身份。
+> 4. **投诉的聚类很弱**，这以一个否定结果回答了 §12 的开放问题 7：最大的簇是 3，只有 49% 的行落在任何
+>    一个簇里。设计里的批处理论证撑不住这个数字，所以 `/review` 是一个列表加可选分组。
+> 5. **复现器必须带 `--embed` 跑。** §11 的 T3 建成了 `tools/reproduce_observation.py`，实际驱动它时
+>    发现：只走 lexical 的复查会报出 2 张缺失的 gold 表，而该行记录的是 1 —— 一个假的「仍然复现」，读起来
+>    和真发现一模一样。
+> 6. **上报 UI 和 `/reports` 没有建，本轮也不打算建。** 这套部署上所有角色都由同一个人担任，所以通知
+>    回路和按读者划分的报告列表没有服务对象。输入是 eval artifact：`tools/import_eval_failures.py`。
+>    §15 里的上报界面（`raise-note.tsx` 重写、`category-picker.tsx`、`my-reports.ts`、
+>    `report-status.tsx`）是给一个还不存在的第二类受众做的设计。
+>
+> 同样没有建、且在 §13 里就被列为后续步骤而非本轮的：agentic pipeline（`triage/`）、T4、T5，以及
+> 超出 `corpus_release` 这个 knob 之外的任何 `CorpusRelease`。
+
 读者与工程师的反馈如何变成一次语料变更。约束性决策在
 [ADR 0015](adr/0015-the-return-path.zh.md)；本页是工程师照着实现的东西。
 English: [The return path — working reference](return-path.md)。

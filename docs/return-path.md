@@ -1,5 +1,39 @@
 # The return path — working reference
 
+> ## What shipped, and where it differs from this page (2026-08-23)
+>
+> Steps **0-6 are built and on `design/return-path`**. This page is the design as agreed; six
+> things came out differently once measured, and a reader acting on the page rather than on this
+> note would get each of them wrong. `docs/open-work.md` §3.10a-3.10c carries the evidence.
+>
+> 1. **`tools/check_closed_domains.py` does not exist, and T2 needs no database.** §11 put the
+>    metric-expression resolver behind a live catalog. It does not need one: the corpus declares its
+>    own tables, columns and joins, and *those* are what an expression must be consistent with — the
+>    warehouse is `govern/`'s business at serve time. T2 is conformance rule **V17b** over the
+>    patched tree, offline and free.
+> 2. **V18 is cut.** Five new rules, not six. It had no live population and no calibrated
+>    false-positive rate, so it would have shipped as a rule nobody could size.
+> 3. **The measured findings, which are what separate these rules from rules written on a hunch:**
+>    V17a **107 across 94 of 478 metrics** (the design's 28 was a parse-only prototype — `DIVIDE(a,
+>    b)` parses as SQL and names a function no dialect has, so the shipped rule also asks
+>    `govern/functions.py::PERMITTED_FUNCTIONS`); V17b **17**; V19 **0**; V21 **1**, the file the
+>    design named; V23 **0**. The ratchet pins **101** identities.
+> 4. **Complaints cluster weakly**, which answers §12's open question 7 with a negative result: the
+>    largest cluster is 3 and 49% of rows are in a cluster at all. The design's batching argument
+>    does not survive it, and `/review` is a list with an optional grouping.
+> 5. **The reproducer must be run with `--embed`.** §11's T3 is built as
+>    `tools/reproduce_observation.py`, and driving it found that a lexical-only re-check reported 2
+>    missing gold tables where the row recorded 1 — a false "still reproduces" that reads exactly
+>    like a real finding.
+> 6. **The capture UI and `/reports` are not built and are not planned in this cut.** One principal
+>    holds every role on this deployment, so a notification loop and a per-reader report list have
+>    nobody to serve. The input is the eval artifact: `tools/import_eval_failures.py`. §15's capture
+>    surfaces (`raise-note.tsx`'s rewrite, `category-picker.tsx`, `my-reports.ts`,
+>    `report-status.tsx`) are the design for a second audience that does not exist yet.
+>
+> Also not built, and named in §13 as later steps rather than as this cut: the agentic pipeline
+> (`triage/`), T4, T5, and `CorpusRelease` as anything more than the `corpus_release` knob.
+
 How reader and engineer feedback becomes a corpus change. The binding decision is
 [ADR 0015](adr/0015-the-return-path.md); this page is what an engineer implements from.
 中文版：[回流路径 —— 工作参考](return-path.zh.md)。

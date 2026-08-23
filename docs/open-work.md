@@ -432,23 +432,98 @@ coincidental string literal launders one. That is why the eight closed above are
 their **values**, in `tests/eval/test_the_row_names_the_harness_that_produced_it.py`, and why
 `build_workers` is left red rather than given a number.
 
-**Two capabilities landed before their callers, on purpose (2026-08-19).** Both are the shape this
-section is about and neither is visible to `check_declared_is_consumed.py`, which reads the register
-and not the call graph — so they are written down here instead:
+**Two capabilities landed before their callers (2026-08-19). Both are closed as of 2026-08-23**,
+and they are kept here rather than deleted because neither is visible to
+`check_declared_is_consumed.py` — it reads the register and not the call graph — so nothing in CI
+would have noticed either one being reopened.
 
-- `eval/power.py::require_power` refuses to declare an arm that cannot detect its own hypothesis.
-  **Nothing calls it.** `ArmSpec` carries no hypothesised effect, so there is nothing to enforce it
-  against. Closing this means a field on `ArmSpec` and a driver-side check, at which point the arm
-  that cannot detect its target fails before it spends anything.
-- `corpus/snapshot.py` puts a corpus back. **Nothing calls it**, because no path in this repository
-  writes to a corpus during a run. It is here because the first path that does will need it on its
-  first turn: adding one file inside `corpus_root` moves `corpus_content_hash`, which
-  `measure/gates.py::_corpus_content_hash_gate` reads as an arm running on two corpora.
+- ~~`eval/power.py::require_power` has no caller.~~ **Closed.** `ArmProfile` gained
+  `hypothesised_effect` and `readout`, and `eval/provenance.py::arm_power_refusal` is the caller,
+  invoked by `tools/run_datalake_eval.py` beside `arm_startup_refusal` — before the first paid
+  question, which is the only point where refusing is free. It is silent when a profile declares no
+  hypothesis: every arm on disk predates the field, and inventing an effect size so the gate has
+  something to check would put that module's number into a later quotation of the arm's. `readout`
+  is required alongside the effect and is not in the arithmetic — MDE is denominated in points of
+  the whole population, and a draft of the design read a mechanism indicator's smaller MDE as the
+  better instrument when its base rate was two orders of magnitude lower.
+- ~~`corpus/snapshot.py` has no caller.~~ **Still no caller, and now deliberately so.** The
+  verification ladder was the path that would have needed it; `tools/verify_patch.py` applies the
+  edit **in memory** instead, because `corpus/patch.py::apply_edit` returns text and writes nothing.
+  That is faster (no 8.0 s copy of a 7,357-file tree per run, measured) and it removes the hazard
+  in F8 below from the ladder path entirely. The module keeps its guard fix and its tests; the first
+  path that genuinely writes a corpus during a run will still want it.
 
 The distinction that keeps these off the list above: a knob with no reader **changes the config
 hash** while changing no behaviour, so setting it produces a row that lies. A function with no caller
 produces nothing at all. The failure mode is a reader believing the capability is in force, which is
 what this entry exists to prevent.
+
+### 3.10a Four things measured while building the return path (2026-08-23)
+
+Each one changed a decision in [ADR 0015](adr/0015-the-return-path.md), which records *which*
+decision and points here for the evidence.
+
+**F1 — the `raised` channel held zero rows, on three independent checks.**
+`select count(*) from writes where channel='raised'` → 0; a full msgpack decode of all 931
+checkpoints in `runs/conversations.sqlite` → 0; the 23 thread rows in
+`.langgraph_api/.langgraph_ops.pckl` → 0. A byte-grep shows 47 apparent hits and every one is
+English prose inside `messages`. **So the migration needed no drain tool**, which is what let the
+channel deletion move earlier and get cheaper. The channel and `api/raised_write.py` are deleted;
+`ServeState` went 48 → 47.
+
+**F2 — the cost of deleting a channel is the contract, not the code.** The writer was one path and
+the readers were two call sites and a constant, all in `api/thread_turns.py`. What actually took the
+time: `docs/openapi.json` pinned `RaisedRowResponse` with seven required non-nullable fields,
+`report_id` was declared in the pending queue's `meta.columns` *because a client keys a card on it*,
+and `tests/api/test_the_spec_matches_the_server.py` held four assertions over that operation. About
+half a day. `docs/return-path.md` called it "a rename with a deleted owner, not a rename with churn"
+and that was half wrong; the page now says so.
+
+**And the spec was missing seven operations, not two.** `GET /observations` in both shapes and
+`GET /observations/{id}` shipped with the review screen and were never declared, which made
+`ui/scripts/check-api-contract.ts`'s "inventory of record" claim about `docs/openapi.json` false.
+All seven are declared and driven against real payloads now.
+
+**F7 — `corpus/store.py::write` on an existing id writes a second file with the same id.**
+`store.load` returns both with zero problems and `retrieve/index.py:316` then raises
+`ValueError: duplicate index id` — after the commit. Measured on the same one-word `summary` edit:
+`store.write` touches 343 lines and lands at a different path; `corpus/patch.py::apply_edit` touches
+4 and lands where the asset already lives. **This is why a bundle is a `git apply` diff and never a
+directory copy**, and why conformance rule V23 exists even though it finds zero today.
+
+**F8 — `corpus/snapshot.py`'s `rmtree` was guarded only against nesting.** `_identify_corpus`
+guarded `restore` and not the destination, and it was **measured deleting a scratch directory of
+unrelated files**. Fixed: `_identify_corpus(dest)` runs before the `rmtree`, an empty directory is
+allowed, and an existing file raises `NotADirectoryError`.
+
+### 3.10b Complaints cluster weakly, measured on the real 73
+
+ADR 0015's open question 7 asked whether complaints cluster. **They do not, and the design's
+batching argument does not survive it.** Measured on the 73 coverage-miss failures the importer
+produced from `runs/eval/proxy_v4_corpus30872d3.jsonl`:
+
+| key | clusters | singletons | largest | in a cluster ≥2 |
+|---|---:|---:|---:|---:|
+| `(category, schema, missing[:3])` | 70 | 67 | 2 | **8%** |
+| **`(category, schema)`** — shipped | 54 | 37 | 3 | **49%** |
+| `(schema, missing[:1])` | 63 | 55 | 4 | 25% |
+| `(schema,)` | 36 | 17 | 6 | 77% |
+| `(category,)` | 4 | 0 | 33 | 100% |
+
+56 of 73 miss exactly one table and those tables are mostly *different*, so the absent table
+identifies a **turn** rather than a problem — which is why `missing_tables` stays on the row as
+evidence and out of the key. The largest cluster is 3. Anything sized on "the marginal cost of one
+more observation in a cluster is zero" has to be re-sized, and `/review` is a list with an optional
+grouping rather than a cluster-first screen.
+
+### 3.10c The 438-row partition now has a producer
+
+§1's table above and `failure-modes.md` §1 carry **⚠ hand-run, no producer in the tree** over the
+six-way partition of the 438 failures. `eval/feedback_import.py` reproduces it from the artifact in
+code — 1,351 rows read, 438 failures, 73 coverage misses, 87 dataset defects, 278 full coverage, 0
+crashed, 0 unparsed — so that partition is the **first** number in this block to have one. The rest
+of the hand-run block (the 292-statement diagnosis, the projection recovery counts) still does not,
+and the marks there stand.
 
 ### 3.11 Selective prediction is closed at 0.80, and the reflector closed it
 

@@ -1,5 +1,24 @@
 # 0015: The return path — reader feedback into the corpus
 
+> **Status, 2026-08-23: steps 0-6 accepted and built on `design/return-path`.** **Five** measurements
+> taken while building changed a decision here; the evidence is in `docs/open-work.md` §3.10a-3.10c
+> and is deliberately not repeated, because this file is the decision record and that one is the work
+> list.
+>
+> | measurement | the decision it changed |
+> |---|---|
+> | The `raised` channel held **zero** rows, on three independent checks | The migration needs no drain tool, so the channel deletion moved *earlier* — before the review screen was written against its contract — and the compatibility union was dropped outright |
+> | Deleting the channel costs the **contract**, not the code | Decision 2's cost estimate; `docs/return-path.md` §1's "a rename with a deleted owner, not a rename with churn" was half wrong and now says so |
+> | `corpus/store.py::write` writes a **second file with the same id** on an existing asset | A bundle is a `git apply` diff and never a directory copy (decision 4), `corpus/patch.py` exists at all, and conformance rule V23 ships despite finding zero |
+> | `corpus/snapshot.py`'s `rmtree` **deleted a scratch directory of unrelated files** | The guard was fixed first, and the verification ladder was then built to apply the edit *in memory* so it never calls `snapshot` at all |
+> | Complaints cluster **weakly** — largest cluster 3, 49% grouped, on the real 73 | **Open question 7 is answered, negatively.** The batching argument does not survive, so the review surface is a list with an optional grouping rather than a cluster-first screen |
+>
+> Two decisions were narrowed in the build and the pages say so: **T2 needs no database** (the
+> corpus declares its own joins, so the resolver is offline and free) and **V18 is cut** (no live
+> population, no calibrated false-positive rate — five new rules, not six). The capture UI and
+> `/reports` are not built and are not planned in this cut: one principal holds every role here, so
+> the input is the eval artifact rather than a person clicking.
+
 - **Status:** Proposed (2026-08-23). **No code.** Every module path, signature and route in this
   document is a design, not a description; nothing named here exists unless the text says it
   already does. Design session: five independent proposals (intake, pipeline, verification,
