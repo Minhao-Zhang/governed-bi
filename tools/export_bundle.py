@@ -76,6 +76,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="print the diff and the checks; write nothing",
     )
+    parser.add_argument(
+        "--despite-a-red-ladder",
+        action="store_true",
+        help="export even though T0, T1 or T2 says this edit breaks something. Prints what it is "
+        "overriding",
+    )
     args = parser.parse_args(argv)
 
     store = FeedbackStore(_resolve(args.db))
@@ -125,6 +131,25 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    ladder_refusals, ladder_warnings = _ladder_verdict(patch)
+    for warning in ladder_warnings:
+        print(f"\nNOTE: {warning}")
+    if ladder_refusals and not args.despite_a_red_ladder:
+        print("\nREFUSED, and no bundle was written:", file=sys.stderr)
+        for refusal in ladder_refusals:
+            print(f"  {refusal}", file=sys.stderr)
+        print(
+            "\nThese tiers say the edit breaks something, so handing it over is handing over a "
+            "regression. Fix it and re-run tools/verify_patch.py, or pass "
+            "--despite-a-red-ladder if you mean it.",
+            file=sys.stderr,
+        )
+        return 1
+    if ladder_refusals:
+        print("\nOVERRIDDEN with --despite-a-red-ladder:")
+        for refusal in ladder_refusals:
+            print(f"  {refusal}")
+
     if args.dry_run:
         print("\n(dry run: nothing was written. Drop --dry-run to write the bundle.)")
         return 0
@@ -152,6 +177,50 @@ def main(argv: list[str] | None = None) -> int:
 
 
 # ── the two fatal checks ──────────────────────────────────────────────────────
+
+
+def _ladder_verdict(patch: Patch) -> tuple[list[str], list[str]]:
+    """``(refusals, warnings)`` from the ladder rows the patch carries.
+
+    Split because the tiers answer different questions. **T0-T2 red is a refusal**: they say the
+    edit breaks something, and a bundle for that is a regression somebody will apply. **T3 red is a
+    warning**: it says this patch does not fix the complaint it is attached to, which sends it back
+    to the steward without meaning the edit is wrong -- refusing would refuse every patch that
+    improves an asset without closing one specific coverage miss.
+
+    **An unrun ladder warns and does not refuse.** The free tiers cost nothing, so there is no
+    argument for handing over a change nobody ran them on; but there is no finding to refuse on
+    either, and manufacturing one is the "unrun reads as failed" defect the derived states exist to
+    avoid.
+    """
+    ladder = dict(patch.ladder or {})
+    refusals: list[str] = []
+    warnings: list[str] = []
+
+    unrun = [tier for tier in ("T0", "T1", "T2") if tier not in ladder]
+    if unrun:
+        warnings.append(
+            f"{', '.join(unrun)} has not been run on this patch, and they cost nothing. "
+            "tools/verify_patch.py --patch " + patch.patch_id
+        )
+    for tier in ("T0", "T1", "T2"):
+        row = ladder.get(tier)
+        if isinstance(row, dict) and row.get("passed") is False:
+            refusals.append(f"{tier}: {row.get('detail') or 'failed'}")
+
+    t3 = ladder.get("T3")
+    if isinstance(t3, dict) and t3.get("passed") is False:
+        warnings.append(
+            f"T3 says this patch does not fix the complaint it answers -- {t3.get('detail') or ''} "
+            "That is a reason to take it back to the steward and not a reason it cannot land: the "
+            "edit may still be a correct improvement to the asset."
+        )
+    elif t3 is None:
+        warnings.append(
+            "T3 has not been run, so nothing says whether this patch fixes the complaint. "
+            "tools/reproduce_observation.py --patch " + patch.patch_id + " --embed"
+        )
+    return refusals, warnings
 
 
 def _refuse(patch: Patch, *, corpus_root: Path, store: FeedbackStore) -> list[Refusal]:

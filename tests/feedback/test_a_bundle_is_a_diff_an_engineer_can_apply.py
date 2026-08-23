@@ -280,6 +280,54 @@ def test_only_an_edit_produces_a_bundle(tmp_path: Path) -> None:
     assert _export(tmp_path, store, patch.patch_id) == 2
 
 
+def test_a_red_t0_refuses_the_export(tmp_path: Path) -> None:
+    """The gate that was a preference until 2026-08-23.
+
+    The bundle has always carried `evidence/ladder.json`, so a patch whose T1 said the tree stops
+    indexing exported anyway with the finding sitting in a file the person applying it had to go
+    looking for. A finding somebody has to go looking for is not a gate.
+    """
+    _corpus(tmp_path)
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " Grain is one order.")
+    store.record_ladder(patch_id, "T0", {"passed": False, "detail": "V3 fires on the new summary"})
+
+    assert _export(tmp_path, store, patch_id) == 1
+    assert not (tmp_path / "bundles").exists(), "a refused export must write nothing"
+
+
+def test_the_red_ladder_can_be_overridden_deliberately(tmp_path: Path) -> None:
+    """One person holds every role on this deployment, so a deliberate override has to be possible.
+    What must not be possible is overriding it by accident."""
+    _corpus(tmp_path)
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " Grain is one order.")
+    store.record_ladder(patch_id, "T1", {"passed": False, "detail": "build_index raises"})
+
+    assert _export(tmp_path, store, patch_id, extra=["--despite-a-red-ladder"]) == 0
+    assert (tmp_path / "bundles" / f"bnd-{patch_id}" / "changes.patch").is_file()
+
+
+def test_a_red_t3_warns_and_does_not_refuse(tmp_path: Path) -> None:
+    """T3 says this patch does not fix the complaint it is attached to. That sends it back to the
+    steward; it does not mean the edit is wrong. Refusing here would refuse every patch that
+    improves an asset without closing one specific coverage miss."""
+    _corpus(tmp_path)
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " Grain is one order.")
+    for tier in ("T0", "T1", "T2"):
+        store.record_ladder(patch_id, tier, {"passed": True, "detail": "fine"})
+    store.record_ladder(patch_id, "T3", {"passed": False, "detail": "still misses a gold table"})
+
+    assert _export(tmp_path, store, patch_id) == 0
+
+
+def test_an_unrun_ladder_warns_and_does_not_refuse(tmp_path: Path) -> None:
+    """The free tiers cost nothing, so there is no argument for handing over a change nobody ran
+    them on -- and no finding to refuse on either. Manufacturing one would be the "unrun reads as
+    failed" defect the derived states exist to avoid."""
+    _corpus(tmp_path)
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " Grain is one order.")
+    assert _export(tmp_path, store, patch_id) == 0
+
+
 def test_a_truncated_corpus_hash_is_refused_at_the_store(tmp_path: Path) -> None:
     """The second defect the end-to-end run found. A 16-character prefix -- what every display
     shows -- never equals the digest the landing check compares against, so the patch reported
