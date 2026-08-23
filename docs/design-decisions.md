@@ -19,6 +19,7 @@ Do not re-author ADR content here.
 | The access seam: principal, authorization, Layer 6 split | [0012](adr/0012-access-seam-principal-and-authorization.md) |
 | The declared abstention policy | [0013](adr/0013-the-declared-abstention-policy.md) |
 | One conversation store | [0014](adr/0014-one-conversation-store.md) |
+| The return path: reader feedback into the corpus | [0015](adr/0015-the-return-path.md) (proposed, no code) |
 
 Non-ADR judgements that still matter in code:
 

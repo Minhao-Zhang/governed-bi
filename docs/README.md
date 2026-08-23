@@ -16,7 +16,10 @@ SQLite is the offline test/CI substrate.
 6. [Design decisions](design-decisions.md) — short index into the ADRs.
 7. [Glossary](glossary.md) — canonical terms.
 8. [Open work](open-work.md) — what is unfinished, and the evidence for each.
-9. [Enterprise fork](enterprise-fork.md) — what an enterprise deployment must implement for
+9. [Return path](return-path.md) — how reader and engineer feedback becomes a corpus change
+   ([ADR 0015](adr/0015-the-return-path.md), proposed, no code). Chinese pair:
+   [return-path.zh.md](return-path.zh.md), [ADR 0015 zh](adr/0015-the-return-path.zh.md).
+10. [Enterprise fork](enterprise-fork.md) — what an enterprise deployment must implement for
    PII / RLS / RBAC, in what order, and what this repository deliberately does not do for it.
 
 ## Decision records (ADRs)
@@ -46,6 +49,7 @@ build in the present tense after that build was deleted.
 | [0012](adr/0012-access-seam-principal-and-authorization.md) | The access seam: principal, authorization, and the Layer 6 split |
 | [0013](adr/0013-the-declared-abstention-policy.md) | The declared abstention policy |
 | [0014](adr/0014-one-conversation-store.md) | One conversation store, on a durable LangGraph checkpointer — **supersedes 0004 §5** |
+| [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **Proposed, no code** |
 
 ## Measurement findings
 

@@ -24,6 +24,11 @@ this page wins. Binding design detail is in the [ADRs](adr/).
 | **Knob** | Declared setting in `register/knobs.py` (defaults, roles, hash participation). |
 | **Main model / utility model** | Large model for SQL generation vs small model for scope gate / facet rewrite ([ADR 0011](adr/0011-two-model-split-and-facet-query-rewriting.md)). |
 | **Stage event** | Custom stream event for a visible turn timeline ([ADR 0010](adr/0010-live-stage-events.md)). |
+| **Return path** | The loop that takes a reader's or an engineer's feedback back into the corpus ([ADR 0015](adr/0015-the-return-path.md)). **Proposed, no code**: every term in the next four rows names a design, not a module. |
+| **Observation** | One thing a reader or operator saw, attributed to exactly one turn. Replaces today's `raised` row, whose `report_id` is retired with it. Carries a `kind` (the existing two wire values) and an optional `category` — the reader's refinement of *what* was wrong, in business language, never naming an asset. |
+| **Patch** | A candidate corpus change: asset creates or edits with an intent, verified against a snapshot and handed to a human as a **bundle**. Not a `Proposal` — see the homonym traps. |
+| **Corpus release** | A tag in the corpus repository plus its `corpus_content_hash`. What an arm pins, instead of a floating directory pointer. The `corpus_release` comparability knob does not exist yet: measured 2026-08-23, `comparability_keys()` is 50 names and not one contains "corpus", so an arm whose treatment *is* the corpus cannot declare it. |
+| **`addressed`** | An observation whose patch landed in the corpus. **Not `resolved`**: on turns where every gold table was licensed the engine's measured accuracy is 0.7555, so about one in four complaints closed on a landed commit would still be wrong. The one free upgrade is `retrieval_verified` — the tables needed are now reachable — and nothing licenses `resolved`. |
 
 ## Homonym traps
 
@@ -37,4 +42,8 @@ this page wins. Binding design detail is in the [ADRs](adr/).
 | **server** | Infra (LangGraph Server). The product agent path is `serve/`, not a package named Analyst. |
 | **`r_table_not_licensed`** | Not "you are not allowed." It means retrieval did not find the table this turn — 19 of the v4 arm's 20 refusals, and every one of them a retrieval miss. The permission answer is `r_table_not_authorized`, which is a different rule ([ADR 0012](adr/0012-access-seam-principal-and-authorization.md) §3). |
 | **`r_column_excluded` vs `r_column_not_authorized`** | The first is the corpus hiding a column from **everyone**; the second is **this principal** being denied one. A third, `r_column_not_allowed`, means the corpus declares no such column at all. |
+| **Observation** (return path) | Not `measure/signals.py::Signal`, which is a selective-prediction ranking feature. The return path deliberately does **not** use the word "signal" for a type, and its own reader-facing field is `category`. |
+| **Patch** (return path) | Not the `proposal` of `eval/projection.py`, which is the model's *ungoverned* SQL — proposed in a transcript and executed nowhere. A return-path patch is a corpus change. The two were nearly given one name. |
+| **Cluster** (return path) | Not a `tools/check_corpus_conformance.py::Finding`, which is one conformance violation line. |
+| **`state` vs `status`** | Return-path lifecycle fields are always `state`. `status` already means three things here — a run's, a column's `reliability.status`, and a provenance `status` — and a fourth is how a reader comes to read the wrong one. |
 | **row predicate** | Declared, **never applied**. This engine refuses a statement touching a table whose predicate it cannot enforce; it does not inject a `WHERE` clause and there is no enforcement mode that does (ADR 0012 §5). Row-level security belongs on the database role. |
