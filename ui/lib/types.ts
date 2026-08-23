@@ -19,6 +19,10 @@ import type {
   observationClustersSchema,
   observationSchema,
   observationsSchema,
+  observationEnvelopeSchema,
+  patchEnvelopeSchema,
+  patchSchema,
+  patchesSchema,
   pendingClarificationSchema,
   pendingQueueSchema,
   corpusFieldSchema,
@@ -165,6 +169,10 @@ export type Observation = z.infer<typeof observationSchema>;
 export type Observations = z.infer<typeof observationsSchema>;
 export type ObservationCluster = z.infer<typeof observationClusterSchema>;
 export type ObservationClusters = z.infer<typeof observationClustersSchema>;
+export type Patch = z.infer<typeof patchSchema>;
+export type Patches = z.infer<typeof patchesSchema>;
+export type PatchEnvelope = z.infer<typeof patchEnvelopeSchema>;
+export type ObservationEnvelope = z.infer<typeof observationEnvelopeSchema>;
 
 export const CORPUS_ASSET_TYPES = ["table", ...ASSET_TYPES] as const;
 export type CorpusAssetType = (typeof CORPUS_ASSET_TYPES)[number];

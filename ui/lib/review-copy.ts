@@ -95,6 +95,20 @@ export const CATEGORY_COPY: Record<string, string> = {
   reusable_fact: "A fact worth keeping",
 };
 
+/**
+ * What each editable field *does*, because the two are not interchangeable.
+ *
+ * `summary` is indexed for retrieval and `body` is injected into the model's prompt, so an edit to
+ * one changes what gets found and an edit to the other changes what the model reads. A reviewer
+ * deciding whether an edit fixes a coverage miss has to know which. Nothing else is editable:
+ * governance, provenance, audit and column fields are refused by `corpus/patch.py`.
+ */
+export const FIELD_COPY: Record<string, string> = {
+  summary:
+    "summary is what retrieval searches. Editing it changes which questions find this asset — which is the lever on a coverage miss.",
+  body: "body is what the model reads once the asset is in context. Editing it changes how the asset is used, not whether it is found.",
+};
+
 export const REVIEW_COPY = {
   pageTitle: "Review",
   /** The product boundary in one sentence, permanently on the page. */
@@ -133,4 +147,44 @@ export const REVIEW_COPY = {
   missingTablesHeading: "Tables the reference answer needs that the turn was not allowed to read",
   missingTablesCaption:
     "The defect itself rather than a symptom. Empty means every table was reachable and the answer was still wrong, which is a different problem.",
+
+  /* ── the decision half ─────────────────────────────────────────────────── */
+
+  /** On the bar itself, permanently. The single most important sentence on the screen: a steward
+   *  who believes a button changed the engine will stop checking whether anything landed. */
+  decisionBoundary:
+    "Deciding here writes a row in this server's own store. It does not change the semantic layer — that is a commit in the corpus repository, made by a person.",
+
+  /** Shown when a patch exists but no bundle has been exported. */
+  handoffPending:
+    "Drafted, and not handed over. Export a bundle to get a diff somebody can apply.",
+
+  /** Shown once a bundle exists. Names the two commands and nothing else, because a longer
+   *  instruction is one somebody skims. */
+  handoffExported:
+    "A bundle has been exported. Applying it is git apply and a commit, run by a person in the corpus repository.",
+
+  /** The state a landing usually reaches, and why it is not the stronger one. */
+  landedMatchedNote:
+    "In the corpus this server runs, alongside other changes that landed with it. Not hash-matched, because two bundles landing in one week make an exact match fail for a change that did ship.",
+
+  /** The ladder gate on the export button. */
+  ladderUnrun:
+    "Nothing has verified this patch. The free checks (T0-T2) cost no model calls, so there is no reason to hand over a change nobody ran them on.",
+
+  /** Empty-diff caption, which is a real state: a patch whose text matches what is already there. */
+  diffEmpty:
+    "No words changed. This patch would produce an empty diff, which means the field already holds the replacement.",
+
+  /** Both the decline form and the withdraw form require one, and the requirement is the server's. */
+  reasonRequired:
+    "A reason is required. A closed row whose why lives only in somebody's memory gets re-opened from scratch six weeks later.",
+
+  /** The one thing the draft form must not invite. */
+  draftHeldOutWarning:
+    "Write this in your own words. Copying the question's wording into an asset contaminates the benchmark, and the export refuses a verbatim run of five words or more.",
+
+  draftHeading: "Draft a change",
+  draftSubmit: "Draft this change",
+  diffHeading: "What this change does",
 } as const;

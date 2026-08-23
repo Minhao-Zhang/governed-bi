@@ -9,23 +9,29 @@
  * of them in full would be asserting they are the same problem, which is exactly what the queue's
  * caption says nobody checked.
  *
- * Read-only. There is no decision bar yet: drafting a change needs `corpus/patch.py` and the diff
- * renderer, and a button that produced nothing would be worse than its absence.
+ * **The open row is re-fetched by id rather than read out of the cluster.** The grouped projection
+ * does not join patches -- every member arrives with `patches: []` -- so a decision bar built on the
+ * cluster's copy would report "nothing drafted" about a row that already has a patch, and offer to
+ * draft a second one.
  */
 
 import { useState } from "react";
 
+import { DecisionBar } from "@/components/review/decision-bar";
 import { EvidenceBundle } from "@/components/review/evidence-bundle";
+import { HandoffPanel } from "@/components/review/handoff-panel";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { QueryState } from "@/components/common/query-state";
-import { useObservationClusters } from "@/hooks/queries";
+import { useObservation, useObservationClusters } from "@/hooks/queries";
 import { REVIEW_COPY } from "@/lib/review-copy";
 import type { ObservationClusters } from "@/lib/types";
 
 export function ClusterPanel({ clusterKey }: { clusterKey: string }): React.JSX.Element {
   const query = useObservationClusters();
   const [openId, setOpenId] = useState<string | null>(null);
+  const [drafting, setDrafting] = useState(false);
+  const detail = useObservation(openId);
 
   return (
     <QueryState
@@ -38,8 +44,14 @@ export function ClusterPanel({ clusterKey }: { clusterKey: string }): React.JSX.
       {(data: ObservationClusters) => {
         const cluster = data.clusters.find((c) => c.key === clusterKey);
         if (!cluster) return <></>;
-        const open =
+        const listed =
           cluster.observations.find((o) => o.observation_id === openId) ?? cluster.observations[0];
+        // The detail row when it has arrived for *this* observation, the listed one until then. A
+        // stale detail from the previously selected row would draw another row's patches here.
+        const open =
+          detail.data && detail.data.observation_id === listed.observation_id
+            ? detail.data
+            : listed;
 
         return (
           <div className="flex min-h-0 flex-col gap-4">
@@ -56,7 +68,10 @@ export function ClusterPanel({ clusterKey }: { clusterKey: string }): React.JSX.
                   <button
                     key={observation.observation_id}
                     type="button"
-                    onClick={() => setOpenId(observation.observation_id)}
+                    onClick={() => {
+                      setOpenId(observation.observation_id);
+                      setDrafting(false);
+                    }}
                     className={`max-w-[22rem] truncate rounded-md border px-2 py-1 text-left text-xs ${
                       observation.observation_id === open.observation_id
                         ? "border-primary bg-accent/40"
@@ -73,6 +88,14 @@ export function ClusterPanel({ clusterKey }: { clusterKey: string }): React.JSX.
             <Card className="min-h-0 overflow-y-auto p-4">
               <EvidenceBundle observation={open} />
             </Card>
+
+            <HandoffPanel
+              observation={open}
+              open={drafting}
+              onClose={() => setDrafting(false)}
+            />
+
+            <DecisionBar observation={open} onDraft={() => setDrafting(true)} />
 
             <p className="text-xs text-muted-foreground">{REVIEW_COPY.clusterCaption}</p>
           </div>

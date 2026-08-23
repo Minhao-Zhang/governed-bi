@@ -20,6 +20,8 @@ import {
   MOCK_AUDIT_TRACE,
   MOCK_AUDIT_TURNS,
   MOCK_OBSERVATIONS,
+  MOCK_PATCH,
+  MOCK_PATCHES,
   MOCK_OBSERVATION_CLUSTERS,
   MOCK_PENDING_QUEUE,
   MOCK_CAPABILITIES,
@@ -41,7 +43,10 @@ import {
   auditTurnsSchema,
   observationSchema,
   observationClustersSchema,
+  observationEnvelopeSchema,
   observationsSchema,
+  patchEnvelopeSchema,
+  patchesSchema,
   pendingQueueSchema,
   corpusFieldsSchema,
   corpusRowsSchema,
@@ -55,7 +60,10 @@ import {
 import type {
   Observation,
   ObservationClusters,
+  ObservationEnvelope,
   Observations,
+  PatchEnvelope,
+  Patches,
   AssetRow,
   AuditCorpus,
   AuditTrace,
@@ -135,6 +143,32 @@ async function post<T>(path: string, body: unknown, schema: z.ZodType<T>): Promi
   try {
     res = await fetch(`${LANGGRAPH_URL}${path}`, {
       method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError(`Could not reach the backend at ${LANGGRAPH_URL}${path}.`);
+  }
+  if (!res.ok) throw new ApiError(`${path} returned ${res.status}.`, res.status);
+  return parse(path, schema, await res.json());
+}
+
+/**
+ * `PATCH`, for the one route that has one.
+ *
+ * A separate function rather than a `method` argument on `post`, because the two differ in what a
+ * non-2xx *means* and the caller has to be able to tell: a 409 from `PATCH /observations/{id}` is
+ * "somebody has already triaged this, so the note is frozen", which is a sentence to show, not a
+ * failure to retry. `ApiError` carries the status for exactly that.
+ */
+async function patch<T>(path: string, body: unknown, schema: z.ZodType<T>): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${LANGGRAPH_URL}${path}`, {
+      method: "PATCH",
       headers: {
         "content-type": "application/json",
         accept: "application/json",
@@ -311,6 +345,107 @@ export const api = {
       `/observations/${encodeURIComponent(observationId)}`,
       observationSchema,
       MOCK_OBSERVATIONS.rows[0],
+    ),
+
+  /* ── the steward's verbs ────────────────────────────────────────────────
+   *
+   * **All four 404 unless the engine was started with `GOVERNED_BI_FEEDBACK_ADMIN` set** — a 403
+   * would confirm the routes exist. That means a 404 from any of them is ambiguous between "no
+   * such row" and "this engine does not offer the verb", and the surface says so rather than
+   * guessing; there is no capability flag for it, because `/capabilities` describes the serve
+   * path.
+   *
+   * **None of them writes to the corpus.** Drafting records what a change would be. The write is
+   * `git apply` and a commit in the corpus repository, run by a person, and that gap is the
+   * provenance gate the whole return path is built around.
+   */
+
+  /** Move an observation. The server's transition table decides; a 409 means it refused. */
+  triageObservation: (
+    observationId: string,
+    body: {
+      to: string;
+      detail?: string;
+      decline_reason?: string;
+      duplicate_of?: string;
+      blocked_note?: string;
+    },
+  ): Promise<ObservationEnvelope> => {
+    if (USE_MOCKS) {
+      return Promise.resolve({
+        ok: true,
+        observation: { ...MOCK_OBSERVATIONS.rows[0], state: body.to, open: body.to !== "declined" },
+      });
+    }
+    return post(
+      `/observations/${encodeURIComponent(observationId)}/triage`,
+      body,
+      observationEnvelopeSchema,
+    );
+  },
+
+  /** Amend the note on an untriaged observation. 409 once somebody has looked. */
+  amendObservation: (
+    observationId: string,
+    body: { note?: string; expected?: string },
+  ): Promise<ObservationEnvelope> => {
+    if (USE_MOCKS) {
+      return Promise.resolve({
+        ok: true,
+        observation: { ...MOCK_OBSERVATIONS.rows[0], note: body.note ?? "" },
+      });
+    }
+    return patch(
+      `/observations/${encodeURIComponent(observationId)}`,
+      body,
+      observationEnvelopeSchema,
+    );
+  },
+
+  /**
+   * Draft a patch (`POST /patches`, 201).
+   *
+   * `base_corpus_content_hash` must be the **full** 64-character digest. The 16-character prefix
+   * every display shows is refused with 422, because it never equals the digest the landing check
+   * compares against — a patch nobody had touched would report `superseded`.
+   */
+  draftPatch: (body: {
+    intent: string;
+    namespace: string;
+    asset_type?: string;
+    asset_id?: string;
+    field_path?: string;
+    was?: string;
+    becomes?: string;
+    rationale?: string;
+    base_corpus_content_hash: string;
+    observations?: string[];
+  }): Promise<PatchEnvelope> => {
+    if (USE_MOCKS) return Promise.resolve({ ok: true, patch: MOCK_PATCH });
+    return post("/patches", body, patchEnvelopeSchema);
+  },
+
+  /** Abandon a patch. The reason is required by the server, not just by the form. */
+  withdrawPatch: (patchId: string, reason: string): Promise<PatchEnvelope> => {
+    if (USE_MOCKS) {
+      return Promise.resolve({
+        ok: true,
+        patch: { ...MOCK_PATCH, state: "withdrawn", withdrawn_reason: reason },
+      });
+    }
+    return post(
+      `/patches/${encodeURIComponent(patchId)}/withdraw`,
+      { reason },
+      patchEnvelopeSchema,
+    );
+  },
+
+  /** Patches, newest first. `state` is comma-separated. */
+  patches: (params: { state?: string; limit?: number } = {}): Promise<Patches> =>
+    get(
+      `/patches${qs({ state: params.state, limit: params.limit ?? 50 })}`,
+      patchesSchema,
+      MOCK_PATCHES,
     ),
 
   /**

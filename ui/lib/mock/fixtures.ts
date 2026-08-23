@@ -1132,3 +1132,43 @@ export const MOCK_OBSERVATION_CLUSTERS = {
   ],
   meta: { n: 1, total: 1, truncated: false, limit: 200, offset: 0, grouped: 1 },
 };
+
+/**
+ * One drafted patch, in the state it spends most of its life in.
+ *
+ * `derived_state` is **null** and `expected_corpus_content_hash` is **null**, both deliberately:
+ * the first is answered by reading the corpus and no route without one may claim to know, and the
+ * second is the digest of a tree nobody has written yet. A fixture that filled either in would let
+ * the surface be built against a value the server never sends.
+ *
+ * `base_corpus_content_hash` is the full 64 characters, because a 16-character prefix is refused —
+ * and a fixture carrying the prefix would make the offline UI disagree with the live one about
+ * whether the form validates.
+ */
+export const MOCK_PATCH = {
+  patch_id: "pat-20260823T124500Z-9f8e7d",
+  created_at: "2026-08-23T12:45:00+00:00",
+  author: "operator",
+  intent: "edit_asset",
+  state: "draft",
+  namespace: "beer_factory",
+  rationale: "The reference answer reads wurzelbier and retrieval did not license it.",
+  asset_type: "table",
+  asset_id: "beer_factory.wurzelbier",
+  field_path: "summary",
+  was: "wurzelbier holds one row per product.",
+  becomes:
+    "wurzelbier holds one row per product. Questions about which brewery makes a drink read this table.",
+  base_corpus_content_hash:
+    "6e5c7b4be83d5682a1c4f09b7e2d6a3c85f1b0d94e7a2c68f3b5d10a9c4e8f27",
+  expected_corpus_content_hash: null as string | null,
+  ladder: {} as Record<string, unknown>,
+  withdrawn_reason: "",
+  observations: [MOCK_OBSERVATIONS.rows[0].observation_id],
+  derived_state: null as string | null,
+};
+
+export const MOCK_PATCHES = {
+  patches: [MOCK_PATCH],
+  meta: { n: 1, total: 1, truncated: false, limit: 50, offset: 0 },
+};

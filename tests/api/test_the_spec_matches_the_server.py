@@ -24,8 +24,8 @@ pending queue are shaped by the code that ships, not by a fake that agrees with 
 
 **No ``jsonschema``.** It is not declared in ``pyproject.toml`` (it arrives transitively under
 the LangGraph stack, which is not the same thing) and this file must not add a dependency. The
-subset the spec uses — ``$ref``, ``anyOf``, ``type``, ``properties``, ``required``, ``items``,
-``enum``, ``additionalProperties`` — is walked below, which is also what lets a failure name the
+subset the spec uses — ``$ref``, ``anyOf``, ``allOf``, ``type``, ``properties``, ``required``,
+``items``, ``enum``, ``additionalProperties`` — is walked below, which is also what lets a failure name the
 route, the JSON path, the component and which side is missing the field.
 
 **What this does NOT cover, and none of it is incidental:**
@@ -48,12 +48,32 @@ route, the JSON path, the component and which side is missing the field.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 SPEC_PATH = Path(__file__).resolve().parents[2] / "docs" / "openapi.json"
+
+#: The switch that mounts the steward's verbs. Off in production; on in this fixture, because an
+#: operation the spec declares and the fixture cannot reach is an operation nothing validates.
+ADMIN_SWITCH = "GOVERNED_BI_FEEDBACK_ADMIN"
+
+#: A patch body the store accepts. The hash is the full 64 characters on purpose: a 16-character
+#: prefix -- what every display shows -- is refused, and a fixture carrying one would exercise the
+#: 422 instead of the 201.
+_DRAFT: dict[str, Any] = {
+    "intent": "edit_asset",
+    "namespace": "beer",
+    "asset_type": "table",
+    "asset_id": "beer.brands",
+    "field_path": "summary",
+    "was": "one row per brand",
+    "becomes": "one row per brand of beer",
+    "base_corpus_content_hash": "d" * 64,
+    "rationale": "the reference answer reads this table and retrieval did not license it",
+}
 
 #: A prompt the four-asset corpus below routes to `beer` on the lexical channel alone.
 QUESTION = "how many root beer brands are there"
@@ -98,9 +118,36 @@ def _matches(value: Any, name: str) -> bool:
     return _kind(value) == name if name in known else True
 
 
+def _flattened(schema: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
+    """``allOf`` merged into one object schema.
+
+    Needed because ``ObservationDetailResponse`` is ``ObservationResponse`` plus two arrays, and the
+    alternative to merging is copying twenty-eight property declarations into a second component --
+    where they would drift. The merge is shallow and one level deep, which is all the spec uses:
+    ``properties`` union and ``required`` union, with the branch's own keys taking precedence.
+
+    An extending schema must NOT re-declare a property its base declares differently. Nothing here
+    detects that, and the failure would be silent, so it is a rule about writing the spec rather
+    than one this walker enforces.
+    """
+    if "allOf" not in schema:
+        return schema
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    for branch in schema["allOf"]:
+        resolved = _resolve(branch, spec)
+        properties.update(resolved.get("properties") or {})
+        required += list(resolved.get("required") or ())
+    merged = {k: v for k, v in schema.items() if k != "allOf"}
+    merged["properties"] = {**properties, **(schema.get("properties") or {})}
+    merged["required"] = sorted({*required, *(schema.get("required") or ())})
+    merged.setdefault("type", "object")
+    return merged
+
+
 def _violations(value: Any, schema: Any, spec: dict[str, Any], at: str) -> list[str]:
     """Every way ``value`` disagrees with ``schema``, each naming ``at`` and which side is wrong."""
-    schema = _resolve(schema, spec)
+    schema = _flattened(_resolve(schema, spec), spec)
     title = schema.get("title") or "(inline)"
     out: list[str] = []
 
@@ -328,9 +375,24 @@ def wire() -> dict[str, Any]:
     queue = PendingClarifications(client_factory=lambda: _Client())
     log = ThreadTurnLog(client_factory=lambda: _Client())
     store = scratch_feedback_store()
+
+    # The steward's three verbs are mounted, because the spec declares them and an operation the
+    # fixture cannot reach is an operation nothing validates. Set here rather than through
+    # `monkeypatch`, which is function-scoped and this fixture is not; restored below so a later
+    # module does not inherit an admin surface.
+    had = os.environ.get(ADMIN_SWITCH)
+    os.environ[ADMIN_SWITCH] = "1"
+    try:
+        app = make_app(session, log, queue, store)
+    finally:
+        if had is None:
+            os.environ.pop(ADMIN_SWITCH, None)
+        else:
+            os.environ[ADMIN_SWITCH] = had
+
     return {
         "spec": json.loads(SPEC_PATH.read_text(encoding="utf-8")),
-        "client": TestClient(make_app(session, log, queue, store)),
+        "client": TestClient(app),
         "store": store,
         "turn_id": turn_id,
     }
@@ -440,6 +502,182 @@ def test_the_spec_declares_the_envelope_the_filing_route_returns_and_not_the_row
         assert not problems, "\n".join(problems)
 
 
+def test_the_spec_declares_the_queue_in_both_of_its_shapes(wire: dict[str, Any]) -> None:
+    """``rows`` by default and ``clusters`` under ``group=cluster``: two shapes, one operation.
+
+    Both are exercised because neither is ``required`` in the component -- exactly one is present
+    on any response -- so a test that only ever asked for the default would validate a schema half
+    of which nothing reaches.
+    """
+    spec, client, turn_id = wire["spec"], wire["client"], wire["turn_id"]
+    filed = client.post(
+        f"/turns/{turn_id}/raised", json={"kind": "wrong_answer", "category": "wrong_value"}
+    )
+    assert filed.status_code == 201, filed.text
+    schema = _declared(spec, "GET", "/observations", "200")
+
+    for url, present, absent in (
+        ("/observations?limit=5", "rows", "clusters"),
+        ("/observations?group=cluster&state=open&limit=5", "clusters", "rows"),
+    ):
+        body = client.get(url).json()
+        assert body[present], f"{url} returned no {present}, so its shape is unchecked"
+        assert absent not in body, f"{url} returned both shapes"
+        problems = _violations(body, schema, spec, f"GET {url} $")
+        assert not problems, "\n".join(problems)
+
+    problems = _violations(
+        client.get("/observations?state=not-a-state").json(),
+        _declared(spec, "GET", "/observations", "422"),
+        spec,
+        "GET /observations?state=not-a-state (422) $",
+    )
+    assert not problems, "\n".join(problems)
+
+
+def test_the_spec_declares_one_observation_with_its_patches_and_history(
+    wire: dict[str, Any],
+) -> None:
+    """The detail shape, with a patch attached so ``patches`` is not an empty array.
+
+    An empty array satisfies any item schema, which is how ``PatchResponse`` would go unchecked
+    while every assertion passed.
+    """
+    spec, client, turn_id = wire["spec"], wire["client"], wire["turn_id"]
+    observation_id = client.post(f"/turns/{turn_id}/raised", json={"kind": "from_refusal"}).json()[
+        "observation"
+    ]["observation_id"]
+    client.post("/patches", json={**_DRAFT, "observations": [observation_id]})
+
+    body = client.get(f"/observations/{observation_id}").json()
+    assert body["patches"], "no patch attached, so PatchResponse is unchecked here"
+    problems = _violations(
+        body,
+        _declared(spec, "GET", "/observations/{observation_id}", "200"),
+        spec,
+        f"GET /observations/{observation_id} $",
+    )
+    assert not problems, "\n".join(problems)
+
+    problems = _violations(
+        client.get("/observations/obs-nope").json(),
+        _declared(spec, "GET", "/observations/{observation_id}", "404"),
+        spec,
+        "GET /observations/obs-nope (404) $",
+    )
+    assert not problems, "\n".join(problems)
+
+
+def test_the_spec_declares_the_amend_and_triage_envelopes(wire: dict[str, Any]) -> None:
+    """Both return ``{"ok", "observation"}``, and both have an error the fixture can drive.
+
+    ``PATCH`` then ``POST`` in that order on the same row on purpose: amending freezes at
+    ``triaged``, so the 409 is only reachable after the triage, and driving it proves the freeze is
+    real rather than declared.
+    """
+    spec, client, turn_id = wire["spec"], wire["client"], wire["turn_id"]
+    observation_id = client.post(f"/turns/{turn_id}/raised", json={"kind": "wrong_answer"}).json()[
+        "observation"
+    ]["observation_id"]
+
+    amended = client.patch(f"/observations/{observation_id}", json={"note": "it is about 400"})
+    assert amended.status_code == 200, amended.text
+    problems = _violations(
+        amended.json(),
+        _declared(spec, "PATCH", "/observations/{observation_id}", "200"),
+        spec,
+        "PATCH /observations/{id} $",
+    )
+    assert not problems, "\n".join(problems)
+
+    triaged = client.post(f"/observations/{observation_id}/triage", json={"to": "triaged"})
+    assert triaged.status_code == 200, triaged.text
+    problems = _violations(
+        triaged.json(),
+        _declared(spec, "POST", "/observations/{observation_id}/triage", "200"),
+        spec,
+        "POST /observations/{id}/triage $",
+    )
+    assert not problems, "\n".join(problems)
+
+    frozen = client.patch(f"/observations/{observation_id}", json={"note": "too late"})
+    assert frozen.status_code == 409, frozen.text
+    problems = _violations(
+        frozen.json(),
+        _declared(spec, "PATCH", "/observations/{observation_id}", "409"),
+        spec,
+        "PATCH /observations/{id} (409) $",
+    )
+    assert not problems, "\n".join(problems)
+
+    undeclared = client.post(f"/observations/{observation_id}/triage", json={"to": "landed"})
+    assert undeclared.status_code == 422, undeclared.text
+    problems = _violations(
+        undeclared.json(),
+        _declared(spec, "POST", "/observations/{observation_id}/triage", "422"),
+        spec,
+        "POST /observations/{id}/triage (422) $",
+    )
+    assert not problems, "\n".join(problems)
+
+
+def test_the_spec_declares_the_three_patch_operations(wire: dict[str, Any]) -> None:
+    """Draft, list, withdraw. The 201 and the two 200s, plus the 409 the transition table raises.
+
+    None of these writes to the corpus and none can: a patch records what a change *would* be, and
+    the write is a human's ``git commit`` in a repository this process cannot reach.
+    """
+    spec, client = wire["spec"], wire["client"]
+
+    drafted = client.post("/patches", json=_DRAFT)
+    assert drafted.status_code == 201, drafted.text
+    problems = _violations(
+        drafted.json(), _declared(spec, "POST", "/patches", "201"), spec, "POST /patches $"
+    )
+    assert not problems, "\n".join(problems)
+    patch_id = drafted.json()["patch"]["patch_id"]
+
+    listed = client.get("/patches?limit=5")
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["patches"], "the list is empty, so PatchResponse is unchecked here"
+    problems = _violations(
+        listed.json(), _declared(spec, "GET", "/patches", "200"), spec, "GET /patches $"
+    )
+    assert not problems, "\n".join(problems)
+
+    withdrawn = client.post(
+        f"/patches/{patch_id}/withdraw", json={"reason": "the router, not the summary"}
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    problems = _violations(
+        withdrawn.json(),
+        _declared(spec, "POST", "/patches/{patch_id}/withdraw", "200"),
+        spec,
+        "POST /patches/{id}/withdraw $",
+    )
+    assert not problems, "\n".join(problems)
+
+    again = client.post(f"/patches/{patch_id}/withdraw", json={"reason": "again"})
+    assert again.status_code == 409, again.text
+    problems = _violations(
+        again.json(),
+        _declared(spec, "POST", "/patches/{patch_id}/withdraw", "409"),
+        spec,
+        "POST /patches/{id}/withdraw (409) $",
+    )
+    assert not problems, "\n".join(problems)
+
+    unknown = client.get("/patches?state=landed")
+    assert unknown.status_code == 422, unknown.text
+    problems = _violations(
+        unknown.json(),
+        _declared(spec, "GET", "/patches", "422"),
+        spec,
+        "GET /patches?state=landed (422) $",
+    )
+    assert not problems, "\n".join(problems)
+
+
 def test_the_pending_queue_carries_both_populations_so_neither_shape_goes_unchecked(
     wire: dict[str, Any],
 ) -> None:
@@ -494,6 +732,13 @@ def test_every_operation_in_the_spec_is_exercised_here() -> None:
     exercised = {(method, path) for method, path, _ in CASES} | {
         ("GET", "/audit/turns/{turn_id}/trace"),
         ("POST", "/turns/{turn_id}/raised"),
+        ("GET", "/observations"),
+        ("GET", "/observations/{observation_id}"),
+        ("PATCH", "/observations/{observation_id}"),
+        ("POST", "/observations/{observation_id}/triage"),
+        ("POST", "/patches"),
+        ("GET", "/patches"),
+        ("POST", "/patches/{patch_id}/withdraw"),
     }
     assert not declared - exercised, (
         f"docs/openapi.json declares {sorted(declared - exercised)} and nothing here validates a "

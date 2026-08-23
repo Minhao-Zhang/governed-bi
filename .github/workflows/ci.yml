@@ -181,6 +181,13 @@ jobs:
       - name: Answer-delivery closure
         run: npm run check:answer-delivery
 
+      # The word diff a reviewer reads before deciding whether a change to the semantic layer is
+      # right. It is a *minimality* gate: a diff that marks a whole sentence changed when one word
+      # moved still renders and still looks like a diff, so the degradation is silent. Imports
+      # `lib/asset-diff.ts` and nothing else.
+      - name: Asset-diff minimality
+        run: npm run check:asset-diff
+
       # `npm run check:api` and `npm run check:stream-messages` are deliberately NOT here.
       # `check:api` needs a live engine and a loaded corpus (ADR 0009 says so in the section that
       # introduces it); `check:stream-messages` is pure and could run, but it is a red/green

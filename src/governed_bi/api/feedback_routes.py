@@ -38,6 +38,9 @@ from governed_bi.feedback.events import (
     Kind,
     Observation,
     ObservationState,
+    Patch,
+    PatchIntent,
+    PatchState,
     Source,
 )
 from governed_bi.feedback.lifecycle import TransitionRefused, is_open
@@ -45,9 +48,11 @@ from governed_bi.feedback.store import (
     FeedbackStore,
     Rejected,
     mint_observation_id,
+    mint_patch_id,
     utc_now,
 )
 from governed_bi.feedback.validate import NOTE_MAX_CHARS
+from governed_bi.register.assets import AssetType
 
 __all__ = ["make_admin_router", "make_feedback_router", "PENDING_SOURCE_INTERRUPT"]
 
@@ -312,23 +317,12 @@ def _wire_observation_detail(store: FeedbackStore, observation_id: str) -> dict[
         return None
     return {
         **_wire_observation(obs),
+        # `derived_state` is null on every row here. It is derived and stored nowhere, and this
+        # route has no session, so it cannot read the corpus; answering "did this land" from an
+        # empty corpus view would say `superseded` about everything. The review surface composes
+        # the corpus half, and `tools/check_landed.py` is the one that reads it.
         "patches": [
-            {
-                "patch_id": patch.patch_id,
-                "intent": patch.intent.value,
-                "state": patch.state.value,
-                "asset_id": patch.asset_id,
-                "field_path": patch.field_path,
-                "was": patch.was,
-                "becomes": patch.becomes,
-                "rationale": patch.rationale,
-                "ladder": dict(patch.ladder),
-                # Derived here and stored nowhere. `asset_text_now` is empty on this route: it has
-                # no session, so it cannot read the corpus, and answering "did this land" from an
-                # empty corpus view would say `superseded` about everything. The review surface
-                # composes the corpus half; this is the shape it fills in.
-                "derived_state": None,
-            }
+            {**_wire_patch(store, patch), "derived_state": None}
             for patch in store.patches_of(observation_id)
         ],
         "history": list(store.history(observation_id)),
@@ -472,4 +466,176 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
             raise HTTPException(status_code=422, detail=list(exc.faults)) from exc
         return {"ok": True, "observation": _wire_observation_detail(store, observation_id)}
 
+    @router.post("/patches", status_code=201)
+    def draft_patch(body: dict[str, Any]) -> dict[str, Any]:
+        """Draft a patch against one asset field.
+
+        The handler builds the ``Patch`` and hands it to the store; every rule about what a patch
+        may say lives in ``feedback/validate.py``, so a field this endpoint forgot to police is
+        still refused. It does **not** write to the corpus and cannot: the only write is a human's
+        ``git commit``, and this row is what produces the diff for it.
+        """
+        try:
+            patch = _patch_from_body(body or {})
+        except _BadRequest as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        observations = [str(o) for o in ((body or {}).get("observations") or [])]
+        for observation_id in observations:
+            if store.get(observation_id) is None:
+                raise HTTPException(
+                    status_code=404, detail=f"no observation {observation_id!r}"
+                )
+        try:
+            patch_id = store.draft(patch, observations=observations)
+        except Rejected as exc:
+            raise HTTPException(status_code=422, detail=list(exc.faults)) from exc
+        return {"ok": True, "patch": _wire_patch(store, store.get_patch(patch_id))}
+
+    @router.post("/patches/{patch_id}/withdraw")
+    def withdraw(patch_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Abandon a patch, with a reason. Legal from ``draft`` and from ``exported`` both.
+
+        From ``exported`` too, because a bundle that went out and was rejected in review is the
+        common case, and leaving it `exported` forever is the unclosable row this design exists to
+        remove. What the corpus does with a bundle already applied is not this store's business --
+        ``tools/check_landed.py`` reads that from the corpus.
+        """
+        reason = str((body or {}).get("reason") or "").strip()
+        if not reason:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "reason is required. A terminal state whose why lives only in somebody's "
+                    "memory is a patch that gets re-drafted from scratch six weeks later."
+                ),
+            )
+        try:
+            store.move_patch(
+                patch_id, to=PatchState.withdrawn, withdrawn_reason=reason, detail=reason
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="patch not found") from exc
+        except TransitionRefused as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Rejected as exc:
+            raise HTTPException(status_code=422, detail=list(exc.faults)) from exc
+        return {"ok": True, "patch": _wire_patch(store, store.get_patch(patch_id))}
+
+    @router.get("/patches")
+    def list_patches(
+        state: str | None = Query(default=None, description="comma-separated PatchState values"),
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, Any]:
+        """Patches, newest first. No derived landing state on this route, deliberately.
+
+        Landing is answered by reading the corpus, which this process does at load time and not
+        per request. Putting a stale ``landed_*`` on a list row would make the list disagree with
+        ``tools/check_landed.py`` -- two answers to one question, which is the defect the derived
+        state was introduced to avoid.
+        """
+        states: list[PatchState] | None = None
+        if state:
+            states = []
+            for part in (p.strip() for p in state.split(",") if p.strip()):
+                try:
+                    states.append(PatchState(part))
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"unknown state {part!r}; declared: "
+                            f"{sorted(s.value for s in PatchState)}"
+                        ),
+                    ) from exc
+        page = store.patches(states=states or None, limit=limit, offset=offset)
+        return {
+            "patches": [_wire_patch(store, p) for p in page.rows],
+            "meta": _queue_meta(page, limit, offset),
+        }
+
     return router
+
+
+class _BadRequest(ValueError):
+    """A body this surface can reject without asking the store."""
+
+
+def _patch_from_body(body: dict[str, Any]) -> Patch:
+    """Build a ``Patch`` from a request body, or raise ``_BadRequest`` with what is wrong.
+
+    Enum members are looked up rather than trusted, and the error names the declared set: a client
+    sending ``"edit"`` for ``"edit_asset"`` learns the vocabulary from the 422 instead of from a
+    stack trace.
+    """
+    try:
+        intent = PatchIntent(str(body.get("intent") or ""))
+    except ValueError as exc:
+        raise _BadRequest(
+            f"intent must be one of {sorted(i.value for i in PatchIntent)}"
+        ) from exc
+
+    asset_type: AssetType | None = None
+    raw_type = body.get("asset_type")
+    if raw_type:
+        try:
+            asset_type = AssetType(str(raw_type))
+        except ValueError as exc:
+            raise _BadRequest(
+                f"asset_type must be one of {sorted(a.value for a in AssetType)}"
+            ) from exc
+
+    namespace = str(body.get("namespace") or "").strip()
+    if not namespace:
+        raise _BadRequest("namespace is required")
+
+    return Patch(
+        patch_id=mint_patch_id(),
+        created_at=utc_now(),
+        author=Source.operator,
+        intent=intent,
+        state=PatchState.draft,
+        namespace=namespace,
+        rationale=str(body.get("rationale") or ""),
+        asset_type=asset_type,
+        asset_id=_optional(body.get("asset_id")),
+        field_path=_optional(body.get("field_path")),
+        was=_optional(body.get("was")),
+        becomes=_optional(body.get("becomes")),
+        asset_yaml=_optional(body.get("asset_yaml")),
+        base_corpus_content_hash=str(body.get("base_corpus_content_hash") or ""),
+    )
+
+
+def _optional(value: Any) -> str | None:
+    """``None`` and ``""`` are different answers on a ``Patch``: ``was=""`` says the field was
+    empty, ``was=None`` says this patch does not edit a field. JSON gives one of them by omission,
+    so an empty string is preserved rather than folded into ``None``."""
+    return None if value is None else str(value)
+
+
+def _wire_patch(store: FeedbackStore, patch: Patch | None) -> dict[str, Any]:
+    """A patch on the wire. ``ladder`` goes out as the store holds it, because the review surface
+    renders whatever tiers ran rather than a fixed three."""
+    if patch is None:  # pragma: no cover - callers pass a row they just wrote
+        return {}
+    return {
+        "patch_id": patch.patch_id,
+        "created_at": patch.created_at,
+        "author": patch.author.value,
+        "intent": patch.intent.value,
+        "state": patch.state.value,
+        "namespace": patch.namespace,
+        "rationale": patch.rationale,
+        "asset_type": patch.asset_type.value if patch.asset_type else None,
+        "asset_id": patch.asset_id,
+        "field_path": patch.field_path,
+        "was": patch.was,
+        "becomes": patch.becomes,
+        "base_corpus_content_hash": patch.base_corpus_content_hash,
+        "expected_corpus_content_hash": patch.expected_corpus_content_hash,
+        "ladder": dict(patch.ladder),
+        "withdrawn_reason": patch.withdrawn_reason,
+        "observations": [o.observation_id for o in store.observations_of(patch.patch_id)],
+    }

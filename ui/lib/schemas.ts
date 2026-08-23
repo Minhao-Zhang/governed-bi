@@ -785,3 +785,52 @@ export const observationClustersSchema = z.object({
   clusters: z.array(observationClusterSchema),
   meta: observationQueueMetaSchema,
 });
+
+/**
+ * One drafted patch.
+ *
+ * **`derived_state` is nullable and usually null**, which is the whole design showing through the
+ * wire: whether a change landed is answered by reading the corpus, and no route that lacks a
+ * loaded corpus may claim to know. A client that filled the null in with a guess would be the
+ * second answer this shape exists to prevent.
+ *
+ * `field_path` is `summary` or `body` and typed as a plain string anyway — the editable set is
+ * enforced in `corpus/patch.py`, and a client-side union would refuse a row the server accepted
+ * the day the set grows.
+ */
+export const patchSchema = z.object({
+  patch_id: z.string(),
+  created_at: z.string(),
+  author: z.string(),
+  intent: z.string(),
+  state: z.string(),
+  namespace: z.string(),
+  rationale: z.string(),
+  asset_type: z.string().nullable(),
+  asset_id: z.string().nullable(),
+  field_path: z.string().nullable(),
+  was: z.string().nullable(),
+  becomes: z.string().nullable(),
+  base_corpus_content_hash: z.string(),
+  expected_corpus_content_hash: z.string().nullable(),
+  /** Tier name to that tier's result. Open-ended: the decision bar renders whatever tiers ran. */
+  ladder: z.record(z.string(), z.unknown()).default({}),
+  withdrawn_reason: z.string(),
+  observations: z.array(z.string()).default([]),
+  derived_state: z.string().nullable().optional(),
+});
+
+export const patchEnvelopeSchema = z.object({
+  ok: z.boolean(),
+  patch: patchSchema,
+});
+
+export const observationEnvelopeSchema = z.object({
+  ok: z.boolean(),
+  observation: observationSchema,
+});
+
+export const patchesSchema = z.object({
+  patches: z.array(patchSchema),
+  meta: observationQueueMetaSchema,
+});

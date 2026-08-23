@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence, TypeVar
 
 from governed_bi.feedback.events import (
     Category,
@@ -48,7 +48,7 @@ from governed_bi.feedback.events import (
     PatchState,
     Source,
 )
-from governed_bi.feedback.lifecycle import Actor, transition_for
+from governed_bi.feedback.lifecycle import Actor, patch_transition_for, transition_for
 from governed_bi.feedback.validate import NOTE_MAX_CHARS, faults_with
 from governed_bi.paths import assert_not_a_warehouse
 from governed_bi.register.assets import AssetType
@@ -427,6 +427,67 @@ class FeedbackStore:
                 "UPDATE observation SET note = ? WHERE observation_id = ?", (note, observation_id)
             )
 
+    def move_patch(
+        self,
+        patch_id: str,
+        *,
+        to: PatchState,
+        moved_by: Actor | None = None,
+        detail: str = "",
+        withdrawn_reason: str = "",
+        expected_corpus_content_hash: str | None = None,
+    ) -> Patch:
+        """Move a patch, through the same table that moves an observation.
+
+        ``exported`` is set by ``tools/export_bundle.py`` after the bundle is on disk and not
+        before: a patch that says a bundle exists when the write failed is a patch the steward
+        stops looking at. ``withdrawn`` needs a reason for the same rule the observation's decline
+        follows -- a terminal state whose "why" lives only in somebody's memory is a row that gets
+        re-drafted from scratch six weeks later.
+        """
+        current = self.get_patch(patch_id)
+        if current is None:
+            raise KeyError(f"no patch {patch_id!r}")
+        edge = patch_transition_for(current.state, to)
+
+        proposed = _replace(
+            current,
+            state=to,
+            withdrawn_reason=withdrawn_reason or current.withdrawn_reason,
+            expected_corpus_content_hash=(
+                expected_corpus_content_hash
+                if expected_corpus_content_hash is not None
+                else current.expected_corpus_content_hash
+            ),
+        )
+        faults = faults_with(proposed)
+        if faults:
+            raise Rejected(f"patch {patch_id} -> {to.value}", faults)
+
+        with self._tx() as conn:
+            conn.execute(
+                "UPDATE patch SET state = ?, withdrawn_reason = ?, "
+                "expected_corpus_content_hash = ? WHERE patch_id = ?",
+                (
+                    proposed.state.value,
+                    proposed.withdrawn_reason,
+                    proposed.expected_corpus_content_hash,
+                    patch_id,
+                ),
+            )
+            _record_transition(
+                conn,
+                entity="patch",
+                entity_id=patch_id,
+                from_state=current.state.value,
+                to_state=to.value,
+                moved_by=moved_by or edge.moved_by,
+                detail=detail or withdrawn_reason,
+            )
+        moved = self.get_patch(patch_id)
+        assert moved is not None  # noqa: S101 - just written in this transaction
+        return moved
+
     def record_ladder(self, patch_id: str, tier: str, result: Mapping[str, Any]) -> None:
         """Merge one tier's result into a patch's ladder. Later runs of a tier replace earlier ones.
 
@@ -474,6 +535,11 @@ class FeedbackStore:
         the one you came for, and a queue is read oldest-first because the row that has waited
         longest is the one to act on. Sorting by cluster size instead would make the long tail
         permanently invisible.
+
+        The tiebreak is ``rowid`` and not the id. ``filed_at`` is to the second and an id carries a
+        random suffix, so two rows filed in the same second -- which is what an importer does 73
+        times -- would order by that suffix, differently on every run. ``rowid`` is insertion
+        order, which is what "oldest first" means when the clock cannot tell them apart.
         """
         where: list[str] = ["1 = 1"]
         params: list[object] = []
@@ -491,7 +557,7 @@ class FeedbackStore:
                 ).fetchone()["n"]
             )
             rows = conn.execute(
-                f"SELECT * FROM observation WHERE {clause} ORDER BY filed_at, observation_id "
+                f"SELECT * FROM observation WHERE {clause} ORDER BY filed_at, rowid "
                 "LIMIT ? OFFSET ?",
                 (*params, limit, offset),
             ).fetchall()
@@ -510,16 +576,50 @@ class FeedbackStore:
         """
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM observation WHERE turn_id = ? ORDER BY filed_at, observation_id",
+                "SELECT * FROM observation WHERE turn_id = ? ORDER BY filed_at, rowid",
                 (str(turn_id),),
             ).fetchall()
         return tuple(_observation_from(r) for r in rows)
+
+    def patches(
+        self,
+        *,
+        states: Sequence[PatchState] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Page:
+        """Patches, newest first, with the total behind the page.
+
+        Newest-first where the observation queue is oldest-first, and the asymmetry is the point:
+        an observation queue is work waiting, so the row that has waited longest is next; a patch
+        list is work done, so the one just authored is the one being looked for.
+        """
+        where: list[str] = ["1 = 1"]
+        params: list[object] = []
+        if states:
+            where.append(f"state IN ({', '.join('?' for _ in states)})")
+            params.extend(s.value for s in states)
+        clause = " AND ".join(where)
+        with self._conn() as conn:
+            total = int(
+                conn.execute(f"SELECT count(*) FROM patch WHERE {clause}", params).fetchone()[0]
+            )
+            rows = conn.execute(
+                f"SELECT * FROM patch WHERE {clause} ORDER BY created_at DESC, rowid DESC "
+                f"LIMIT ? OFFSET ?",
+                (*params, limit, offset),
+            ).fetchall()
+        return Page(
+            rows=tuple(_patch_from(r) for r in rows),
+            total=total,
+            truncated=offset + len(rows) < total,
+        )
 
     def patches_of(self, observation_id: str) -> tuple[Patch, ...]:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT p.* FROM patch p JOIN observation_patch op ON op.patch_id = p.patch_id "
-                "WHERE op.observation_id = ? ORDER BY p.created_at, p.patch_id",
+                "WHERE op.observation_id = ? ORDER BY p.created_at, p.rowid",
                 (observation_id,),
             ).fetchall()
         return tuple(_patch_from(r) for r in rows)
@@ -529,7 +629,7 @@ class FeedbackStore:
             rows = conn.execute(
                 "SELECT o.* FROM observation o JOIN observation_patch op "
                 "ON op.observation_id = o.observation_id WHERE op.patch_id = ? "
-                "ORDER BY o.filed_at, o.observation_id",
+                "ORDER BY o.filed_at, o.rowid",
                 (patch_id,),
             ).fetchall()
         return tuple(_observation_from(r) for r in rows)
@@ -696,16 +796,21 @@ def _patch_from(row: sqlite3.Row) -> Patch:
     )
 
 
-def _replace(obs: Observation, **changes: Any) -> Observation:
+_Row = TypeVar("_Row", Observation, Patch)
+
+
+def _replace(row: _Row, **changes: Any) -> _Row:
     """``dataclasses.replace`` over a slotted frozen class, spelled out.
 
     Written by hand rather than imported so the field list is checked at call time: a typo in a
-    keyword would otherwise be a silently ignored change on some Python versions.
+    keyword would otherwise be a silently ignored change on some Python versions. One function for
+    both rows, because "the same row with one field moved" is one concept and two copies of it is
+    how ``Patch`` acquires a field ``Observation``'s copy silently drops.
     """
-    known = {f.name for f in dataclass_fields(obs)}
+    known = {f.name for f in dataclass_fields(row)}
     unknown = set(changes) - known
     if unknown:
-        raise KeyError(f"Observation has no field(s) {sorted(unknown)}")
-    current = {f.name: getattr(obs, f.name) for f in dataclass_fields(obs)}
+        raise KeyError(f"{type(row).__name__} has no field(s) {sorted(unknown)}")
+    current = {f.name: getattr(row, f.name) for f in dataclass_fields(row)}
     current.update(changes)
-    return Observation(**current)
+    return type(row)(**current)

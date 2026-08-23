@@ -3,7 +3,7 @@
   "info": {
     "title": "governed-bi",
     "summary": "Corpus browsing, relationship graphs, and the turn audit surface, as JSON.",
-    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\n**Most routes here are reads, and none of them serves a turn.** `POST /chat` and `POST /chat/resume` were deleted on 2026-08-18 (ADR 0014). `POST /turns/{turn_id}/raised` is the one write: it files a reader note onto checkpointed thread state and does not resume a run. A turn is served by the graph `langgraph.json` mounts, over the platform's `POST /threads/{thread_id}/runs/stream`, which is not described here.",
+    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\n**Most routes here are reads, and none of them serves a turn.** `POST /chat` and `POST /chat/resume` were deleted on 2026-08-18 (ADR 0014). **The return path's writes are the exception** (ADR 0015): `POST /turns/{turn_id}/raised` files an observation into `runs/feedback.sqlite`, `PATCH /observations/{id}` amends its note, and the steward's three verbs -- triage, draft a patch, withdraw one -- are mounted only when `GOVERNED_BI_FEEDBACK_ADMIN` is set. None of them writes graph state, none resumes a run, and **none writes to the corpus**: the write to corpus content is a human's `git commit` in a repository this process cannot reach. A turn is served by the graph `langgraph.json` mounts, over the platform's `POST /threads/{thread_id}/runs/stream`, which is not described here.",
     "version": "2"
   },
   "paths": {
@@ -943,6 +943,631 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ObservationAcceptedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/observations": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "The observation queue, oldest first",
+        "description": "Oldest first, because the row that has waited longest is the one to act on. Sorting by cluster size instead would make the long tail permanently invisible. Ties inside one second break by insertion order, not by id -- an id carries a random suffix, and an importer files 73 rows in the same second. Nothing here authenticates, so any caller reaching the port reads every open question, and those questions can name assets. That was accepted on the grounds that `/audit/turns` already discloses every thread's SQL to the same caller.",
+        "operationId": "list_observations_observations_get",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated. Declared: `open`, `triaged`, `declined`, `duplicate`, `addressed`, `blocked_on_a_person`."
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "One category. 422 names the declared set."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "cluster"
+              ]
+            },
+            "description": "`cluster` returns `clusters` instead of `rows`. Any other value is ignored rather than refused, because a client that mistypes a grouping should still see the queue."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page, in one of two shapes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationQueueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "An undeclared `state` or `category`. `detail` names the declared set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/observations/{observation_id}": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "One observation, its patches and its history",
+        "description": "`derived_state` is null on every patch: this route has no session and cannot read the corpus. `tools/check_landed.py` is what answers landing, from the corpus.",
+        "operationId": "get_observation_observations__observation_id__get",
+        "parameters": [
+          {
+            "name": "observation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Observation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The row, its patches and its transitions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such observation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Amend the note on an untriaged observation",
+        "description": "The one mutable field outside the lifecycle, and it earns that by being the field the design asks for **after** filing succeeds -- a note that gates submission is a note nobody writes. **Freezes at `triaged`**: a reviewer reading a row whose text changes underneath them is worse than a second observation. No transition is recorded, because nothing about the row's state changed.",
+        "operationId": "amend_observations__observation_id__patch",
+        "parameters": [
+          {
+            "name": "observation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Observation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "expected": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "Folded into the note as an `expected:` line rather than stored separately, because it is one claim about one turn."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The amended row.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such observation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Somebody has already triaged it, so the note is frozen. `detail` says which state it is in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The note or the expected line is over its cap.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/observations/{observation_id}/triage": {
+      "post": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Move an observation to a triaged state",
+        "description": "The transition table decides what is legal, not the handler: a move it does not declare is 409, which is how a queue avoids acquiring a row nothing can move on from. The fields a state makes mandatory -- `decline_reason` on a decline, `blocked_note` on a block -- are enforced by the same validator that enforces them at filing. **Mounted only when `GOVERNED_BI_FEEDBACK_ADMIN` is set, and 404 otherwise** -- a 403 would confirm the route exists. This is a deployment switch and not an identity: `api/auth.py` returns one principal, so with the switch on, whoever reaches the port is the steward. The honest control is that it is off.",
+        "operationId": "triage_observations__observation_id__triage_post",
+        "parameters": [
+          {
+            "name": "observation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Observation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "to": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "triaged",
+                      "declined",
+                      "duplicate",
+                      "addressed",
+                      "blocked_on_a_person"
+                    ]
+                  },
+                  "detail": {
+                    "type": "string"
+                  },
+                  "decline_reason": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Required when `to` is `declined`."
+                  },
+                  "duplicate_of": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Required when `to` is `duplicate`."
+                  },
+                  "blocked_note": {
+                    "type": "string",
+                    "description": "Required when `to` is `blocked_on_a_person`."
+                  }
+                },
+                "required": [
+                  "to"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The moved row and its history.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such observation, or the router is not mounted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The transition table does not declare this move.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "An undeclared `to` or `decline_reason`, or a field the target state makes mandatory and the body omits. `detail` is a list on the validator's rejections.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/patches": {
+      "post": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Draft a patch",
+        "description": "Records what a change to the corpus would be. **It does not write to the corpus and cannot**: the only write is a human's `git commit` in a repository this process cannot reach, which is the provenance gate the design is. `tools/export_bundle.py` turns this row into a diff. **Mounted only when `GOVERNED_BI_FEEDBACK_ADMIN` is set, and 404 otherwise** -- a 403 would confirm the route exists. This is a deployment switch and not an identity: `api/auth.py` returns one principal, so with the switch on, whoever reaches the port is the steward. The honest control is that it is off.",
+        "operationId": "draft_patch_patches_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "intent": {
+                    "type": "string",
+                    "enum": [
+                      "new_asset",
+                      "edit_asset",
+                      "exclusion_request",
+                      "engine_defect",
+                      "no_change"
+                    ]
+                  },
+                  "namespace": {
+                    "type": "string"
+                  },
+                  "asset_type": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Required on the intents that author an asset."
+                  },
+                  "asset_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": ""
+                  },
+                  "field_path": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "`summary` or `body`, and nothing else."
+                  },
+                  "was": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "The field's current text. Enforced when the edit is applied."
+                  },
+                  "becomes": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "The replacement."
+                  },
+                  "asset_yaml": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Whole-asset YAML, on `new_asset` only."
+                  },
+                  "rationale": {
+                    "type": "string"
+                  },
+                  "base_corpus_content_hash": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "description": "The **full** digest. A 16-character prefix is refused, because it never equals what the landing check compares it against."
+                  },
+                  "observations": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "The observations this answers. May be empty. Each must exist -- a patch attached to nothing is a patch the queue can never surface."
+                  }
+                },
+                "required": [
+                  "intent",
+                  "namespace"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The drafted row.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatchEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "An observation in `observations` does not exist, or the router is not mounted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "An undeclared enum member, a missing `namespace`, a truncated corpus hash, or any rule in `feedback/validate.py`. `detail` is a list on the validator's rejections and a string on the handler's.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Patches, newest first",
+        "description": "No landing state on this route, deliberately: landing is answered by reading the corpus, which this process does at load time and not per request. A stale `landed_*` here would disagree with `tools/check_landed.py` -- two answers to one question. **Mounted only when `GOVERNED_BI_FEEDBACK_ADMIN` is set, and 404 otherwise** -- a 403 would confirm the route exists. This is a deployment switch and not an identity: `api/auth.py` returns one principal, so with the switch on, whoever reaches the port is the steward. The honest control is that it is off.",
+        "operationId": "list_patches_patches_get",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated. Declared: `draft`, `exported`, `withdrawn`."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatchListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "An undeclared `state`. `detail` names the declared set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/patches/{patch_id}/withdraw": {
+      "post": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Abandon a patch, with a reason",
+        "description": "Legal from `draft` and from `exported` both -- a bundle that went out and was rejected in review is the common case, and leaving it `exported` forever is the unclosable row this design exists to remove. The reason is required: a terminal state whose why lives only in somebody's memory is a patch that gets re-drafted from scratch six weeks later. **Mounted only when `GOVERNED_BI_FEEDBACK_ADMIN` is set, and 404 otherwise** -- a 403 would confirm the route exists. This is a deployment switch and not an identity: `api/auth.py` returns one principal, so with the switch on, whoever reaches the port is the steward. The honest control is that it is off.",
+        "operationId": "withdraw_patches__patch_id__withdraw_post",
+        "parameters": [
+          {
+            "name": "patch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patch Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The withdrawn row.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatchEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such patch, or the router is not mounted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`PATCH_TRANSITIONS` does not declare this move -- withdrawing an already withdrawn patch, for instance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No reason, or a rule in `feedback/validate.py`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
                 }
               }
             }
@@ -3918,6 +4543,432 @@
         "required": [
           "ok",
           "observation"
+        ]
+      },
+      "QueueMeta": {
+        "type": "object",
+        "title": "QueueMeta",
+        "description": "What the rows alone cannot say. `truncated` is load-bearing (ADR 0009): a caller that cannot tell a full page from the end of the queue stops at the first page and believes it saw everything.",
+        "properties": {
+          "n": {
+            "type": "integer",
+            "description": "Rows in this page."
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows behind the filter, ignoring the page."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "`offset + n < total`."
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "grouped": {
+            "type": "integer",
+            "description": "Clusters in this page. Present only under `group=cluster`."
+          }
+        },
+        "required": [
+          "n",
+          "total",
+          "truncated",
+          "limit",
+          "offset"
+        ]
+      },
+      "PatchResponse": {
+        "type": "object",
+        "title": "PatchResponse",
+        "description": "One row of the `patch` table (ADR 0015 §4). A patch records what a change to the corpus *would* be; it is never the change. The write is a human's `git commit` in the corpus repository, which this process cannot reach -- that gap is the provenance gate the design exists for, so no field here says a patch was applied. **Landing is derived** by reading the corpus (`tools/check_landed.py`) and appears on this shape only as `derived_state`, which is null on every route that has no corpus loaded.",
+        "properties": {
+          "patch_id": {
+            "type": "string",
+            "description": "`pat-{yyyymmddThhmmssZ}-{6hex}`, minted server-side."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "ISO-8601 UTC to the second."
+          },
+          "author": {
+            "type": "string",
+            "enum": [
+              "reader",
+              "operator",
+              "agent",
+              "eval"
+            ],
+            "description": "Who drafted it. `operator` on everything this route creates."
+          },
+          "intent": {
+            "type": "string",
+            "enum": [
+              "new_asset",
+              "edit_asset",
+              "exclusion_request",
+              "engine_defect",
+              "no_change"
+            ],
+            "description": "What the patch is for. **Two members author no asset on purpose**: an `exclusion_request` is an argument a human transcribes by hand, because exclusion is enforced by the absence of a tool; `engine_defect` and `no_change` record that the corpus is not at fault. Only `edit_asset` produces a bundle."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "exported",
+              "withdrawn"
+            ],
+            "description": "Stored. `exported` means a bundle is on disk and is terminal from the store's point of view -- what happens next happens in a git repository. `withdrawn` requires a reason."
+          },
+          "namespace": {
+            "type": "string",
+            "description": "The schema the change is in."
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Why, in the drafter's words."
+          },
+          "asset_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on the intents that author no asset."
+          },
+          "asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on the intents that author no asset."
+          },
+          "field_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`summary` or `body`, and nothing else. The editable set is enforced in `corpus/patch.py`: a governance, provenance, audit or columns field is refused."
+          },
+          "was": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The field's text when the patch was drafted. **Enforced at apply time** -- if the corpus no longer holds this, the edit is refused rather than merged."
+          },
+          "becomes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The replacement text."
+          },
+          "base_corpus_content_hash": {
+            "type": "string",
+            "description": "The full 64-character digest of the corpus the patch was authored against. A truncated prefix -- which is what every display shows -- is refused with 422, because it never equals the digest the landing check compares it against and the patch would report `superseded` while nothing had changed."
+          },
+          "expected_corpus_content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until a bundle is built, because it is the hash of a tree nobody has written yet. A hash-shaped string nobody can compare is worse than an absence."
+          },
+          "ladder": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Tier name to that tier's result, as the store holds it. Open-ended because the surface renders whatever tiers ran rather than a fixed three."
+          },
+          "withdrawn_reason": {
+            "type": "string",
+            "description": "Empty unless withdrawn."
+          },
+          "observations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The observations this patch answers. May be empty: a patch drafted from a corpus audit rather than from a failure answers nobody, and refusing it would push that work outside the store where nothing records it."
+          },
+          "derived_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "**Derived, never stored**, and null wherever the route has no corpus loaded. One of `handed_off`, `landed_verified`, `landed_matched`, `retrieval_verified`, `superseded`."
+          }
+        },
+        "required": [
+          "patch_id",
+          "created_at",
+          "author",
+          "intent",
+          "state",
+          "namespace",
+          "rationale",
+          "base_corpus_content_hash",
+          "ladder",
+          "withdrawn_reason",
+          "observations"
+        ]
+      },
+      "ObservationCluster": {
+        "type": "object",
+        "title": "ObservationCluster",
+        "description": "Observations grouped by `(category, schema)` and nothing else. **The grouping is structural, and a client must say so**: nothing read the questions and decided they mean the same thing. Measured on the 73 imported coverage misses the largest cluster is 3 and 49% of rows are in a cluster at all -- which answers ADR 0015's open question 7 with a negative result, so a caller should treat this as an optional grouping over a list rather than as the primary shape.",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "`{category}|{schema}`."
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the members carry no category."
+          },
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The namespace the members are about."
+          },
+          "n": {
+            "type": "integer",
+            "description": "Members."
+          },
+          "n_distinct_questions": {
+            "type": "integer",
+            "description": "Distinct question texts among the members. Lower than `n` means the same question was filed more than once, which is a different fact from a cluster of related failures."
+          },
+          "shared_missing_tables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tables absent from every member's licensed set. Evidence, and deliberately **not** part of the key: 56 of the 73 miss exactly one table and those tables are mostly different, so the absence identifies a turn rather than a problem."
+          },
+          "oldest_filed_at": {
+            "type": "string"
+          },
+          "observations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservationResponse"
+            }
+          }
+        },
+        "required": [
+          "key",
+          "category",
+          "schema",
+          "n",
+          "n_distinct_questions",
+          "shared_missing_tables",
+          "oldest_filed_at",
+          "observations"
+        ]
+      },
+      "ObservationQueueResponse": {
+        "type": "object",
+        "title": "ObservationQueueResponse",
+        "description": "One page of the queue, in one of **two shapes under one operation**: `rows` by default, `clusters` under `group=cluster`. Exactly one of the two is present, which is why neither is required here.",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservationResponse"
+            }
+          },
+          "clusters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservationCluster"
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/QueueMeta"
+          }
+        },
+        "required": [
+          "meta"
+        ]
+      },
+      "ObservationDetailResponse": {
+        "type": "object",
+        "title": "ObservationDetailResponse",
+        "description": "One observation, the patches drafted against it, and its transition history. The same shape the 201 envelope's `observation` carries, which is why a client needs one parser.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ObservationResponse"
+          }
+        ],
+        "properties": {
+          "patches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PatchResponse"
+            },
+            "description": "`derived_state` is null on every row: this route has no session, so it cannot read the corpus, and answering \"did this land\" from an empty corpus view would say `superseded` about everything."
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "string"
+                },
+                "entity": {
+                  "type": "string",
+                  "enum": [
+                    "observation",
+                    "patch"
+                  ],
+                  "description": "Which table the row is about. The transition log is one table for both, so a client reading a history has to be told which entity moved."
+                },
+                "entity_id": {
+                  "type": "string"
+                },
+                "from_state": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Null on the row that filed it."
+                },
+                "to_state": {
+                  "type": "string"
+                },
+                "moved_by": {
+                  "type": "string",
+                  "enum": [
+                    "filer",
+                    "steward",
+                    "engineer"
+                  ],
+                  "description": "The role the transition table declares, not an identity. On this deployment one person holds all three."
+                },
+                "detail": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "at",
+                "entity",
+                "entity_id",
+                "from_state",
+                "to_state",
+                "moved_by",
+                "detail"
+              ]
+            },
+            "description": "Append-only. Who moved it, in order."
+          }
+        },
+        "required": [
+          "patches",
+          "history"
+        ]
+      },
+      "PatchEnvelope": {
+        "type": "object",
+        "title": "PatchEnvelope",
+        "description": "`{ok: true, patch: {...}}`, the same envelope shape the filing route returns.",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "patch": {
+            "$ref": "#/components/schemas/PatchResponse"
+          }
+        },
+        "required": [
+          "ok",
+          "patch"
+        ]
+      },
+      "ObservationEnvelope": {
+        "type": "object",
+        "title": "ObservationEnvelope",
+        "description": "`{ok: true, observation: {...}}`.",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/ObservationDetailResponse"
+          }
+        },
+        "required": [
+          "ok",
+          "observation"
+        ]
+      },
+      "PatchListResponse": {
+        "type": "object",
+        "title": "PatchListResponse",
+        "description": "Patches **newest first**, where the observation queue is oldest-first. The asymmetry is the point: an observation queue is work waiting, so the row that has waited longest is next; a patch list is work done, so the one just authored is the one being looked for.",
+        "properties": {
+          "patches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PatchResponse"
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/QueueMeta"
+          }
+        },
+        "required": [
+          "patches",
+          "meta"
         ]
       }
     }

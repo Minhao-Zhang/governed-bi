@@ -46,7 +46,7 @@ from pathlib import Path
 from governed_bi.corpus.analyst import for_analyst
 from governed_bi.corpus.patch import apply_edit, locate
 from governed_bi.corpus.store import load
-from governed_bi.feedback.events import Patch, PatchIntent, Source
+from governed_bi.feedback.events import Patch, PatchIntent, PatchState, Source
 from governed_bi.feedback.store import FeedbackStore
 from governed_bi.paths import REPO_ROOT
 
@@ -139,6 +139,14 @@ def main(argv: list[str] | None = None) -> int:
         diff=diff,
     )
     print(f"\nwrote {bundle}")
+
+    if patch.state is PatchState.draft:
+        store.move_patch(
+            patch.patch_id,
+            to=PatchState.exported,
+            detail=f"bundle at {bundle.name}",
+        )
+        print("patch state: draft -> exported")
     print(_apply_instructions(bundle, corpus_root))
     return 0
 

@@ -10,7 +10,8 @@
     "lint": "eslint",
     "check:api": "node --experimental-strip-types scripts/check-api-contract.ts",
     "check:stream-messages": "node --experimental-strip-types scripts/check-stream-messages.ts",
-    "check:answer-delivery": "node --experimental-strip-types scripts/check-answer-delivery.ts"
+    "check:answer-delivery": "node --experimental-strip-types scripts/check-answer-delivery.ts",
+    "check:asset-diff": "node --experimental-strip-types scripts/check-asset-diff.ts"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",

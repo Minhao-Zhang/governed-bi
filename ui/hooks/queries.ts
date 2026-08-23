@@ -17,7 +17,9 @@ import { useMemo } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
+  useMutation,
   useQuery,
+  useQueryClient,
 } from "@tanstack/react-query";
 
 import { api } from "@/lib/api-client";
@@ -379,5 +381,97 @@ export function useObservation(observationId: string | null) {
     queryKey: ["observation", observationId] as const,
     queryFn: () => api.observation(observationId as string),
     enabled: Boolean(observationId),
+  });
+}
+
+/** Patches, newest first. `state` is comma-separated; `undefined` means every state. */
+export function usePatches(state?: string) {
+  return useQuery({
+    queryKey: ["patches", state ?? null] as const,
+    queryFn: () => api.patches({ state }),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Everything a return-path mutation has to invalidate.
+ *
+ * One list, because the three verbs all change the same two things — a row's state and whether a
+ * patch hangs off it — and three hand-maintained lists is how a screen ends up showing a triaged
+ * row as open until somebody reloads. `queryKey` prefixes match, so `["observation", id]` is
+ * covered by `["observation"]`.
+ */
+const RETURN_PATH_KEYS = [
+  ["observation-clusters"],
+  ["observations"],
+  ["observation"],
+  ["patches"],
+] as const;
+
+function useInvalidateReturnPath(): () => Promise<void> {
+  const client = useQueryClient();
+  return async () => {
+    await Promise.all(
+      RETURN_PATH_KEYS.map((key) => client.invalidateQueries({ queryKey: key })),
+    );
+  };
+}
+
+/**
+ * Move an observation.
+ *
+ * **No optimistic update, on purpose.** The server's transition table decides what is legal and
+ * answers 409 when a move is not declared, so a client that painted the new state first would show
+ * a state the store refused — and on a queue whose whole job is deciding, a wrong state on screen
+ * is worse than a spinner. Same reason there is no rollback path to get wrong.
+ */
+export function useTriageObservation() {
+  const invalidate = useInvalidateReturnPath();
+  return useMutation({
+    mutationFn: (vars: {
+      observationId: string;
+      to: string;
+      detail?: string;
+      decline_reason?: string;
+      duplicate_of?: string;
+      blocked_note?: string;
+    }) => api.triageObservation(vars.observationId, vars),
+    onSuccess: invalidate,
+  });
+}
+
+/** Amend an untriaged observation's note. 409 once somebody has looked, which is not an error to
+ *  retry — it is a sentence to show. */
+export function useAmendObservation() {
+  const invalidate = useInvalidateReturnPath();
+  return useMutation({
+    mutationFn: (vars: { observationId: string; note?: string; expected?: string }) =>
+      api.amendObservation(vars.observationId, vars),
+    onSuccess: invalidate,
+  });
+}
+
+/**
+ * Draft a patch. **This does not change the corpus and cannot.**
+ *
+ * It records what a change would be. Applying it is `git apply` and a commit in the corpus
+ * repository, run by a person — which is why the surface's success message says a change was
+ * drafted rather than made.
+ */
+export function useDraftPatch() {
+  const invalidate = useInvalidateReturnPath();
+  return useMutation({
+    mutationFn: (body: Parameters<typeof api.draftPatch>[0]) => api.draftPatch(body),
+    onSuccess: invalidate,
+  });
+}
+
+/** Abandon a patch, with a reason the server requires. */
+export function useWithdrawPatch() {
+  const invalidate = useInvalidateReturnPath();
+  return useMutation({
+    mutationFn: (vars: { patchId: string; reason: string }) =>
+      api.withdrawPatch(vars.patchId, vars.reason),
+    onSuccess: invalidate,
   });
 }

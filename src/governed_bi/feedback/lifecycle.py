@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping
+from typing import Any, Mapping
 
 from governed_bi.feedback.events import (
     TERMINAL_OBSERVATION_STATES,
@@ -37,6 +37,8 @@ __all__ = [
     "is_open",
     "allowed_next",
     "transition_for",
+    "patch_allowed_next",
+    "patch_transition_for",
     "derived_state",
     "TransitionRefused",
 ]
@@ -145,6 +147,21 @@ def is_open(state: ObservationState) -> bool:
     return state not in TERMINAL_OBSERVATION_STATES
 
 
+def _edge(table: Mapping[Any, Transition], state: Any, to: Any) -> Transition:
+    """One lookup for both tables. The two public names below differ only in which table they
+    read, and writing the message twice is how the two halves drift apart."""
+    edge = table.get((state, to))
+    if edge is None:
+        reachable = sorted(t.value for (frm, t) in table if frm == state)
+        frm = "nothing" if state is None else state.value
+        raise TransitionRefused(
+            f"{frm} -> {to.value} is not a declared transition; from {frm} the declared moves are "
+            f"{reachable or 'none'}. A move the table does not declare is a caller bug, and "
+            "allowing it is how a queue acquires a row nothing can move on from."
+        )
+    return edge
+
+
 def allowed_next(state: ObservationState | None) -> frozenset[ObservationState]:
     """States reachable from ``state`` in one declared move. Empty is a real answer."""
     return frozenset(to for (frm, to) in TRANSITIONS if frm == state)
@@ -154,16 +171,24 @@ def transition_for(
     state: ObservationState | None, to: ObservationState
 ) -> Transition:
     """The declared edge, or raise. The store calls this before it writes anything."""
-    edge = TRANSITIONS.get((state, to))
-    if edge is None:
-        reachable = sorted(s.value for s in allowed_next(state))
-        frm = "nothing" if state is None else state.value
-        raise TransitionRefused(
-            f"{frm} -> {to.value} is not a declared transition; from {frm} the declared moves are "
-            f"{reachable or 'none'}. A move the table does not declare is a caller bug, and "
-            "allowing it is how a queue acquires a row nothing can move on from."
-        )
-    return edge
+    return _edge(TRANSITIONS, state, to)
+
+
+def patch_allowed_next(state: PatchState | None) -> frozenset[PatchState]:
+    """The same question about a patch. The review surface draws its buttons from this rather
+    than from a hard-coded pair, so a state added to the table appears without a UI change."""
+    return frozenset(to for (frm, to) in PATCH_TRANSITIONS if frm == state)
+
+
+def patch_transition_for(state: PatchState | None, to: PatchState) -> Transition:
+    """The declared edge on the patch table.
+
+    ``PATCH_TRANSITIONS`` was declared and read by nothing, which is the shape
+    ``tools/check_declared_is_consumed.py`` exists to catch: a table nothing consults is a
+    comment that type-checks. Now the store calls it, so ``exported -> draft`` -- re-drafting a
+    patch a bundle already went out for -- is refused by the table rather than by nobody.
+    """
+    return _edge(PATCH_TRANSITIONS, state, to)
 
 
 def derived_state(
