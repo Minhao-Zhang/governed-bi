@@ -328,6 +328,76 @@ def test_an_unrun_ladder_warns_and_does_not_refuse(tmp_path: Path) -> None:
     assert _export(tmp_path, store, patch_id) == 0
 
 
+def test_a_value_that_would_not_parse_is_refused_rather_than_shipped(tmp_path: Path) -> None:
+    """The exporter shipped unparseable YAML with **exit 0**, and the fact was in the bundle.
+
+    Reproduced by a reviewer: `becomes="revenue for the quarter:"`, no ladder rows, and the tool
+    printed the diff, printed two NOTEs, returned 0 and wrote `changes.patch` plus `after/...yaml`.
+    `yaml.safe_load` on the shipped file raised. An engineer applies it and the corpus stops
+    loading -- after the commit, which is the failure mode the whole module exists to prevent.
+
+    There was no `yaml.safe_load` anywhere in the exporter. The fix is one layer down --
+    `corpus/patch.py::apply_edit` re-parses its own output -- and this asserts the exporter reports
+    it rather than tracebacking through it.
+    """
+    _corpus(tmp_path)
+    store, patch_id = _seeded(tmp_path, becomes="orders is the transaction table:")
+
+    assert _export(tmp_path, store, patch_id) == 1
+    assert not (tmp_path / "bundles").exists(), "a refused export must write nothing"
+
+
+def test_a_value_that_would_land_differently_is_refused(tmp_path: Path) -> None:
+    """The quieter half: an interior newline in a plain scalar is written as a quoted single line,
+    which parses and resolves to the newline turned into a space. So the patch lands a *different*
+    value, the landing check cannot match it, and a change that shipped correctly reports
+    `superseded`."""
+    _corpus(tmp_path)
+    store, patch_id = _seeded(
+        tmp_path, becomes="orders is the transaction table,\none per order."
+    )
+
+    assert _export(tmp_path, store, patch_id) == 1
+    assert not (tmp_path / "bundles").exists()
+
+
+@pytest.mark.skipif(
+    subprocess.run(["git", "--version"], capture_output=True).returncode != 0,
+    reason="git is not on PATH",
+)
+def test_git_apply_accepts_a_diff_on_a_file_with_no_trailing_newline(tmp_path: Path) -> None:
+    r"""`_unified` never emitted `\ No newline at end of file`, so the `-old` and `+new` lines
+    concatenated and `git apply --check` answered **rc 128, corrupt patch at line 7**. `_summarise`
+    miscounted it too, as "0 line(s) added, 1 removed".
+
+    Not hypothetical for a corpus a person hand-edits: a file saved without a final newline is
+    ordinary, and the resulting bundle is unappliable with a message that blames the patch rather
+    than the writer.
+    """
+    root = _corpus(tmp_path)
+    target = root / "sales" / "tables" / "tbl_sales_orders.yaml"
+    target.write_bytes(target.read_bytes().rstrip())
+
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "seed"],
+        cwd=root,
+        check=True,
+    )
+
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " One added sentence.")
+    assert _export(tmp_path, store, patch_id) == 0
+
+    check = subprocess.run(
+        ["git", "apply", "--check", "-p1", str(tmp_path / "bundles" / f"bnd-{patch_id}" / "changes.patch")],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert check.returncode == 0, f"git apply refused the diff: {check.stderr}"
+
+
 def test_a_truncated_corpus_hash_is_refused_at_the_store(tmp_path: Path) -> None:
     """The second defect the end-to-end run found. A 16-character prefix -- what every display
     shows -- never equals the digest the landing check compares against, so the patch reported

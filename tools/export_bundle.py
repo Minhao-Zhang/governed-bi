@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from governed_bi.corpus.analyst import for_analyst
-from governed_bi.corpus.patch import apply_edit, locate
+from governed_bi.corpus.patch import StaleValue, UnwritableValue, apply_edit, locate
 from governed_bi.corpus.store import load
 from governed_bi.feedback.events import Patch, PatchIntent, PatchState, Source
 from governed_bi.feedback.store import FeedbackStore
@@ -107,13 +107,26 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     before = target.read_text(encoding="utf-8")
-    after = apply_edit(
-        target,
-        asset_id=str(patch.asset_id),
-        field_path=str(patch.field_path),
-        was=str(patch.was),
-        becomes=str(patch.becomes),
-    )
+    try:
+        after = apply_edit(
+            target,
+            asset_id=str(patch.asset_id),
+            field_path=str(patch.field_path),
+            was=str(patch.was),
+            becomes=str(patch.becomes),
+        )
+    except UnwritableValue as err:
+        # The value cannot be written into this field and read back unchanged -- a tab, a control
+        # character, a trailing colon, or an interior newline in a plain scalar. Refused here rather
+        # than shipped: before `apply_edit` checked its own output this exited **0** and wrote a
+        # bundle that stops the corpus loading after the commit.
+        print(f"REFUSED, and no bundle was written:\n  {err}", file=sys.stderr)
+        return 1
+    except StaleValue as err:
+        # `verify_patch` wraps this and this did not, so a stale `was` was a traceback carrying a
+        # message about the corpus having moved.
+        print(f"REFUSED, and no bundle was written:\n  {err}", file=sys.stderr)
+        return 1
     diff = _unified(target.relative_to(corpus_root), before, after)
 
     refusals = _refuse(patch, corpus_root=corpus_root, store=store)
@@ -427,21 +440,57 @@ def _apply_instructions(bundle: Path, corpus_root: Path) -> str:
 # ── plumbing ─────────────────────────────────────────────────────────────────
 
 
+#: git's marker for a hunk line that is not newline-terminated. `difflib` does not emit it -- it is
+#: a git convention rather than a diff one -- and without it `git apply` reads the next line as a
+#: continuation of this one and refuses the whole patch as corrupt.
+NO_NEWLINE = "\\ No newline at end of file\n"
+
+
 def _unified(relative: Path, before: str, after: str) -> str:
+    """A unified diff `git apply` accepts, including for a file with no trailing newline.
+
+    **The marker is why this is not a one-liner.** Reproduced in a real repository: without
+    ``\\ No newline at end of file`` the ``-old`` and ``+new`` lines concatenate and
+    ``git apply --check`` answers *corrupt patch at line 7*. A corpus file saved without a final
+    newline is ordinary, so every bundle touching one was unappliable -- with a message that blames
+    the patch rather than the writer.
+
+    The marker goes after any hunk line whose source text did not end in a newline, which `difflib`
+    tells us only indirectly: a payload line it emits carries the original terminator or does not.
+    """
     posix = str(relative).replace("\\", "/")
-    return "".join(
-        difflib.unified_diff(
-            before.splitlines(keepends=True),
-            after.splitlines(keepends=True),
-            fromfile=f"a/{posix}",
-            tofile=f"b/{posix}",
-        )
-    )
+    out: list[str] = []
+    for line in difflib.unified_diff(
+        before.splitlines(keepends=True),
+        after.splitlines(keepends=True),
+        fromfile=f"a/{posix}",
+        tofile=f"b/{posix}",
+    ):
+        out.append(line if line.endswith("\n") else line + "\n")
+        # A payload line (context, removal or addition) that did not end in a newline is the last
+        # line of an unterminated file. The headers are excluded by shape, not by position: a
+        # `+++`/`---`/`@@` line always ends in a newline from `difflib`, so only real content
+        # reaches here without one.
+        if not line.endswith("\n"):
+            out.append(NO_NEWLINE)
+    return "".join(out)
 
 
 def _summarise(diff: str) -> str:
-    added = sum(1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
-    removed = sum(1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---"))
+    """Lines added and removed, ignoring the headers and the no-newline marker.
+
+    The marker begins with a backslash and used to be counted as neither -- but its *presence*
+    shifted the arithmetic, so a one-line change on an unterminated file reported "0 line(s) added,
+    1 removed". Excluded explicitly, because a reader checking the diff against this count is the
+    one person who would notice the bundle was malformed.
+    """
+    payload = [
+        line
+        for line in diff.splitlines()
+        if not line.startswith(("+++", "---", "@@", "\\"))
+    ]
+    added = sum(1 for line in payload if line.startswith("+"))
+    removed = sum(1 for line in payload if line.startswith("-"))
     return f"{added} line(s) added, {removed} removed"
 
 

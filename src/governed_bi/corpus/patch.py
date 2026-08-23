@@ -62,6 +62,7 @@ __all__ = [
     "Span",
     "FieldNotLocatable",
     "StaleValue",
+    "UnwritableValue",
     "EDITABLE",
     "locate",
     "read_field",
@@ -83,6 +84,15 @@ class FieldNotLocatable(LookupError):
     An alias or a merge key is the interesting case: the same scalar is referenced from more than
     one place, so replacing it at one site changes the others. Refusing is the only correct answer
     and it is not a limitation to be lifted — a shared scalar is *supposed* to be shared.
+    """
+
+
+class UnwritableValue(ValueError):
+    """The replacement cannot be written into this field's style and read back unchanged.
+
+    Distinct from :class:`StaleValue`, which is about the corpus having moved. This is about the
+    *value*: a tab, a control character, a trailing colon, an interior newline in a plain scalar.
+    The caller's move is to change the text, not to re-read the field.
     """
 
 
@@ -190,7 +200,69 @@ def apply_edit(
             "is there."
         )
     text = file.read_text(encoding="utf-8")
-    return text[: span.start] + _render(becomes, span) + text[span.end :]
+    edited = text[: span.start] + _render(becomes, span) + text[span.end :]
+    _assert_it_round_trips(edited, path=file, asset_id=asset_id, field_path=field_path, becomes=becomes)
+    return edited
+
+
+def _assert_it_round_trips(
+    edited: str, *, path: Path, asset_id: str, field_path: str, becomes: str
+) -> None:
+    """Re-parse the text this module just produced and require the field to read back as asked.
+
+    **This is the structural fix and it is worth more than any individual renderer rule.** Every
+    defect in this class has one shape: the renderer emits text that either does not parse or parses
+    to a *different* string, and nothing looks. A trailing colon and a tab made the file
+    unparseable; an interior newline made the plain renderer quote it into a single line; the
+    hard-coded chomping indicator changed the value on 1,750 files. One check at the one place all
+    of them pass through catches the whole family, including the ones nobody has thought of.
+
+    It costs one extra parse of one file per edit, which is nothing next to shipping a bundle that
+    stops the corpus loading after the commit -- which is what happened, because
+    ``tools/export_bundle.py`` never parsed the text it wrote either.
+
+    Raised as :class:`UnwritableValue` rather than returned, because there is no partial success
+    here: either the edit is faithful or the caller must not have the text.
+    """
+    try:
+        document = yaml.safe_load(edited)
+    except yaml.YAMLError as err:
+        raise UnwritableValue(
+            f"{path}:{asset_id}.{field_path} cannot be written as {becomes[:60]!r}: the result is "
+            f"not loadable YAML ({type(err).__name__}: {err}). Nothing was written. This is a "
+            "property of the value -- a tab, a control character, or a trailing colon are the "
+            "usual causes -- and not of the file."
+        ) from err
+    if not isinstance(document, dict):
+        raise UnwritableValue(
+            f"{path}:{asset_id}.{field_path}: the edited document is no longer a mapping"
+        )
+
+    landed = _resolved_field(document, asset_id=asset_id, field_path=field_path)
+    if landed != becomes:
+        raise UnwritableValue(
+            f"{path}:{asset_id}.{field_path} would land {landed!r}, not the {becomes!r} it was "
+            "given. The value cannot be written faithfully in this field's style, so the edit is "
+            "refused rather than applied -- a value that lands as something else reports "
+            "`superseded` after it has already shipped."
+        )
+
+
+def _resolved_field(document: dict, *, asset_id: str, field_path: str) -> object:
+    """``field_path`` as YAML resolves it in ``document``, on the asset or one of its columns.
+
+    Mirrors :func:`locate`'s search so the check asks about the same field the edit targeted; a
+    column's id is derived rather than stored, which is why the fallback walks ``columns``.
+    """
+    if str(document.get("id") or "") == asset_id:
+        return document.get(field_path)
+    for column in document.get("columns") or ():
+        if not isinstance(column, dict):
+            continue
+        physical = str(column.get("physical_name") or column.get("name") or "")
+        if physical and asset_id.endswith(f".{physical}"):
+            return column.get(field_path)
+    return None
 
 
 # ── locating ──────────────────────────────────────────────────────────────────
@@ -308,23 +380,65 @@ def _render(value: str, span: Span) -> str:
     return _render_plain(value)
 
 
+def _chomping(value: str) -> str:
+    """The indicator that makes a block scalar resolve back to exactly ``value``.
+
+    **Derived from the value, not copied from the source and not hard-coded.** It was hard-coded to
+    ``-`` on the claim that "the original spans measured here all use ``>-``" -- inverted: the
+    served corpus is **1,750 files at ``body: >``** against 137 at ``body: >-``. So every ``body``
+    edit flipped the header and dropped the trailing newline, which changed the value, which made
+    ``lifecycle._content_is_there`` miss and reported a landed patch as ``superseded``.
+
+    Deriving it makes the round trip exact by construction: the header enters the diff only when the
+    value's trailing shape actually changed, which is a change worth showing.
+
+    * no trailing newline -> ``-`` (strip)
+    * exactly one        -> ``""`` (clip, the default)
+    * two or more        -> ``+`` (keep)
+    """
+    trailing = len(value) - len(value.rstrip("\n"))
+    if trailing == 0:
+        return "-"
+    return "" if trailing == 1 else "+"
+
+
 def _render_block(value: str, span: Span) -> str:
     """A folded or literal block scalar at the original indentation and wrap width.
 
-    The chomping indicator is ``-``: the original spans measured here all use ``>-``, and a block
-    that ends in a newline the loader then strips is a byte the diff shows and nothing reads.
+    A **literal** (``|``) block is emitted line by line and never wrapped: folding is precisely
+    what it exists not to do, and re-wrapping one silently joins lines the author separated.
+
+    A **folded** (``>``) block treats a newline in the value as a paragraph break and emits a blank
+    line for it, because that is what a blank line folds to. Each paragraph is wrapped on its own.
     """
     pad = " " * (span.indent or 2)
     width = max(span.width, span.indent + 20) if span.width else 100
-    body = "\n".join(pad + line for line in _wrap(value, width - len(pad)))
-    return f"{span.style}-\n{body}\n"
+    indicator = _chomping(value)
+    core = value.rstrip("\n")
+
+    if span.style == "|":
+        lines = [pad + line if line else "" for line in core.split("\n")]
+    else:
+        lines = []
+        for index, paragraph in enumerate(core.split("\n")):
+            if index:
+                lines.append("")
+            lines.extend(pad + line for line in _wrap(paragraph, width - len(pad)))
+
+    body = "\n".join(lines)
+    return f"{span.style}{indicator}\n{body}\n"
 
 
 def _wrap(value: str, width: int) -> list[str]:
     """Greedy word wrap. A word longer than the width gets its own line rather than being cut.
 
-    Greedy and not `textwrap`, for one reason: `textwrap` collapses runs of whitespace and would
-    rewrite parts of the value nobody asked to change.
+    Greedy and not `textwrap`, and the reason this docstring used to give was false: it said
+    `textwrap` "collapses runs of whitespace and would rewrite parts of the value nobody asked to
+    change", but this function collapses them identically -- ``"two  spaces"`` lands as
+    ``"two spaces"``. The real reason to keep it is that `textwrap` also breaks on hyphens and
+    long words, and a corpus identifier split across two lines is a value nobody can grep for.
+    The whitespace collapse is a genuine limitation of writing a folded block at all, and
+    :func:`apply_edit`'s round-trip check is what stops it being silent.
     """
     out: list[str] = []
     current = ""

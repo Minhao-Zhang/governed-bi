@@ -38,7 +38,13 @@ from pathlib import Path
 from typing import Any
 
 from governed_bi.corpus.hash import corpus_content_hash
-from governed_bi.corpus.patch import FieldNotLocatable, StaleValue, apply_edit, read_field
+from governed_bi.corpus.patch import (
+    FieldNotLocatable,
+    StaleValue,
+    UnwritableValue,
+    apply_edit,
+    read_field,
+)
 from governed_bi.corpus.store import load
 from governed_bi.feedback.events import DerivedState, PatchState
 from governed_bi.feedback.lifecycle import derived_state
@@ -174,7 +180,7 @@ def _verify(
             was=str(patch.was),
             becomes=str(patch.becomes),
         )
-    except (StaleValue, FieldNotLocatable) as exc:
+    except (StaleValue, FieldNotLocatable, UnwritableValue) as exc:
         print(f"{resolved}: will not apply -- {exc}")
         return 1
 

@@ -47,7 +47,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import check_corpus_conformance as cc  # noqa: E402 - after the path insert, by design
 
-from governed_bi.corpus.patch import FieldNotLocatable, StaleValue, apply_edit  # noqa: E402
+from governed_bi.corpus.patch import (  # noqa: E402
+    FieldNotLocatable,
+    StaleValue,
+    UnwritableValue,
+    apply_edit,
+)
 from governed_bi.feedback.events import PatchIntent  # noqa: E402
 from governed_bi.feedback.store import FeedbackStore  # noqa: E402
 from governed_bi.paths import REPO_ROOT  # noqa: E402
@@ -119,10 +124,9 @@ def main(argv: list[str] | None = None) -> int:
             was=str(patch.was),
             becomes=str(patch.becomes),
         )
-    except StaleValue as err:
-        print(f"T0 fails before it starts: {err}", file=sys.stderr)
-        return 1
-    except FieldNotLocatable as err:
+    except (StaleValue, FieldNotLocatable, UnwritableValue) as err:
+        # Three reasons the ladder cannot start, and the caller wants the sentence rather than the
+        # class: the corpus moved, the field is gone, or the value cannot be written faithfully.
         print(f"T0 fails before it starts: {err}", file=sys.stderr)
         return 1
 
