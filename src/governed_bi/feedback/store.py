@@ -475,7 +475,8 @@ class FeedbackStore:
         longest is the one to act on. Sorting by cluster size instead would make the long tail
         permanently invisible.
         """
-        where, params = ["1 = 1"], []
+        where: list[str] = ["1 = 1"]
+        params: list[object] = []
         if states:
             where.append(f"state IN ({', '.join('?' for _ in states)})")
             params.extend(s.value for s in states)

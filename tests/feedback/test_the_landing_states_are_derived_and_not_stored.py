@@ -25,7 +25,9 @@ from governed_bi.feedback.lifecycle import derived_state
 from governed_bi.feedback.store import FeedbackStore, mint_patch_id, utc_now
 from governed_bi.register.assets import AssetType
 
-_BASE = "hash-at-authoring-time"
+#: Full length on purpose: a truncated hash never equals the digest, and a fixture that
+#: carries a prefix would exercise a comparison no real patch can make.
+_BASE = "b" * 64
 _EXPECTED = "hash-the-bundle-predicted"
 
 

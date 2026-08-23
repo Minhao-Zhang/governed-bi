@@ -66,6 +66,13 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
     #: Gates that cannot run in CI, each with the precondition that stops them. Declared here
     #: so "not in CI" is a decision with a reason rather than an omission.
     manual = {
+        "check_landed.py": (
+            "not a property of this tree: it answers whether ONE patch reached the corpus, so "
+            "it needs the corpus repository (a sibling, untracked) and a populated "
+            "runs/feedback.sqlite. In CI both are absent and every run would report `no "
+            "exported patches`, which is a green step that checked nothing. The states it "
+            "derives are asserted on values in tests/feedback/, which does run in CI"
+        ),
         "check_train_only.py": (
             "needs a corpus tree (untracked), the held-out question file (a separate "
             "repository) and a third corpus certified train-only"

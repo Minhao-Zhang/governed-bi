@@ -34,6 +34,7 @@ from governed_bi.feedback.events import (
 )
 
 __all__ = [
+    "CONTENT_HASH_CHARS",
     "NOTE_MAX_CHARS",
     "QUESTION_MAX_CHARS",
     "EDITABLE_FIELD_PATHS",
@@ -70,6 +71,19 @@ QUESTION_MAX_CHARS = 8000
 #: setting one column suspect by hand is cheap. It is the first thing to add when the landing check
 #: can read more than two fields.
 EDITABLE_FIELD_PATHS: frozenset[str] = frozenset({"summary", "body"})
+
+#: Length of a corpus content hash, and a patch's must be exactly this.
+#:
+#: ``corpus/hash.py::corpus_content_hash`` returns a full sha256 hex digest — 64 characters,
+#: verified. Every other place in this repository *displays* a 16-character prefix, which is the
+#: trap: a prefix stored in ``base_corpus_content_hash`` never equals the full digest
+#: ``lifecycle.derived_state`` compares it against, so the first branch falls through, the content
+#: check finds the asset unchanged, and the patch reports **superseded** — a good change sent back
+#: to the steward with nothing in the output to suggest the comparison was at fault.
+#:
+#: Found by driving the loop end to end rather than by a unit test, because both values are strings
+#: and every type is satisfied.
+CONTENT_HASH_CHARS = 64
 
 
 def faults_with(item: object) -> list[str]:
@@ -192,6 +206,19 @@ def _patch_problems(patch: Patch) -> list[str]:
             "base_corpus_content_hash is empty. A patch that does not say which tree it was "
             "authored against cannot be told apart from one whose tree has moved."
         )
+    elif len(patch.base_corpus_content_hash) != CONTENT_HASH_CHARS:
+        out.append(
+            f"base_corpus_content_hash is {len(patch.base_corpus_content_hash)} characters, and a "
+            f"corpus content hash is {CONTENT_HASH_CHARS}. A truncated one -- the 16-character "
+            "prefix every display uses -- never equals the digest the landing check compares it "
+            "against, so the patch reports `superseded` while nothing has changed."
+        )
+    for name, value in (
+        ("base_corpus_content_hash", patch.base_corpus_content_hash),
+        ("expected_corpus_content_hash", patch.expected_corpus_content_hash),
+    ):
+        if value and len(value) == CONTENT_HASH_CHARS and not _is_hex(value):
+            out.append(f"{name} is the right length but is not hex")
 
     authors_nothing = patch.intent in (PatchIntent.engine_defect, PatchIntent.no_change)
     if authors_nothing:
@@ -287,6 +314,30 @@ def _patch_problems(patch: Patch) -> list[str]:
     return out
 
 
+def _is_hex(value: str) -> bool:
+    return all(character in "0123456789abcdef" for character in value.lower())
+
+
+def _assert_the_editable_sets_agree() -> None:
+    """This module and ``corpus/patch.py`` must allow the same field paths.
+
+    Asserted here rather than there because ``feedback`` may import ``corpus`` and not the reverse
+    -- the layering gate is AST-based and catches an upward import wherever the statement sits.
+
+    What it prevents: a path this module accepts and ``patch.py`` cannot splice is a patch that is
+    drafted and then fails at export, which is late; a path ``patch.py`` can splice and
+    ``lifecycle.derived_state`` cannot confirm is a patch that **lands and reads as superseded
+    forever**, which is worse than either.
+    """
+    from governed_bi.corpus.patch import EDITABLE
+
+    if EDITABLE_FIELD_PATHS != EDITABLE:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"feedback/validate.py allows {sorted(EDITABLE_FIELD_PATHS)} and corpus/patch.py "
+            f"allows {sorted(EDITABLE)}. The two must be the same set."
+        )
+
+
 def _assert_editable_paths_are_landable() -> None:
     """The two sets that must agree, and the reason they are separate anyway.
 
@@ -306,3 +357,4 @@ def _assert_editable_paths_are_landable() -> None:
 
 
 _assert_editable_paths_are_landable()
+_assert_the_editable_sets_agree()

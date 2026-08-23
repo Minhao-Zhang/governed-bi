@@ -30,7 +30,12 @@ from governed_bi.feedback.store import (
     mint_patch_id,
     utc_now,
 )
-from governed_bi.feedback.validate import EDITABLE_FIELD_PATHS, NOTE_MAX_CHARS, faults_with
+from governed_bi.feedback.validate import (
+    CONTENT_HASH_CHARS,
+    EDITABLE_FIELD_PATHS,
+    NOTE_MAX_CHARS,
+    faults_with,
+)
 from governed_bi.register.assets import AssetType
 
 
@@ -65,7 +70,7 @@ def _patch(**over: object) -> Patch:
         field_path="summary",
         was="before",
         becomes="after",
-        base_corpus_content_hash="BASE",
+        base_corpus_content_hash="b" * CONTENT_HASH_CHARS,
     )
     base.update(over)
     return Patch(**base)  # type: ignore[arg-type]

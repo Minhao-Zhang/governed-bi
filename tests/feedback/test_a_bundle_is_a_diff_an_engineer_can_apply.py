@@ -1,0 +1,305 @@
+"""The exporter's contract, and the two content checks that are fatal only here.
+
+**The end-to-end path was driven against the real corpus and found two defects a unit test could
+not have.** Both are recorded here as the tests that would now catch them:
+
+1. ``Path.write_text`` defaults to ``newline=None``, which on Windows turns every line feed into a
+   carriage-return pair. That made ``changes.patch``'s separators CRLF, and ``git apply`` —
+   comparing against the index, where git stores line feeds — read the stray carriage return as
+   content and refused with "patch does not apply". On **every bundle the tool would ever have
+   produced**. The defect was in the bytes on disk and in no value the code held.
+2. A **truncated** corpus hash in ``base_corpus_content_hash`` never equals the 64-character digest
+   the landing check compares it against, so a patch nobody had touched reported ``superseded``. A
+   wrong landing state is worse than a missing one: it sends a good change back to the steward with
+   nothing in the output to suggest the comparison was at fault.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+# `tools/` is a directory of scripts and not a package, so it is put on the path the way
+# `tests/conformance/test_corpus_conformance_rules_fire.py` does it. One convention, one place to
+# change it if `tools/` ever becomes importable properly.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+
+import pytest
+
+from governed_bi.feedback.events import (
+    Kind,
+    Observation,
+    ObservationState,
+    Patch,
+    PatchIntent,
+    PatchState,
+    Source,
+)
+from governed_bi.feedback.store import (
+    FeedbackStore,
+    Rejected,
+    mint_observation_id,
+    mint_patch_id,
+    utc_now,
+)
+from governed_bi.feedback.validate import CONTENT_HASH_CHARS
+
+pytest.importorskip("yaml")
+
+HASH_A = "a" * CONTENT_HASH_CHARS
+ASSET = "sales.orders"
+WAS = "orders is the transaction table, one row per placed order."
+
+_TABLE = f"""asset_type: table
+id: {ASSET}
+schema: sales
+physical_name: orders
+summary: {WAS}
+body: >-
+  Grain is one order.
+"""
+
+
+def _corpus(tmp_path: Path) -> Path:
+    root = tmp_path / "corpus"
+    (root / "sales" / "tables").mkdir(parents=True)
+    (root / "sales" / "tables" / "tbl_sales_orders.yaml").write_text(_TABLE, encoding="utf-8")
+    return root
+
+
+def _seeded(
+    tmp_path: Path,
+    *,
+    becomes: str,
+    question: str = "how much revenue?",
+    source: Source = Source.operator,
+) -> tuple[FeedbackStore, str]:
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    observation = Observation(
+        observation_id=mint_observation_id(),
+        filed_at=utc_now(),
+        source=source,
+        kind=Kind.wrong_answer,
+        state=ObservationState.open,
+        question=question,
+        turn_id=None if source is Source.eval else "turn-1",
+        external_key="k" if source is Source.eval else None,
+        arm="v4" if source is Source.eval else None,
+        question_id="q1" if source is Source.eval else None,
+    )
+    store.file(observation)
+    patch = Patch(
+        patch_id=mint_patch_id(),
+        created_at=utc_now(),
+        author=Source.operator,
+        intent=PatchIntent.edit_asset,
+        state=PatchState.draft,
+        namespace="sales",
+        asset_id=ASSET,
+        field_path="summary",
+        was=WAS,
+        becomes=becomes,
+        base_corpus_content_hash=HASH_A,
+    )
+    from governed_bi.register.assets import AssetType
+
+    patch = Patch(**{**{f: getattr(patch, f) for f in patch.__slots__}, "asset_type": AssetType.table})
+    store.draft(patch, observations=[observation.observation_id])
+    return store, patch.patch_id
+
+
+def _export(tmp_path: Path, store: FeedbackStore, patch_id: str, *, extra: list[str] | None = None) -> int:
+    from export_bundle import main
+
+    return main(
+        [
+            "--patch",
+            patch_id,
+            "--db",
+            str(store.path),
+            "--corpus-dir",
+            str(_existing_corpus(tmp_path)),
+            "--out",
+            str(tmp_path / "bundles"),
+            *(extra or []),
+        ]
+    )
+
+
+def _existing_corpus(tmp_path: Path) -> Path:
+    root = tmp_path / "corpus"
+    return root if root.exists() else _corpus(tmp_path)
+
+
+def test_the_patch_file_uses_line_feeds_and_git_accepts_it(tmp_path: Path) -> None:
+    """The bug that would have made every bundle unappliable.
+
+    Asserted on the **bytes**, because that is where it lived: both the broken and the fixed
+    version are strings Python is perfectly happy with.
+    """
+    _corpus(tmp_path)
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " Grain is one order.")
+
+    assert _export(tmp_path, store, patch_id) == 0
+
+    patch_file = tmp_path / "bundles" / f"bnd-{patch_id}" / "changes.patch"
+    raw = patch_file.read_bytes()
+    assert b"\r" not in raw, "the patch carries a carriage return; git apply will refuse it"
+    assert raw.count(b"\n") > 0
+
+    after = tmp_path / "bundles" / f"bnd-{patch_id}" / "after" / "sales/tables/tbl_sales_orders.yaml"
+    assert b"\r" not in after.read_bytes()
+
+
+@pytest.mark.skipif(
+    subprocess.run(["git", "--version"], capture_output=True).returncode != 0,
+    reason="git is not on PATH",
+)
+def test_git_apply_accepts_the_diff(tmp_path: Path) -> None:
+    """The property the bundle exists for, checked with the tool that will be used on it."""
+    root = _corpus(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "seed"],
+        cwd=root,
+        check=True,
+    )
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " Grain is one order.")
+    assert _export(tmp_path, store, patch_id) == 0
+
+    check = subprocess.run(
+        ["git", "apply", "--check", "-p1", str(tmp_path / "bundles" / f"bnd-{patch_id}" / "changes.patch")],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert check.returncode == 0, check.stderr
+
+
+def test_the_bundle_carries_the_five_things_the_layout_declares(tmp_path: Path) -> None:
+    _corpus(tmp_path)
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " Grain is one order.")
+    assert _export(tmp_path, store, patch_id) == 0
+
+    bundle = tmp_path / "bundles" / f"bnd-{patch_id}"
+    for name in ("MANIFEST.yaml", "COMMIT_MSG.txt", "changes.patch"):
+        assert (bundle / name).is_file(), name
+    assert (bundle / "after").is_dir()
+    assert (bundle / "evidence" / "observations.md").is_file()
+    assert (bundle / "evidence" / "ladder.json").is_file()
+
+
+def test_the_commit_message_carries_no_reader_prose(tmp_path: Path) -> None:
+    """A sentence somebody typed must not become a line of a commit log that some other tool later
+    renders unescaped. It lives in `evidence/observations.md`, inside a fence."""
+    _corpus(tmp_path)
+    store, patch_id = _seeded(
+        tmp_path, becomes=WAS + " Grain is one order.", question="a very distinctive question string"
+    )
+    assert _export(tmp_path, store, patch_id) == 0
+
+    bundle = tmp_path / "bundles" / f"bnd-{patch_id}"
+    message = (bundle / "COMMIT_MSG.txt").read_text(encoding="utf-8")
+    assert "a very distinctive question string" not in message
+    assert "a very distinctive question string" in (
+        bundle / "evidence" / "observations.md"
+    ).read_text(encoding="utf-8")
+    assert message.splitlines()[0].startswith("Reword ")
+    assert len(message.splitlines()[0]) <= 72
+
+
+def test_the_manifest_omits_a_hash_nobody_can_compute_yet(tmp_path: Path) -> None:
+    """`expected_corpus_content_hash` is the digest of a tree nobody has written. A hash-shaped
+    string nobody can compare is worse than an absence, so `check_landed.py` computes it after the
+    commit — which is why a landing usually reads `landed_matched` rather than `landed_verified`."""
+    import yaml
+
+    _corpus(tmp_path)
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " Grain is one order.")
+    assert _export(tmp_path, store, patch_id) == 0
+
+    manifest = yaml.safe_load(
+        (tmp_path / "bundles" / f"bnd-{patch_id}" / "MANIFEST.yaml").read_text(encoding="utf-8")
+    )
+    assert "expected_corpus_content_hash" not in manifest
+    assert manifest["base_corpus_content_hash"] == HASH_A
+    assert manifest["file"] == "sales/tables/tbl_sales_orders.yaml", "POSIX separators on the wire"
+
+
+def test_a_held_out_phrase_in_the_new_text_is_fatal(tmp_path: Path) -> None:
+    """The leakage channel the importer opens, closed at the one gate a change has to pass.
+
+    A phrase carried from a graded question into an asset contaminates every EX number measured
+    afterwards, and the contamination is invisible. Five consecutive words is the threshold: a
+    shorter run is ordinary English, and V12 is about a quotation.
+    """
+    _corpus(tmp_path)
+    question = "what is the average female median age in that county"
+    store, patch_id = _seeded(
+        tmp_path,
+        becomes=WAS + " Use it for the average female median age in that county.",
+        question=question,
+        source=Source.eval,
+    )
+
+    assert _export(tmp_path, store, patch_id) == 1, "a held-out quotation must refuse"
+    assert not (tmp_path / "bundles").exists(), "a refused export must write nothing"
+
+
+def test_a_shared_phrase_that_is_ordinary_english_is_not_fatal(tmp_path: Path) -> None:
+    """The check has to be usable. Refusing every asset that shares four words with a question
+    would refuse every asset, and a gate that always fires is a gate that gets waived."""
+    _corpus(tmp_path)
+    store, patch_id = _seeded(
+        tmp_path,
+        becomes=WAS + " One row per order.",
+        question="how many orders were placed in the last month by each customer",
+        source=Source.eval,
+    )
+    assert _export(tmp_path, store, patch_id) == 0
+
+
+def test_only_an_edit_produces_a_bundle(tmp_path: Path) -> None:
+    """An exclusion_request is prose a human transcribes; engine_defect and no_change author
+    nothing on purpose. A bundle for either would be an empty diff with a commit message."""
+    _corpus(tmp_path)
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    patch = Patch(
+        patch_id=mint_patch_id(),
+        created_at=utc_now(),
+        author=Source.operator,
+        intent=PatchIntent.engine_defect,
+        state=PatchState.draft,
+        namespace="sales",
+        rationale="r_star_projection; nothing in the corpus is at fault",
+        base_corpus_content_hash=HASH_A,
+    )
+    store.draft(patch, observations=[])
+    assert _export(tmp_path, store, patch.patch_id) == 2
+
+
+def test_a_truncated_corpus_hash_is_refused_at_the_store(tmp_path: Path) -> None:
+    """The second defect the end-to-end run found. A 16-character prefix -- what every display
+    shows -- never equals the digest the landing check compares against, so the patch reported
+    `superseded` while nothing had changed."""
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    from governed_bi.register.assets import AssetType
+
+    patch = Patch(
+        patch_id=mint_patch_id(),
+        created_at=utc_now(),
+        author=Source.operator,
+        intent=PatchIntent.edit_asset,
+        state=PatchState.draft,
+        namespace="sales",
+        asset_type=AssetType.table,
+        asset_id=ASSET,
+        field_path="summary",
+        was=WAS,
+        becomes=WAS + " More.",
+        base_corpus_content_hash=HASH_A[:16],
+    )
+    with pytest.raises(Rejected, match="16 characters"):
+        store.draft(patch, observations=[])
