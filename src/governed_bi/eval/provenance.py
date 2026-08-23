@@ -34,7 +34,10 @@ from ..register.arm_profiles import reconcile, recorded_question_subset
 
 __all__ = [
     "append_refusal",
+    "arm_power_refusal",
     "arm_startup_refusal",
+    "PRIOR_DISCORDANT",
+    "PRIOR_OF",
     "derived_question_set",
     "flag_conflict",
     "git_provenance",
@@ -516,6 +519,75 @@ def resume_identity_problem(
 # --------------------------------------------------------------------------- #
 # Reading the *arm profile* back
 # --------------------------------------------------------------------------- #
+
+
+#: Discordance to assume when an arm declares a hypothesis and no prior pair exists to estimate it
+#: from: **the fork's ``beer_factory`` pair, 20 discordant of 131 questions.**
+#:
+#: A fraction and not a decimal, deliberately. ``eval/power.py``'s whole docstring is about not
+#: presenting a figure carried from another tree as a measurement of this one, and ``0.153`` reads
+#: like a rate somebody measured here while ``20 / 131`` reads like what it is. It is also why
+#: :func:`arm_power_refusal` scales it with integer arithmetic rather than a float: ``require_power``
+#: refuses a float ``discordant`` outright, because a rate passed as a count understates the
+#: detection floor by about sqrt(n) and passes the exact arm shape the gate exists to refuse.
+PRIOR_DISCORDANT, PRIOR_OF = 20, 131
+
+
+def arm_power_refusal(profile: Any, n: int) -> str | None:
+    """Why ``--arm NAME`` cannot detect what it claims to be testing, or ``None``.
+
+    **This is ``eval/power.py::require_power``'s caller**, which ``open-work.md`` §3.10 recorded as
+    missing: the gate existed, was tested, and nothing in the tree invoked it — so an arm whose
+    hypothesis sat under its own detection floor spent its whole budget and reported a null about
+    the feature rather than about the sample. That is the exact failure the module was taken from
+    another repository to prevent.
+
+    Asked beside :func:`arm_startup_refusal`, before the first paid question, because that is the
+    only point where refusing is free.
+
+    **Silent when the profile declares no hypothesis**, and that is not a loophole — it is the
+    honest reading. Every arm on disk predates the field, and inventing an effect size for them so
+    the gate has something to check would be worse than not checking: the number would be this
+    function's, quoted later as the arm's.
+
+    ``readout`` is required alongside the effect and is *not* used in the arithmetic. It is in the
+    message, because MDE is denominated in points of the whole population and two readouts' base
+    rates can differ by two orders of magnitude — a mechanism indicator with a 2.15pp ceiling has
+    1.9 resolvable steps against EX's 28.5, and a draft of this design read the smaller MDE as the
+    better instrument. Naming the readout in the refusal is what makes that visible to the person
+    reading it.
+    """
+    effect = getattr(profile, "hypothesised_effect", None)
+    if effect is None:
+        return None
+    readout = getattr(profile, "readout", None)
+    if not readout:
+        return (
+            f"--arm {profile.name} declares hypothesised_effect={effect} and no readout. An "
+            "effect size with no quantity attached cannot be compared against a detection floor: "
+            "MDE is in points of the whole population, and two readouts' base rates differ by two "
+            "orders of magnitude. Name the readout in arms.toml."
+        )
+
+    from governed_bi.eval.power import UnderpoweredArm, require_power
+
+    # Integer arithmetic all the way: `require_power` takes a COUNT and refuses a float. `max(1,
+    # ...)` because it also refuses zero discordance as unmeasurable rather than as infinite
+    # precision -- an arm small enough to floor the estimate to nothing must not read as a pass.
+    estimated = max(1, int(n) * PRIOR_DISCORDANT // PRIOR_OF)
+    try:
+        require_power(n=int(n), discordant=estimated, hypothesised_effect=float(effect))
+    except UnderpoweredArm as err:
+        return (
+            f"--arm {profile.name} cannot detect its own hypothesis on {readout}:\n"
+            f"  {err}\n"
+            f"  The discordance is an ESTIMATE: {estimated} of {int(n)}, scaled from the only "
+            f"prior pair on disk ({PRIOR_DISCORDANT} of {PRIOR_OF} questions, another "
+            "repository's beer_factory run). It is not a measurement of this arm.\n"
+            "  Raise n at a comparable discordance rate, or restrict the population to the "
+            "stratum the treatment actually reaches -- and say so in arms.toml."
+        )
+    return None
 
 
 def arm_startup_refusal(profile: Any, session_identity: Mapping[str, Any]) -> str | None:

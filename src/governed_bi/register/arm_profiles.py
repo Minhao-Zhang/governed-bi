@@ -32,6 +32,7 @@ __all__ = [
     "arm_profile",
     "load_arm_profiles",
     "reconcile",
+    "recorded_corpus_release",
     "recorded_question_subset",
 ]
 
@@ -65,6 +66,24 @@ class ArmProfile:
     #: The question set the rows must carry, in the ``question_subset`` scope knob's own format
     #: and under its own name. This is what :func:`reconcile` reads.
     question_subset: str | None = None
+    #: The corpus **release tag** this arm was measured on, matching the ``corpus_release``
+    #: comparability knob. Distinct from :attr:`corpus` (a ref a human checks out) and from
+    #: :attr:`corpus_content_hash` (what a row carries): a release is what an arm *declares*, and
+    #: without it an arm whose treatment is the corpus cannot name its own treatment.
+    corpus_release: str | None = None
+    #: The effect this arm exists to detect, in points of the readout below (0.03 = 3pp).
+    #:
+    #: **Declared before the run, which is the whole point.** ``eval/power.py::require_power``
+    #: refuses an arm that cannot detect its own hypothesis, and until this field existed it had
+    #: no caller -- so the gate that stops an underpowered arm before it spends anything was
+    #: reachable only by a caller passing a number it had made up on the spot.
+    hypothesised_effect: float | None = None
+    #: Which quantity :attr:`hypothesised_effect` is denominated in. Required alongside it,
+    #: because **MDE is denominated in points of the whole population** and two readouts' base
+    #: rates can differ by two orders of magnitude. A mechanism indicator with a 2.15pp ceiling
+    #: has 1.9 resolvable steps against EX's 28.5, and a draft of this design read the smaller
+    #: MDE as the better instrument. Naming the readout is what makes that error visible.
+    readout: str | None = None
     notes: str = ""
 
 
@@ -242,7 +261,36 @@ def reconcile(profile: ArmProfile, row: Mapping[str, Any]) -> tuple[str, ...]:
                 f"profile claims question_subset {profile.question_subset!r}, "
                 f"row records {subset!r}"
             )
+
+    # `corpus_release` is checked only when the profile declares one, which is the opposite
+    # convention from `corpus_content_hash` above -- and deliberately. The digest is what makes a
+    # row reconcilable at all, so its absence is a defect. A release is a *name a human pinned*,
+    # and the arms measured before the knob existed have none: refusing them would strand every
+    # artifact on disk to gain nothing, since the digest already reconciles the rows.
+    if profile.corpus_release is not None:
+        release = recorded_corpus_release(row)
+        if release is not None and str(release) != str(profile.corpus_release):
+            problems.append(
+                f"profile claims corpus_release {profile.corpus_release!r}, "
+                f"row records {release!r}"
+            )
     return tuple(problems)
+
+
+def recorded_corpus_release(row: Mapping[str, Any]) -> Any:
+    """``corpus_release`` as this row records it, or ``None``.
+
+    Read out of the knob mapping, where a ``Role.comparability`` knob lives, and **not** off the
+    top of the row: ``corpus_content_hash`` is a ``RecordField`` and lives at the top, and the
+    2026-08-11 defect was reading one from the other's home. Each field is read from its own.
+
+    Absent reads as "did not say" rather than as disagreement, for the reason ``reconcile`` gives
+    at the call site: every artifact on disk predates this knob.
+    """
+    knobs = row.get("knobs_resolved")
+    if isinstance(knobs, Mapping) and "corpus_release" in knobs:
+        return knobs["corpus_release"]
+    return row.get("corpus_release")
 
 
 def recorded_question_subset(row: Mapping[str, Any]) -> Any:

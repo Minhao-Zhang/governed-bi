@@ -122,6 +122,20 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("asset_budgets", _ASSET_BUDGETS, Role.comparability,
        "per-type retrieval budgets, declared in register.assets beside the types",
        hashed_by_content=True),
+    _k("corpus_release", "", Role.comparability,
+       "the corpus TAG an arm was measured on, and the one comparability knob that names the "
+       "treatment itself. Measured 2026-08-23: not one of the other 50 comparability names "
+       "contains 'corpus', so an arm whose treatment IS the corpus could not declare it and "
+       "`register/arm_profiles.py` returned `cannot_evaluate` -- the gate said 'unknown' where "
+       "the honest answer was 'the thing being tested'. A TAG and not a directory, and not the "
+       "content hash either: patches land continuously, so the digest of a working tree moves "
+       "for reasons that are not a treatment (`corpus_content_hash('../BIRD-corpus')` at HEAD is "
+       "6e5c7b4b..., `arms.toml` declares 86ed1dbf... on all four arms, and the two commits "
+       "between them add only LICENSE and README.md -- no asset changed and the digest moved "
+       "anyway, which refuses `--arm v4` against the checked-out tip). A release is a name a "
+       "human pinned; the digest still reconciles the rows, and this says which release they "
+       "belong to",
+       env_var="GOVERNED_BI_CORPUS_RELEASE"),
 
     # ── retrieval ───────────────────────────────────────────────────────────
     _k("candidate_depth", 50, Role.comparability,

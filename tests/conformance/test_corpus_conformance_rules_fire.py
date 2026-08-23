@@ -90,6 +90,25 @@ BROKEN: list[tuple[str, str, dict]] = [
         ("V13", "column", {"schema": "addr", "physical_name": "zip_code",
                            "summary": "The postal code that identifies this row in the table.",
                            "body": "Observed values: " + "97079, " * 1_500}),
+        # V17a, three ways an expression fails. The middle one is the class the design named
+        # first and the one a parse-only check accepts: `DIVIDE(a, b)` is perfectly well-formed
+        # SQL syntax naming a function no dialect has.
+        ("V17a", "metric", {"id": "m", "name": "rate", "base_table": "addr.zip_data",
+                            "expression": "COUNT(zip_code WHERE state = 'OR')",
+                            "summary": "rate counts the postal points in one state.",
+                            "body": "The share of zip_data rows in a given state."}),
+        ("V17a", "metric", {"id": "m", "name": "rate", "base_table": "addr.zip_data",
+                            "expression": "DIVIDE(COUNT(zip_code), COUNT(*))",
+                            "summary": "rate divides the counted postal points by the total.",
+                            "body": "The share of zip_data rows that carry a postal code."}),
+        ("V17a", "metric", {"id": "m", "name": "rate", "base_table": "addr.zip_data",
+                            "expression": "COUNT(zip_code) / <total>",
+                            "summary": "rate counts the postal points over a total.",
+                            "body": "The share of zip_data rows, over an unspecified total."}),
+        # V21: two U+200B zero-width spaces, which is the real finding in the corpus today.
+        ("V21", "column", {"schema": "addr", "physical_name": "zip_code",
+                           "summary": "The postal code that identifies this row in the table.",
+                           "body": "The zip\u200b code for\u200b this row."}),
 ]
 
 
@@ -373,7 +392,12 @@ def test_v14_catches_a_file_the_engine_cannot_load(tmp_path: Path) -> None:
 #: **V13 left this set on 2026-08-13.** It measured ``path.stat().st_size``, which no local rule
 #: can see; it now measures the asset's body, which is the thing delivered and the thing that
 #: goes pathological, so it is answerable from one asset and carries cases in ``BROKEN`` above.
-NOT_LOCAL = {"V9", "V11", "V12", "V14", "V15", "V16"}
+#: V17b, V19 and V23 join the whole-tree set for the reason the others are in it: each needs a
+#: second asset to be about. V17b resolves an identifier against the table and join assets, V19
+#: needs an asset marked excluded *somewhere else* to look for the name of, and a duplicate id
+#: needs something to duplicate. All three are exercised in
+#: ``tests/conformance/test_the_whole_tree_rules_fire.py``.
+NOT_LOCAL = {"V9", "V11", "V12", "V14", "V15", "V16", "V17b", "V19", "V23"}
 
 
 def test_every_rule_is_documented_and_exercised() -> None:

@@ -1,6 +1,6 @@
 """Does a corpus tree obey ADR 0005's field spec? Exit 1 if not.
 
-Two modes. ``--file`` checks one asset file and is what the rebuild loop calls after each
+Three modes. ``--file`` checks one asset file and is what the rebuild loop calls after each
 write; the default walks a whole tree and prints a per-rule report. Rules that need the whole
 corpus or an external file are reported as **not evaluated** in ``--file`` mode rather than
 passed, because a rule that silently skips is worse than one that fails.
@@ -18,6 +18,11 @@ half-written tree, where the loader would raise.
 one policy is how ``airline."Air Carriers"`` ended up with no table asset while 24 few-shots
 cited it.
 
+``--json`` emits the findings and **exits 0**, because it is an inventory rather than a gate:
+``tools/check_ratchet.py`` is what decides whether the inventory is allowed. A mode that both
+reported and failed would make the ratchet unable to read a tree that has findings, which is every
+tree it exists for.
+
 **On reading the held-out split (V12).** This tool loads ``test_final.jsonl`` to *forbid* its
 text. That is the opposite of the defect it guards: tuning a corpus against the split adapts to
 it, while refusing content that appears in it cannot. Nothing here writes an asset.
@@ -34,6 +39,23 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
+
+# The 2026-08-23 rules, split out at the 1,000-line cap. Predicates only -- this module
+# still owns the RULES table, the report and the exit codes.
+#
+# `Finding`, `_text` and `_where` come from there too, and the direction matters: the
+# predicates need them and so does the report, so leaving them here would make the import
+# circular and copying them would make two `Finding` types that compare unequal.
+from conformance_rules_metric_and_content import (  # noqa: E402 - sibling script, path-added
+    Finding,
+    _text,
+    _where,
+    check_excluded_not_named,
+    check_guard_rules,
+    check_metric_bindings,
+    check_metric_expression,
+    check_unique_ids,
+)
 
 from governed_bi.corpus.identity import derive_column_id
 from governed_bi.register.assets import ASSET_REGISTER, AssetType
@@ -184,20 +206,10 @@ def _closed() -> None:
 _closed()
 
 
-class Finding(str):
-    """One violation line. A ``str`` so the report can just sort them."""
 
 
-def _text(value: Any) -> str:
-    return value.strip() if isinstance(value, str) else ""
 
 
-def _where(kind: str, asset: dict[str, Any], path: Path) -> str:
-    """``file:asset`` for a finding. Inline columns carry no ``id`` in YAML — the loader
-    derives it — so without ``physical_name`` here every column in a table reports as
-    ``:column`` and the writer cannot tell which one failed."""
-    label = asset.get("id") or (_text(asset.get("physical_name")) if kind == "column" else "") or kind
-    return f"{path.name}:{label}"
 
 
 def _norm(value: str) -> str:
@@ -262,6 +274,8 @@ def _own_identifiers(at: AssetType, a: dict[str, Any]) -> list[str]:
     return sorted((n for n in names if n), key=len, reverse=True)
 
 
+#: Dialect for V17a. The same one ``govern/`` parses generated SQL at -- restated nowhere, because
+#: a metric expression that parses here and not there is a metric that fails at serve time.
 def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Finding]]:
     """Every rule answerable from one asset alone."""
     out: dict[str, list[Finding]] = defaultdict(list)
@@ -285,6 +299,14 @@ def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Find
 
     if summary == SENTINEL or summary.startswith(SENTINEL):
         out["V2"].append(Finding(f"{where}: summary is still the scaffold sentinel"))
+
+    # Only touched when there is something to add: `out` is a defaultdict, so an unconditional
+    # `extend([])` creates an empty key and "no findings" stops meaning `{}`.
+    if at is AssetType.metric:
+        for finding in check_metric_expression(a, where):
+            out["V17a"].append(finding)
+    for finding in check_guard_rules(kind, a, where):
+        out["V21"].append(finding)
 
     body_cap = BODY_CAP.get(kind, BODY_CAP["*"])
     if len(body) > body_cap:
@@ -587,8 +609,28 @@ RULES: dict[str, str] = {
     "V14": "the engine's loader accepts the file",
     "V15": "exactly the manifest's columns are marked suspect",
     "V16": "a table and its folded column roster fit the delivery cap",
+    "V17a": "a metric expression parses as SQL at the engine's dialect",
+    "V17b": "every identifier in a metric expression resolves on base_table or a declared join",
+    "V19": "no model-visible body names a governance-excluded column or asset",
+    "V21": "model-visible text passes govern/guard.py's GUARD_RULES",
+    "V23": "asset ids are unique across the tree",
 }
-WHOLE_TREE_ONLY = ("V9", "V11", "V12", "V15")
+
+#: Rules that need more than one asset, and are reported **not evaluated** rather than passed in
+#: ``--file`` mode. V17b is here because "reachable through a declared join" is a question about
+#: the join assets, and V23 because a duplicate needs a second file to duplicate.
+WHOLE_TREE_ONLY = ("V9", "V11", "V12", "V15", "V17b", "V23")
+
+
+def _where_of(line: str) -> str:
+    """The ``file:asset`` a finding is about, or ``""`` if the line is not in that shape.
+
+    Split off the front rather than parsed, because the message that follows contains colons of its
+    own. ``""`` drops the line from the JSON: an identity the ratchet cannot key on is worse than a
+    missing finding, since it would pin as one thing and re-appear as another.
+    """
+    parts = str(line).split(":", 2)
+    return f"{parts[0]}:{parts[1]}" if len(parts) >= 3 else ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -602,6 +644,11 @@ def main(argv: list[str] | None = None) -> int:
                     type=Path, default=DEFAULT_DATASET / "schema_rename_map.json")
     ap.add_argument("--test-split", type=Path, default=DEFAULT_DATASET / "test_final.jsonl")
     ap.add_argument("--max-lines", type=int, default=15, help="findings printed per rule")
+    ap.add_argument(
+        "--json",
+        action="store_true",
+        help="emit findings as JSON on stdout (for tools/check_ratchet.py); exit 0 either way",
+    )
     args = ap.parse_args(argv)
 
     if args.file:
@@ -627,6 +674,9 @@ def main(argv: list[str] | None = None) -> int:
     skipped: dict[str, str] = {}
     if whole:
         findings["V9"].extend(check_references(assets))
+        findings["V17b"].extend(check_metric_bindings(assets))
+        findings["V19"].extend(check_excluded_not_named(assets))
+        findings["V23"].extend(check_unique_ids(assets))
         if args.trap_manifest.exists():
             findings["V11"].extend(check_suspect_summaries(assets, args.trap_manifest))
         else:
@@ -644,6 +694,29 @@ def main(argv: list[str] | None = None) -> int:
     else:
         for rule in WHOLE_TREE_ONLY:
             skipped[rule] = "needs the whole tree"
+
+    if args.json:
+        # A finding's **identity** is (rule, asset), and that is all this emits alongside the
+        # message. The ratchet pins identities: a reworded message must not read as a new finding,
+        # and a finding moving to another asset must not read as the same one.
+        print(
+            json.dumps(
+                {
+                    "corpus": str(args.corpus_dir if whole else args.file),
+                    "whole_tree": whole,
+                    "not_evaluated": skipped,
+                    "findings": [
+                        {"rule": rule, "where": _where_of(line), "message": str(line)}
+                        for rule in RULES
+                        for line in sorted(findings.get(rule, ()))
+                        if _where_of(line)
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
 
     by_type = Counter(kind for kind, _, _ in assets)
     print(f"corpus conformance: {scope}")

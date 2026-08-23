@@ -271,11 +271,16 @@ def test_the_driver_supplies_both_locks_to_the_pre_flight() -> None:
     identity = calls[0].args[1]
     assert isinstance(identity, ast.Dict), "the identity mapping is built at the call site"
     keys = {k.value for k in identity.keys if isinstance(k, ast.Constant)}
-    assert keys == {"corpus_content_hash", "question_subset"}, (
+    assert keys == {"corpus_content_hash", "question_subset", "corpus_release"}, (
         f"the pre-flight compares {sorted(keys)}; an identity it does not pass is an identity "
         "nothing checks until the artifact is finished"
     )
     # No `knobs_resolved`, which is the shape `recorded_question_subset` falls through for. A
     # nested mapping here would send it down the knob branch and read `None` -- the pre-flight
     # would pass on every dataset and say nothing about it.
+    #
+    # `corpus_release` joined the set on 2026-08-23 and is flat for that reason. A real row carries
+    # it inside the knob mapping, where `recorded_corpus_release` reads it from; this identity is
+    # not a row, and nesting one key to be faithful to a row's shape would risk the defect above
+    # for the sake of it.
     assert "knobs_resolved" not in keys

@@ -66,6 +66,14 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
     #: Gates that cannot run in CI, each with the precondition that stops them. Declared here
     #: so "not in CI" is a decision with a reason rather than an omission.
     manual = {
+        "check_ratchet.py": (
+            "reads a pin file that lives in the CORPUS repository, not this one, and derives the "
+            "finding set from a corpus tree -- both siblings of this tree and absent in CI. It is "
+            "the corpus repo's gate rather than the engine's, which is the point: the findings "
+            "are properties of a corpus, and pinning them here would mean two corpora could "
+            "never both be clean. Its two directions are exercised in "
+            "tests/conformance/test_the_ratchet_only_turns_one_way.py, which does run in CI"
+        ),
         "check_landed.py": (
             "not a property of this tree: it answers whether ONE patch reached the corpus, so "
             "it needs the corpus repository (a sibling, untracked) and a populated "

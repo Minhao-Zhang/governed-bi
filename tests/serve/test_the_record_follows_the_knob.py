@@ -416,19 +416,43 @@ def test_every_declared_env_var_is_one_a_reader_actually_reads():
 
     from governed_bi.register.knobs import env_overrides
 
-    src = pathlib.Path(__file__).resolve().parents[2] / "src" / "governed_bi" / "serve"
+    root = pathlib.Path(__file__).resolve().parents[2]
+    src = root / "src" / "governed_bi" / "serve"
     read_by = (src / "graph.py").read_text(encoding="utf-8") + (
         src / "nodes" / "agent_core.py"
     ).read_text(encoding="utf-8")
 
+    #: Env-first knobs that change what a node **does**. `_resolved_knobs` only records a value, so
+    #: without a node reading the variable the override moves nothing and the register is lying.
+    behavioural = {"rail_node_timeout_s", "agent_node_timeout_s", "agent_recursion_limit"}
+
+    #: Env-first knobs that change nothing and **label** a run. `corpus_release` names the corpus
+    #: release an arm was measured on: `register/knobs.py::env_override` performs it generically,
+    #: `session._resolved_knobs` records it, and `arm_profiles.reconcile` refuses a row that
+    #: disagrees with the arm's declaration. There is no node that should read it, and the search
+    #: below is deliberately NOT widened to "read anywhere" -- that would let a real behavioural
+    #: knob be declared and never acted on, which is the defect this test exists for.
+    label_only = {"corpus_release"}
+
     declared = env_overrides()
-    assert set(declared) == {
-        "rail_node_timeout_s",
-        "agent_node_timeout_s",
-        "agent_recursion_limit",
-    }
-    unread = sorted(var for var in declared.values() if var not in read_by)
+    assert set(declared) == behavioural | label_only, (
+        "an env-first knob was added or removed. Put it in `behavioural` if a node must act on "
+        "it, in `label_only` if it changes nothing -- and if it is neither, it should not be "
+        "env-first."
+    )
+    unread = sorted(
+        var for name, var in declared.items() if name in behavioural and var not in read_by
+    )
     assert unread == [], f"declared as an override and read by no node: {unread}"
+
+    from governed_bi.register import knobs as knobs_module
+
+    performs = pathlib.Path(knobs_module.__file__).read_text(encoding="utf-8")
+    for name in sorted(label_only):
+        assert declared[name] in performs, (
+            f"{name} is label-only, so the generic resolver in register/knobs.py is what performs "
+            f"it. {declared[name]} appears nowhere there, which means nothing performs it at all."
+        )
 
 
 # ── 5. nothing is absent ──────────────────────────────────────────────────────

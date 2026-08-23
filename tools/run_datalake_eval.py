@@ -268,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     from governed_bi.eval.harness import run_arm
     from governed_bi.eval.provenance import (
         append_refusal,
+        arm_power_refusal,
         arm_startup_refusal,
         harness_knobs,
         resume_identity_problem,
@@ -275,6 +276,7 @@ def main(argv: list[str] | None = None) -> int:
         truncation_notice,
     )
     from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.register.knobs import env_override as _knobs_env_override
     from governed_bi.serve import session as session_mod
 
     model, utility_model, embedder, vector_cache = _build_models(args)
@@ -368,10 +370,32 @@ def main(argv: list[str] | None = None) -> int:
                     question_ids=covered_qids,
                     dataset_file=dataset_file,
                 )["question_subset"],
+                # The one comparability knob that names the *treatment*: measured 2026-08-23, not
+                # one of the other 50 contains "corpus", so an arm whose treatment is the corpus
+                # could not declare it and `arm_profiles.reconcile` returned agreement.
+                #
+                # **Flat, not nested under `knobs_resolved`.** A real row carries it in the knob
+                # mapping and `recorded_corpus_release` reads it from there; this identity is not a
+                # row, and putting a nested mapping here is how the question-set check went vacuous
+                # once already -- `recorded_question_subset` looks in the knob mapping first. The
+                # top-level fallback exists for this caller.
+                #
+                # `None` means this run declined to name a release, which `reconcile` reads as "did
+                # not say" rather than as a mismatch: every arm on disk predates the knob.
+                "corpus_release": _knobs_env_override("corpus_release") or None,
             },
         )
         if mislabelled:
             print(mislabelled, file=sys.stderr)
+            return 5
+
+        # Power, asked here for the same reason the label is: before the first paid question is the
+        # only point where refusing costs nothing. Silent unless the profile declares a hypothesis
+        # -- every arm on disk predates the field, and inventing one so the gate has something to
+        # check would put this file's number into somebody's later quotation of the arm's.
+        underpowered = arm_power_refusal(profile, len(covered_qids))
+        if underpowered:
+            print(underpowered, file=sys.stderr)
             return 5
 
     # The retrieval channel is in the tag because it is an arm, not a detail: lexical and
