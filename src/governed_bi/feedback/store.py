@@ -48,7 +48,12 @@ from governed_bi.feedback.events import (
     PatchState,
     Source,
 )
-from governed_bi.feedback.lifecycle import Actor, patch_transition_for, transition_for
+from governed_bi.feedback.lifecycle import (
+    Actor,
+    TransitionRefused,
+    patch_transition_for,
+    transition_for,
+)
 from governed_bi.feedback.validate import NOTE_MAX_CHARS, faults_with
 from governed_bi.paths import assert_not_a_warehouse
 from governed_bi.register.assets import AssetType
@@ -317,28 +322,37 @@ class FeedbackStore:
         The new row is validated before it is written, so the fields a state makes mandatory --
         ``decline_reason`` on a decline, ``blocked_note`` on a block -- are enforced by the same
         rules that enforce them at filing rather than by a second copy here.
+
+        **The read, the check and the write are one transaction, and the write is guarded on the
+        state the check was made against.** They were not, and two stewards moving one row at the
+        same moment both won: reproduced at 29 of 40 attempts, leaving the row on an edge
+        ``TRANSITIONS`` does not declare, with ``decline_reason`` nulled by the *other* writer's
+        target, and two audit lines both claiming the same ``from_state`` -- so the append-only
+        trail stopped chaining. ``BEGIN IMMEDIATE`` serialises it; the ``AND state = ?`` guard is
+        the second lock, so a future refactor that moves the read back out fails loudly instead of
+        corrupting a row quietly.
         """
-        current = self.get(observation_id)
-        if current is None:
-            raise KeyError(f"no observation {observation_id!r}")
-        edge = transition_for(current.state, to)
-
-        proposed = _replace(
-            current,
-            state=to,
-            decline_reason=decline_reason if to is ObservationState.declined else None,
-            duplicate_of=duplicate_of if duplicate_of is not None else current.duplicate_of,
-            blocked_note=blocked_note or current.blocked_note,
-            triaged_at=current.triaged_at or utc_now(),
-        )
-        faults = faults_with(proposed)
-        if faults:
-            raise Rejected(f"observation {observation_id} -> {to.value}", faults)
-
         with self._tx() as conn:
-            conn.execute(
+            current = _observation_or_none(conn, observation_id)
+            if current is None:
+                raise KeyError(f"no observation {observation_id!r}")
+            edge = transition_for(current.state, to)
+
+            proposed = _replace(
+                current,
+                state=to,
+                decline_reason=decline_reason if to is ObservationState.declined else None,
+                duplicate_of=duplicate_of if duplicate_of is not None else current.duplicate_of,
+                blocked_note=blocked_note or current.blocked_note,
+                triaged_at=current.triaged_at or utc_now(),
+            )
+            faults = faults_with(proposed)
+            if faults:
+                raise Rejected(f"observation {observation_id} -> {to.value}", faults)
+
+            changed = conn.execute(
                 "UPDATE observation SET state = ?, decline_reason = ?, duplicate_of = ?, "
-                "blocked_note = ?, triaged_at = ? WHERE observation_id = ?",
+                "blocked_note = ?, triaged_at = ? WHERE observation_id = ? AND state = ?",
                 (
                     proposed.state.value,
                     proposed.decline_reason.value if proposed.decline_reason else None,
@@ -346,8 +360,15 @@ class FeedbackStore:
                     proposed.blocked_note,
                     proposed.triaged_at,
                     observation_id,
+                    current.state.value,
                 ),
-            )
+            ).rowcount
+            if changed != 1:
+                raise TransitionRefused(
+                    f"observation {observation_id} was {current.state.value} when this move was "
+                    f"checked and is not any more, so {current.state.value} -> {to.value} is not "
+                    "the move that would land. Read it again and decide against what it says now."
+                )
             _record_transition(
                 conn,
                 entity="observation",
@@ -444,37 +465,49 @@ class FeedbackStore:
         stops looking at. ``withdrawn`` needs a reason for the same rule the observation's decline
         follows -- a terminal state whose "why" lives only in somebody's memory is a row that gets
         re-drafted from scratch six weeks later.
+
+        Read, check and write are one transaction guarded on the checked state, for the reason
+        :meth:`move` gives at length: without it two concurrent moves both win. Here the damage is
+        that ``exported`` and ``withdrawn`` are both reachable from ``draft`` while
+        ``withdrawn -> exported`` is not declared -- so a lost update can un-withdraw a patch.
         """
-        current = self.get_patch(patch_id)
-        if current is None:
-            raise KeyError(f"no patch {patch_id!r}")
-        edge = patch_transition_for(current.state, to)
-
-        proposed = _replace(
-            current,
-            state=to,
-            withdrawn_reason=withdrawn_reason or current.withdrawn_reason,
-            expected_corpus_content_hash=(
-                expected_corpus_content_hash
-                if expected_corpus_content_hash is not None
-                else current.expected_corpus_content_hash
-            ),
-        )
-        faults = faults_with(proposed)
-        if faults:
-            raise Rejected(f"patch {patch_id} -> {to.value}", faults)
-
         with self._tx() as conn:
-            conn.execute(
+            current = _patch_or_none(conn, patch_id)
+            if current is None:
+                raise KeyError(f"no patch {patch_id!r}")
+            edge = patch_transition_for(current.state, to)
+
+            proposed = _replace(
+                current,
+                state=to,
+                withdrawn_reason=withdrawn_reason or current.withdrawn_reason,
+                expected_corpus_content_hash=(
+                    expected_corpus_content_hash
+                    if expected_corpus_content_hash is not None
+                    else current.expected_corpus_content_hash
+                ),
+            )
+            faults = faults_with(proposed)
+            if faults:
+                raise Rejected(f"patch {patch_id} -> {to.value}", faults)
+
+            changed = conn.execute(
                 "UPDATE patch SET state = ?, withdrawn_reason = ?, "
-                "expected_corpus_content_hash = ? WHERE patch_id = ?",
+                "expected_corpus_content_hash = ? WHERE patch_id = ? AND state = ?",
                 (
                     proposed.state.value,
                     proposed.withdrawn_reason,
                     proposed.expected_corpus_content_hash,
                     patch_id,
+                    current.state.value,
                 ),
-            )
+            ).rowcount
+            if changed != 1:
+                raise TransitionRefused(
+                    f"patch {patch_id} was {current.state.value} when this move was checked and "
+                    f"is not any more, so {current.state.value} -> {to.value} is not the move "
+                    "that would land."
+                )
             _record_transition(
                 conn,
                 entity="patch",
@@ -508,6 +541,12 @@ class FeedbackStore:
             )
 
     # ── reads ─────────────────────────────────────────────────────────────────
+
+    # ── reads on a caller's connection ────────────────────────────────────────
+    #
+    # `move`/`move_patch` need to read INSIDE their own transaction, and `self.get` opens a fresh
+    # connection -- which is exactly the window that let two writers both win. These two are the
+    # same query against a connection the caller already holds.
 
     def get(self, observation_id: str) -> Observation | None:
         with self._conn() as conn:
@@ -797,6 +836,20 @@ def _patch_from(row: sqlite3.Row) -> Patch:
 
 
 _Row = TypeVar("_Row", Observation, Patch)
+
+
+def _observation_or_none(conn: sqlite3.Connection, observation_id: str) -> Observation | None:
+    """One observation, on a connection the caller already holds inside a transaction."""
+    row = conn.execute(
+        "SELECT * FROM observation WHERE observation_id = ?", (observation_id,)
+    ).fetchone()
+    return _observation_from(row) if row is not None else None
+
+
+def _patch_or_none(conn: sqlite3.Connection, patch_id: str) -> Patch | None:
+    """One patch, on a connection the caller already holds inside a transaction."""
+    row = conn.execute("SELECT * FROM patch WHERE patch_id = ?", (patch_id,)).fetchone()
+    return _patch_from(row) if row is not None else None
 
 
 def _replace(row: _Row, **changes: Any) -> _Row:

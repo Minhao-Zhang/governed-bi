@@ -28,7 +28,10 @@ from governed_bi.register.assets import AssetType
 #: Full length on purpose: a truncated hash never equals the digest, and a fixture that
 #: carries a prefix would exercise a comparison no real patch can make.
 _BASE = "b" * 64
-_EXPECTED = "hash-the-bundle-predicted"
+#: Full length and hex, like `_BASE`. It was `"hash-the-bundle-predicted"` -- 25 characters,
+#: not hex -- under a comment two lines up saying full length was used on purpose, which is
+#: how the missing length rule on this field went unnoticed.
+_EXPECTED = "e" * 64
 
 
 def _patch(**over: object) -> Patch:

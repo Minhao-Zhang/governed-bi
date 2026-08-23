@@ -206,18 +206,28 @@ def _patch_problems(patch: Patch) -> list[str]:
             "base_corpus_content_hash is empty. A patch that does not say which tree it was "
             "authored against cannot be told apart from one whose tree has moved."
         )
-    elif len(patch.base_corpus_content_hash) != CONTENT_HASH_CHARS:
-        out.append(
-            f"base_corpus_content_hash is {len(patch.base_corpus_content_hash)} characters, and a "
-            f"corpus content hash is {CONTENT_HASH_CHARS}. A truncated one -- the 16-character "
-            "prefix every display uses -- never equals the digest the landing check compares it "
-            "against, so the patch reports `superseded` while nothing has changed."
-        )
+    # One loop for both hash fields, because "a corpus content hash is 64 hex characters" is one
+    # rule about two fields. It was stated twice and the second copy checked only hexness *if* the
+    # length already happened to be right -- so `expected_corpus_content_hash="deadbeefdeadbeef"`
+    # was accepted, and `derived_state` compares it against a 64-character digest in exactly the
+    # same way `base_` is compared. Same defect, other field, and a fixture blessed it.
+    #
+    # `base_` is mandatory and `expected_` is legitimately absent until a bundle is written, so
+    # only the emptiness rule differs between them.
     for name, value in (
         ("base_corpus_content_hash", patch.base_corpus_content_hash),
         ("expected_corpus_content_hash", patch.expected_corpus_content_hash),
     ):
-        if value and len(value) == CONTENT_HASH_CHARS and not _is_hex(value):
+        if not value:
+            continue
+        if len(value) != CONTENT_HASH_CHARS:
+            out.append(
+                f"{name} is {len(value)} characters, and a corpus content hash is "
+                f"{CONTENT_HASH_CHARS}. A truncated one -- the 16-character prefix every display "
+                "uses -- never equals the digest the landing check compares it against, so the "
+                "patch reports `superseded` while nothing has changed."
+            )
+        elif not _is_hex(value):
             out.append(f"{name} is the right length but is not hex")
 
     authors_nothing = patch.intent in (PatchIntent.engine_defect, PatchIntent.no_change)
