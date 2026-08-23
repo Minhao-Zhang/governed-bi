@@ -3,7 +3,9 @@
 /**
  * What a steward must see on the same screen as the decision.
  *
- * **Five blocks, and the two missing ones say why they are missing.** The design specified seven.
+ * **Six blocks, and the missing one says why it is missing.** The design specified seven. Block 6,
+ * the reproducer, is here and costs nothing -- for an imported failure "does this still happen" is a
+ * coverage re-check with the answering model off, not a model call.
  * Block 5 ("which corpus assets were in context") and block 7 ("the full record") are absent because
  * an evaluation artifact records neither: `facet_hits`, `pulled_in` and `turn_id` are on **0 of
  * 1,351** rows of the v4 arm, measured. A block rendered empty would read as "we did not bother"
@@ -21,6 +23,7 @@
 
 import { AlertTriangle } from "lucide-react";
 
+import { ReproducePanel } from "@/components/review/reproduce-panel";
 import { SqlBlock } from "@/components/answer/sql-block";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -157,6 +160,13 @@ export function EvidenceBundle({ observation }: { observation: Observation }): R
       {/* 5 — the block that cannot exist here, saying so. */}
       <Section title="Which corpus assets were in context">
         <p className="text-xs text-muted-foreground">{REVIEW_COPY.noAssetEvidence}</p>
+      </Section>
+
+      {/* 6 — the reproducer. A command rather than a button: the check needs a warehouse and a warm
+              vector cache, and a button that 404'd on most deployments would be worse than a line
+              somebody can copy. */}
+      <Section title={REVIEW_COPY.reproduceHeading}>
+        <ReproducePanel observation={observation} />
       </Section>
 
       {atLeast(mode, "engineer") && (

@@ -18,6 +18,12 @@ bundles landing in one week make exact-hash matching fail for a change that *did
 two-state model calls that "handed off, forever" — which is the unclosable ``open: true`` row this
 whole design replaces, reintroduced one level up.
 
+**``retrieval_verified`` is the fifth state and the only one that needs something to have been
+run.** The other four are read off the corpus. This one says the tables the affected question needs
+are reachable again, which is a claim about a *question* and not about a tree -- so it comes from the
+patch's own T3 row, written by ``tools/reproduce_observation.py --record``. A patch nobody ran it on
+reports ``landed_matched``, not a failure: an unrun check must not read as a failed one.
+
 ``--verify`` asks the other question: is this bundle still applicable? Between export and commit the
 corpus can move, and the honest answers are three — applies cleanly, the base moved but the field is
 untouched (re-export and go), or the field changed under it (back to the steward). Without this the
@@ -29,6 +35,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 from governed_bi.corpus.hash import corpus_content_hash
 from governed_bi.corpus.patch import FieldNotLocatable, StaleValue, apply_edit, read_field
@@ -94,7 +101,10 @@ def _report(store: FeedbackStore, corpus_root: Path, *, patch_id: str | None) ->
     print(f"corpus {corpus_root} at {loaded_hash[:16]}\n")
     for patch in patches:
         state = derived_state(
-            patch, loaded_corpus_hash=loaded_hash, asset_text_now=text_now
+            patch,
+            loaded_corpus_hash=loaded_hash,
+            asset_text_now=text_now,
+            retrieval_ok=_retrieval_ok(patch),
         )
         print(f"{patch.patch_id}  {state.value}")
         print(f"    {_SENTENCE[state]}")
@@ -190,6 +200,23 @@ def _exported(store: FeedbackStore) -> list:
             if patch.state in (PatchState.exported, PatchState.draft) and patch not in out:
                 out.append(patch)
     return out
+
+
+def _retrieval_ok(patch: Any) -> bool | None:
+    """The patch's T3 verdict, or ``None`` when nothing ran it.
+
+    **``None`` and ``False`` are different answers and both leave the landing unchanged.** ``None``
+    is "nobody asked"; ``False`` is "asked, and the question still fails". Collapsing them would let
+    an unrun check read as a failed one, which sends a landed change back to the steward.
+
+    `retrieval_verified` was unreachable until this existed: `derived_state` has taken
+    `retrieval_ok` since it was written and every caller passed `None`, so the state was declared
+    and nothing could compute it. The value comes from `tools/reproduce_observation.py --record`.
+    """
+    tier = dict(getattr(patch, "ladder", {}) or {}).get("T3")
+    if not isinstance(tier, dict) or "passed" not in tier:
+        return None
+    return bool(tier["passed"])
 
 
 def _source_refs(assets: list) -> dict[str, str]:

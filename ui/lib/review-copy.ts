@@ -187,4 +187,23 @@ export const REVIEW_COPY = {
   draftHeading: "Draft a change",
   draftSubmit: "Draft this change",
   diffHeading: "What this change does",
+
+  /* ── the reproducer (T3) ───────────────────────────────────────────────── */
+
+  reproduceHeading: "Does this still happen?",
+
+  /** `--embed` is not optional and the sentence says why. */
+  reproduceHow:
+    "Re-route this question through the engine with the answering model off. It costs nothing — the vector cache is warm — and it takes about twenty seconds. Run it with --embed: a lexical-only check has a different coverage ceiling, and one observation recorded with a single missing table came back with two that way.",
+
+  /** The claim, and the number that bounds it. The one sentence between a green check and
+   *  somebody reading it as "fixed". */
+  reproduceClaim:
+    "The tables the reference answer reads are reachable again. Not that the answer is right: on turns where every table was already reachable, measured accuracy is 0.7555, so about one in four would still come back wrong.",
+
+  /** The two cases the check cannot answer, in the CLI's own words. */
+  reproduceNoGold:
+    "There is no reference answer on this row, so there is nothing for a coverage check to compare against. Somebody filed this by hand rather than importing it from an evaluation.",
+  reproduceNotCoverage:
+    "Every table the reference answer reads was already reachable when this was filed, so this was never a coverage failure. A coverage check cannot say anything about it — the free ladder stops here.",
 } as const;
