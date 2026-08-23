@@ -254,8 +254,17 @@ def main() -> int:
     # No headers: no route asks for a credential (2026-08-13). This used to carry `x-api-key`, and
     # `main()` used to exit 2 when the variable was unset rather than measure the auth gate.
     # `make_app` also lost its `graph` with `POST /chat`, and nothing here posts a turn.
+    # The feedback store is `make_app`'s fourth dependency (ADR 0015). A temp file, because this
+    # script must not write into the operator's real queue to prove a route answers.
+    from tempfile import mkdtemp
+
+    from governed_bi.feedback.store import FeedbackStore
+
     failures += run_checks(TestClient(make_app(
-        session, ThreadTurnLog(_EmptyThreadStore), PendingClarifications(_EmptyThreadStore)
+        session,
+        ThreadTurnLog(_EmptyThreadStore),
+        PendingClarifications(_EmptyThreadStore),
+        FeedbackStore(Path(mkdtemp(prefix="smoke-feedback-")) / "feedback.sqlite"),
     )))
 
     print(f"\n{'PASS' if not failures else 'FAIL: ' + ', '.join(failures)}")

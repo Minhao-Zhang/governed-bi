@@ -8,7 +8,9 @@ contradiction "accepted with no code" and reports "code with no acceptance."
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -66,3 +68,20 @@ def needs(parcel: str) -> pytest.MarkDecorator:
             f"make it pass without editing it."
         ),
     )
+
+
+def scratch_feedback_store() -> Any:
+    """A throwaway :class:`~governed_bi.feedback.store.FeedbackStore` in a temp directory.
+
+    Here rather than in a fixture because most call sites build their app in a module-level helper
+    with no request available. The reason it exists at all is that ``routes.make_app`` takes the
+    store as its fourth **dependency** and does not build one: an app that built its own would put
+    ``runs/feedback.sqlite`` behind every test that constructs one, and a suite that writes into
+    the operator's real queue is a suite nobody can trust twice.
+
+    Not cleaned up, deliberately: ``mkdtemp`` under the OS temp root is the platform's problem, and
+    a fixture that deleted it would have to become a fixture, which is what this avoids.
+    """
+    from governed_bi.feedback.store import FeedbackStore
+
+    return FeedbackStore(Path(tempfile.mkdtemp(prefix="gb-feedback-")) / "feedback.sqlite")

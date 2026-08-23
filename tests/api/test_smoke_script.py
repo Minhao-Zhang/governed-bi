@@ -29,7 +29,7 @@ from typing import Any
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
+from contracts import needs, scratch_feedback_store  # noqa: E402
 
 pytestmark = [needs("J")]
 
@@ -152,7 +152,7 @@ def test_every_check_the_script_makes_still_passes(smoke_api) -> None:
     from governed_bi.api.routes import make_app
 
     lines: list[str] = []
-    app = make_app(_session(), _TurnLog(), _Pending())
+    app = make_app(_session(), _TurnLog(), _Pending(), scratch_feedback_store())
     failures = smoke_api.run_checks(TestClient(app), out=lines.append)
 
     assert not failures, "\n".join(lines)

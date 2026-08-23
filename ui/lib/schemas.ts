@@ -544,7 +544,10 @@ export const pendingClarificationSchema = z.object({
   thread_id: z.string().nullable(),
   source: z.enum(["interrupt", "from_refusal", "wrong_answer"]).optional(),
   basis: z.enum(["data_definition", "ranking_ambiguity"]).nullable().optional(),
-  report_id: z.string().nullable().optional(),
+  // `observation_id` since 2026-08-23, where it was `report_id`: that name was minted by the
+  // deleted `serve/raised.py`, and "report" would have been the third meaning of the word in
+  // one system. Null on an interrupt row, present on an observation row.
+  observation_id: z.string().nullable().optional(),
   /** What a resume would have to name. Carried, not used — this surface is read-only until the
    * corpus write path has a provenance gate. */
   interrupt_id: z.string().nullable().optional(),
@@ -624,7 +627,11 @@ export const auditTraceSchema = z.object({
   record: z.record(z.string(), z.unknown()).optional(),
   undeclared_keys: z.array(z.string()).optional().default([]),
   clarifications: z.array(z.record(z.string(), z.unknown())).optional().default([]),
-  raised: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  // Observations filed about this turn, from `runs/feedback.sqlite`. Was `raised`, which read
+  // a checkpoint channel that no longer exists (ADR 0015). Left deliberately opaque, like its
+  // `clarifications` sibling: the server owns the row's shape and a client that pinned it
+  // would fail the parse for every row in the response the day a field is added.
+  observations: z.array(z.record(z.string(), z.unknown())).optional().default([]),
 });
 
 /** `GET /audit/corpus` — what the corpus is, and what is wrong with it.

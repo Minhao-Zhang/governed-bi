@@ -28,7 +28,6 @@ from governed_bi.serve.nodes.rewrite import rewrite_node
 from governed_bi.serve.nodes.route_retrieve import connect_node, resolve_node, route_node
 from governed_bi.serve.nodes.stamp import stamp
 from governed_bi.serve.nodes.terminal import decline_node, refuse_node
-from governed_bi.serve.raised import raise_note
 from governed_bi.serve.state import ServeInput, ServeOutput, ServeState
 from governed_bi.serve.wrap import wrap_node
 
@@ -221,10 +220,12 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     rail("decline", decline_node)
     # Unwrapped: nothing after stamp can record a wrap crash.
     graph.add_node("stamp", stamp)
-    # Unattached: no edge from START, never runs during a turn. Exists so
-    # ``aupdate_state(as_node="raise_note")`` can append ``ServeState.raised`` —
-    # ``as_node=None`` only writes ``messages`` (A2/A3).
-    graph.add_node("raise_note", raise_note)
+    # There is deliberately no unattached write node here. One existed —
+    # ``raise_note``, whose only purpose was to be an ``aupdate_state(as_node=...)``
+    # target for reader-filed notes — and ADR 0015 §2 deleted it with the channel it
+    # wrote. A node with no edge from START is a write path into checkpointed state
+    # that the graph's own topology does not describe, so the graph is easier to
+    # reason about without one and nothing needs it: feedback is its own store.
 
     def _fanout_passthrough(state: ServeState) -> dict[str, Any]:
         return {}

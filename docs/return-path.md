@@ -138,16 +138,21 @@ that word, and an evidence bundle is a `Bundle`.
 at once for no gain. `wrong_answer` keeps a real job: the "something is wrong and I cannot say
 what" bucket.
 
-**`report_id` is retired, and this was the closest call in the vocabulary.** A critic argued for
-keeping *Report* as the canonical noun on the strongest available grounds: `report_id` and the
-`rpt-` prefix are *already* the wire, in three server-side readers plus `ui/lib/schemas.ts:547`,
-and `serve/raised.py::mint_report_id` mints them today. It loses on one count. "Report" would be
-the **third** meaning of the word in one system — `eval/report.py`, a BI report (which to every
-analyst alive means a dashboard), and a reader's complaint — and a word carrying two meanings in
-one system is the specific defect this repository audits itself for. `Observation` collides with
-nothing and is more honest about the thing: a reader says what they saw, not what is wrong.
-The cost is four call sites in a greenfield tree, paid once, during a migration (§2) that touches
-all four anyway.
+**`report_id` is retired, and this page under-priced it.** A critic argued for keeping *Report*
+as the canonical noun on the strongest available grounds: `report_id` and the `rpt-` prefix were
+*already* the wire. It loses on one count — "report" would be the **third** meaning of the word in
+one system, after `eval/report.py` and the thing every BI user means by it, and a word carrying two
+meanings in one system is the specific defect this repository audits itself for. `Observation`
+collides with nothing and is more honest: a reader says what they saw, not what is wrong.
+
+**What this page got wrong was the cost.** It said "a rename with a deleted owner, not a rename
+with churn", on the grounds that `serve/raised.py::mint_report_id` was being deleted anyway. The
+owner was deleted; the **contract** was not. Measured while doing it: `docs/openapi.json` pinned
+`RaisedRowResponse` with seven required non-nullable fields, `report_id` was declared in the
+pending queue's `meta.columns` *because the client keys a card on it*, and
+`tests/api/test_the_spec_matches_the_server.py` held four assertions over that operation. The
+rename touched all of them plus `ui/lib/schemas.ts` and `pending-queue.tsx`. Still the right call,
+and about half a day rather than the nothing this claimed.
 
 ---
 

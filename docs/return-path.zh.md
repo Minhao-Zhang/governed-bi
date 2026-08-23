@@ -122,13 +122,18 @@ git commit -F …/COMMIT_MSG.txt
 `api/thread_turns.py::_open_raised_of` 的收窄逻辑读取。扩宽或重命名它会一次打断四个调用点，而且没有
 收益。`wrong_answer` 有一个真实职责：「有问题但我说不清是什么」这个兜底桶。
 
-**`report_id` 退役，而这是整个词汇表里最接近的一次判断。** 一位批判者以最强的可用理由主张保留
-*Report* 作为规范名词：`report_id` 和 `rpt-` 前缀**已经**是 wire，存在于三个服务端读取方加
-`ui/lib/schemas.ts:547`，而 `serve/raised.py::mint_report_id` 今天就在铸造它们。它输在一点上。
-"Report" 会成为这个系统里这个词的**第三**个意思 —— `eval/report.py`、一份 BI 报表（对每个在世的分析师
-都意味着 dashboard）、以及一位读者的投诉 —— 而一个词在一个系统里背两个意思，正是本仓库专门审计自己的
-那个缺陷。`Observation` 与任何东西都不冲突，而且对这个东西更诚实：读者说的是他们看到了什么，不是什么
-错了。代价是一棵 greenfield 树里的四个调用点，一次付清，而且是在一次本来就要碰到这四处的迁移（§2）中付。
+**`report_id` 退役，而本页把它的代价算低了。** 一位批判者以最强的可用理由主张保留 *Report* 作为
+规范名词：`report_id` 和 `rpt-` 前缀**已经**是 wire。它输在一点上 —— "report" 会成为这个系统里这个
+词的**第三**个意思，排在 `eval/report.py` 和每个 BI 用户所指的那个东西之后，而一个词在一个系统里背
+两个意思，正是本仓库专门审计自己的那个缺陷。`Observation` 与任何东西都不冲突，而且更诚实：读者说的
+是他们看到了什么，不是什么错了。
+
+**本页搞错的是代价。** 它写着「这是一次所有者已被删除的重命名，不是一次带 churn 的重命名」，理由是
+`serve/raised.py::mint_report_id` 反正要删。所有者确实删了；**契约**没有。动手时实测到：
+`docs/openapi.json` 用七个必填非空字段钉住了 `RaisedRowResponse`；`report_id` 被声明在待办队列的
+`meta.columns` 里，**正因为客户端拿它做卡片的 key**；而 `tests/api/test_the_spec_matches_the_server.py`
+在那个 operation 上有四条断言。这次重命名碰了以上全部，加 `ui/lib/schemas.ts` 和 `pending-queue.tsx`。
+判断仍然是对的，而代价是大半天，不是本页声称的「不花什么」。
 
 ---
 

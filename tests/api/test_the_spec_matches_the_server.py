@@ -270,8 +270,10 @@ def _envelope(session: Any) -> dict[str, Any]:
 def wire() -> dict[str, Any]:
     """The app, the spec and the turn id the tests address. Built once; the graph run is the cost.
 
-    One thread carries **both** pending populations — an unanswered ``ask_user`` interrupt, which
-    contributes ``interrupt_id``/``task_id``, and an open ``raised`` note, which omits both.
+    One thread carries the interrupt half of the pending queue — an unanswered ``ask_user``
+    question, which contributes ``interrupt_id``/``task_id``. The observation half comes from the
+    feedback store, which the filing test writes into: two stores, unioned by the route, so the
+    fixture seeds one and the test seeds the other.
 
     A **second, degenerate thread** exists to make the server send ``null`` where it can: it has
     no ``thread_id`` and an interrupt with no ``question``, the two values the handler passes
@@ -281,11 +283,10 @@ def wire() -> dict[str, Any]:
     """
     from fastapi.testclient import TestClient
 
-    from governed_bi.api.raised_write import ThreadBusy
+    from contracts import scratch_feedback_store
     from governed_bi.api.routes import make_app
     from governed_bi.api.thread_turns import PendingClarifications, ThreadTurnLog
     from governed_bi.datasource.postgres import PostgresConnector
-    from governed_bi.serve.raised import raised_row
 
     # A real connector, never connected: `endpoint` is pure DSN parsing, and it is the only way
     # `connection.host`/`port`/`database` reach the wire at all (SQLite carries none of them).
@@ -306,8 +307,6 @@ def wire() -> dict[str, Any]:
         "interrupts": {"task-spec-1": [{"id": "int-spec-1", "value": asked}]},
         "values": {
             "turns": [envelope],
-            "raised": [raised_row(kind="wrong_answer", turn_id=turn_id,
-                                  thread_id=THREAD, note="off by one")],
             "clarifications": [{**asked, "turn_id": turn_id, "answer": "the critic one"}],
         },
     }
@@ -322,19 +321,17 @@ def wire() -> dict[str, Any]:
     class _Client:
         threads = _FakeThreads([thread, degenerate])
 
-    def _busy(thread_id: str, row: dict[str, Any]) -> None:
-        raise ThreadBusy(f"thread {thread_id} is paused at an interrupt")
-
+    # No `state_writer` and no "busy" client. Filing wrote graph state through one and 409'd on a
+    # paused thread; ADR 0015 §2 replaced the channel with a table, so there is no interrupt to
+    # consume and no 409 to declare -- and the reader whose turn is paused can file, which is what
+    # `tests/api/test_an_observation_is_filed_on_a_turn.py` asserts.
     queue = PendingClarifications(client_factory=lambda: _Client())
-    log = ThreadTurnLog(
-        client_factory=lambda: _Client(),
-        state_writer=lambda _tid, row: thread["values"]["raised"].append(row),
-    )
-    busy_log = ThreadTurnLog(client_factory=lambda: _Client(), state_writer=_busy)
+    log = ThreadTurnLog(client_factory=lambda: _Client())
+    store = scratch_feedback_store()
     return {
         "spec": json.loads(SPEC_PATH.read_text(encoding="utf-8")),
-        "client": TestClient(make_app(session, log, queue)),
-        "busy": TestClient(make_app(session, busy_log, queue)),
+        "client": TestClient(make_app(session, log, queue, store)),
+        "store": store,
         "turn_id": turn_id,
     }
 
@@ -399,39 +396,40 @@ def test_the_spec_declares_the_trace_for_a_turn_that_exists_and_one_that_does_no
         assert not problems, "\n".join(problems)
 
 
-def test_the_spec_declares_the_envelope_the_raised_route_returns_and_not_the_row(
+def test_the_spec_declares_the_envelope_the_filing_route_returns_and_not_the_row(
     wire: dict[str, Any],
 ) -> None:
-    """The 200 is ``{"ok": true, "row": {...}}``, and the spec said "the row" in prose only.
+    """The **201** is ``{"ok": true, "observation": {...}}``.
 
-    Until 2026-08-22 this was the one operation whose 200 had no schema at all, so a client
-    written from the spec read ``kind`` and ``report_id`` off the envelope and found nothing. The
-    three error codes ride along because they are the rest of the same operation's contract — and
-    because a 422 here carries **two** different bodies, the handler's own ``HTTPError`` and
-    FastAPI's ``HTTPValidationError`` for a body that is not a JSON object.
+    Three changes from the version this replaces, all of them ADR 0015 §2's. The status is 201 and
+    not 200, because the route creates a row in a store rather than appending to a channel, and a
+    client should not have to read the body to learn which. The envelope's key is ``observation``
+    rather than ``row``. And **there is no 409**: filing used to refuse on a paused thread because
+    the write would consume the live ``ask_user`` interrupt, and nothing writes graph state now.
+
+    The error codes ride along because they are the rest of the same operation's contract — and a
+    422 here carries **two** different bodies, the handler's own ``HTTPError`` and FastAPI's
+    ``HTTPValidationError`` for a body that is not a JSON object.
     """
     spec, client, turn_id = wire["spec"], wire["client"], wire["turn_id"]
 
     ok = client.post(f"/turns/{turn_id}/raised", json={"kind": "wrong_answer", "note": "off by one"})
-    assert ok.status_code == 200, ok.text
+    assert ok.status_code == 201, ok.text
     problems = _violations(
-        ok.json(), _declared(spec, "POST", "/turns/{turn_id}/raised", "200"), spec,
+        ok.json(), _declared(spec, "POST", "/turns/{turn_id}/raised", "201"), spec,
         f"POST /turns/{turn_id}/raised $",
     )
     assert not problems, "\n".join(problems)
     assert "kind" not in ok.json(), (
-        "the row reached the top level, so the old description-only 200 was right and this "
-        "wrapper schema is now the wrong one"
+        "the row reached the top level, so the envelope schema is the wrong one"
     )
 
-    cases = [
-        ("404", "/turns/no-such-turn/raised", {"kind": "from_refusal"}, client),
-        ("422", f"/turns/{turn_id}/raised", {"kind": "not-a-kind"}, client),
-        ("422", f"/turns/{turn_id}/raised", ["not", "an", "object"], client),
-        ("409", f"/turns/{turn_id}/raised", {"kind": "from_refusal"}, wire["busy"]),
-    ]
-    for status, url, body, caller in cases:
-        response = caller.post(url, json=body)
+    for status, url, body in (
+        ("404", "/turns/no-such-turn/raised", {"kind": "from_refusal"}),
+        ("422", f"/turns/{turn_id}/raised", {"kind": "not-a-kind"}),
+        ("422", f"/turns/{turn_id}/raised", ["not", "an", "object"]),
+    ):
+        response = client.post(url, json=body)
         assert str(response.status_code) == status, f"{url} {body} -> {response.status_code}"
         problems = _violations(
             response.json(),
@@ -448,12 +446,19 @@ def test_the_pending_queue_carries_both_populations_so_neither_shape_goes_unchec
     """A guard on the fixture, not on the server.
 
     The pending row's two hardest properties are ``interrupt_id`` and ``task_id``: present on an
-    interrupt row, **absent** on a raised note, and declared in neither ``PENDING_FIELDS`` nor —
-    until 2026-08-22 — the spec. The conformance test above reaches that asymmetry only if both
+    interrupt row, **absent** on an observation row, and declared in neither ``PENDING_FIELDS`` nor
+    — until 2026-08-22 — the spec. The conformance test above reaches that asymmetry only if both
     kinds of row are in the response, and a fixture that quietly stopped producing one would make
     it pass while covering nothing. Same for the two nullable fields: a nullability declaration is
     unfalsifiable unless some row actually carries the null.
+
+    **The two populations now come from two stores**, which is why this seeds one directly: the
+    interrupt half is thread state and the observation half is ``runs/feedback.sqlite``, and the
+    route is the only place that holds both.
     """
+    wire["client"].post(
+        f"/turns/{wire['turn_id']}/raised", json={"kind": "wrong_answer", "note": "off by one"}
+    )
     rows = wire["client"].get("/clarifications/pending").json()["rows"]
     sources = {row["source"] for row in rows}
     assert "interrupt" in sources and sources - {"interrupt"}, (
@@ -464,7 +469,7 @@ def test_the_pending_queue_carries_both_populations_so_neither_shape_goes_unchec
     note = next(row for row in rows if row["source"] != "interrupt")
     assert "task_id" in interrupt and "interrupt_id" in interrupt, interrupt
     assert "task_id" not in note and "interrupt_id" not in note, (
-        "a raised note grew the resume fields; the spec declares them absent here, not null"
+        "an observation row grew the resume fields; the spec declares them absent here, not null"
     )
     for field in ("question", "thread_id"):
         assert any(row[field] is None for row in rows), (

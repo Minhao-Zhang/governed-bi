@@ -62,7 +62,7 @@ export function PendingQueueSurface() {
             <Card
               key={
                 row.clarification_id ??
-                row.report_id ??
+                row.observation_id ??
                 `${row.thread_id}-${row.asked_at}`
               }
               className="p-4"

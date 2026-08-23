@@ -258,18 +258,32 @@ export const api = {
       MOCK_PENDING_QUEUE,
     ),
 
-  /** File a reader note on a finished turn (`POST /turns/{id}/raised`). */
+  /**
+   * File an observation about a finished turn (`POST /turns/{id}/raised`).
+   *
+   * 201, not 200: the route creates a row in a store rather than appending to a channel.
+   * `category` and `expected` are optional -- the first tap files something valid, and a
+   * refinement is never a gate.
+   */
   raiseTurn: (
     turnId: string,
-    body: { kind: "from_refusal" | "wrong_answer"; note?: string },
-  ): Promise<{ ok: boolean; row: Record<string, unknown> }> => {
+    body: {
+      kind: "from_refusal" | "wrong_answer";
+      category?: string;
+      note?: string;
+      expected?: string;
+    },
+  ): Promise<{ ok: boolean; observation: Record<string, unknown> }> => {
     if (USE_MOCKS) {
-      return Promise.resolve({ ok: true, row: { kind: body.kind, note: body.note ?? "" } });
+      return Promise.resolve({
+        ok: true,
+        observation: { kind: body.kind, note: body.note ?? "", state: "open", open: true },
+      });
     }
     return post(
       `/turns/${encodeURIComponent(turnId)}/raised`,
       body,
-      z.object({ ok: z.boolean(), row: z.record(z.string(), z.unknown()) }),
+      z.object({ ok: z.boolean(), observation: z.record(z.string(), z.unknown()) }),
     );
   },
 

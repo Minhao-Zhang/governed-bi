@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 
+from contracts import scratch_feedback_store
 from governed_bi.corpus.schema import (
     AssetType,
     Binding,
@@ -156,7 +157,7 @@ def _client(grant: Grant) -> Any:
         corpus_content_hash_="corpus-under-test",
     )
     assert not session.fatal_problems, [str(p) for p in session.fatal_problems]
-    return TestClient(make_app(session, _TurnLog(), _Pending()))
+    return TestClient(make_app(session, _TurnLog(), _Pending(), scratch_feedback_store()))
 
 
 class _TurnLog:

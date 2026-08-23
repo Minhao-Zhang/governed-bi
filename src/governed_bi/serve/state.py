@@ -558,9 +558,16 @@ class ServeOutput(TypedDict, total=False):
     ``delivery`` (the whole rendered corpus context block). This class is not a guarantee about
     either surface.
 
-    Count went 46 → 47 with :attr:`ServeState.turns` and 47 → 48 with :attr:`ServeState.raised`
-    (48 re-measured 2026-08-22 on langgraph 1.2.11, by reading ``stream_channels_asis`` off the
-    compiled graph). Those channels widen the §B1 remainder on the **checkpoint-read** surfaces
+    Count went 46 → 47 with :attr:`ServeState.turns`, 47 → 48 with a ``raised`` channel, and
+    **48 → 47 on 2026-08-23 when that channel was deleted** (ADR 0015 §2). It held reader-filed
+
+    notes, and an accumulating channel cannot hold a row that changes: a note has a lifecycle, so
+    closing one would have meant a second row and a fold in every reader. Those rows live in
+    ``runs/feedback.sqlite`` now. The channel is gone rather than kept-and-unused because it was
+    measured empty — zero rows across the checkpoint store, the harness store and every platform
+    thread row — so there was nothing to migrate and no reason to carry a compatibility union.
+
+    ``turns`` widens the §B1 remainder on the **checkpoint-read** surfaces
     and not on the streamed one: what escapes there is one ``answer["record"]`` per read plus
     every prior turn's record, now that ``turns`` is present.
     Since ``GET /threads/*`` requires no credential (finding A7), that is the surface to price.
@@ -619,10 +626,6 @@ class ServeState(TypedDict, total=False):
     usage: Annotated[list[UsageRecord], operator.add]
     clarifications: Annotated[list[dict[str, Any]], operator.add]
     clarification_requested: bool
-    #: Reader-filed notes on a finished turn (from a refusal, or a wrong delivered
-    #: answer). Accumulates; each row carries ``turn_id`` / ``thread_id``. Written only
-    #: through the unattached ``raise_note`` node via in-process ``aupdate_state``.
-    raised: Annotated[list[dict[str, Any]], operator.add]
     #: Every finished turn of this thread, appended by ``api/graph_app.record_node``. This is the
     #: channel that makes a checkpoint hold the **whole conversation's** audit trail rather than
     #: only the newest turn: ``answer``, ``execution`` and ``generated_sql`` are all in
@@ -710,7 +713,7 @@ PER_TURN_RESET: dict[str, Any] = {
 
 #: Channels that accumulate across turns (each row carries turn identity).
 ACCUMULATING: frozenset[str] = frozenset(
-    {"messages", "usage", "clarifications", "turns", "raised"}
+    {"messages", "usage", "clarifications", "turns"}
 )
 
 #: Written by ``turn()`` itself — turn identity and run claims.

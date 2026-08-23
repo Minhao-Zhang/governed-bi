@@ -23,6 +23,7 @@ nothing.
 
 from __future__ import annotations
 
+import tempfile
 from typing import Any
 
 import pytest
@@ -60,14 +61,11 @@ def _thread(
     updated_at: str,
     interrupts: dict[str, Any] | None,
     status: str = "interrupted",
-    raised: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     # `turns` is present so a reader that forgot to project would be caught by the size of what it
-    # got back rather than by a missing key. `raised` is only set when a test asks for it, so a walk
-    # that stopped extracting the channel fails on the note tests rather than on all of them.
+    # got back rather than by a missing key. There is no `raised` seed any more: ADR 0015 §2 deleted
+    # that channel, so this reader has one population and one walk.
     values: dict[str, Any] = {"turns": [{"question": "unrelated"}]}
-    if raised is not None:
-        values["raised"] = raised
     return {
         "thread_id": thread_id,
         "updated_at": updated_at,
@@ -166,8 +164,10 @@ def test_the_queue_asks_for_interrupted_threads_and_selects_the_interrupts() -> 
         "every row comes back empty"
     )
     assert not call["extract"], (
-        "the paused walk must not also project `values.raised`: the note walk reads that channel "
-        "off the same threads, so paying for it twice reports every note on a paused thread twice"
+        "the paused walk projects no channel. It used to matter because a second walk read "
+        "`values.raised` off the same threads; that walk is gone with the channel (ADR 0015 §2), "
+        "and what is left is that an unprojected thread carries the whole of `ServeState` -- "
+        "2.42 MB for sixteen threads, measured -- so `select` is the whole read."
     )
 
 
@@ -388,7 +388,13 @@ def _app_client(threads: list[dict[str, Any]]) -> Any:
             return []
 
     queue, _ = _queue(threads)
-    return TestClient(make_app(object(), _TurnLog(), queue))
+    # The store is the app's fourth dependency. Empty here on purpose: this file is about the
+    # interrupt half of the union, and `tests/api/test_the_pending_queue_unions_two_stores.py`
+    # is about the union itself.
+    from governed_bi.feedback.store import FeedbackStore
+
+    store = FeedbackStore(tempfile.mkdtemp(prefix="pending-") + "/feedback.sqlite")
+    return TestClient(make_app(object(), _TurnLog(), queue, store))
 
 
 def test_the_route_serves_the_queue_with_its_columns() -> None:
@@ -431,58 +437,6 @@ def test_the_route_refuses_a_nonsense_window_rather_than_clamping_silently() -> 
     assert client.get("/clarifications/pending?offset=-1").status_code == 422
 
 
-def _note(
-    kind: str = "from_refusal",
-    *,
-    turn_id: str = TURN_A,
-    thread_id: str = "t-idle",
-    note: str = "this refusal is wrong",
-    open_: bool = True,
-    report_id: str = "rpt-abc-0123456789ab",
-) -> dict[str, Any]:
-    """One ``raised`` row in the shape ``serve/raised.raised_row`` mints."""
-    return {
-        "kind": kind,
-        "report_id": report_id,
-        "turn_id": turn_id,
-        "thread_id": thread_id,
-        "reported_at": "2026-08-19T09:00:00Z",
-        "note": note,
-        "open": open_,
-    }
-
-
-def test_an_open_raised_row_on_an_idle_thread_joins_the_queue() -> None:
-    """A finished refusal is not an interrupt; it still belongs on the pending list."""
-    queue, client = _queue([_thread("t-idle", "2026-08-19T10:00:00Z", {}, status="idle", raised=[_note()])])
-    page = queue.pending()
-    assert any(call["status"] is None for call in client.threads.calls), (
-        "the note walk must send no status filter -- see the coverage tests below"
-    )
-    (row,) = page.rows
-    assert row["source"] == "from_refusal"
-    assert row["basis"] is None
-    assert row["turn_id"] == TURN_A
-    assert row["clarification_id"] is None
-    assert row["report_id"] == "rpt-abc-0123456789ab"
-    assert "refusal" in (row["question"] or "").lower() or "wrong" in (row["question"] or "")
-
-
-def test_a_closed_raised_row_is_not_pending() -> None:
-    queue, _ = _queue(
-        [
-            _thread(
-                "t-idle",
-                "2026-08-19T10:00:00Z",
-                {},
-                status="idle",
-                raised=[_note("wrong_answer", note="", open_=False)],
-            )
-        ]
-    )
-    assert queue.pending().rows == []
-
-
 def test_a_ranking_interrupt_carries_its_basis() -> None:
     queue, _ = _queue(
         [
@@ -514,125 +468,23 @@ def test_an_unanswered_definition_interrupt_stays_pending() -> None:
     assert row["basis"] == "data_definition"
 
 
-# ── coverage by status ───────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize("status", ["idle", "error", "busy", "interrupted"])
-def test_a_note_is_pending_whatever_status_its_thread_is_in(status: str) -> None:
-    """The coverage decision, pinned per status rather than described.
-
-    A note is filed on a *finished* turn, and the thread it hangs off is in whatever state its last
-    run left: ``idle`` normally, ``error`` when that run crashed — the very turn a reader flags —
-    ``busy`` while a later question on the same conversation runs, ``interrupted`` when that later
-    question stopped to ask something. The walk that finds notes therefore filters on no status at
-    all. ``error`` is the case that made this non-negotiable: nothing moves a thread out of it, so a
-    filter naming only ``idle`` hid that note **permanently**.
-    """
-    queue, client = _queue([_thread("t-x", "2026-08-19T10:00:00Z", {}, status=status, raised=[_note(thread_id="t-x")])])
-    page = queue.pending()
-
-    assert [row["source"] for row in page.rows] == ["from_refusal"], (
-        f"a note on a {status!r} thread never reached the queue"
-    )
-    note_walks = [c for c in client.threads.calls if c["status"] is None]
-    assert note_walks, "no walk read the store unfiltered, so some status is now hidden"
-    assert note_walks[0]["extract"] == {"raised": "values.raised"}, (
-        "the unfiltered walk must project `values.raised`; without it the rows come back empty"
-    )
-
-
-def test_a_note_on_a_paused_thread_is_one_row_not_two() -> None:
-    """The two walks overlap on interrupted threads, and only one of them reads ``raised``.
-
-    Both the paused-question walk and the unfiltered note walk see this thread. If the first one
-    also projected the channel, the note would be reported once per walk and the queue would claim
-    two people are waiting where one is.
-    """
-    queue, _ = _queue(
-        [
-            _thread(
-                "t-1",
-                "2026-08-19T10:00:00Z",
-                {"k": [_interrupt(TURN_A, "which rating?")]},
-                status="interrupted",
-                raised=[
-                    _note(turn_id=TURN_B, thread_id="t-1"),
-                ],
-            )
-        ]
-    )
-    page = queue.pending()
-    assert sorted(row["source"] for row in page.rows) == ["from_refusal", "interrupt"]
-    assert page.threads_scanned == 1, (
-        "`threads_scanned` counts distinct threads read, not reads: both walks fetch this thread"
-    )
-
-
-def test_threads_scanned_is_distinct_threads_across_both_walks() -> None:
-    """Two conversations, three thread fetches (the paused one is read by both walks), and the
-    number a caller reads is two."""
-    queue, client = _queue(
-        [
-            _thread("t-open", "2026-08-19T10:00:00Z", {"k": [_interrupt(TURN_A, "open")]}),
-            _thread("t-idle", "2026-08-19T11:00:00Z", {}, status="idle", raised=[_note(thread_id="t-idle")]),
-        ]
-    )
-    page = queue.pending()
-    assert page.threads_scanned == 2
-    assert len(client.threads.calls) >= 2, "one walk cannot cover both populations"
-
-
 # ── the declared row ─────────────────────────────────────────────────────────────────────────
 
 
-def test_report_id_is_declared_and_present_on_both_kinds_of_row() -> None:
-    """A column the client renders from is in ``meta.columns``, and null rather than absent.
+def test_every_declared_column_is_present_on_an_interrupt_row() -> None:
+    """A declared column is present and null where it does not apply, never absent.
 
-    ``pending-queue.tsx`` keys a note's card on ``report_id`` — a note has no ``clarification_id``
-    to key on — so it is a declared column and not a carried one like ``interrupt_id``/``task_id``.
-    Declared means present on **every** row: an interrupt is not a report, so it carries the key
-    with ``None``, the way ``clarification_id`` and ``basis`` are null on a note.
+    ``observation_id`` is declared and is null here, the way ``clarification_id`` and ``basis``
+    are null on the store's half of the union. A client forced to tell "no value" from "no such
+    key" ends up guessing which kind of row it holds.
     """
-    assert "report_id" in PENDING_FIELDS
-    queue, _ = _queue(
-        [
-            _thread("t-1", "2026-08-19T10:00:00Z", {"k": [_interrupt(TURN_A, "which rating?")]}),
-            _thread("t-2", "2026-08-19T11:00:00Z", {}, status="idle", raised=[_note(thread_id="t-2")]),
-        ]
+    queue, _ = _queue([_thread("t-1", "2026-08-19T10:00:00Z", {"k": [_interrupt(TURN_A, "which?")]})])
+    (row,) = queue.pending().rows
+    assert set(PENDING_FIELDS) <= set(row), (
+        f"absent: {sorted(set(PENDING_FIELDS) - set(row))}"
     )
-    rows = {row["source"]: row for row in queue.pending().rows}
-    interrupt_row, note_row = rows["interrupt"], rows["from_refusal"]
-
-    for row in (interrupt_row, note_row):
-        assert set(PENDING_FIELDS) <= set(row), "a declared column is absent from a row"
-    assert interrupt_row["report_id"] is None
-    assert note_row["report_id"] == "rpt-abc-0123456789ab"
-    assert note_row["clarification_id"] is None
-    assert "interrupt_id" not in note_row, "there is nothing on a filed note to resume"
+    assert row["observation_id"] is None, "an interrupt is not an observation"
+    assert row["source"] == "interrupt"
+    assert row["interrupt_id"] and row["task_id"], "a resume needs both, so both are carried"
 
 
-# ── the bound on how much store one request reads ────────────────────────────────────────────
-
-
-def test_a_store_larger_than_the_walk_says_the_list_is_short() -> None:
-    """``_MAX_THREADS`` can bite now that a walk reads every thread, and it is reported.
-
-    It could not before: only interrupted threads were paged and that population is a handful.
-    The note walk reads the whole store, so past the bound notes go missing — and the direction is
-    the unhelpful one, because both walks sort ``updated_at`` **ascending**: the threads dropped are
-    the most recently touched, so the newest note is the first one lost. That is exactly what is
-    built here, and the only thing standing between an operator and a silently empty queue is
-    ``truncated``.
-    """
-    threads = [
-        _thread(f"t-{i:04d}", f"2026-08-19T10:{i // 60:02d}:{i % 60:02d}Z", {}, status="idle") for i in range(1000)
-    ]
-    threads.append(_thread("t-newest", "2026-08-19T23:00:00Z", {}, status="idle", raised=[_note(thread_id="t-newest")]))
-    queue, _ = _queue(threads)
-
-    page = queue.pending()
-    assert page.rows == [], "the fixture's only note is on the thread the bound drops"
-    assert page.truncated is True, (
-        "the walk stopped on _MAX_THREADS with threads still arriving and the page did not say so"
-    )
-    assert page.threads_scanned == 1000

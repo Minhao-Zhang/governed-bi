@@ -49,7 +49,7 @@ from governed_bi.feedback.events import (
     Source,
 )
 from governed_bi.feedback.lifecycle import Actor, transition_for
-from governed_bi.feedback.validate import faults_with
+from governed_bi.feedback.validate import NOTE_MAX_CHARS, faults_with
 from governed_bi.paths import assert_not_a_warehouse
 from governed_bi.register.assets import AssetType
 
@@ -394,6 +394,39 @@ class FeedbackStore:
             )
         return patch.patch_id
 
+    def amend_note(self, observation_id: str, note: str) -> None:
+        """Replace the note on an untriaged observation. Refuses once somebody has looked.
+
+        The one mutable field outside the lifecycle, and it earns that by being the field the
+        design asks for **after** filing succeeds: a note that gates submission is a note nobody
+        writes. No transition row, because nothing about the row's *state* changed — and the
+        append-only audit trail is about who moved it, not about who typed into it.
+        """
+        note = note.strip()
+        faults = [
+            f"note must be at most {NOTE_MAX_CHARS} characters, not {len(note)}"
+        ] if len(note) > NOTE_MAX_CHARS else []
+        if faults:
+            raise Rejected(f"observation {observation_id}", faults)
+        with self._tx() as conn:
+            row = conn.execute(
+                "SELECT state FROM observation WHERE observation_id = ?", (observation_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"no observation {observation_id!r}")
+            if row["state"] != ObservationState.open.value:
+                raise Rejected(
+                    f"observation {observation_id}",
+                    [
+                        f"is {row['state']}; a note can only be amended while nobody has triaged "
+                        "it, because a reviewer reading a row whose text changes underneath them "
+                        "is worse than a second observation"
+                    ],
+                )
+            conn.execute(
+                "UPDATE observation SET note = ? WHERE observation_id = ?", (note, observation_id)
+            )
+
     def record_ladder(self, patch_id: str, tier: str, result: Mapping[str, Any]) -> None:
         """Merge one tier's result into a patch's ladder. Later runs of a tier replace earlier ones.
 
@@ -466,6 +499,20 @@ class FeedbackStore:
             total=total,
             truncated=offset + len(rows) < total,
         )
+
+    def observations_for_turn(self, turn_id: str) -> tuple[Observation, ...]:
+        """Every observation filed about one turn. What ``ix_obs_turn`` exists for.
+
+        The audit trace reads this beside ``clarifications``, and for the same reason that one is
+        on the trace: an observation about a turn is evidence about the turn, so a trace without it
+        cannot explain why somebody thought the statement above was wrong.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM observation WHERE turn_id = ? ORDER BY filed_at, observation_id",
+                (str(turn_id),),
+            ).fetchall()
+        return tuple(_observation_from(r) for r in rows)
 
     def patches_of(self, observation_id: str) -> tuple[Patch, ...]:
         with self._conn() as conn:

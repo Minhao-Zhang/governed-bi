@@ -1044,7 +1044,7 @@ export const MOCK_AUDIT_TRACE: AuditTrace = {
   stages: [],
   ledger: [],
   clarifications: [],
-  raised: [],
+  observations: [],
   terminal: null,
   missing_required: [],
   undeclared_keys: [],

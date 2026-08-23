@@ -140,13 +140,6 @@ _EXTRACT: dict[str, str] = {"turns": "values.turns"}
 #: 2.42 MB projection got measured in the first place.
 _CLARIFICATION_EXTRACT: dict[str, str] = {"clarifications": "values.clarifications"}
 
-#: The ``raised`` channel's projection, for two reads with opposite economics.
-#: :meth:`ThreadTurnLog.raised_of` wants it for one thread it can already name; the pending queue's
-#: note walk wants it off **every** thread in the store and -- unlike the case
-#: :data:`_CLARIFICATION_EXTRACT` argues against -- does look at what it pays for, because an open
-#: note *is* the row. :func:`_pending_async` carries the cost of that walk.
-_RAISED_EXTRACT: dict[str, str] = {"raised": "values.raised"}
-
 #: Stands for "this server exposes no such attribute", which is not the same as ``None``. Used
 #: once, by :func:`_in_process_client`.
 _UNCHECKED = object()
@@ -279,45 +272,6 @@ class ThreadTurnLog:
         for thread in threads or ():
             return _answered_clarifications_of(thread).get(str(turn_id)) or []
         return []
-
-    def raised_of(self, thread_id: str, turn_id: str) -> list[dict[str, Any]]:
-        """Reader-filed notes on this turn, from the ``raised`` channel.
-
-        Clone of :meth:`clarifications_of`: one keyed read, ``[]`` when the turn has none.
-        """
-        client = self._client_once()
-        threads = _blocking(
-            client.threads.search(
-                ids=[str(thread_id)],
-                limit=1,
-                select=["thread_id", "metadata"],
-                extract=_RAISED_EXTRACT,
-            )
-        )
-        for thread in threads or ():
-            return [
-                dict(row)
-                for row in _channel_of(thread, "raised")
-                if isinstance(row, Mapping) and str(row.get("turn_id") or "") == str(turn_id)
-            ]
-        return []
-
-    def append_raised(self, thread_id: str, row: Mapping[str, Any]) -> None:
-        """Append one ``raised`` row via in-process ``aupdate_state(as_node="raise_note")``.
-
-        Not ``threads.update`` and not ``command.update``: both are client-writable surfaces
-        ``api/auth.py`` denies. The unattached ``raise_note`` node is the only legal writer.
-        Production does not use the saver-less Pregel ``make_graph`` compiled: that graph
-        has no checkpointer, and a checkpoint write that never copies the thread row is
-        invisible to pending and trace. See ``api/raised_write.py``.
-        """
-        payload = dict(row)
-        if self._state_writer is not None:
-            self._state_writer(str(thread_id), payload)
-            return
-        from governed_bi.api.raised_write import append_raised_on_thread
-
-        append_raised_on_thread(str(thread_id), payload)
 
     # ── the store ────────────────────────────────────────────────────────────
 
@@ -566,11 +520,16 @@ def _answered_clarifications_of(thread: Any) -> dict[str, list[dict[str, Any]]]:
 #: `meta.columns` is on the wire and the client renders from it.
 #:
 #: **Some of these are null on half the rows, which is the shape and not a defect.** The queue
-#: unions two populations -- an unanswered interrupt and an open ``raised`` note -- so
-#: `clarification_id`/`basis` are null on every note and `report_id` on every interrupt. The rule
-#: is that a *declared* column is present and null where it does not apply, never absent: a client
-#: forced to tell "no value" from "no such key" ends up guessing which kind of row it holds.
-#: `source` says which, and is the one column never null.
+#: unions two populations -- an unanswered interrupt, read from thread state here, and an open
+#: observation, read from ``runs/feedback.sqlite`` by ``api/feedback_routes.py`` -- so
+#: `clarification_id`/`basis` are null on every observation and `observation_id` on every
+#: interrupt. The rule is that a *declared* column is present and null where it does not apply,
+#: never absent: a client forced to tell "no value" from "no such key" ends up guessing which kind
+#: of row it holds. `source` says which, and is the one column never null.
+#:
+#: Declared here although this reader now produces only the interrupt half, because `meta.columns`
+#: describes the **response**, and the response is the union. Moving the declaration to the router
+#: would put it next to one of the two readers and away from the other.
 PENDING_FIELDS: tuple[str, ...] = (
     "asked_at",
     "question",
@@ -581,10 +540,15 @@ PENDING_FIELDS: tuple[str, ...] = (
     "source",
     "basis",
     # Declared rather than carried, unlike `interrupt_id`/`task_id`, because the client
-    # *consumes* it: `ui/components/clarifications/pending-queue.tsx` keys a note's card on it,
-    # and a note has no `clarification_id` to key on instead. A column the client renders from
-    # and `meta.columns` does not name is a contract that happens to work.
-    "report_id",
+    # *consumes* it: the pending queue keys an observation's card on it, and an observation has no
+    # `clarification_id` to key on instead. A column the client renders from and `meta.columns`
+    # does not name is a contract that happens to work.
+    #
+    # `observation_id` since 2026-08-23, where it was `report_id`. That name was minted by
+    # `serve/raised.py::mint_report_id`, which is deleted -- and "report" would have been the third
+    # meaning of the word in one system, after `eval/report.py` and the thing every BI user means
+    # by it. Null on an interrupt row, which this reader is the only producer of.
+    "observation_id",
 )
 
 #: Prefix ``serve/tools.py`` builds a clarification id with: ``f"clar-{turn_id}-{digest}"``.
@@ -792,13 +756,12 @@ async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage
         extract=None,
         rows_of=_open_questions_of,
     )
-    notes_bound = await _walk(
-        status=None,
-        select=["thread_id", "updated_at", "metadata"],
-        extract=_RAISED_EXTRACT,
-        rows_of=_open_raised_of,
-    )
-    truncated = paused_bound or notes_bound
+    # One walk now, not two. The second projected ``values.raised`` off **every** thread in the
+    # store -- 40 uncached round trips per request, priced against the store rather than against
+    # the paused handful -- and ADR 0015 §2 replaced that channel with a table. The note half of
+    # the queue is one indexed query, composed by ``api/feedback_routes.py`` where a surface that
+    # wants both populations can hold both readers. So this reader reads threads and nothing else.
+    truncated = paused_bound
 
     rows.sort(key=lambda row: str(row.get("asked_at") or ""))
     window = rows[offset : offset + limit]
@@ -844,9 +807,10 @@ def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
                     "thread_id": thread_id,
                     "source": "interrupt",
                     "basis": value.get("basis"),
-                    # Null because an interrupt is not a report, not because it went missing --
-                    # see :data:`PENDING_FIELDS` on why a declared column is never absent.
-                    "report_id": None,
+                    # Null because an interrupt is not an observation, not because it went
+                    # missing -- see :data:`PENDING_FIELDS` on why a declared column is never
+                    # absent.
+                    "observation_id": None,
                     # ``interrupt_id`` and ``task_id`` are what a resume would have to name.
                     # Carried because withholding them would make this surface un-actionable the
                     # day the provenance gate lands, and they identify nothing a reader could not
@@ -855,46 +819,4 @@ def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
                     "task_id": task_id,
                 }
             )
-    return out
-
-
-def _open_raised_of(thread: Any) -> list[dict[str, Any]]:
-    """Open ``raised`` rows on ``thread``, shaped for the pending queue.
-
-    Not an interrupt: a finished refusal cannot be resumed, so these rows carry ``source``
-    of ``from_refusal`` / ``wrong_answer`` and a ``report_id`` rather than a fake
-    ``clarification_id``. ``thread`` arrives from an **unfiltered** walk, so it may be in any
-    status; this function is the only narrowing, and it narrows on the row (``open``, ``kind``)
-    rather than on the conversation's state.
-
-    ``interrupt_id`` and ``task_id`` are absent rather than null, unlike the columns
-    :data:`PENDING_FIELDS` declares: they name a resume, and there is nothing here to resume.
-    """
-    if not isinstance(thread, Mapping):
-        return []
-    thread_id = thread.get("thread_id")
-    out: list[dict[str, Any]] = []
-    for row in _channel_of(thread, "raised"):
-        if not isinstance(row, Mapping) or row.get("open") is False:
-            continue
-        kind = str(row.get("kind") or "")
-        if kind not in {"from_refusal", "wrong_answer"}:
-            continue
-        note = str(row.get("note") or "")
-        question = note or (
-            "A reader flagged this refusal." if kind == "from_refusal" else "A reader flagged this answer as wrong."
-        )
-        out.append(
-            {
-                "asked_at": row.get("reported_at") or thread.get("updated_at"),
-                "question": question,
-                "why": note or None,
-                "clarification_id": None,
-                "turn_id": row.get("turn_id"),
-                "thread_id": thread_id,
-                "source": kind,
-                "basis": None,
-                "report_id": row.get("report_id"),
-            }
-        )
     return out

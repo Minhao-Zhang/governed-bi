@@ -13,7 +13,7 @@
           "meta"
         ],
         "summary": "Livez",
-        "description": "Process liveness. Touches neither the corpus nor the database, so it answers before the session is built. Corpus status is /audit/corpus.\n\nIt used to be the one route served without a key. Since 2026-08-13 no route needs one, so it is no longer special \u2014 what still makes it the liveness probe is that it returns `{\"ok\": true}` and nothing else, so it reports the process's health and not that of anything the process depends on.",
+        "description": "Process liveness. Touches neither the corpus nor the database, so it answers before the session is built. Corpus status is /audit/corpus.\n\nIt used to be the one route served without a key. Since 2026-08-13 no route needs one, so it is no longer special — what still makes it the liveness probe is that it returns `{\"ok\": true}` and nothing else, so it reports the process's health and not that of anything the process depends on.",
         "operationId": "livez_livez_get",
         "responses": {
           "200": {
@@ -35,7 +35,7 @@
           "meta"
         ],
         "summary": "Capabilities",
-        "description": "What this backend can do \u2014 the UI blocks on this response and adapts its affordances to it.",
+        "description": "What this backend can do — the UI blocks on this response and adapts its affordances to it.",
         "operationId": "capabilities_capabilities_get",
         "responses": {
           "200": {
@@ -112,7 +112,7 @@
           "corpus"
         ],
         "summary": "Corpus Fields",
-        "description": "The filterable columns of one asset type, derived from its dataclass \u2014 so a new field in the corpus schema becomes filterable with no change here and none in the UI. Also lists every known asset type.",
+        "description": "The filterable columns of one asset type, derived from its dataclass — so a new field in the corpus schema becomes filterable with no change here and none in the UI. Also lists every known asset type.",
         "operationId": "corpus_fields_corpus_fields_get",
         "parameters": [
           {
@@ -448,7 +448,7 @@
           "graph"
         ],
         "summary": "Er Graph",
-        "description": "Bounded ER view: tables as nodes, curated joins as edges (ADR 0009 D2).\n\n`schema` and `kinds` narrow the candidate set, `focus` then walks outward over that set's edges for `radius` hops, and the budget is applied last, breadth-first from the focus \u2014 so what survives truncation is what is nearest. With no focus the budget is spent growing neighbourhoods from the best-connected node, because alphabetical order rarely holds both ends of any edge.\n\n`boundary` and `meta` are always present. `meta.truncated` and `meta.dropped` say what was cut; a view that renders them as complete coverage is the failure this bound exists to prevent.",
+        "description": "Bounded ER view: tables as nodes, curated joins as edges (ADR 0009 D2).\n\n`schema` and `kinds` narrow the candidate set, `focus` then walks outward over that set's edges for `radius` hops, and the budget is applied last, breadth-first from the focus — so what survives truncation is what is nearest. With no focus the budget is spent growing neighbourhoods from the best-connected node, because alphabetical order rarely holds both ends of any edge.\n\n`boundary` and `meta` are always present. `meta.truncated` and `meta.dropped` say what was cut; a view that renders them as complete coverage is the failure this bound exists to prevent.",
         "operationId": "er_graph_graph_get",
         "parameters": [
           {
@@ -847,8 +847,8 @@
         "tags": [
           "audit"
         ],
-        "summary": "Raise On Turn",
-        "description": "File a reader note on a finished turn. Body `{kind: from_refusal|wrong_answer, note?}`. Server resolves `thread_id` from the turn envelope and appends `ServeState.raised` via in-process `aupdate_state(as_node=raise_note)`, then copies the checkpoint onto the thread row pending/trace read. Does not resume a turn and does not go through LangGraph `command.update` or `POST /threads/{id}/state`. 409 when the thread is paused or has an in-flight run: that `as_node` would consume the live interrupt, and a runtime whose run table this server cannot read is refused the same way rather than assumed idle. `note` is stripped (whitespace-only becomes empty) and capped at 4000 characters; the row lands in an accumulating channel on a store whose TTL sweep is a no-op, so an unbounded note would be a way to grow the store without limit. Nothing on this route authenticates (audit A7 open), so any caller reaching the port can file against any turn.",
+        "summary": "File an observation about a finished turn",
+        "description": "Files into `runs/feedback.sqlite` (ADR 0015). Was an append onto the `ServeState.raised` checkpoint channel, which is why it used to 409 on a paused thread -- the write would have consumed the live `ask_user` interrupt. **That 409 is gone, deliberately**: nothing writes graph state, and the reader whose turn is paused is the one most likely to want to complain. Nothing here authenticates, so any caller reaching the port can file against any turn; that was true before and is unchanged.",
         "operationId": "raise_on_turn_turns__turn_id__raised_post",
         "parameters": [
           {
@@ -870,41 +870,48 @@
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "enum": ["from_refusal", "wrong_answer"]
+                    "enum": [
+                      "from_refusal",
+                      "wrong_answer"
+                    ]
                   },
                   "note": {
                     "type": "string",
                     "maxLength": 4000
+                  },
+                  "category": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Optional refinement of `kind`. The first tap files something valid; a refinement is never a gate. Refused with 422 when it cannot apply to the card `kind` names."
+                  },
+                  "expected": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "What the answer should have been, at most 200 characters. Asked for **after** filing succeeds, so it is a bonus rather than a gate -- a note that blocks submission is a note nobody writes."
                   }
                 },
-                "required": ["kind"]
+                "required": [
+                  "kind"
+                ]
               }
             }
           }
         },
         "responses": {
-          "200": {
-            "description": "An envelope, **not the row at the top level**. The handler returns `{\"ok\": true, \"row\": {...}}` (`api/clarification_routes.py::raise_on_turn`), and this route carried a description-only 200 until 2026-08-22 -- so a client written from the old sentence read `kind` and `report_id` off the envelope and found nothing.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RaisedNoteAcceptedResponse"
-                }
-              }
-            }
-          },
           "404": {
             "description": "Turn not found, or the envelope has no thread_id, or the thread the turn names is not in the store (`ThreadNotFound`). `detail` is a sentence, not a list.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPError"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "The thread is paused, has an in-flight run, or runs on a runtime whose run table this server cannot read. Filing would consume the live interrupt, or would race a run nobody checked. `detail` is `str(ThreadBusy)`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -926,6 +933,16 @@
                       "$ref": "#/components/schemas/HTTPValidationError"
                     }
                   ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Filed. **201 and not 200**: the route creates a row in a store rather than appending to a channel, and a client should not have to read the body to learn which.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationAcceptedResponse"
                 }
               }
             }
@@ -972,7 +989,7 @@
               }
             ],
             "title": "Provenance Status",
-            "description": "Null means not measured, which is not the same as clean (ADR 0005 \u00a76)."
+            "description": "Null means not measured, which is not the same as clean (ADR 0005 §6)."
           },
           "excluded": {
             "type": "boolean",
@@ -1170,7 +1187,7 @@
               }
             ],
             "title": "Outcome",
-            "description": "How the turn ended: one of `answered`, `refused`, `clarification`, `capped`, `crashed`, `no_sql` (`register/stages.py::Outcome`). Not enumerated in this schema because the handler passes the recorded string through. **`no_sql` was added on 2026-08-18** for a turn that ended having executed no governed statement; turns recorded before that date carry `answered` for the same state, so a list spanning the boundary mixes two taxonomies (ADR 0006 \u00a75)."
+            "description": "How the turn ended: one of `answered`, `refused`, `clarification`, `capped`, `crashed`, `no_sql` (`register/stages.py::Outcome`). Not enumerated in this schema because the handler passes the recorded string through. **`no_sql` was added on 2026-08-18** for a turn that ended having executed no governed statement; turns recorded before that date carry `answered` for the same state, so a list spanning the boundary mixes two taxonomies (ADR 0006 §5)."
           },
           "asked_at": {
             "anyOf": [
@@ -1199,16 +1216,7 @@
             },
             "type": "array",
             "title": "Clarifications",
-            "description": "What this turn asked its reader mid-flight and what they answered: one object per `ask_user` call, `{clarification_id, question, why, answer, turn_id, basis, deferred, resolution}`. Empty when the turn asked nothing, which is a read and not a shrug \u2014 the reader read the channel either way.\n\n**Added 2026-08-19.** The `clarifications` channel had two writers and no reader, so a turn whose SQL a *person* selected showed no sign of having asked. Read beside the envelope and not joined into it: `get_turn` returns the five keys the record node stored, and a test holds it to them. The unanswered half of the same pair is `GET /clarifications/pending`."
-          },
-          "raised": {
-            "items": {
-              "type": "object",
-              "additionalProperties": true
-            },
-            "type": "array",
-            "title": "Raised",
-            "description": "Reader-filed notes on this turn (`from_refusal` | `wrong_answer`). Empty when nobody filed. Sibling of `clarifications`, not a record field."
+            "description": "What this turn asked its reader mid-flight and what they answered: one object per `ask_user` call, `{clarification_id, question, why, answer, turn_id, basis, deferred, resolution}`. Empty when the turn asked nothing, which is a read and not a shrug — the reader read the channel either way.\n\n**Added 2026-08-19.** The `clarifications` channel had two writers and no reader, so a turn whose SQL a *person* selected showed no sign of having asked. Read beside the envelope and not joined into it: `get_turn` returns the five keys the record node stored, and a test holds it to them. The unanswered half of the same pair is `GET /clarifications/pending`."
           },
           "ledger": {
             "items": {
@@ -1217,7 +1225,7 @@
             },
             "type": "array",
             "title": "Ledger",
-            "description": "`record.execution.attempts` \u2014 one row per SQL attempt. Empty when the turn attempted none."
+            "description": "`record.execution.attempts` — one row per SQL attempt. Empty when the turn attempted none."
           },
           "terminal": {
             "anyOf": [
@@ -1249,6 +1257,15 @@
             "type": "array",
             "title": "Undeclared Keys",
             "description": "Sorted record keys the register does not declare."
+          },
+          "observations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "title": "Observations",
+            "description": "Observations filed about this turn, read from `runs/feedback.sqlite` keyed on `turn_id`. Was `raised`, which read the deleted checkpoint channel. On the trace for the same reason `clarifications` is: somebody read the statement above and said it was wrong, so a trace without it shows half of what happened."
           }
         },
         "type": "object",
@@ -1326,7 +1343,7 @@
               }
             ],
             "title": "Outcome",
-            "description": "How the turn ended: one of `answered`, `refused`, `clarification`, `capped`, `crashed`, `no_sql` (`register/stages.py::Outcome`). Not enumerated in this schema because the handler passes the recorded string through. **`no_sql` was added on 2026-08-18** for a turn that ended having executed no governed statement; turns recorded before that date carry `answered` for the same state, so a list spanning the boundary mixes two taxonomies (ADR 0006 \u00a75)."
+            "description": "How the turn ended: one of `answered`, `refused`, `clarification`, `capped`, `crashed`, `no_sql` (`register/stages.py::Outcome`). Not enumerated in this schema because the handler passes the recorded string through. **`no_sql` was added on 2026-08-18** for a turn that ended having executed no governed statement; turns recorded before that date carry `answered` for the same state, so a list spanning the boundary mixes two taxonomies (ADR 0006 §5)."
           },
           "terminal_reason": {
             "anyOf": [
@@ -1374,7 +1391,7 @@
               }
             ],
             "title": "Latency Sec",
-            "description": "Seconds, unrounded. **Not reachable as an absence on a served turn**: `wrap_node` stamps `turn_started_at`, so only a hand-built state is unmeasured. The old `string` member of this union came from the JSONL log\u2019s `json.dumps(..., default=str)`, which is deleted with the log (ADR 0014); an unmeasured `Measured` now survives the checkpoint as itself (`register/quantity.py`) and would reach the wire as an object, which `ui/lib/schemas.ts` validates as `z.number().nullable()` and would reject. Narrowed to match the client rather than documenting a shape nothing produces."
+            "description": "Seconds, unrounded. **Not reachable as an absence on a served turn**: `wrap_node` stamps `turn_started_at`, so only a hand-built state is unmeasured. The old `string` member of this union came from the JSONL log’s `json.dumps(..., default=str)`, which is deleted with the log (ADR 0014); an unmeasured `Measured` now survives the checkpoint as itself (`register/quantity.py`) and would reach the wire as an object, which `ui/lib/schemas.ts` validates as `z.number().nullable()` and would reject. Narrowed to match the client rather than documenting a shape nothing produces."
           },
           "execution": {
             "anyOf": [
@@ -1603,18 +1620,6 @@
             "title": "Basis",
             "description": "`data_definition` or `ranking_ambiguity` on interrupt rows; null on raised notes."
           },
-          "report_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Report Id",
-            "description": "The `raised` note this row came from; null on interrupt rows. Declared in `meta.columns` because the client keys a note's card on it -- a note has no `clarification_id`."
-          },
           "interrupt_id": {
             "anyOf": [
               {
@@ -1631,6 +1636,17 @@
             "type": "string",
             "title": "Task Id",
             "description": "The key of the thread's `interrupts` mapping (`{task_id: [Interrupt, ...]}`), so a JSON object key and never null. **Absent on raised-note rows**, same as `interrupt_id`. Together the two are what a resume would have to name; this surface carries them and does not use them -- answering from here is refused (ADR 0006 B9) until the corpus write path has a provenance gate."
+          },
+          "observation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The observation this row came from, or null on an interrupt row. `observation_id` since 2026-08-23, where it was `report_id`: that name was minted by the deleted `serve/raised.py`, and report would have been the third meaning of the word in one system. Declared and null-where-inapplicable rather than absent, so a client never has to tell no-value from no-such-key."
           }
         },
         "type": "object",
@@ -1643,7 +1659,7 @@
           "thread_id",
           "source",
           "basis",
-          "report_id"
+          "observation_id"
         ],
         "title": "PendingClarificationRowResponse",
         "description": "One row of the pending queue, unioned from two populations: an unanswered `ask_user` interrupt and an open `raised` note.\n\n**Two rules, and they differ.** The nine columns `PENDING_FIELDS` declares are *always present*, null where they do not apply -- `clarification_id`/`basis` on every note, `report_id` on every interrupt -- because a client forced to tell \"no value\" from \"no such key\" ends up guessing which kind of row it holds. `interrupt_id` and `task_id` are *carried* rather than declared, and are genuinely absent on a note. `source` says which kind of row this is and is the one column never null."
@@ -1712,83 +1728,6 @@
           "meta"
         ],
         "title": "PendingClarificationsResponse"
-      },
-      "RaisedRowResponse": {
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "from_refusal",
-              "wrong_answer"
-            ],
-            "title": "Kind",
-            "description": "Enumerated here, unlike `outcome` on a turn summary, because `serve/raised.py::raised_row` raises on anything outside `RAISED_KINDS` -- the server cannot emit a third value."
-          },
-          "report_id": {
-            "type": "string",
-            "title": "Report Id",
-            "description": "`rpt-{turn_id}-{12hex}`, minted server-side by `serve/raised.py::mint_report_id`. The join key the pending queue and the trace read a note back by."
-          },
-          "turn_id": {
-            "type": "string",
-            "title": "Turn Id",
-            "description": "Echoed from the path, as a string."
-          },
-          "thread_id": {
-            "type": "string",
-            "title": "Thread Id",
-            "description": "**Resolved server-side** from the turn envelope's `record.thread_id`, never taken from the caller. Non-empty: an envelope without one is a 404 rather than a row."
-          },
-          "reported_at": {
-            "type": "string",
-            "title": "Reported At",
-            "description": "UTC ISO-8601 to the second, stamped by the server."
-          },
-          "note": {
-            "type": "string",
-            "title": "Note",
-            "description": "The caller's note, **stripped** and capped at `RAISED_NOTE_MAX_CHARS` (4000). Empty string when the caller sent nothing or only whitespace -- padding is not a note."
-          },
-          "open": {
-            "type": "boolean",
-            "title": "Open",
-            "description": "Always `true` on a freshly filed row: nothing closes one yet. The pending queue's note walk narrows on this."
-          }
-        },
-        "type": "object",
-        "required": [
-          "kind",
-          "report_id",
-          "turn_id",
-          "thread_id",
-          "reported_at",
-          "note",
-          "open"
-        ],
-        "title": "RaisedRowResponse",
-        "description": "One `ServeState.raised` row, as appended (`serve/raised.py::raised_row`). Every field is present and none is nullable -- the constructor returns a seven-key literal and mints what the caller did not send."
-      },
-      "RaisedNoteAcceptedResponse": {
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "enum": [
-              true
-            ],
-            "title": "Ok",
-            "description": "Always `true`. Every failure on this route is a status code, so this field distinguishes nothing; it is declared because it is on the wire, not because a client should branch on it."
-          },
-          "row": {
-            "$ref": "#/components/schemas/RaisedRowResponse"
-          }
-        },
-        "type": "object",
-        "required": [
-          "ok",
-          "row"
-        ],
-        "title": "RaisedNoteAcceptedResponse",
-        "description": "`POST /turns/{turn_id}/raised`'s 200 body. **A wrapper**, so the row is at `row` and not at the top level."
       },
       "BoundaryEdgeResponse": {
         "properties": {
@@ -1954,12 +1893,12 @@
           "checkpoint_durable": {
             "type": "boolean",
             "title": "Checkpoint Durable",
-            "description": "Whether this deployment mounts a durable checkpointer. **Derived** from `langgraph.json` \u2014 `checkpointer.path` names a module and factory, and that module is on disk \u2014 so the flag goes false if either stops existing, without anyone editing a line (ADR 0009 D4). It is honest about being a *configuration reading* and not an observation: the platform injects the saver into the graph it runs and this custom app never holds that graph, so there is no live handle here to ask. Reported as the literal `False` until 2026-08-18, when `POST /chat`'s process-local `InMemorySaver` \u2014 the thing that comment described \u2014 was deleted (ADR 0014). Audit A10, `docs/open-work.md` \u00a74.4."
+            "description": "Whether this deployment mounts a durable checkpointer. **Derived** from `langgraph.json` — `checkpointer.path` names a module and factory, and that module is on disk — so the flag goes false if either stops existing, without anyone editing a line (ADR 0009 D4). It is honest about being a *configuration reading* and not an observation: the platform injects the saver into the graph it runs and this custom app never holds that graph, so there is no live handle here to ask. Reported as the literal `False` until 2026-08-18, when `POST /chat`'s process-local `InMemorySaver` — the thing that comment described — was deleted (ADR 0014). Audit A10, `docs/open-work.md` §4.4."
           },
           "hitl_survives_process_restart": {
             "type": "boolean",
             "title": "Hitl Survives Process Restart",
-            "description": "Whether a clarification paused at `interrupt()` survives a restart of this process. Reads the same derivation as `checkpoint_durable`, and cannot be true while that is false: an `ask_user` interrupt *is* checkpoint state, and the resume reads it back out of the same store through the platform's `Command(resume=\u2026)`, so this is one observation and not two.\n\n**The behaviour was watched end to end on 2026-08-19**: a turn paused at `ask_user`, the process was killed and confirmed off the port, a fresh process re-mounted the prompt from checkpointed state, and answering it resumed the turn to a correct answer. So the flag is no longer derived from nothing. It is still derived from configuration rather than re-checked per process, which is what remains open. Audit A10, `docs/open-work.md` \u00a74.4."
+            "description": "Whether a clarification paused at `interrupt()` survives a restart of this process. Reads the same derivation as `checkpoint_durable`, and cannot be true while that is false: an `ask_user` interrupt *is* checkpoint state, and the resume reads it back out of the same store through the platform's `Command(resume=…)`, so this is one observation and not two.\n\n**The behaviour was watched end to end on 2026-08-19**: a turn paused at `ask_user`, the process was killed and confirmed off the port, a fresh process re-mounted the prompt from checkpointed state, and answering it resumed the turn to a correct answer. So the flag is no longer derived from nothing. It is still derived from configuration rather than re-checked per process, which is what remains open. Audit A10, `docs/open-work.md` §4.4."
           }
         },
         "type": "object",
@@ -2460,7 +2399,7 @@
               }
             ],
             "title": "Nullable",
-            "description": "Tri-state: null means not observed (ADR 0005 \u00a76)."
+            "description": "Tri-state: null means not observed (ADR 0005 §6)."
           },
           "is_unique": {
             "anyOf": [
@@ -2472,7 +2411,7 @@
               }
             ],
             "title": "Is Unique",
-            "description": "Tri-state: null means not observed (ADR 0005 \u00a76)."
+            "description": "Tri-state: null means not observed (ADR 0005 §6)."
           }
         },
         "type": "object",
@@ -2629,7 +2568,7 @@
             },
             "type": "array",
             "title": "Unknown Where",
-            "description": "Predicates that were **not** applied \u2014 unknown field, unsupported operator, or a malformed triple. Reported rather than dropped, so a filtered-looking list is never silently unfiltered."
+            "description": "Predicates that were **not** applied — unknown field, unsupported operator, or a malformed triple. Reported rather than dropped, so a filtered-looking list is never silently unfiltered."
           },
           "detail": {
             "type": "string",
@@ -2658,7 +2597,7 @@
           "n_edges": {
             "type": "integer",
             "title": "N Edges",
-            "description": "Edges in this response \u2014 both endpoints kept."
+            "description": "Edges in this response — both endpoints kept."
           },
           "n_total_nodes": {
             "type": "integer",
@@ -2867,7 +2806,7 @@
               }
             ],
             "title": "Provenance Status",
-            "description": "Null means not measured, which is not the same as clean (ADR 0005 \u00a76)."
+            "description": "Null means not measured, which is not the same as clean (ADR 0005 §6)."
           },
           "confidence": {
             "anyOf": [
@@ -3202,7 +3141,7 @@
           "n_relationships": {
             "type": "integer",
             "title": "N Relationships",
-            "description": "Distinct ON digests among `join_ids` \u2014 a bidirectional declaration is one relationship, not two."
+            "description": "Distinct ON digests among `join_ids` — a bidirectional declaration is one relationship, not two."
           }
         },
         "type": "object",
@@ -3598,7 +3537,7 @@
           "required_and_absent": {
             "type": "boolean",
             "title": "Required And Absent",
-            "description": "The register requires this field and the record does not carry it \u2014 the turn is not quotable."
+            "description": "The register requires this field and the record does not carry it — the turn is not quotable."
           },
           "why": {
             "type": "string",
@@ -3645,7 +3584,7 @@
         "type": "object",
         "required": [],
         "title": "TurnRecord",
-        "description": "The turn record: exactly the 38 keys register/record.record_keys() declares, projected by serve/nodes/stamp.py \u2014 attempt_id, cache_read_tokens, cache_write_tokens, context_hash, corpus_content_hash, crossings, db_id, delivery_hash, error_type, evicted, execution, facet_channels, facet_degraded, facet_hits, failed_stage, generated_sql, guard, guardrail_errors, knobs_resolved, latency_sec, lexical_coverage, licensed, n_re_served, negative, outcome, prompt_set_hash, pulled_in, question_id, reflect_verdict, rewrite, run_id, schema_ranking, schemas, terminal_reason, thread_id, tool_delivered, turn_id, usage.\n\nAn empty object on a paused (clarification) turn and on a request a chat route rejected. A quantity the turn could not measure is an object ``{state, raw, why, relation}`` rather than a number, so `not measured` never renders as 0.",
+        "description": "The turn record: exactly the 38 keys register/record.record_keys() declares, projected by serve/nodes/stamp.py — attempt_id, cache_read_tokens, cache_write_tokens, context_hash, corpus_content_hash, crossings, db_id, delivery_hash, error_type, evicted, execution, facet_channels, facet_degraded, facet_hits, failed_stage, generated_sql, guard, guardrail_errors, knobs_resolved, latency_sec, lexical_coverage, licensed, n_re_served, negative, outcome, prompt_set_hash, pulled_in, question_id, reflect_verdict, rewrite, run_id, schema_ranking, schemas, terminal_reason, thread_id, tool_delivered, turn_id, usage.\n\nAn empty object on a paused (clarification) turn and on a request a chat route rejected. A quantity the turn could not measure is an object ``{state, raw, why, relation}`` rather than a number, so `not measured` never renders as 0.",
         "additionalProperties": true
       },
       "ValidationError": {
@@ -3687,6 +3626,299 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "ObservationResponse": {
+        "type": "object",
+        "title": "ObservationResponse",
+        "description": "One row of `runs/feedback.sqlite`'s `observation` table (ADR 0015). Replaces `RaisedRowResponse`, which described a row on the deleted `ServeState.raised` checkpoint channel. Two differences matter to a client: the id field is `observation_id` and not `report_id`, and `open` is **computed** from `state` rather than stored -- a row cannot be open and terminal, because there is no column that could disagree with the state.",
+        "properties": {
+          "observation_id": {
+            "type": "string",
+            "description": "`obs-{yyyymmddThhmmssZ}-{8hex}`, minted server-side. The join key the pending queue and the trace read a row back by."
+          },
+          "filed_at": {
+            "type": "string",
+            "description": "ISO-8601 UTC to the second."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "reader",
+              "operator",
+              "agent",
+              "eval"
+            ],
+            "description": "Which population filed it. `eval` means an eval artifact rather than a person, and it is the only value on which `question_is_held_out` is true."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "from_refusal",
+              "wrong_answer"
+            ],
+            "description": "Unchanged from the deleted route, so a client written against it keeps working. The refinement is `category`."
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The reader's refinement or the importer's derivation. Null is legal: the first tap may be all there is, and a category nobody chose beats one somebody guessed."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "triaged",
+              "declined",
+              "duplicate",
+              "addressed",
+              "blocked_on_a_person"
+            ],
+            "description": "Stored. Every member is moved by a named actor; there is no `closed`, because nothing would branch on it."
+          },
+          "open": {
+            "type": "boolean",
+            "description": "**Computed**, never stored: `state not in {declined, duplicate}`. `addressed` is open, because a patch exists and until it lands nothing the filer cared about has changed."
+          },
+          "note": {
+            "type": "string",
+            "description": "Free text, stripped, capped at 4000 characters."
+          },
+          "decline_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Required on a decline and null everywhere else. The reason *is* the notification: there is no declined badge without a sentence."
+          },
+          "duplicate_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "blocked_note": {
+            "type": "string",
+            "description": "Required on `blocked_on_a_person`, and the whole content of that state -- there is nobody to escalate to, so the sentence is what a reader gets."
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on an imported observation: an eval artifact carries no turn id on any row, and a synthesised one would 404 on `/audit/turns/{id}/trace`."
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "question": {
+            "type": "string",
+            "description": "Copied from the turn, not joined to it: the turn record elides after 25 turns, so a join returns nothing six months from now -- which is when a reviewer reads the queue."
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "refused_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "generated_sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "licensed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The table allowlist Layer 6 enforced against on that turn."
+          },
+          "schemas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "missing_tables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Gold tables the turn was **not** allowed to read. The defect itself rather than a symptom, and empty on an operator-filed row -- there is no reference statement to diff against."
+          },
+          "gold_sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present only on an imported observation. The falsifiable claim on such a row, and stronger than a sentence: it is compared by fingerprint."
+          },
+          "gold_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pred_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "quality_flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "arm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "question_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "db_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "corpus_content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "question_is_held_out": {
+            "type": "boolean",
+            "description": "**A warning and not metadata.** True when the question came from the held-out split, which is every imported row. A person who writes corpus prose from one contaminates the benchmark, and conformance rule V12 is the gate; this field is what tells the reader before they read."
+          },
+          "patches": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "description": "Candidate corpus changes drafted for this observation. `derived_state` is null on this route: answering whether one landed needs the loaded corpus, and this route has no session."
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "description": "Every transition, oldest first, each carrying the actor that moved it. The append-only audit trail."
+          }
+        },
+        "required": [
+          "observation_id",
+          "filed_at",
+          "source",
+          "kind",
+          "state",
+          "open",
+          "note",
+          "question",
+          "licensed",
+          "schemas",
+          "missing_tables",
+          "quality_flags",
+          "question_is_held_out"
+        ]
+      },
+      "ObservationAcceptedResponse": {
+        "type": "object",
+        "title": "ObservationAcceptedResponse",
+        "description": "The 201 envelope. The row is under `observation`, not at the top level.",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/ObservationResponse"
+          }
+        },
+        "required": [
+          "ok",
+          "observation"
+        ]
       }
     }
   }

@@ -23,8 +23,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from contracts import scratch_feedback_store
 from governed_bi.api.routes import trace_for
 from governed_bi.api.thread_turns import ThreadTurnLog
+
+
+def _store():
+    """A throwaway feedback store. ``trace_for`` reads observations filed about the turn out of
+    it, the way it reads clarifications out of thread state -- somebody read the statement and
+    said it was wrong, so a trace without that shows half of what happened."""
+    return scratch_feedback_store()
+
 
 TURN_ASKED = "a1b2c3d4e5f60718"
 TURN_QUIET = "0f1e2d3c4b5a6978"
@@ -257,7 +266,7 @@ def test_the_trace_route_carries_the_clarification_beside_the_ledger() -> None:
     """
     log, _ = _log(_THREAD)
 
-    trace = trace_for(log, TURN_ASKED)
+    trace = trace_for(log, _store(), TURN_ASKED)
 
     assert trace["found"] is True
     assert [r["answer"] for r in trace["clarifications"]] == [
@@ -275,29 +284,49 @@ def test_the_trace_route_carries_the_clarification_beside_the_ledger() -> None:
 def test_the_trace_reports_no_clarifications_for_a_turn_that_asked_none() -> None:
     log, _ = _log(_THREAD)
 
-    assert trace_for(log, TURN_QUIET)["clarifications"] == []
+    assert trace_for(log, _store(), TURN_QUIET)["clarifications"] == []
 
 
-def test_the_trace_carries_raised_notes_beside_clarifications() -> None:
-    log, client = _log(_THREAD)
+def test_the_trace_carries_observations_beside_clarifications() -> None:
+    """Somebody read the statement and said it was wrong, so a trace without that shows half.
 
-    trace = trace_for(log, TURN_ASKED)
+    Read from ``runs/feedback.sqlite`` keyed on ``turn_id``, not from a channel: the ``raised``
+    channel this replaces was deleted with ADR 0015 §2, and the wire key changed with it. The
+    channel held rows minted by ``serve/raised.py``; the store holds rows with a lifecycle, so the
+    trace can show what state a complaint reached and not only that one was filed.
+    """
+    from governed_bi.feedback.events import Kind, Observation, ObservationState, Source
+    from governed_bi.feedback.store import mint_observation_id, utc_now
 
-    assert [r["kind"] for r in trace["raised"]] == ["wrong_answer"]
-    assert trace["raised"][0]["note"] == "top 5 is the wrong ranking"
-    assert any(
-        (call.get("extract") or {}) == {"raised": "values.raised"}
-        for call in client.threads.calls
+    log, _ = _log(_THREAD)
+    store = _store()
+    store.file(
+        Observation(
+            observation_id=mint_observation_id(),
+            filed_at=utc_now(),
+            source=Source.operator,
+            kind=Kind.wrong_answer,
+            state=ObservationState.open,
+            question="which brewery made the best-selling root beer?",
+            turn_id=TURN_ASKED,
+            thread_id="t-1",
+            note="top 5 is the wrong ranking",
+        )
     )
-    quiet = trace_for(log, TURN_QUIET)
-    assert quiet["raised"] == []
 
+    trace = trace_for(log, store, TURN_ASKED)
+    assert [o["kind"] for o in trace["observations"]] == ["wrong_answer"]
+    assert trace["observations"][0]["note"] == "top 5 is the wrong ranking"
+    assert trace["observations"][0]["state"] == "open"
 
+    # A turn nobody complained about carries an empty list, not a missing key: a client forced to
+    # tell "none" from "no such field" ends up guessing.
+    assert trace_for(log, store, TURN_QUIET)["observations"] == []
 def test_a_missing_turn_never_reaches_the_clarification_read() -> None:
     """``found: False`` short-circuits, so a bad id costs one lookup and not two."""
     log, client = _log(_THREAD)
 
-    trace = trace_for(log, "ffffffffffffffff")
+    trace = trace_for(log, _store(), "ffffffffffffffff")
 
     assert trace == {"found": False, "turn_id": "ffffffffffffffff"}
     assert all(

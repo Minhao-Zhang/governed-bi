@@ -5,16 +5,21 @@ report what is actually built. **Nothing here needs a model**: serving a turn is
 LangGraph Server path (``langgraph.json``'s ``graphs.serve`` → ``api/graph_app.make_graph``)
 and nothing else.
 
-**Every route here is a read except one**, and this docstring said "every route" until
-2026-08-22 (ADR 0009's correction of the same date carries the full account).
-``POST /turns/{turn_id}/raised`` writes: the handler is ``api/clarification_routes.py:66``,
-mounted at ``:212`` below, and ``api/raised_write.py:99`` appends the row onto checkpointed
-``ServeState.raised`` through ``aupdate_state(as_node="raise_note")``. It resumes nothing and is
-409 on a paused or in-flight thread, but nothing on this surface authenticates (A7, below), so
-any caller that can reach the port can file a note against any turn. Neither clarification route
-goes through ``api/visibility.py::visible()`` either — its callers are ``api/browse_routes.py:59``
-and ``routes.py:156``, ``:168``, ``:181``, ``:205`` — so both verbs sit outside the ADR 0012 grant
-withholding.
+**Every route here is a read except the return path's** (ADR 0015). ``POST /turns/{id}/raised``
+files an observation and ``PATCH /observations/{id}`` amends its note, both in
+``api/feedback_routes.py`` over ``runs/feedback.sqlite``. Four steward verbs exist and are
+**mounted only when ``GOVERNED_BI_FEEDBACK_ADMIN`` is set**, returning 404 otherwise — a 403 would
+confirm the route exists, and with one principal the switch is the whole of the control.
+
+What that changed and what it did not. Filing no longer writes graph state, so the ~250 lines that
+existed to do that safely are gone along with the 409 that refused a paused thread — the reader
+whose turn is paused can file now. The pending queue no longer projects ``values.raised`` off every
+thread, so its 40 uncached round trips per request are one indexed query. **The disclosure is
+unchanged**: nothing here authenticates (A7, below), so any caller reaching the port can file
+against any turn and read every open question, and neither verb goes through
+``api/visibility.py::visible()``. Two things are arithmetically better — one row once instead of a
+row re-serialised into every later checkpoint, and a store that can be swept — and neither is a
+control.
 
 ``POST /chat`` and ``POST /chat/resume`` are **deleted** (2026-08-18, ADR 0014). They were a
 second topology for the same job — no ``accept`` node, the whole of ``ServeState`` in and out, a
@@ -56,6 +61,7 @@ the state-write denials that are *not* authentication.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -63,7 +69,7 @@ from fastapi import FastAPI
 
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import make_router
-from governed_bi.api.clarification_routes import make_clarification_router
+from governed_bi.api.feedback_routes import make_admin_router, make_feedback_router
 from governed_bi.api.visibility import visible
 from governed_bi.model.provider import reasoning_effort_of
 from governed_bi.paths import REPO_ROOT
@@ -75,8 +81,8 @@ __all__ = ["make_app", "app_from_environment", "app"]
 # ── the seam ─────────────────────────────────────────────────────────────────
 
 
-def make_app(session: Any, turn_log: Any, pending: Any) -> FastAPI:
-    """An app over exactly these three dependencies. **The constructor.**
+def make_app(session: Any, turn_log: Any, pending: Any, store: Any) -> FastAPI:
+    """An app over exactly these four dependencies. **The constructor.**
 
     ``session`` is a :class:`~governed_bi.serve.session.Session` (or anything with its read
     surface: ``assets_by_id``, ``structure``, ``connector``, ``agent_model``, ``knobs_resolved``,
@@ -84,11 +90,12 @@ def make_app(session: Any, turn_log: Any, pending: Any) -> FastAPI:
     write, and the whole seam is six members, because a fork that implements fewer gets an
     ``AttributeError`` out of a route rather than a refusal: ``list_turns`` and
     ``SUMMARY_FIELDS`` for ``/audit/turns``, ``TURN_LOG_DIR`` for that route's ``meta.log_dir``,
-    ``get_turn`` and ``clarifications_of`` for ``/audit/turns/{id}/trace`` (the latter unguarded
-    at ``routes.py:657``), and ``append_raised`` for ``POST /turns/{id}/raised``
-    (``api/clarification_routes.py:104``, the one write). ``raised_of`` is the only optional
-    member: ``routes.py:661`` guards it with ``hasattr``, so a seam without it serves an empty
-    ``raised`` list. :class:`governed_bi.api.thread_turns.ThreadTurnLog` is the production one.
+    ``get_turn`` and ``clarifications_of`` for ``/audit/turns/{id}/trace``. The seam is **four
+    members now, not six**: ``append_raised`` and ``raised_of`` went with the channel (ADR 0015
+    §2), and ``get_turn`` gained a second caller — the return path's filing route reads the turn's
+    question and record off it, because an observation copies its attribution rather than joining
+    to a store that removes rows. :class:`governed_bi.api.thread_turns.ThreadTurnLog` is the
+    production one.
 
     **There is no ``graph``.** It was the third dependency and only the deleted chat pair ever
     called it, so keeping the parameter would advertise a transport this app does not have. A
@@ -101,10 +108,16 @@ def make_app(session: Any, turn_log: Any, pending: Any) -> FastAPI:
     separate dependency from ``turn_log`` because it answers a different question — an open
     question has no turn yet, which is exactly why thread state does not record it.
 
-    All three are required and none is defaulted. A default would put the environment back in the
+    ``store`` is the fourth, added with the return path (ADR 0015): a
+    :class:`~governed_bi.feedback.store.FeedbackStore`. It is a **dependency and not a default**
+    for the reason the next sentence gives — an app that built its own would put
+    ``runs/feedback.sqlite`` behind every test that constructs one, and a test suite that writes
+    into the operator's real queue is a suite nobody can trust twice.
+
+    All four are required and none is defaulted. A default would put the environment back in the
     constructor, which is the thing this exists to remove.
     """
-    return _build_app(lambda: session, turn_log, pending)
+    return _build_app(lambda: session, turn_log, pending, store)
 
 
 def app_from_environment() -> FastAPI:
@@ -127,11 +140,13 @@ def app_from_environment() -> FastAPI:
     # the two hold different questions; they share the one in-process client seam, which is the
     # thing that must not exist twice.
     return _build_app(
-        session_from_environment, ThreadTurnLog(), PendingClarifications()
+        session_from_environment, ThreadTurnLog(), PendingClarifications(), feedback_store()
     )
 
 
-def _build_app(get_session: Callable[[], Any], turn_log: Any, pending: Any) -> FastAPI:
+def _build_app(
+    get_session: Callable[[], Any], turn_log: Any, pending: Any, store: Any
+) -> FastAPI:
     """Assemble the app from a session thunk, a turn log and a pending-question reader.
 
     A thunk rather than a value, so :func:`make_app` can hand over a concrete object and
@@ -197,7 +212,7 @@ def _build_app(get_session: Callable[[], Any], turn_log: Any, pending: Any) -> F
     @app.get("/audit/turns/{turn_id}/trace")
     def audit_trace(turn_id: str) -> dict[str, Any]:
         """Turn fields grouped by owning stage, derived from ``RECORD_REGISTER``."""
-        return trace_for(turn_log, turn_id)
+        return trace_for(turn_log, store, turn_id)
 
     @app.get("/audit/corpus")
     def audit_corpus() -> dict[str, Any]:
@@ -209,8 +224,27 @@ def _build_app(get_session: Callable[[], Any], turn_log: Any, pending: Any) -> F
     app.include_router(make_router(_DeferredSession(get_session)))
     # No `_Deferred` wrapper: the pending reader builds its client on first read already, so it
     # costs nothing at import and holds no session.
-    app.include_router(make_clarification_router(pending, turn_log))
+    app.include_router(make_feedback_router(pending, turn_log, store))
+    # The steward's verbs, and the `if` is the control. They are new authority -- moving a row's
+    # state, drafting a patch -- on a surface where reaching the port is sufficient, so they ship
+    # unmounted and a deployment opts in. Unmounted means 404: a 403 confirms the route is there.
+    if os.environ.get("GOVERNED_BI_FEEDBACK_ADMIN"):
+        app.include_router(make_admin_router(store))
     return app
+
+
+def feedback_store() -> Any:
+    """The return path's store, at ``GOVERNED_BI_FEEDBACK_DB`` or ``runs/feedback.sqlite``.
+
+    Read here rather than in ``feedback/`` because only an entry point may read the environment
+    (``tests/conformance/test_only_entry_points_read_the_environment.py``), and this module is one.
+    The path goes through ``paths.assert_not_a_warehouse``, so a DSN in that variable is refused
+    rather than accepted by something.
+    """
+    from governed_bi.feedback.store import FeedbackStore
+
+    raw = os.environ.get("GOVERNED_BI_FEEDBACK_DB")
+    return FeedbackStore(raw if raw else REPO_ROOT / "runs" / "feedback.sqlite")
 
 
 class _DeferredSession:
@@ -639,7 +673,7 @@ def turns_page(turn_log: Any, *, limit: int = 50, thread_id: str | None = None) 
     }
 
 
-def trace_for(turn_log: Any, turn_id: str) -> dict[str, Any]:
+def trace_for(turn_log: Any, store: Any, turn_id: str) -> dict[str, Any]:
     """``/audit/turns/{id}/trace``' body: fields grouped by their register-declared owner."""
     from governed_bi.register.record import RECORD_REGISTER, missing_required, undeclared_keys
     from governed_bi.register.stages import Stage
@@ -655,11 +689,6 @@ def trace_for(turn_log: Any, turn_id: str) -> dict[str, Any]:
     thread_id = record.get("thread_id")
     clarifications = (
         turn_log.clarifications_of(str(thread_id), turn_id) if thread_id else []
-    )
-    raised = (
-        turn_log.raised_of(str(thread_id), turn_id)
-        if thread_id and hasattr(turn_log, "raised_of")
-        else []
     )
 
     by_stage: dict[str, list[dict[str, Any]]] = {}
@@ -698,7 +727,25 @@ def trace_for(turn_log: Any, turn_id: str) -> dict[str, Any]:
         # the statement above was chosen *because* of the answer below, so a trace without it
         # cannot explain the SQL it is showing.
         "clarifications": clarifications,
-        "raised": raised,
+        # Observations filed about this turn, on the trace for the reason above rather than for a
+        # different one: somebody read the statement and said it was wrong, and a trace that shows
+        # the statement without that is showing half of what happened. Read from
+        # ``runs/feedback.sqlite`` keyed on ``turn_id``, not from a channel -- the ``raised``
+        # channel this replaces was deleted with ADR 0015 §2, and the key on the wire changed with
+        # it: ``raised`` held rows minted by ``serve/raised.py``, and ``observations`` holds rows
+        # the store owns and can move through a lifecycle.
+        "observations": [
+            {
+                "observation_id": obs.observation_id,
+                "filed_at": obs.filed_at,
+                "source": obs.source.value,
+                "kind": obs.kind.value,
+                "category": obs.category.value if obs.category else None,
+                "state": obs.state.value,
+                "note": obs.note,
+            }
+            for obs in store.observations_for_turn(turn_id)
+        ],
         "ledger": (record.get("execution") or {}).get("attempts") or [],
         "terminal": (record.get("execution") or {}).get("terminal"),
         "missing_required": sorted(absent),

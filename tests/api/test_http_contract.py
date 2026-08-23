@@ -10,7 +10,7 @@ before v1 was deleted, and nothing has ever been in it.
 stubs for the whole of v2, and one cause covered all seven: the surface they describe could not
 be constructed. `routes.app` reached a memoised session built from the environment and the
 graph factory closed over the same global, so reaching any of this needed a Postgres server, a
-corpus and a credential. `routes.make_app(session, turn_log, pending)` and
+corpus and a credential. `routes.make_app(session, turn_log, pending, store)` and
 `graph_app.build_serve_graph(session)` take their dependencies, and the fixtures below are four
 assets in memory. Nothing here needs a database, a model or a key.
 
@@ -60,7 +60,7 @@ from typing import Any
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
+from contracts import needs, scratch_feedback_store  # noqa: E402
 
 pytestmark = [needs("J")]
 
@@ -290,7 +290,8 @@ def test_capabilities_reports_what_is_true_not_what_is_configured() -> None:
     """
     from governed_bi.api.routes import make_app
 
-    modelless = _client(make_app(_indexed_session(), _TurnLog(), _Pending())).get("/capabilities")
+    app = make_app(_indexed_session(), _TurnLog(), _Pending(), scratch_feedback_store())
+    modelless = _client(app).get("/capabilities")
     assert modelless.status_code == 200, modelless.text
     caps = modelless.json()
     assert caps["has_live_model"] is False, (
@@ -304,7 +305,7 @@ def test_capabilities_reports_what_is_true_not_what_is_configured() -> None:
     assert caps["can_search"] is False, "there is no /search route; false is the true answer"
 
     with_model = _client(
-        make_app(_indexed_session(model=object()), _TurnLog(), _Pending())
+        make_app(_indexed_session(model=object()), _TurnLog(), _Pending(), scratch_feedback_store())
     ).get("/capabilities")
     assert with_model.json()["has_live_model"] is True, (
         "a configured model is reported absent, so the panel degrades on a server that works"
@@ -468,7 +469,7 @@ def test_the_pages_that_do_not_need_a_model_work_without_one() -> None:
     # `browse_routes` imported `routes` backwards to reach the same global, so a test had to
     # patch both — and patching the second was the only thing that made the browse routes
     # answer at all.
-    app = make_app(_tiny_session(), _TurnLog(), _Pending())
+    app = make_app(_tiny_session(), _TurnLog(), _Pending(), scratch_feedback_store())
     client = _client(app)
 
     for path in ("/audit/corpus", "/schema/summary", "/corpus/assets", "/graph", "/knowledge-graph"):
