@@ -18,10 +18,21 @@ that went wrong when it was measured:
 * ``restore`` used to remove whatever path it was handed. A directory holding one
   ``IMPORTANT.txt`` and no corpus at all was silently deleted. It now refuses to delete a tree
   it cannot identify as a corpus.
+* **``snapshot`` had the same hole and this paragraph used to imply it did not.** ``_identify_corpus``
+  guarded ``restore`` only, while ``snapshot`` reached ``shutil.rmtree(dest)`` behind nothing but the
+  nesting check -- so a ``dest`` that was not a corpus was removed without a question. Measured
+  2026-08-23: pointed at a scratch directory holding unrelated files, it deleted them. Both
+  functions now apply the same identification, and ``snapshot`` accepts one further case
+  ``restore`` has no reason to -- an **empty** directory, which holds nothing to lose.
 * ``snapshot(root, root / "snap")`` was accepted, which puts the only backup inside the tree
   ``restore`` later deletes. Nesting either way round is refused.
 * the delete-then-copy order left no recoverable state in the window between the two. It is
   copy-then-swap now.
+
+**A caller must never derive ``dest`` from a string it did not mint.** The guards above bound what
+this module will delete; they do not make an attacker-chosen path safe, because a path that *is* a
+corpus is exactly the path deleting is worst on. Compose a scratch directory from a run id this
+process minted, not from anything that arrived over a socket.
 """
 
 from __future__ import annotations
@@ -78,9 +89,27 @@ def _identify_corpus(root: Path) -> str:
 
 
 def snapshot(root: Path, dest: Path) -> str:
-    """Copy ``root`` to ``dest`` and return the content hash captured."""
+    """Copy ``root`` to ``dest`` and return the content hash captured.
+
+    ``dest`` is replaced when it already exists, so it is held to the same identification
+    ``restore`` holds its target to: it must be a corpus, or empty. The empty case is allowed
+    here and not there because an empty directory has nothing to lose, and a caller that
+    ``mkdir``s its scratch path before calling should not be refused for tidiness.
+
+    Raises ``ValueError`` when ``dest`` exists, is non-empty, and is not identifiable as a
+    corpus -- which is the case that deleted a scratch directory of unrelated files when it
+    was measured. ``NotADirectoryError`` when ``dest`` is an existing file, because
+    ``rmtree`` on one raises something less legible three frames down.
+    """
     _refuse_nesting(dest, root)
     if dest.exists():
+        if not dest.is_dir():
+            raise NotADirectoryError(
+                f"{dest} exists and is not a directory, so it is not a snapshot this module "
+                "wrote and not one it will replace."
+            )
+        if any(dest.iterdir()):
+            _identify_corpus(dest)
         shutil.rmtree(dest)
     shutil.copytree(root, dest)
     return corpus_content_hash(root)

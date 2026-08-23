@@ -15,8 +15,18 @@ is live rather than assuming:
 
 | | |
 |---|---|
-| **Served today** | `../MS Fabric Facilities/corpus` — the facilities warehouse's flattened serving layer, one namespace, against the `facilities` Postgres on 5432 |
-| **What the benchmark numbers were measured on** | [`../BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus) — commented out in `.env`, still checked out |
+| **Served today** (since 2026-08-23) | [`../BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus), paired with `PG_RENAME_DECOY_DSN` on port 5435 — `docker compose up pg_rename_decoy` in `../BIRD-Data-Obfuscation`. 13,304 assets, 0 problems, content hash `6e5c7b4be83d5682` at that repo's HEAD |
+| **Retired as the served tree** | `../MS Fabric Facilities/corpus` — the facilities warehouse's flattened serving layer, one namespace, the `facilities` Postgres on 5432. Both `.env` lines are commented out and they are one switch |
+
+**Why the swap, because it is a standing choice and not a benchmark detour.** The return path
+([ADR 0015](adr/0015-the-return-path.md)) lands corpus changes through the corpus repository's own
+git history, and **`../MS Fabric Facilities` is not a git repository** — it carries a `.gitignore`
+written for one and no `.git`, so a landed change there cannot be told apart from a superseded one.
+Its recorded identity does not reproduce either: `.env` claimed content hash `2f2b296e321d89ba` for
+1,432 assets, and while the asset count checks out the digest measures `ddabcc43dc32b4a5…`
+unrestricted and `8fb6e79f4008d7de` under `schemas=["facilities"]`. With no history, nothing can say
+whether the tree moved or the note was wrong when it was written — which is the argument for
+versioning a corpus, made by the one that was not.
 
 `GOVERNED_BI_CORPUS_DIR` and `GOVERNED_BI_PG_DSN` are **one switch**: a corpus describes one
 warehouse, so swapping the corpus without swapping the DSN points the engine's semantic layer

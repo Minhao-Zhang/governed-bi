@@ -66,7 +66,11 @@ def test_restore_removes_a_file_the_snapshot_did_not_have(tmp_path: Path) -> Non
     assert not (root / "draft.yaml").exists()
 
 
-# ── the three guards on the one operation here that can destroy data ───────────
+# ── the guards on the two operations here that can destroy data ────────────────
+#
+# This header used to say "three guards on the one operation", and the count and the number of
+# operations were both wrong: ``snapshot`` removes ``dest`` too, and until 2026-08-23 it did so
+# behind nothing but the nesting check.
 
 
 def test_restore_refuses_a_directory_that_is_not_a_corpus(tmp_path: Path) -> None:
@@ -84,6 +88,69 @@ def test_restore_refuses_a_directory_that_is_not_a_corpus(tmp_path: Path) -> Non
 
     assert (victim / "IMPORTANT.txt").read_text() == "not a corpus"
     assert not (victim / "a.yaml").exists()
+
+
+def test_snapshot_refuses_a_destination_that_is_not_a_corpus(tmp_path: Path) -> None:
+    """The same hole as ``restore``'s, in the function whose docstring implied it was covered.
+
+    ``_identify_corpus`` guarded ``restore`` only, so ``snapshot`` reached ``shutil.rmtree(dest)``
+    behind nothing but the nesting check. Measured 2026-08-23: pointed at a scratch directory of
+    unrelated files, it deleted them. The worked case that made this urgent is a trial corpus whose
+    scratch path comes from an environment variable -- ``GOVERNED_BI_TRIAL_SCRATCH`` set to the
+    repository root passes the nesting check against a sibling corpus.
+    """
+    root = _corpus(tmp_path / "corpus")
+    victim = tmp_path / "my_documents"
+    victim.mkdir()
+    (victim / "IMPORTANT.txt").write_text("not a corpus")
+    (victim / "sub").mkdir()
+    (victim / "sub" / "taxes.pdf").write_text("also not a corpus")
+
+    with pytest.raises(ValueError, match="not identifiable as a corpus"):
+        snapshot(root, victim)
+
+    assert (victim / "IMPORTANT.txt").read_text() == "not a corpus"
+    assert (victim / "sub" / "taxes.pdf").exists()
+    assert not (victim / "a.yaml").exists()
+
+
+def test_snapshot_replaces_a_destination_that_is_itself_a_corpus(tmp_path: Path) -> None:
+    """The guard must not break the reason the function exists: snapshotting twice into the same
+    scratch path. The second call's ``dest`` is the first call's output, which *is* a corpus."""
+    root = _corpus(tmp_path / "corpus")
+    snapshot(root, tmp_path / "snap")
+    (root / "b.yaml").write_text("id: b\nkind: term\n")
+
+    captured = snapshot(root, tmp_path / "snap")
+
+    assert captured == corpus_content_hash(root)
+    assert (tmp_path / "snap" / "b.yaml").exists()
+
+
+def test_snapshot_accepts_an_empty_destination_directory(tmp_path: Path) -> None:
+    """Allowed where ``restore`` would refuse, and the asymmetry is the point: an empty directory
+    holds nothing to lose, and a caller that ``mkdir``s its scratch path first should not be
+    refused for tidiness."""
+    root = _corpus(tmp_path / "corpus")
+    dest = tmp_path / "snap"
+    dest.mkdir()
+
+    captured = snapshot(root, dest)
+
+    assert captured == corpus_content_hash(root)
+    assert (dest / "a.yaml").exists()
+
+
+def test_snapshot_refuses_a_destination_that_is_an_existing_file(tmp_path: Path) -> None:
+    """``rmtree`` on a file raises three frames down with a message about the wrong thing."""
+    root = _corpus(tmp_path / "corpus")
+    dest = tmp_path / "snap"
+    dest.write_text("i am a file")
+
+    with pytest.raises(NotADirectoryError, match="not a directory"):
+        snapshot(root, dest)
+
+    assert dest.read_text() == "i am a file"
 
 
 def test_a_snapshot_may_not_live_inside_the_corpus_it_snapshots(tmp_path: Path) -> None:
