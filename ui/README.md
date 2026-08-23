@@ -41,10 +41,13 @@ talks to.
   - **Semantic graph** — the full corpus as a typed, filterable knowledge graph
     (metrics, terms, joins, few-shots, negatives).
   - **Tables** — a plain, auditable table/column browser with governance flags.
-- **Corpus** — every asset the engine loaded, by type (server-filtered, sorted and
-  paginated) or by ranked search, with provenance and exclusion state. Corpus
-  health — servable, fatal problems, degradations — is the header control, from
-  `GET /audit/corpus`.
+- **Corpus** — every asset the engine loaded, two ways: by type (server-filtered,
+  sorted and paginated by `GET /corpus/rows`) or by ranked search, with provenance and
+  exclusion state. The ranking is a **client-side** Fuse index over a catalog assembled in the
+  browser (`lib/asset-catalog.ts`), not a server query — the engine reports
+  `can_search: false` and `GET /search` was deliberately never built, so this is the only
+  ranking there is. Corpus health — servable, fatal problems, degradations — is the
+  header control, from `GET /audit/corpus`.
 - **History** — every conversation on the server; a row leads back into the chat.
 - **Audit** — every turn the server has served, and one turn's record stage by
   stage: the governance ledger, the licensed set, and which required register
@@ -60,8 +63,9 @@ always means *an observation about this turn*.
 
 The UI is a **pure client** of the engine's **LangGraph Server** (see
 [ADR 0001](../docs/adr/0001-langgraph-server-chat-runtime.md)):
-chat streams over the LangChain **`useStream`** protocol; schema / corpus / health
-are **custom REST routes** on that same server; the UI adapts its affordances to
+chat streams over the LangChain **`useStream`** protocol; schema, corpus and the audit
+surface are **custom REST routes** on that same server (fourteen reads and one write,
+inventoried in [`docs/openapi.json`](../docs/openapi.json)); the UI adapts its affordances to
 `GET /capabilities`. It owns no database — conversation state is the runtime's
 thread state. When no backend URL is configured, all reads resolve to mock
 fixtures and chat uses a synthetic transport, so the app is fully explorable

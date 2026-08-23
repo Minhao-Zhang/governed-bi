@@ -1,9 +1,20 @@
 """Custom REST routes mounted by ``langgraph.json``'s ``http.app`` (ADR 0007 §7).
 
-Route shapes follow ``docs/openapi.json``. Capabilities report what is actually built.
-**Every route here is a read and none of them needs a model.** Serving a turn is the streamed
-LangGraph Server path (``langgraph.json``'s ``graphs.serve`` → ``api/graph_app.make_graph``) and
-nothing else.
+Route shapes follow ``docs/openapi.json``, which is the inventory of record. Capabilities
+report what is actually built. **Nothing here needs a model**: serving a turn is the streamed
+LangGraph Server path (``langgraph.json``'s ``graphs.serve`` → ``api/graph_app.make_graph``)
+and nothing else.
+
+**Every route here is a read except one**, and this docstring said "every route" until
+2026-08-22 (ADR 0009's correction of the same date carries the full account).
+``POST /turns/{turn_id}/raised`` writes: the handler is ``api/clarification_routes.py:66``,
+mounted at ``:212`` below, and ``api/raised_write.py:99`` appends the row onto checkpointed
+``ServeState.raised`` through ``aupdate_state(as_node="raise_note")``. It resumes nothing and is
+409 on a paused or in-flight thread, but nothing on this surface authenticates (A7, below), so
+any caller that can reach the port can file a note against any turn. Neither clarification route
+goes through ``api/visibility.py::visible()`` either — its callers are ``api/browse_routes.py:59``
+and ``routes.py:156``, ``:168``, ``:181``, ``:205`` — so both verbs sit outside the ADR 0012 grant
+withholding.
 
 ``POST /chat`` and ``POST /chat/resume`` are **deleted** (2026-08-18, ADR 0014). They were a
 second topology for the same job — no ``accept`` node, the whole of ``ServeState`` in and out, a
@@ -13,11 +24,11 @@ degrading to REST lost the conversation it was meant to rescue. Their append int
 went with them, so ``record_node`` is the only writer of a turn: it returns the envelope onto
 ``ServeState.turns`` and the checkpointer persists it.
 
-**The surface has a constructor** (2026-08-11). :func:`make_app` takes its two dependencies —
-the session and the turn log — and returns an app over exactly those.
-:func:`app_from_environment` is the adapter the process entry uses, and is the only thing here
-that resolves anything from the environment; the module-level :data:`app` is that adapter's
-output because ``langgraph.json`` names an attribute rather than a factory.
+**The surface has a constructor** (2026-08-11). :func:`make_app` takes its three dependencies —
+the session, the turn log and the pending-clarification reader — and returns an app over
+exactly those. :func:`app_from_environment` is the adapter the process entry uses, and is the
+only thing here that resolves anything from the environment; the module-level :data:`app` is
+that adapter's output because ``langgraph.json`` names an attribute rather than a factory.
 
 The two adapters are what justify the seam: the environment in production, a fake ``Session`` in
 tests. Resolution stays **lazy** for the environment one — importing this module must not build
@@ -69,9 +80,15 @@ def make_app(session: Any, turn_log: Any, pending: Any) -> FastAPI:
 
     ``session`` is a :class:`~governed_bi.serve.session.Session` (or anything with its read
     surface: ``assets_by_id``, ``structure``, ``connector``, ``agent_model``, ``knobs_resolved``,
-    ``corpus_content_hash``, ``problems``). ``turn_log`` is a **reader** of served turns —
-    anything exposing ``list_turns``, ``get_turn``, ``SUMMARY_FIELDS`` and ``TURN_LOG_DIR``;
-    :class:`governed_bi.api.thread_turns.ThreadTurnLog` is the production one.
+    ``corpus_content_hash``, ``problems``). ``turn_log`` is a reader of served turns plus one
+    write, and the whole seam is six members, because a fork that implements fewer gets an
+    ``AttributeError`` out of a route rather than a refusal: ``list_turns`` and
+    ``SUMMARY_FIELDS`` for ``/audit/turns``, ``TURN_LOG_DIR`` for that route's ``meta.log_dir``,
+    ``get_turn`` and ``clarifications_of`` for ``/audit/turns/{id}/trace`` (the latter unguarded
+    at ``routes.py:657``), and ``append_raised`` for ``POST /turns/{id}/raised``
+    (``api/clarification_routes.py:104``, the one write). ``raised_of`` is the only optional
+    member: ``routes.py:661`` guards it with ``hasattr``, so a seam without it serves an empty
+    ``raised`` list. :class:`governed_bi.api.thread_turns.ThreadTurnLog` is the production one.
 
     **There is no ``graph``.** It was the third dependency and only the deleted chat pair ever
     called it, so keeping the parameter would advertise a transport this app does not have. A
@@ -373,12 +390,12 @@ def capabilities_for(session: Any) -> dict[str, Any]:
         # clarification paused, the process was killed with nothing left listening, a fresh one
         # re-mounted the prompt from checkpointed interrupt state, and answering it resumed the
         # turn to a correct answer (
-        # `docs/analysis/adopting-the-downstream-fork-2026-08-19.md`). That is one hand-run
-        # observation and **no test coverage**: every HITL test runs on `InMemorySaver`, and
-        # `tests/serve/test_the_durable_saver_survives_a_process.py` reaches the saver through
-        # `update_state` because that file is about persistence rather than the serve graph. So
-        # nothing automated drives a real `ask_user` interrupt and resume across a process
-        # boundary through `AsyncSqliteSaver`.
+        # `git-history:docs/analysis/adopting-the-downstream-fork-2026-08-19.md`).
+        # `tests/serve/test_a_pause_survives_a_restart_on_disk.py` has covered the saver half
+        # since 2026-08-20: a real `ask_user` interrupt written onto `AsyncSqliteSaver` through
+        # `compile_durable`, then answered by a second graph over the same file. Its own header
+        # says that is deliberately not a process boundary, so nothing automated drives a real
+        # `ask_user` interrupt and resume across a process boundary through `AsyncSqliteSaver`.
         "hitl_survives_process_restart": durable,
     }
 

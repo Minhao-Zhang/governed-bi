@@ -3,24 +3,23 @@
 /**
  * useChat — the chat cockpit's state machine.
  *
- * ── MOCK TRANSPORT (current) ────────────────────────────────────────────────
- * No LangGraph Server is attached yet (USE_MOCKS is the default), so this hook
- * FAKES the governed agentic core (ADR 0002): on send() it replays the scripted
- * `MOCK_AGENT_EVENTS` governance trajectory as a live agent timeline (folded
- * through `reduceSteps` on a ~250 ms timer), then resolves to a synthetic
- * AnswerView from the fixtures — MOCK_REFUSAL when the question trips the
- * restricted-content pattern (mirroring the engine's fail-closed negative-example
- * / excluded-field gates), MOCK_GRADED_ANSWER / MOCK_AGENT_ANSWER / MOCK_ANSWER
- * otherwise. A separate clarify path stands in for the `ask_user` HITL interrupt.
+ * **This is the mock transport, and only the mock transport.** The real path shipped: it is
+ * `hooks/use-stream-chat.ts` over the LangChain `useStream` hook, rendered by
+ * `components/chat/stream-chat.tsx`. `components/chat/chat-panel.tsx` mounts one or the
+ * other — this hook when `USE_MOCKS` (no `NEXT_PUBLIC_LANGGRAPH_URL`), `<StreamChat/>`
+ * when a backend reports `can_stream`, `<NoTransport/>` when it does not. So nothing here is
+ * pending, and nothing here is ever reached against a live engine.
  *
- * ── REAL PATH (later) ───────────────────────────────────────────────────────
- * When capabilities.can_stream is true, swap this mock for the LangChain
- * `useStream` hook (`@langchain/langgraph-sdk/react`) pointed at
- * LANGGRAPH_URL + ASSISTANT_ID (@/lib/env). The serve graph streams `GovEvent`s
- * that `reduceSteps` folds into the same timeline, and the assistant AnswerView
- * comes from the streamed graph state. The { messages, send, isRunning, steps,
- * reset } shape below is intentionally transport-neutral so the UI layer
- * (MessageList / AgentTimeline / Composer) never changes.
+ * What it does: on send() it replays the scripted `MOCK_AGENT_EVENTS` governance trajectory
+ * as a live agent timeline (folded through `reduceSteps` on a ~250 ms timer), then resolves
+ * to a synthetic AnswerView from the fixtures — MOCK_REFUSAL when the question trips the
+ * restricted-content pattern (mirroring the engine's fail-closed negative-example /
+ * excluded-field gates), MOCK_GRADED_ANSWER / MOCK_AGENT_ANSWER / MOCK_ANSWER otherwise. A
+ * separate clarify path stands in for the `ask_user` HITL interrupt.
+ *
+ * The { messages, send, isRunning, steps, reset } shape below is transport-neutral, which is
+ * what let the streamed hook arrive beside it without the UI layer (MessageList /
+ * AgentTimeline / Composer) changing. Keep it that way.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -101,8 +100,8 @@ const AGENT_PATTERN = /agent|reason|corpus|repair|inspect|step/i;
 /**
  * Questions matching this replay the serve-time clarification (HITL) flow: the
  * agent interrupts mid-turn to ask one question and waits, then resumes on the
- * answer — a faithful offline stand-in for the server's `ask_user` interrupt
- * (docs/plans/hitl-clarification-contract.md). Refusal still takes priority.
+ * answer — a faithful offline stand-in for the server's `ask_user` interrupt, whose
+ * payload shape is fixed by ADR 0007 §6. Refusal still takes priority.
  */
 const CLARIFY_PATTERN = /clarif|ambiguous|which .*mean|did you mean|active/i;
 

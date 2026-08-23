@@ -15,7 +15,8 @@
  * into the append-only agent timeline shown in <ServeProgress/>, and the same
  * rows are rebuilt from the completed ledger via `buildStepsFromLedger`
  * (live == audit). The terminal AnswerView prefers `stream.values.answer`
- * (handoff §3); per-message `additional_kwargs.governed_bi` remains a fallback
+ * (ADR 0007 §4: `answer` is the system-copy channel and the model's prose lives in
+ * `messages`); per-message `additional_kwargs.governed_bi` remains a fallback
  * for older stamps.
  *
  * Everything that makes the stream arrive at all is in `SUBMIT_OPTIONS` below —
@@ -311,7 +312,7 @@ export function useStreamChat(
 
   const isRunning = stream.isLoading;
 
-  // Channel answer (handoff §3) — used for the latest assistant turn when present.
+  // The `answer` channel (ADR 0007 §4) — used for the latest assistant turn when present.
   const channelAnswer = parseAnswer(stream.values?.answer);
 
   // HITL: when the graph pauses at `interrupt()` inside its `ask_user` tool, the

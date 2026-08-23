@@ -24,7 +24,6 @@ import type {
   capabilitiesSchema,
   columnRelatedResponseSchema,
   columnViewSchema,
-  editResponseSchema,
   erGraphEdgeSchema,
   erGraphNodeSchema,
   erGraphSchema,
@@ -36,8 +35,6 @@ import type {
   leanColumnSchema,
   resultTableSchema,
   schemaSummaryResponseSchema,
-  searchHitSchema,
-  searchResponseSchema,
   tableSummarySchema,
   tableViewSchema,
 } from "./schemas";
@@ -80,16 +77,13 @@ export type AssetRow = z.infer<typeof assetRowSchema>;
 export type ColumnRelated = z.infer<typeof columnRelatedResponseSchema>;
 export type ResultTable = z.infer<typeof resultTableSchema>;
 export type AnswerView = z.infer<typeof answerViewSchema>;
-export type EditResponse = z.infer<typeof editResponseSchema>;
 
-/* ── D15 scope-on-demand (gated on capabilities.can_scope / can_search) ───── */
+/* ── the scopeable/paginated read surface (ADR 0009 D3/D4) ────────────────── */
 export type LeanColumn = z.infer<typeof leanColumnSchema>;
 export type TableSummary = z.infer<typeof tableSummarySchema>;
 export type SchemaSummaryResponse = z.infer<typeof schemaSummaryResponseSchema>;
 export type BoundaryEdge = z.infer<typeof boundaryEdgeSchema>;
 export type GraphMeta = z.infer<typeof graphMetaSchema>;
-export type SearchHit = z.infer<typeof searchHitSchema>;
-export type SearchResponse = z.infer<typeof searchResponseSchema>;
 
 /**
  * Normalized catalog row for the search omnibox + schema rail. Produced
@@ -151,11 +145,15 @@ export type AssetType = (typeof ASSET_TYPES)[number];
 /**
  * Every corpus asset type, tables included — what the Corpus browser lists.
  *
- * Kept separate from `ASSET_TYPES` on purpose: `table` is a corpus asset in the
- * domain model and is counted as one by `/health`, but `/corpus/assets?type=table`
- * is **not** a valid request (that endpoint serves the non-table assets, and
- * tables come from `/schema`). Folding them into one constant would invite sending
- * `type=table` to an endpoint that rejects it.
+ * Kept separate from `ASSET_TYPES` on purpose: `table` is a corpus asset in the domain model,
+ * and the Corpus page folds the table catalog in from `/schema/summary` (`lib/asset-catalog.ts`)
+ * rather than asking `/corpus/assets` for it — that surface wants columns and a grain, which
+ * the asset row does not carry.
+ *
+ * **The reason this note used to give was wrong.** It said `/corpus/assets?type=table` is "not
+ * a valid request" and that the endpoint "rejects it". It does not: `api/routes.py::asset_rows`
+ * validates `type` against `ASSET_REGISTER`, which *includes* `table`, and returns `[]` only
+ * for a type outside the register. The `/health` count it also cited is gone with the route.
  */
 export const CORPUS_ASSET_TYPES = ["table", ...ASSET_TYPES] as const;
 export type CorpusAssetType = (typeof CORPUS_ASSET_TYPES)[number];

@@ -130,8 +130,9 @@ moving the other four, and a single prompt with the facet interpolated would mak
 impossible. Four extra registry entries is the price.
 
 **How this decision was made, recorded as a fact about the decision.**
-`docs/plans/context-engineering-2026-08-04.md` states the choice as the maintainer's, between
-deterministic string composition and a model call per facet, and argues for the deterministic
+`git-history:docs/plans/context-engineering-2026-08-04.md` (deleted in `45231c0`) states the
+choice as the maintainer's, between deterministic string composition and a model call per
+facet, and argues for the deterministic
 arm first on the grounds that it is measurable first — a pure function of question and facet,
 no prompt, no budget, and it establishes whether the *shape* of the query matters before paying
 to learn whether the *model* does. The maintainer chose the LLM implementation with that

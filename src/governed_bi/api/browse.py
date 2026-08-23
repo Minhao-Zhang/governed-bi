@@ -53,7 +53,8 @@ class FieldKind(str, Enum):
     #: A reference to another asset id, or a list of them. Compared as text.
     ref = "ref"
     list = "list"
-    #: A nested block (``governance``, ``audit``, ``reliability``). Only presence.
+    #: A nested block. The set is :data:`_BLOCK_FIELDS` below — ``governance``, ``audit``,
+    #: ``reliability``, ``provenance`` — and only presence is offered.
     block = "block"
 
 

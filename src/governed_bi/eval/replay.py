@@ -1,7 +1,8 @@
 """Pin one run's routing decisions onto the next, so a single-knob A/B measures the knob.
 
 ``route_node`` itself is deterministic — it ranks facet hits and takes ``route_top_n``. What
-is not deterministic is the five **facet rewriters** upstream of it: each is a utility-model
+is not deterministic is the four **facet rewriters** upstream of it (``FACET_EXTRACTS``;
+``facet_schema`` does not rewrite): each is a utility-model
 call, and two runs of the same question over the same corpus can hand ``route`` two different
 sets of hits. The schema shortlist then differs, ``licensed`` differs, and the agent is asked
 a different question. A prompt A/B run that way cannot separate "the new prompt helped" from

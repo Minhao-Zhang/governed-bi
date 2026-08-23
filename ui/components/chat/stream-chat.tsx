@@ -10,7 +10,8 @@ import { useThreadId } from "@/hooks/use-thread-id";
  * only when the backend reports `can_stream: true`.
  *
  * **It also owns which conversation is open**, because that is a fact about this transport and
- * no other: threads are LangGraph Server's resource, and the REST fallback has none. Held in the
+ * no other: threads are LangGraph Server's resource, and this is the only transport there is
+ * against a real engine. Held in the
  * URL (`useThreadId`), fed to the hook as `threadId`, and written back by `onThreadId` when the
  * first turn mints one — so a reload reopens the same conversation instead of starting a fresh
  * thread beside the one already on disk.

@@ -2,6 +2,21 @@
 
 **Status:** Accepted · **Date:** 2026-08-03 · **Supersedes the runtime half of** ADR 0001
 
+**Later decisions reaching into this one** *(pointers collected here 2026-08-22; each was
+already marked inline in the body and nowhere in the header):*
+
+- **§5** (stream events) is **superseded by** [ADR 0010](0010-live-stage-events.md), which built
+  it — the envelope, `register/stages.py` as the authority, and the boundary being three places
+  rather than one.
+- **§7**'s capability set was **re-decided by** [ADR 0009](0009-browsing-and-filtering-api.md)
+  (D4: a flag is an observation, flipped by building the thing; D12: `can_clarify` binds to both
+  the tool and the model) and **amended by** [ADR 0014](0014-one-conversation-store.md) §3a for
+  the two durability flags.
+- **§6**'s deferred resume-identity gap was **closed 2026-08-18**, forced by retiring
+  `POST /chat/resume`; see the note in that section.
+- **Amendment 3**'s statement of what an unauthenticated port costs got *wider* under
+  [ADR 0014](0014-one-conversation-store.md) (audit B1), and says so inline.
+
 ## Context
 
 The frontend (`ui/`, then its own repository at `main` @ `4ada0cc`) is architecturally complete: LangGraph
@@ -33,6 +48,20 @@ The graph **cannot** be loaded as a bare compiled object. Every node needs live 
 `serve/state.py` records the same constraint for `policy` at its `ServeState` declaration: the
 policy rides `configurable["policy"]` because it is not msgpack-safe.
 
+> **Two coordinates corrected 2026-08-22. The decision is untouched — `configurable` still
+> carries live objects and is still why the factory exists.**
+>
+> `guard_node` no longer subscripts `config["configurable"]`; it reads through
+> `serve/runtime.py::configurable` and its docstring says so, because that reader is the one
+> place that can refuse a request's attempt to name a run constant, and a node reaching around
+> it is a node a client can hand its own `policy` to. `KeyError` on a missing policy is kept
+> deliberately: "no policy" must not become "no guard".
+>
+> The key list is also short by two. `utility_model` and `embedder` are bound in
+> `api/graph_app.py` alongside the rest — the utility model is the small-model half of
+> [ADR 0011](0011-two-model-split-and-facet-query-rewriting.md)'s split, and neither is
+> JSON-serialisable either, so both belong in this argument.
+
 So `make_graph` builds a `Session` at server start and closes over it. This is the reason
 §2.8.2.2's session seam had to exist before the server could: the server is simply its
 second caller, after `python -m governed_bi.serve`.
@@ -40,7 +69,9 @@ second caller, after `python -m governed_bi.serve`.
 ### 2. The client sends a message. The turn's provenance is minted server-side.
 
 The UI submits exactly one key: `{messages: [{type: "human", content}]}`. The record requires
-fifteen fields.
+**forty-two** fields — `len(register/record.py::RECORD_REGISTER)`, recounted 2026-08-22; this
+said fifteen, and ADR 0006 §11 quoted 37 for the same register. The argument below does not
+turn on the number.
 
 **A client must not be able to set any of them.** `run_id`, `turn_id`, `corpus_content_hash`,
 `prompt_set_hash`, `knobs_resolved` are the run's own claims about itself — a
@@ -238,7 +269,8 @@ single-operator local tool, and it gets its own decision rather than an improvis
 ### 7. `/capabilities` reports what is true, and false is a legitimate answer
 
 It is the UI's **first** request; without it the chat panel pins at a skeleton forever. Twelve
-fields, and each is an observation: `environment`, `dialect`, `model`, `has_live_model` iff a
+fields *(fourteen as of 2026-08-22 — see the correction after this paragraph)*, and each is an
+observation: `environment`, `dialect`, `model`, `has_live_model` iff a
 model is actually configured, `can_stream` true, **`can_edit` false** with `edit_mode: "none"`
 (the curator is out of scope), `can_clarify` iff the `ask_user` tool is bound *and* a model is
 configured — re-decided the next day, and [ADR 0009](0009-browsing-and-filtering-api.md) D12 is
@@ -262,6 +294,20 @@ client-side index over what it already has, which is a route we do not have to b
 to end. Two flags reporting the *server* rather than the mounted client is the failure this
 field set is shaped against — hence `can_clarify` binding to both the tool and the model, and
 hence the durability flags saying what the checkpointer actually does.
+
+> **Two fields short, and one is no longer asserted. Recounted 2026-08-22.**
+> `api/routes.py::capabilities_for` returns **fourteen** keys. The two the enumeration above
+> never mentions are **`models`** (`models_for(session)` — the per-surface model detail the
+> settings page renders, beside the single `model` id the header chip reads) and
+> **`connection`** (`connection_for(session)` — which warehouse this engine is pointed at,
+> credential-free, redacted by `datasource/postgres.py::endpoint`). Both are observations, so
+> the principle of this section holds; the count did not.
+>
+> `can_stream` is also no longer the flat `true` written above. It is derived from
+> `served_graph_declared()`, for this section's own reason: a hardcoded flag describing an
+> intention rather than an observation is the failure the field set is shaped against
+> ([ADR 0009](0009-browsing-and-filtering-api.md) D4). A `false` now renders `<NoTransport/>`,
+> which explains itself, instead of mounting a fallback against a deleted route.
 
 Required for the chat path: `/capabilities` plus the graph. Ungated and therefore required
 for the other pages not to error: `/health`, `/schema/summary`, `/corpus/assets`, `/graph`,

@@ -2,13 +2,14 @@
 
 Separated from :mod:`.selective` because the two answer different questions. This
 module answers "what did the artifact actually record", which is a fact about
-``eval/harness.py::project_turn``; :mod:`.selective` answers "what does ranking on it
+``eval/projection.py::project_turn`` (re-exported from ``eval/harness.py``);
+:mod:`.selective` answers "what does ranking on it
 buy", which is a fact about the arm.
 
 Every entry declares its **direction** and the **mechanism** behind that direction
 before any curve is drawn. That is the whole discipline here: a sign chosen after
 seeing which way the arm went is not a prediction, and
-``docs/analysis/risk-coverage-v4.md`` §4 is a page of AUCs sitting either side of 0.5
+``git-history:docs/analysis/risk-coverage-v4.md`` §4 was a page of AUCs sitting either side of 0.5
 by a couple of points, where picking the winning side per signal would manufacture
 separation out of noise.
 

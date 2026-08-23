@@ -198,7 +198,8 @@ _STRUCTURE_CACHE_MAX = 8
 
 
 #: Run constants no request may name. Empty in-process by default; registered once by
-#: ``api/graph_app.make_graph`` at server start. See :func:`trust`.
+#: ``api/graph_app.build_serve_graph`` (``graph_app.py:463``) as the graph is compiled -- which is
+#: what ``make_graph`` calls at server start. See :func:`trust`.
 _TRUSTED: dict[str, Any] = {}
 
 
@@ -248,8 +249,8 @@ def model_id(model: Any) -> str | None:
     is not a display bug: ``chat_model`` and ``llm_utility_model`` are ``Role.comparability``
     knobs, so two Bedrock arms serving *different* Anthropic models published the same value
     and ``measure/gates.py``'s drift gate compared them equal. Measured on
-    ``runs/serve/2026-08-18.jsonl``: both turns recorded ``amazon_bedrock_converse_chat`` while
-    actually running ``us.anthropic.claude-sonnet-5``.
+    ``runs/serve/2026-08-18.jsonl (an untracked local sink, deleted under ADR 0014)``: both turns recorded
+    ``amazon_bedrock_converse_chat`` while actually running ``us.anthropic.claude-sonnet-5``.
 
     Last in the tuple, not first: it is the fallback spelling, and a client that offers both
     ``model_name`` and ``model_id`` should keep the meaning the earlier arms recorded.

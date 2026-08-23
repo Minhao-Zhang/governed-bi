@@ -41,7 +41,7 @@ REST chat pair that was the second one is deleted.
 |---|---|
 | `guard` | Five deterministic rules (`govern/guard.py::GUARD_RULES`), then a model-backed BI-scope gate on the utility model. **Enabled per rule id, and `guard_rules_enabled` ships `UNSET`** — the served app (`api/graph_app.py`) turns on `g_bi_scope` and nothing else; the eval driver, the one-turn CLI and `tools/` all pass `{}`, so no guard rule fires on any measured arm |
 | `rewrite` | Stub rail today; facet query rewriting lives inside `facet_*` |
-| `negative_gate` | Negative-example decline path. A stub today: `negative_tau` ships `UNSET` and the served corpus holds no `negative_example` asset, so the node writes `outcome: disabled` on every turn and the `decline` branch is unreachable |
+| `negative_gate` | Negative-example decline path. A stub unconditionally: `negative_node` (`serve/nodes/negative.py`) discards its state and returns `outcome: disabled` without reading `negative_tau` or the corpus, so the `decline` branch is unreachable whatever is configured and whatever is curated |
 | `facet_*` | Parallel retrieval channels (each may rewrite its query) |
 | `route` / `resolve` / `connect` | Schema pick, budgets, Steiner join |
 | `assemble` | Render retrieval context block |
@@ -66,12 +66,16 @@ The ledger row comes back on the tool's own `Command(update=...)`, beside the
 payload. What keeps this from being merely a convention is that the model holds no
 connector handle — the connector is closed over inside `build_tools` — and that
 `check()` raises `GovernanceUsageError` rather than defaulting permissive when a
-security argument is unwired. Adding a new executor that skips `check()` is caught
-by `govern/`'s G2 invariant and its tests, not by the topology. Layers, rules and
+security argument is unwired. Adding a new executor that skips `check()` is caught by
+review, not by the topology and not by a test: G2 is prose in
+`govern/__init__.py:6`, and the only test closing over `EXECUTOR_PATHS`
+(`tests/serve/test_state_channels.py:495`) asserts that the four paths partition into answering
+and introspection — never that one of them calls `check()`. Layers, rules and
 executor paths: [ADR 0006](adr/0006-execution-time-governance.md).
 
-**Authorization is a wired seam that ships open.** `govern/access.py` holds an `AccessPolicy`
-port with two adapters, and the TABLES and COLUMNS layers ask the resulting grant
+**Authorization is a wired seam that ships open.** `ports.py:331` declares the `AccessPolicy`
+port and `govern/access.py` holds its two adapters, and the TABLES and COLUMNS layers ask the
+resulting grant
 (`r_table_not_authorized`, `r_column_not_authorized`, `r_row_predicate_unenforced`).
 `api/graph_app.py::access_policy_from_environment` is the composition root and the only place in
 `src/` that chooses one: `OpenAccessPolicy` unless `GOVERNED_BI_ACCESS_POLICY` names a
@@ -85,10 +89,11 @@ grant *does* narrow when one is configured, and what it deliberately does not, i
 [ADR 0012 §8](adr/0012-access-seam-principal-and-authorization.md). What a fork implements, in
 what order: [enterprise fork](enterprise-fork.md).
 
-`AgentMiddleware` *is* used in `agent_core`, for two things that are **not**
+`AgentMiddleware` *is* used in `agent_core`, for three things that are **not**
 governance: injecting the retrieval context block on every model call (via
-`wrap_model_call`, so it never enters `messages`), and ending the turn at the
-`run_query` attempt cap.
+`wrap_model_call`, so it never enters `messages`), ending the turn at the
+`run_query` attempt cap (`_CapEndsTheTurn`), and ending the inner loop after a
+clarification or a fail-closed decline (`_ClarificationEndsTheTurn`).
 
 Server entry: [`api/graph_app.py:make_graph`](../src/governed_bi/api/graph_app.py)
 (`uv run langgraph dev`). HTTP app: [`api/routes.py:app`](../src/governed_bi/api/routes.py)

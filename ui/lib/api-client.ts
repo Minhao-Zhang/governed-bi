@@ -1,8 +1,10 @@
 /**
- * Typed client for the engine's custom REST routes (handoff §4), mounted on the
- * LangGraph Server. Every response is validated with zod at the boundary
- * (fail-loud). Streaming chat goes through `useStream` (see the chat feature);
- * this covers the read routes and the dev `POST /corpus/edit`.
+ * Typed client for the engine's custom REST routes, mounted on the LangGraph
+ * Server. The mounted surface is enumerated in `../docs/openapi.json` — the
+ * inventory of record — and decided in ADR 0009 Amendment 1; the capability
+ * flags that gate it are ADR 0007 §7. Every response is validated with zod at
+ * the boundary (fail-loud). Streaming chat goes through `useStream` (see the
+ * chat feature); this covers the fourteen reads and the one write.
  *
  * In mock mode (`USE_MOCKS`, i.e. no `NEXT_PUBLIC_LANGGRAPH_URL`) each call
  * resolves to a neutral placeholder from `lib/mock/fixtures`, so the UI renders
@@ -40,11 +42,9 @@ import {
   corpusRowsSchema,
   capabilitiesSchema,
   columnRelatedResponseSchema,
-  editResponseSchema,
   erGraphSchema,
   knowledgeGraphSchema,
   schemaSummaryResponseSchema,
-  searchResponseSchema,
   tableViewSchema,
 } from "@/lib/schemas";
 import type {
@@ -58,12 +58,10 @@ import type {
   CorpusRows,
   CorpusWhere,
   ColumnRelated,
-  EditResponse,
   ErGraph,
   KnowledgeGraph,
   SchemaScope,
   SchemaSummaryResponse,
-  SearchResponse,
   TableView,
 } from "@/lib/types";
 
@@ -174,29 +172,12 @@ export const api = {
     return getLive(`/schema/${encodeURIComponent(id)}`, tableViewSchema);
   },
 
-  /** Server-ranked search (GET /search; D15 DEFERRED, gated on can_search). The
-   * default path is the client Fuse index (see lib/catalog.ts); this is only
-   * called when capabilities.can_search is true. */
-  search: (q: string): Promise<SearchResponse> => {
-    if (USE_MOCKS) {
-      const needle = q.trim().toLowerCase();
-      const hits = MOCK_SCHEMA_SUMMARY.items
-        .filter((t) => t.physical_name.toLowerCase().includes(needle))
-        .map((t) => ({
-          kind: "table",
-          id: t.id,
-          table_id: t.id,
-          label: t.physical_name,
-          schema: t.schema,
-          detail: null,
-          excluded: t.excluded,
-          has_suspect: t.has_suspect,
-          score: 1,
-        }));
-      return Promise.resolve({ query: q, total: hits.length, hits });
-    }
-    return getLive(`/search${qs({ q })}`, searchResponseSchema);
-  },
+  // `search()` — a client for `GET /search` — is **gone**, and the route it called never
+  // existed: ADR 0009 Amendment 1 says it is "deliberately **not** built", and
+  // `api/routes.py::capabilities_for` hardcodes `can_search: false`, so the branch could not
+  // be reached against any engine. Ranking is the Fuse index over the lean catalog
+  // (`lib/catalog.ts` for tables, `lib/asset-catalog.ts` for every asset kind) — not a
+  // fallback, the only one there is.
 
   /** The full knowledge graph over all asset types (GET /knowledge-graph).
    * Optional D15 scope (schema/focus/radius/node_budget/kinds) returns a bounded
@@ -222,7 +203,7 @@ export const api = {
     ),
 
   /** Every semantic-layer item touching one physical column (GET
-   * /columns/{column_id}/related; handoff §14). `columnId` is the derived id from
+   * /columns/{column_id}/related; ADR 0009 Amendment 1). `columnId` is the derived id from
    * the engine's column asset id, READ from a column payload — never derived client-side
    * (ADR 0008 D1/D4). Joins are resolved server-side; metrics are table-grain. */
   columnRelated: (columnId: string): Promise<ColumnRelated> => {
@@ -239,20 +220,11 @@ export const api = {
   // of the conversation that preceded it. Chat is `useStream` and nothing else; an engine that
   // cannot stream now says so (see <ChatPanel/>) instead of being answered badly.
 
-  /** Validate + write a corpus asset (POST /corpus/edit; dev, gated on can_edit). */
-  edit: (asset: Record<string, unknown>): Promise<EditResponse> => {
-    if (USE_MOCKS) {
-      return Promise.resolve({
-        written: false,
-        asset_id: String(asset.id ?? "unknown"),
-        asset_type: String(asset.asset_type ?? "unknown"),
-        path: null,
-        findings: ["Editing requires a connected dev backend."],
-        diff: "",
-      });
-    }
-    return post("/corpus/edit", { asset }, editResponseSchema);
-  },
+  // `edit()` — a client for `POST /corpus/edit` — is **gone**, and that route never existed
+  // either. `capabilities_for` reports `can_edit: false` with `edit_mode: "none"` because the
+  // curator is out of scope of the served surface (ADR 0007 §7); writing the corpus is a
+  // git/PR job against the corpus repository, not a request from this client. The only write
+  // this app makes is `raiseTurn` below.
 
   /* ── the audit surface ─────────────────────────────────────────────────── */
   //

@@ -10,9 +10,10 @@ import type { TimelineStep } from "@/lib/steps";
  * The running-progress view. The governed agentic core is the only serve path:
  * streamed and mock turns fold their stage events into `steps`, shown as the live
  * append-only <AgentTimeline/>, which owns the grouping that keeps a twenty-to-
- * thirty-row turn readable. The non-streaming REST fallback has no live stream, so
- * it — or an agent turn before its first event — shows a plain indeterminate
- * spinner instead.
+ * thirty-row turn readable. An agent turn before its first event has no rows yet, so it
+ * shows a plain indeterminate spinner instead. (There is no non-streaming REST fallback to
+ * spin for: `POST /chat` is deleted, and <ChatPanel/> renders <NoTransport/> when
+ * `can_stream` is false.)
  *
  * Nothing here keys on a step name. Every stage-name assumption lives in
  * `lib/steps.ts` (the vocabulary) and <AgentTimeline/> (the phases), so a stage
@@ -63,8 +64,8 @@ export function ServeProgress({
       <p className="text-sm text-muted-foreground">Waiting for your answer.</p>
     );
   }
-  // Running, with no timeline to show: the REST fallback, an agent turn before its first event,
-  // or `business` mode, which is not shown the trace.
+  // Running, with no timeline to show: an agent turn before its first event, or `business`
+  // mode, which is not shown the trace. (Not a REST fallback — there is no such transport.)
   return (
     <div className="flex items-center gap-2 text-sm text-muted-foreground">
       <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />

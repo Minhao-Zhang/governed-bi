@@ -31,11 +31,20 @@ CI runs `uv sync --frozen --extra bedrock`.
 
 ## Configuration
 
-There is no config file. Runtime configuration is, in precedence order:
+No knob is settable from a config file. Runtime configuration is, in precedence order:
 
 1. Secrets and the DSN in `.env` or the process environment.
 2. `GOVERNED_BI_*` variables (see below).
 3. Defaults in [`register/knobs.py`](../src/governed_bi/register/knobs.py).
+
+**One file is an exception, and it is not a knob.** `GOVERNED_BI_ACCESS_POLICY` points at a
+TOML you write, loaded by
+[`govern/access.py`](../src/governed_bi/govern/access.py)`::StaticRoleAccessPolicy.from_toml`
+and selected at `api/graph_app.py::access_policy_from_environment` — the only place in `src/`
+that chooses a policy. Unset means `OpenAccessPolicy`; a path that does not exist is a startup
+`RuntimeError`, not a silent fallback to open. `src/` also ships two TOMLs of its own
+(`govern/adversarial.toml`, `register/arms.toml`), but those are declared claims the test suite
+holds the code to, not configuration you edit.
 
 Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 
@@ -70,6 +79,8 @@ Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 | `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` | Wall clock for the whole `agent_core` loop, overriding the `agent_node_timeout_s` knob (default 1200.0). `0` means no wall; empty means unset |
 | `GOVERNED_BI_AGENT_RECURSION_LIMIT` | Superstep ceiling for the nested `create_agent` graph, overriding the `agent_recursion_limit` knob (default 40) |
 | `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | Wall clock for one cancellable utility rail — today only `guard` — overriding the `rail_node_timeout_s` knob (default 120.0) |
+| `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` | Tracing, off by default. **Read by LangChain itself — nothing in `src/` reads them and there is no callback to wire.** One trace per root invocation, so a whole agentic turn costs one and a 20-question debug run costs 20. When on, traces carry run inputs and outputs in full: tool messages, row previews, governed context. That is intended here and would need a masking layer at the tracer seam in production; there is none |
+| `OPENAI_BASE_URL` | **Do not set.** Read by the OpenAI SDK, so it redirects the chat client and the embedder *together* — a gateway serving a chat model but not an embedding model cannot be expressed this way. Use `GOVERNED_BI_*_PROVIDER` instead |
 
 **Nothing in that table is a credential a caller presents.** `OPENAI_API_KEY`, the AWS names and
 the proxy's three buy *this process* access to a model provider; none of them is asked of anything
@@ -228,20 +239,26 @@ Serve expects Postgres.
 
 ### CORS, and why LangGraph Studio is on the list
 
-`langgraph.json`'s `http.cors.allow_origins` names three origins: the two the `ui/`
-frontend runs on, and `https://smith.langchain.com`, which is where LangGraph Studio
+`langgraph.json`'s `http.cors.allow_origins` names five origins: the four the `ui/`
+frontend runs on (`localhost` and `127.0.0.1`, on port 3000 and on port 3100), and
+`https://smith.langchain.com`, which is where LangGraph Studio
 is served from (`langgraph_api/cli.py` opens
 `https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024`). Declaring a
 `cors` block **replaces** the CLI's default, which would have added the Studio origin
-itself — so without that third entry Studio's preflight answers `400 Disallowed CORS
+itself — so without that Studio entry its preflight answers `400 Disallowed CORS
 origin`, the browser blocks the call, and Studio reports only "Connection failed".
 The origin list is read at startup: restart the server after changing it.
+
+The 3100 pair is load-bearing too, and not obviously so: it is the only reason
+`.claude/launch.json`'s `ui-live-3100` can point a second `next dev` at an engine already
+running on 2024 (`_why_ui_live_3100` says exactly that), so pruning it as dead config
+breaks that entry with a CORS error rather than a missing-config one.
 
 Studio needs nothing in its Custom Headers field: no route asks for a credential, so leave it
 empty. `"*"` is still not an alternative for the *origin* list — `allow_credentials: true` makes a
 wildcard origin invalid — and the list now carries more weight than it used to. **With the key
 gone it is the only thing between a page you happen to be visiting and an engine you have
-running**, and it is a weak thing: it stops a fourth origin, not the three it names, and not
+running**, and it is a weak thing: it stops a sixth origin, not the five it names, and not
 anything that is not a browser.
 
 > **A refusal a browser cannot read.** Until 2026-08-13 the custom routes refused an unkeyed
@@ -383,7 +400,8 @@ npm run build
 ```
 
 `npx tsc --noEmit` is not redundant with the linter, which does not type-check: a payload field
-renamed on the engine side passes lint and fails only in a browser. Two more need a live engine and
-a loaded corpus, so they stay manual: `npm run check:api` validates every route against the
-client's zod schemas, and `npm run check:stream-messages` is a red/green reproduction of one
-rendering bug.
+renamed on the engine side passes lint and fails only in a browser. `npm run check:answer-delivery`
+runs in CI too: it asserts that every refusal reason carries a sentence, so a refusal cannot render
+as a bare catalog. Two more stay manual: `npm run check:api` validates every route against the
+client's zod schemas but needs a live engine and a loaded corpus, and
+`npm run check:stream-messages` is a red/green reproduction of one rendering bug.

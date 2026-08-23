@@ -7,8 +7,8 @@ and before ``interrupt()``, so the rejected ``tool_use`` gets its ``ToolMessage`
 pass. A thread carrying a dangling ``tool_use`` is permanently unreplayable on Bedrock.
 
 Scoped to ``ask_user``. That a *refusal* may name a table is a recorded owner decision
-(``docs/analysis/adopting-the-downstream-fork-2026-08-19.md``); a question written for a reader
-to answer is the other surface.
+(``git-history:docs/analysis/adopting-the-downstream-fork-2026-08-19.md``); a question written
+for a reader to answer is the other surface.
 """
 
 from __future__ import annotations

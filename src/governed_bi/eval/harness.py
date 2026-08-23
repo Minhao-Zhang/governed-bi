@@ -1,4 +1,4 @@
-"""Eval harness — invoke serve ``compile_graph`` per question (ADR 0005 §4.1)."""
+"""Eval harness — invoke serve ``compile_durable`` per question (ADR 0005 §4.1)."""
 
 from __future__ import annotations
 

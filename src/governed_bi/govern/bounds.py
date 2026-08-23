@@ -67,10 +67,21 @@ def _folded_column(key: str) -> str:
 class ToolBounds:
     """What this turn's tools may touch. Closed at ``connect``, never widened."""
 
-    #: **Asset ids** this turn licensed. Not ``{schema}.{physical_name}``: ``connect`` writes
-    #: ``ServeState.licensed`` from the retrieved assets, and ``serve/context.py::_tool_key``
-    #: documents the divergence for the corpora where ``slug()`` fired. The two agree on 655 of
-    #: the 656 gold tables, which is why this said "table keys" for as long as it did.
+    #: **Asset ids** this turn licensed. Not ``{schema}.{physical_name}``: ``route_node``
+    #: *seeds* ``ServeState.licensed`` (``serve/nodes/route_retrieve.py``) and ``resolve`` and
+    #: ``connect`` only widen it — no node builds it at ``connect`` — while
+    #: ``serve/context.py::_tool_key`` documents the divergence for the corpora where ``slug()``
+    #: fired. The two agree on 655 of the 656 gold tables, which is why this said "table keys"
+    #: for as long as it did.
+    #:
+    #: **The seed is the POST-budget table set, and that costs a wrong refusal.** ``route_node``
+    #: reads ``retrieved["by_type"]["table"]``, assembled in ``serve/nodes/pass_two.py`` out of
+    #: the hits ``apply_budgets(...)`` kept, so a table the retrieval cap dropped is never
+    #: licensed and Layer 6 refuses the statement ``r_table_not_licensed`` — a retrieval-budget
+    #: outcome recorded as a governance verdict. Neither widening node restores it: a
+    #: budget-cut table that is neither a reference nor a Steiner point has no path back.
+    #: Corrected 2026-08-22; ADR 0006 §8 holds the open decision, and no behaviour changed for
+    #: the note.
     licensed: frozenset[str] = frozenset()
     #: Asset ids in this turn's ``hits ∪ pulled_in``, already narrowed by :attr:`withheld`.
     #: ``read_body``'s bound.

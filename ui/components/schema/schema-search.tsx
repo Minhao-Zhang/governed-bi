@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * Schema-tab search omnibox. A single text input over the full catalog: the
- * default engine is the synchronous client Fuse index (`useCatalogSearch`), and
- * when the backend reports `can_search` the server-ranked `/search` reorders the
- * same catalog rows (falling back to the client order when the server query is
- * disabled or returns nothing). Results are grouped by namespace; picking one
- * lifts the selection and narrows the scope onto that table.
+ * Schema-tab search omnibox. A single text input over the full catalog, ranked by the
+ * synchronous client Fuse index (`useCatalogSearch`) — the only ranking there is, because
+ * `GET /search` was deliberately never built (ADR 0009 Amendment 1) and `can_search` is
+ * hardcoded `false`. The server-reordering branch that used to sit here was unreachable
+ * against any engine and is deleted. Results are grouped by namespace; picking one lifts the
+ * selection and narrows the scope onto that table.
  *
  * Cross-schema namespaces are shown as ordinary, subtle badges — never warnings
  * (D15 Q7). The only "loud" channel stays the reliability one (suspect/excluded).
@@ -19,13 +19,7 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { groupByNamespace } from "@/lib/catalog";
-import { canSearch } from "@/lib/capabilities";
-import {
-  useCapabilities,
-  useCatalog,
-  useCatalogSearch,
-  useServerSearch,
-} from "@/hooks/queries";
+import { useCatalog, useCatalogSearch } from "@/hooks/queries";
 import type { CatalogItem, GraphSelection, SchemaScope } from "@/lib/types";
 
 export function SchemaSearch({
@@ -37,38 +31,13 @@ export function SchemaSearch({
   onScopeChange: (next: SchemaScope) => void;
   onSelect: (selection: GraphSelection) => void;
 }) {
-  const { data: caps } = useCapabilities();
-  const serverEnabled = canSearch(caps);
-
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
 
   // Search the whole corpus; picking a hit still narrows the rail scope.
   const { items } = useCatalog();
-  const clientResults = useCatalogSearch(items, query);
-  const server = useServerSearch(query); // no-op unless can_search
-
-  // Server (when available + non-empty) reorders the same catalog rows; otherwise
-  // the client Fuse order stands. Grouping always runs on catalog rows so the row
-  // render is identical regardless of which engine ranked them.
-  const results = useMemo<CatalogItem[]>(() => {
-    if (serverEnabled && server.data && server.data.hits.length > 0) {
-      const byId = new Map(items.map((it) => [it.id, it]));
-      const seen = new Set<string>();
-      const ordered: CatalogItem[] = [];
-      for (const hit of server.data.hits) {
-        const key = hit.table_id ?? hit.id;
-        const it = byId.get(key);
-        if (it && !seen.has(it.id)) {
-          seen.add(it.id);
-          ordered.push(it);
-        }
-      }
-      if (ordered.length > 0) return ordered;
-    }
-    return clientResults;
-  }, [serverEnabled, server.data, items, clientResults]);
+  const results = useCatalogSearch(items, query);
 
   const groups = useMemo(() => groupByNamespace(results), [results]);
 

@@ -45,8 +45,9 @@ it was satisfied by fixing the assets rather than by adding a ninth.
 
 **Tri-modal became bi-modal, and PIN is gone.** Retrieval is two scoring channels, `lexical`
 (BM25) and `semantic` (embedding cosine), fused into `hybrid` by weighted sum
-(`retrieve/index.py`). There is no regex-trigger pinning, no RRF, and no `read_notes` /
-`grep_notes` tool. The pin-vs-blend contract was written against a measurement — embedding
+(`retrieve/fuse.py::fuse`, re-exported from `retrieve/__init__.py`; corrected 2026-08-22 —
+this said `retrieve/index.py`, which contains no fusion). There is no regex-trigger pinning,
+no RRF, and no `read_notes` / `grep_notes` tool. The pin-vs-blend contract was written against a measurement — embedding
 recall@3 0.70 against BM25 0.35 <!-- [retired]: quoted here only to name what the reversed decision rested on; the corrected channel recalls are in register/citations.py --> — that was later shown to be wrong in both
 magnitude and direction, which removed the reason to keep the weak channel out of the fusion.
 

@@ -71,7 +71,7 @@ corpus = "30872d3"
 # `None` — the zero-licensed clarifications of open-work §3.6a, which never reach the stamp. It is
 # the same digest v4 and v5 record, which is what a shared corpus is supposed to look like.
 corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
-# **Measured from the artifact, on 2026-08-20, not reconstructed.** The three `proxy_*` artifacts
+# **Measured from the artifact, on 2026-08-20, not reconstructed.** The seven `proxy_*` artifacts
 # in `runs/eval/` are gitignored but they are on the maintainer's machine, which the fork's
 # write-up assumed they were not — so the question set did not have to be inferred. The 1 351
 # `question_id` values in `runs/eval/proxy_v3_fold_opus_high_corpus30872d3.jsonl` are **set-equal**

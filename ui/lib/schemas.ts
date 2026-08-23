@@ -31,21 +31,34 @@ const embeddingSurfaceSchema = z.object({
 });
 
 export const capabilitiesSchema = z.object({
-  environment: z.string(), // "dev" | "prod"
-  dialect: z.string(), // "sqlite" | "postgres" | "redshift"
+  // Free strings on the wire, and neither has an enumerated set to document. There is one
+  // deployment profile: `capabilities_for` returns the literal `"local"` for `environment`
+  // (no "dev"/"prod" profile exists), and `dialect` is read off the connector, which the
+  // served app builds as `PostgresConnector` unconditionally (`api/graph_app.py`). Postgres
+  // is the only dialect this engine serves — see `ui/README.md`'s Deployment section.
+  environment: z.string(),
+  dialect: z.string(),
+  // Both constant on a live engine — `false` / `"none"`, because the curator is out of scope
+  // of the served surface (ADR 0007 §7). Parsed because they arrive, not because anything
+  // renders behind them: `POST /corpus/edit` does not exist and this client mounts no edit
+  // affordance.
   can_edit: z.boolean(),
-  edit_mode: z.string().nullable(), // "file" | "pr" | null (backend types it as str | None)
-  can_stream: z.boolean(), // LangGraph Server present → useStream, else /chat fallback
+  edit_mode: z.string().nullable(), // "none" on a live engine (backend types it as str | None)
+  can_stream: z.boolean(), // LangGraph Server present → useStream, else <NoTransport/>
   has_live_model: z.boolean(),
   model: z.string().nullable(), // null in the offline profile (no model wired)
-  // D15 scope-on-demand flags. Optional + default false so a pre-D15 engine that
-  // omits them still parses and the UI falls back to today's flat behavior.
+  // Optional + default false so an engine that omits this still parses. It is read as an
+  // observation only: no render path gates on it, because the flat fallback it used to switch
+  // to is deleted (see `lib/capabilities.ts` on why `canScope` went with it).
   can_scope: z.boolean().optional().default(false), // scopeable/paginated routes + focus/radius graphs
-  can_search: z.boolean().optional().default(false), // server GET /search (else client Fuse index)
+  // Always false on a live engine: `GET /search` was deliberately never built (ADR 0009
+  // Amendment 1), so the client Fuse index is not a fallback — it is the only ranking there is.
+  can_search: z.boolean().optional().default(false),
   // Serve-time clarification (HITL): the server can `interrupt()` mid-turn to ask
-  // the user one question and resume on the answer. Optional + default false so a
-  // server built without HITL (or the offline/REST profile) degrades cleanly —
-  // the interrupt-prompt UI only mounts when this is true (contract §8).
+  // the user one question and resume on the answer. Optional + default false so a server built
+  // without HITL degrades cleanly. The prompt itself does **not** gate on this flag — it mounts
+  // on the arriving `interrupt()`, so a stale flag cannot hide a question the graph is waiting
+  // on (see `components/chat/clarification-prompt.tsx`).
   can_clarify: z.boolean().optional().default(false),
   // The three model surfaces, for /settings. Optional so an engine built before this
   // field still parses — the settings page renders "not reported" rather than breaking.
@@ -63,7 +76,9 @@ export const capabilitiesSchema = z.object({
     .optional(),
   // Which warehouse the engine is pointed at, for /settings. Credential-free by construction:
   // the connector redacts, and `user`/`password` are never parsed out of the DSN at all — so
-  // there is no field here to accidentally render. `host`/`port` are absent for SQLite (a file).
+  // there is no field here to accidentally render. `host`/`port` are optional because
+  // `connection_for` copies whatever the connector's `endpoint` mapping happens to carry, and a
+  // partial session carries none of it — not because a fileless dialect is served here.
   connection: z
     .object({
       dialect: z.string(),
@@ -182,7 +197,8 @@ export const graphNodeKindSchema = z.enum([
 
 // The full knowledge-graph node is lean (GET /knowledge-graph): no physical_name/
 // row_count/n_columns/summary — those live on the ER GET /graph. Rich table detail
-// comes from GET /schema.
+// comes from GET /schema/{table_id}; the flat GET /schema dump it used to name is deleted
+// (see the note above `assetListSchema` below).
 export const graphNodeSchema = z.object({
   id: z.string(),
   kind: graphNodeKindSchema,
@@ -436,43 +452,26 @@ export const answerViewSchema = z.object({
   audit_error: z.string().nullable().optional(),
 });
 
-/* ── /search — server-ranked search (D15, DEFERRED; gated on can_search) ──── */
-// Q6: server FTS stays deferred; the default is a client Fuse index over the
-// summary catalog. This shape is the parse target only when can_search is true.
-export const searchHitSchema = z.object({
-  kind: z.string(), // "table" | "column" | asset kind
-  id: z.string(),
-  table_id: z.string().nullable().optional(),
-  label: z.string(),
-  schema: z.string().nullable(),
-  detail: z.string().nullable().optional(),
-  excluded: z.boolean().optional().default(false),
-  has_suspect: z.boolean().optional().default(false),
-  score: z.number().optional(),
-});
-
-export const searchResponseSchema = z.object({
-  query: z.string(),
-  total: z.number(),
-  hits: z.array(searchHitSchema),
-});
+/* ── /search — never built ────────────────────────────────────────────────
+ *
+ * `searchHitSchema` / `searchResponseSchema` are gone, because there is no route to parse.
+ * ADR 0009 Amendment 1: "`GET /search` is deliberately **not** built", and
+ * `capabilities_for` hardcodes `can_search: false`. Ranking is the client Fuse index over the
+ * lean catalog (`lib/catalog.ts`, `lib/asset-catalog.ts`).
+ * ────────────────────────────────────────────────────────────────────────── */
 
 // `schemaListSchema` (an array of tableViewSchema, for the flat GET /schema dump) was
 // removed with the route. `tableViewSchema` itself stays: GET /schema/{table_id} returns
 // exactly one of them, which is the point — a detail is per-item.
 export const assetListSchema = z.array(assetRowSchema);
 
-/* ── POST /corpus/edit (dev only; gated on capabilities.can_edit) ─────────── */
-
-/** Response from writing/validating a corpus asset (EditResponse). */
-export const editResponseSchema = z.object({
-  written: z.boolean(), // false when validation blocked the write
-  asset_id: z.string(),
-  asset_type: z.string(),
-  path: z.string().nullable(), // repo-relative path written (null when not written)
-  findings: z.array(z.string()), // reference-integrity findings (empty = clean)
-  diff: z.string(), // unified diff of the YAML file
-});
+/* ── POST /corpus/edit — never built ──────────────────────────────────────
+ *
+ * `editResponseSchema` is gone with the client method that posted to it. The route is absent
+ * from `docs/openapi.json` and from `src/`, and `capabilities_for` reports `can_edit: false`
+ * / `edit_mode: "none"` because the curator is out of scope of the served surface
+ * (ADR 0007 §7). Corpus writes are a git/PR job against the corpus repository.
+ * ────────────────────────────────────────────────────────────────────────── */
 
 /* ── GET /audit/* — the trace and audit surface ───────────────────────────── */
 //

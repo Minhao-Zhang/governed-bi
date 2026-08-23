@@ -42,11 +42,15 @@ instead, per class, with the numbers.
 **A paused turn outlives the process.** When the engine needs to ask you something it stops
 mid-turn and checkpoints, so killing the server and starting a fresh one leaves the question where
 it was — answering it resumes that same turn rather than beginning the work again. Three bounds
-travel with that. It rests on one hand-run observation, on 2026-08-19, and **no test**: every
-human-in-the-loop test runs on an in-memory saver, so nothing automated drives a real pause and
-resume across a process boundary. The resumable state and the browsable history are two different
-files, and only the first is the durable one. And the 90-day retention this deployment configures
-cannot fire on the runtime it runs, so the store only grows.
+travel with that. What a test covers is the seam rather than the restart:
+`tests/serve/test_a_pause_survives_a_restart_on_disk.py` drives a real `ask_user` interrupt onto
+`AsyncSqliteSaver` and answers it through a second `compile_durable` on the same file — new loop,
+new connection, new saver, new graph, so the file is the only thing carrying the pause — but the
+interpreter and its module-level state survive, and a bug living in one of those would pass.
+Spawning a real server and killing it is the test that would cover that, and it needs a model key
+and a port, so it stays a hand procedure. The resumable state and the browsable history are two
+different files, and only the first is the durable one. And the 90-day retention this deployment
+configures cannot fire on the runtime it runs, so the store only grows.
 [ADR 0014](docs/adr/0014-one-conversation-store.md) is the design;
 [open work](docs/open-work.md) keeps the gaps.
 
@@ -94,13 +98,19 @@ uv sync --extra bedrock       # instead, if the provider is Bedrock
 npm --prefix ui ci            # the web client, optional
 ```
 
-Copy `.env.example` to `.env` and fill in three values:
+Copy `.env.example` to `.env` and fill in four values:
 
 ```bash
 GOVERNED_BI_PG_DSN=host=127.0.0.1 port=5432 dbname=... user=... password=...
 OPENAI_API_KEY=sk-...
 GOVERNED_BI_CORPUS_DIR=../BIRD-corpus
+GOVERNED_BI_EMBEDDING_MODEL=text-embedding-3-large
 ```
+
+The last one sits among the optional overrides in `.env.example` and is not optional: unset, the
+semantic retrieval channel reports `not_configured` on every facet and routing runs on lexical
+matching alone, which surfaces as a wall of `no_schema_matched` refusals rather than as a
+configuration error.
 
 Then start the two processes:
 
@@ -119,10 +129,11 @@ the client at the engine.
 
 Chat is one of seven views. The others show the semantic layer as an ER diagram and a knowledge
 graph, page through every corpus asset, list past conversations, replay any served turn stage by
-stage, and hold the questions the engine asked that nobody came back to answer — a clarification
-whose reader closed the tab leaves no trace in the thread's own channels, so that queue is read
-out of the platform's interrupt state and is the only place an abandoned one is visible. Leave `NEXT_PUBLIC_LANGGRAPH_URL` unset and the client runs on mock fixtures with no
-engine attached.
+stage, report what this engine is running on, and hold the questions the engine asked that nobody
+came back to answer — a clarification whose reader closed the tab leaves no trace in the thread's
+own channels, so that queue is read out of the platform's interrupt state and is the only place an
+abandoned one is visible. Leave `NEXT_PUBLIC_LANGGRAPH_URL` unset and the client runs on mock
+fixtures with no engine attached.
 
 Everything else — every environment variable, both API surfaces, and the UI's own quirks — is in
 [the usage guide](docs/usage.md).

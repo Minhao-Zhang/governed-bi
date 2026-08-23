@@ -65,6 +65,14 @@
 > `sample_rows`, `agent` by `run_query` and by the cap and pipeline-error rows beside it
 > (`serve/fetch.py`, `serve/ledger.py`, `serve/tools.py`). The remaining honest exception
 > in that sentence is the best-effort durable run-log write.
+>
+> > **And that last exception is gone too, 2026-08-22.** The best-effort durable run-log write
+> > no longer exists: `api/trace_store.py` and the `runs/serve/*.jsonl` log it appended to were
+> > deleted on 2026-08-18 with [ADR 0014](0014-one-conversation-store.md)
+> > (`git-history:src/governed_bi/api/trace_store.py`), and no `trace_store` module remains in
+> > `src/`. Where a finished turn survives now is the `ServeState.turns` channel in the
+> > checkpoint, and the audit surface reads thread state. So the exception list in the paragraph
+> > above is empty.
 
 - **Status:** Accepted, and implemented on v1 — grilled & refined in design review
   2026-07-13, cutover landed on `main` 2026-07-14 (commit `d2fdd6a`), implementation
@@ -554,7 +562,7 @@ mechanism is now `serve/tools.py::ask_user`, resumed by
 `serve/resume.py::resume_clarification` behind `govern/bounds.py::resume_authorised`,
 with `POST /chat/resume` in `api/routes.py` as the REST half and the payload shape
 re-decided by [ADR 0007](0007-http-surface-and-the-ui-contract.md) §6
-(`tests/serve/test_agent_tools_hitl.py`, `tests/serve/test_chat_transport.py`).
+(`tests/serve/test_agent_tools_hitl.py`, `git-history:tests/serve/test_chat_transport.py`).
 
 > **Corrected, 2026-08-18 (ADR 0014).** There is no REST half. `POST /chat/resume` is deleted, and
 > with it the only caller of `resume_clarification` outside the CLI: the streamed transport posts a
@@ -562,7 +570,10 @@ re-decided by [ADR 0007](0007-http-surface-and-the-ui-contract.md) §6
 > without passing through any route here. The identity check therefore moved *into* the graph —
 > `serve/resume.py::authorise_resume`, called by `ask_user` on the instruction `interrupt()`
 > returns on — because leaving it on the route would have deleted it (ADR 0006 §10,
-> ADR 0007 §6).
+> ADR 0007 §6). *Added 2026-08-22: the second test cited above went with the transport —
+> `tests/api/test_http_contract.py` records that its response-shaping tests were deleted rather
+> than moved, and the chat pair is now stated on the served graph's `answer`. The citation above
+> is marked `git-history:` for that reason.*
 
 What remains deferred is only a Postgres checkpointer. SQLite is mounted for this
 deployment. `serve/graph.py::compile_graph` still defaults to `InMemorySaver` so the

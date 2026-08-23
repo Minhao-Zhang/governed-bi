@@ -78,8 +78,11 @@ function SurfaceCard({
  * which is the only part of it anyone needs when two warehouses are in play.
  *
  * No credential is rendered because none arrives: the connector never parses `user` or
- * `password` out of the DSN, so there is no field here to leak. `host`/`port` are absent on the
- * SQLite profile (a file has neither) and render as a dash rather than as empty space.
+ * `password` out of the DSN, so there is no field here to leak. `host`/`port` render as a
+ * dash rather than as empty space when absent, which happens because `connection_for`
+ * copies only what the connector's `endpoint` mapping carries — not because a fileless
+ * dialect is served here. `Environment` renders the wire value verbatim, and there is
+ * exactly one: the literal "local".
  */
 function ConnectionCard({ caps }: { caps: Capabilities }) {
   const conn = caps.connection;

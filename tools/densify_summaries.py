@@ -9,7 +9,9 @@ The 114-question screen this file used to quote — a ``+6.1 pp`` table and a "p
 channels" pair — carried no artifact path and no corpus commit, which is audit finding N11, and
 it is reversed by the measurement that does carry one: indexing prose rather than an identifier
 list is **+6.21 pp** of gold-table coverage and **+1.41 pp** of recall@3 over all 1,351 questions,
-paired (``register/citations.py``; ``runs/ablation/summary-form-1351-20260805.json``, 2026-08-05).
+paired (``register/citations.py``; ``runs/ablation/summary-form-1351-20260805.json``, 2026-08-05 —
+the artifact is not in this tree or in git, ``runs/`` being gitignored, but this file and
+``tools/query_summary_alignment.py`` are the producers, so it can be re-measured).
 So this is the mechanical floor and not an acceptance bar.
 """
 

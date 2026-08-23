@@ -17,7 +17,9 @@ Two factors, and the cell this tool was built to fill:
 The claim under test is the **interaction** — the rewriter's sign flipping with the document form
 — not either main effect, both already known. It came back null: 342 questions, paired,
 interaction -1.17 pp on recall@3 and -0.64 pp on gold-table coverage, every p >= 0.45
-(``register/citations.py``, artifact ``runs/ablation/summary-form-1351-20260805.json``).
+(``register/citations.py``, artifact ``runs/ablation/summary-form-1351-20260805.json`` — not in
+this tree or in git, ``runs/`` being gitignored; re-measurable by running this tool over both
+document forms).
 The other four facets are held OFF in every cell so
 they contribute a constant to ``route``'s sum and only the schema facet's query form varies;
 re-testing in the production configuration is a different run.

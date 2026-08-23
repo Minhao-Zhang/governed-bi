@@ -212,8 +212,8 @@ def _extract_factory(
     error_type: str | None,
 ) -> Any:
     # ``evicted`` included, so the served record carries it too: it was reaching the eval row
-    # and nothing else, which would have left ``runs/serve/*.jsonl`` with no trace that the
-    # char budget dropped a licensed table before the model ever saw it.
+    # and nothing else, which left the served turn record with no trace that the char budget
+    # dropped a licensed table before the model ever saw it.
     delivery_keys = {"context_hash", "delivery_hash", "tool_delivered", "evicted"}
 
     def extract(state: Mapping[str, Any], name: str) -> Any:
@@ -365,7 +365,9 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
     # ``guard`` is Absence.never and must **not** be substituted here. Standing in
     # ``{"outcome": "error_failed_open"}`` fabricates a security event — that sentinel means the
     # guard ran, errored and let the question through, and it is what a reader counts to find
-    # out whether the gate worked. (No quotability gate reads it; see ``guard.py::_bi_scope``.)
+    # out whether the gate worked. (No quotability gate reads it: ``measure/gates.py`` declares
+    # no gate over ``guard``. The rule the sentinel stands in for is
+    # ``govern/guard.BI_SCOPE_RULE_ID`` == ``g_bi_scope``, ``guard.py:160``.)
     # An absent guard stays absent; ``missing_required`` names it as the wiring failure it is.
     projected_state: dict[str, Any] = dict(state)
     projected_state["execution"] = execution
@@ -376,9 +378,10 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
     # it used to be substituted with ``{}`` here, which is the one case ``measure.gates`` names
     # as the thing it must never see: ``{}`` is a ``Mapping``, so the drift gate reads it as a
     # real configuration in which every knob resolved to ``None``, every row's signature is
-    # identical, and **an arm of empties passes**. `gates.py::_knobs_gate` says so in as many
-    # words ("Absent ``knobs_resolved`` is unmeasured, not passing"), and `harness.py` carries the
-    # same "absent stays absent" comment, while this line defeated both. Absent now reaches
+    # identical, and **an arm of empties passes**. `measure/gates.py::_knobs_resolved_gate` says
+    # so in as many words ("Absent ``knobs_resolved`` is unmeasured, not passing"), and
+    # `harness.py` carries the same "absent stays absent" comment, while this line defeated
+    # both. Absent now reaches
     # ``project`` as absent, so ``Absence.never`` reports ``missing_required`` and the gate
     # returns ``cannot_evaluate`` — which is what a turn whose knobs were never wired *is*.
     # Found by the 2026-08-10 audit (C5).

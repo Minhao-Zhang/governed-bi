@@ -27,7 +27,7 @@ SRC = Path(__file__).resolve().parent.parent.parent / "src" / "governed_bi"
 
 
 def _base_turn(**overrides: Any) -> dict[str, Any]:
-    """The state a served turn starts from — copied from ``test_pass_two_and_context.py:54`` rather
+    """The state a served turn starts from — copied from ``test_pass_two_and_context.py`` rather
     than imported. The keys are not decoration: a thinner turn fails on absence, not the property."""
     payload: dict[str, Any] = {
         "question": "how many customers", "thread_id": "thread-f2", "turn_index": 1,
@@ -56,7 +56,7 @@ def _policy(*, rules: dict[str, bool] | None = None, attempt_cap: int | None = N
 
 
 def _scripted_run_query(sql: str, *, calls: int = 1) -> Any:
-    """Calls ``run_query`` ``calls`` times, then answers. Tool calls copied from ``eval/arms.py:89-101``;
+    """Calls ``run_query`` ``calls`` times, then answers. Tool calls copied from ``eval/arms.py``;
     ``ScriptedChatModel`` replies by counting ``AIMessage``s, so ``calls`` calls means that many attempts."""
     from langchain_core.messages import AIMessage
 

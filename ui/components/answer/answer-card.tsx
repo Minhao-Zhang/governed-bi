@@ -134,8 +134,8 @@ export function AnswerCard({
                   In every mode, not just `business`: withholding it from a reader would make
                   the refusal *less* informative for the person who asked than for the person
                   auditing it. Naming tables at `business` is an explicit owner decision —
-                  `docs/analysis/adopting-the-downstream-fork-2026-08-19.md`, third decision:
-                  "a refusal may name tables" — so this is not a withholding rule this
+                  `git-history:docs/analysis/adopting-the-downstream-fork-2026-08-19.md`,
+                  third decision: "a refusal may name tables" — so this is not a withholding rule this
                   repository has declined to make, it is one it made the other way. */}
               {glimpse && ` ${glimpse}`}
             </p>

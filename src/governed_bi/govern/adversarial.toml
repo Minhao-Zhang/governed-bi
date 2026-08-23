@@ -249,7 +249,7 @@ sql = '''SELECT p.name FROM (SELECT g.name, r.Name FROM geo.country AS g JOIN sa
 expect_layer = "PARSE"
 expect_rule = "r_ambiguous_fold"
 why = "The derived source `p` exposes both `name` and `Name`, and a base-table alias `p` elsewhere in the tree lends its spelling map to it, so `p.name` is rewritten to `p.\"Name\"` — a different column of a different table — behind a passing verdict."
-origin = "open-work.md 3.2a, first defect: `_sources` is blind to derived sources"
+origin = "open-work.md 3.2a, first defect: the resolver's handle map was blind to derived sources. It was tree-wide and named `_sources` then; it is per-scope now, as `_handles_in_scope` feeding `_column_sources`, and `_handles_in_scope` maps a derived source to `None` precisely because of this case"
 
 [[case]]
 id = "a_spelling_self_colliding_table_keeps_its_bare_handle"

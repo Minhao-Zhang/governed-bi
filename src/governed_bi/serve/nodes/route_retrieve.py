@@ -137,6 +137,12 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
 
     # No ``path_kind`` key: routing succeeding is not a path kind, and ``None`` erases a crash.
     out: dict[str, Any] = {"schemas": schemas, "retrieved": retrieved}
+    # **The seed is the POST-budget table set.** ``by_type`` is assembled out of the hits
+    # ``apply_budgets(...)`` kept, so a table the retrieval cap dropped is never licensed and
+    # Layer 6 refuses the statement ``r_table_not_licensed`` — a retrieval-budget outcome
+    # recorded as a governance verdict. ``resolve`` and ``connect`` only widen this set and
+    # neither restores a budget-cut table. ``govern/bounds.py::ToolBounds.licensed`` carries the
+    # measurement; ADR 0006 §8 holds the open decision.
     licensed = list((retrieved.get("by_type") or {}).get("table") or ())
     if licensed:
         out["licensed"] = sorted(str(x) for x in licensed)

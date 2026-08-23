@@ -39,9 +39,14 @@ class Layer(IntEnum):
     FUNCTIONS = 3
     #: Every reference binds to exactly one in-scope source (§4).
     BINDING = 4
-    #: Every bound column is allowed, not excluded, not suspect.
+    #: Every bound column is allowed, not excluded, not suspect, and not denied to this
+    #: principal (``r_column_not_authorized``, the PII seam of ADR 0012 section 4). Five rule
+    #: ids, of which ``check._columns`` raises four in the order that section fixes;
+    #: ``r_column_authorization_unavailable`` is declared here with no raiser anywhere.
     COLUMNS = 5
-    #: Every base table is in the licensed set.
+    #: Three rules, in a fixed order that is itself the security property (ADR 0012 section 3):
+    #: every base table is in the licensed set, then authorized for this principal, then free
+    #: of a declared row predicate this engine cannot enforce.
     TABLES = 6
     #: Cost / shape estimate. Ships disabled: ``cost_budget`` is UNSET.
     COST = 7

@@ -75,9 +75,11 @@ dependencies = [
     # needs it, so selecting a non-Bedrock provider never pays for it. See
     # [project.optional-dependencies].
     # `langgraph-checkpoint-sqlite` is declared because it is now **imported**:
-    # `api/checkpointer.py` yields the `AsyncSqliteSaver` that `langgraph.json`'s
-    # `checkpointer.path` mounts on the streamed path, and `serve/graph.compile_graph`
-    # compiles the CLI/eval graph against the same saver on a *separate* database. It
+    # `serve/checkpointer.py::conversation_checkpointer` yields the `AsyncSqliteSaver` that
+    # `langgraph.json`'s `checkpointer.path` mounts on the streamed path, and
+    # `serve/graph.compile_durable` compiles the CLI/eval graph against a saver of the same
+    # class on a *separate* database (`compile_graph` does **not** — its default is an
+    # `InMemorySaver`, as its own docstring says). On the served path this saver
     # replaced `InMemorySaver` as the default, so `/capabilities` reports
     # `checkpoint_durable: true`.
     #

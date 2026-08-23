@@ -162,7 +162,10 @@ activemq-data/
 .env.*
 !.env.example
 .envrc
-# Local policy overlay (secrets stay in .env; see governed_bi.toml header)
+# Local policy overlay. The header it used to point at was `git-history:governed_bi.toml`
+# (added in ab33708, since deleted), and nothing in the tree reads either file today —
+# knobs come from `register/knobs.py` and GOVERNED_BI_* variables. Kept as a safety net
+# so a revived overlay cannot be committed by accident; secrets stay in .env regardless.
 governed_bi.local.toml
 .venv
 env/

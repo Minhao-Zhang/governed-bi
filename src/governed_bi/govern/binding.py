@@ -27,7 +27,9 @@ class BoundSource:
 
     #: How the statement names it: the alias, or the (possibly qualified) table name.
     reference: str
-    #: ``"base"`` (a real table) or ``"derived"`` (a subquery or CTE).
+    #: ``"base"`` (a real table), ``"derived"`` (a subquery or CTE), or ``"unresolvable"``
+    #: (a FROM source with no Identifier to license -- a table-valued function). The third
+    #: value is not a corner: :func:`bind` collects it and refuses ``r_table_function``.
     kind: str
     schema: str | None = None
     name: str | None = None

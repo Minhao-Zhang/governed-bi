@@ -5,17 +5,26 @@ this page rather than struck through — the git history is the record of what c
 page that carries both states is a page nobody trusts as a to-do list.
 
 Nothing here is carried from an earlier document on the strength of having been written down.
-An item survives only if it was re-verified against the current tree, the current corpus
-(`../BIRD-corpus` @ `30872d3`), or the 2026-08-09 run artifact. Claims that could not be
-re-verified were dropped, not demoted.
+An item survives only if it was re-verified against the current tree, the corpus every number
+here is measured on (`../BIRD-corpus` @ `30872d3`), or the 2026-08-09 run artifact. Claims that
+could not be re-verified were dropped, not demoted.
+
+`30872d3` is the treatment identity and not that sibling's current tip. Its HEAD is `74ff80c4` as
+of 2026-08-22, and the two commits in between add only `LICENSE` and `README.md` — no asset
+changed, so the hash is still the right name for the content and the corpus items below still read
+on the tip. What this tree *loads* is a third thing: `.env:76` points `GOVERNED_BI_CORPUS_DIR` at
+`../MS Fabric Facilities/corpus` and `GOVERNED_BI_PG_DSN` at the 5432 facilities warehouse, so a
+run started here today is not on BIRD until both are flipped back. They are one switch.
 
 Binding design lives in the [ADRs](adr/). This is a work list, not a decision record.
 
-Calls taken while working the 2026-08-10 audit live in
-[decisions-2026-08-10](analysis/decisions-2026-08-10.md) — 30 choices, each with the alternative
-that was rejected and what would reverse it. Read it before re-opening any of them: four entries
-retract their own earlier reasoning in place, so the argument you are about to make may already
-be there with the measurement that killed it.
+Calls taken while working the 2026-08-10 audit were written up as 30 choices, each with the
+alternative that was rejected and what would reverse it, and four of them retract their own
+earlier reasoning in place. That note is not on this tree: `2396ca2` deleted
+`git-history:docs/analysis/decisions-2026-08-10.md` on 2026-08-20 along with the rest of
+`docs/analysis/`. Read it out of git — `git show 2396ca2^:docs/analysis/decisions-2026-08-10.md` —
+before re-opening one of those calls, because nothing on this page carries that reasoning and the
+argument you are about to make may already be there with the measurement that killed it.
 
 ---
 
@@ -121,15 +130,25 @@ The audit's other findings (false observed ranges, Cartesian join labels, invent
 missing glossary, the `card_games.originalReleaseDate` format claim) are fixed in `30872d3`.
 These are not:
 
-1. **Metric expressions that do not resolve on `base_table`** — `sales` total value,
+1. **Metric expressions that do not resolve on `base_table`** — `sales` "total sales value",
    `ice_hockey_draft` heights, `mondial_geo` gdp/capita. Either repair them or require
-   qualified columns.
+   qualified columns. Only the first was re-checked, 2026-08-22:
+   `sales/metrics/metric_sales_total_sales_value.yaml` is `SUM(menge * preis)` over
+   `base_table: sales.verkaeufe`, whose columns are `verkaufid`, `verkaeuferid`, `kundenid`,
+   `produktid` and `menge` — `preis` lives on `produkte`, which the metric's own body says to
+   join. The other two are carried unverified.
 2. **Six decoy-vocabulary losses** — reclaim terms; start with `card_games` "set code" →
    `sets.code`.
 3. **Thin coverage** — terms and metrics for `university`; densify `regional_sales`; metrics
    for `retails` and `world`.
-4. **`soccer_2016` routing summary** leads with a slug echo of "soccer"; it should open with
-   "IPL cricket…". Related to §1.4.
+4. **`soccer_2016` routing summary** — the description no longer matches the text and nobody
+   acted on it. `soccer_2016/soccer_2016.yaml` is unchanged since the corpus rewrite (`e34c90eb`)
+   and its summary reads "`soccer_2016` tracks Indian Premier League cricket seasons: …", which
+   names IPL cricket in the same clause as the identifier. The old wording — "leads with a slug
+   echo of 'soccer'; it should open with 'IPL cricket…'" — is withdrawn. What is left is a
+   judgement rather than a defect: whether opening with the schema identifier at all costs
+   anything on the lexical channel the §1.4 decoy confusions run through. Open as that question
+   and nothing more.
 5. **Dangling term bindings** in `airline` and `superstore`.
 6. **`ritmo_trabajo_ataque` / `_defensa`** document tokens that were not observed.
 
@@ -187,7 +206,8 @@ may describe it as such.
 Both 
 _ambiguous_fold holes (derived-source alias; self-colliding bare name) were fixed.
 A later CTE-scope hole of the same family is in
-[binding-scope-and-statement-timeout-2026-08-19](analysis/binding-scope-and-statement-timeout-2026-08-19.md).
+`git-history:docs/analysis/binding-scope-and-statement-timeout-2026-08-19.md`, deleted by
+`2396ca2` — `git show 2396ca2^:` that path.
 Re-check both properties before trusting the resolver on a rebuilt corpus.
 
 ### 3.3 The char budget is not the binding constraint
@@ -308,8 +328,10 @@ passing ones on either slice.
 
 ### 3.9 The eight tests that could not fail are pinned rather than repaired-and-forgotten
 
-All eight are covered by the nine declared mutations under the `s39-` prefix in
-`tools/mutation_catalogue.py`, verified caught on 2026-08-11: `routing_pinned` pinned to either
+All eight are covered by the nine declared mutations under the `s39-` prefix, which moved on
+2026-08-19 (`77d5f9f`): `tools/mutation_catalogue.py` is a 26-line re-export shim with no `s39`
+hit left in it, and the nine live at `tools/mutation_catalogue_data_2.py:159-245`. Verified
+caught on 2026-08-11: `routing_pinned` pinned to either
 constant, `corpus_content_hash` and `prompt_set_hash` set to `None`, `_attempt_trace` returning
 empty, `computed_correct` always `None`, and three anchors along the eviction chain — the
 producer in `assemble`, `stamp`'s key set, and the consumer in the eval row. The repairs
@@ -339,7 +361,8 @@ eight closed on 2026-08-11 are the driver-side identity — `git_sha`, `git_main
 `working_tree_dirty`, `diff_sha256`, `serve_workers`, `schemas_under_test`, `split` and
 `question_subset`, all resolved in `eval/provenance.py` and stamped onto every row the driver
 writes from now on — which is not the same as every row on disk; see below. Evidence and
-the per-field decisions are in [declared-not-consumed](analysis/declared-not-consumed.md).
+the per-field decisions are in `git-history:docs/analysis/declared-not-consumed.md`, deleted by
+`2396ca2`.
 
 Five remain, and none of them currently corrupts a number:
 
@@ -363,7 +386,11 @@ artifacts showed them.
 
 `tools/check_declared_is_consumed.py` closes the statically-visible part: four rules over knobs,
 record fields and state channels, mutation-verified against a fixture tree. It reported 27
-violations when written and reports 6 now.
+violations when written and reports **5** now — re-run 2026-08-22, exit 1, every one of them
+under K1 and every one a knob: `expand_hops`, `negative_tau`, `facet_model`, `rewrite_model`,
+`build_workers`. Those are exactly the five the table above names, so the two counts in this
+section agree. The "6" this sentence used to give was the pre-2026-08-19 figure, before
+`clarifications` closed.
 
 **Tier 1 is clear as of 2026-08-12**, which is the condition
 `tests/conformance/test_the_lint_gates_fire_on_a_synthetic_violation.py` names for a CI step. All five items —
@@ -374,8 +401,9 @@ now have writers that fire, each asserted **on its value** in
 `tests/serve/test_the_record_follows_the_knob.py`.
 
 **Which artifacts gain, precisely.** All **seven proxy arms** in `runs/eval/` predate the wires and
-gain nothing, so [declared-not-consumed](analysis/declared-not-consumed.md) §1–§5 remain the correct
-description of every number quoted from them — which is every number in this document. Its own
+gain nothing, so `git-history:docs/analysis/declared-not-consumed.md` §1–§5 remain the
+correct description of every number quoted from them — which is every number in this document.
+`2396ca2` deleted that file, so the description has to be read out of git. That note's own
 sweep instrument was six of those seven (8 106 rows); `proxy_v4_reflect_corpus30872d3.jsonl` came
 later and is in the same state, so "all six arms" is the scope of the *sweep*, not of the defect.
 `runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl` is the one artifact that is not a
@@ -427,7 +455,7 @@ what this entry exists to prevent.
 The reflector ran, once, as the last untested source of information: everything that does not
 read meaning had already been measured and capped at OOF AUC 0.721. **It scores 0.597** — worse
 than the count of tokens the agent emitted, and combining the two is worse than the token count
-alone. Full result: [risk coverage](analysis/risk-coverage-v4.md) §6.
+alone. Full result: `git-history:docs/analysis/risk-coverage-v4.md` §6, deleted by `2396ca2`.
 
 The row that matters is `unsure`. The judge called 77 turns unsure and they are **as likely to be
 right (0.766) as the ones it called correct (0.763)**. So the follow-ups that suggest themselves —
@@ -615,7 +643,8 @@ Three consequences for this section and for §4.1.
   `layers_evaluated`, `bound` and `Prepared.sql`. The v4 arm is untouched.
 * **The Layer 6 contrast arm §4.1 still wants is still not run.** ADR 0012 is the *mechanism* that
   makes it cheap — relaxing the allowlist is now a `Grant`, not a code edit — but the arm has not
-  been run and the outward wording does not change until it has (strategy checkpoint §2.6).
+  been run and the outward wording does not change until it has
+  (`git-history:docs/analysis/strategy-checkpoint-2026-08-11.md` §2.6, deleted by `298465f`).
 
 What is still open here, restated because the ADR narrowed rather than closed it: whether the
 *retrieval* budget and the *governance* allowlist should be different sets at all. They still are
@@ -637,13 +666,39 @@ been, so *"19 of 20 refusals are retrieval misses"* stops being an argument from
 feature. The underlying question is still open — `licensed` still serves both masters, and ADR
 0012 added a third set rather than splitting the two.
 
+**Filed 2026-08-22: `licensed` is seeded from the post-budget table set, which the ADRs say it
+must not be.** `serve/nodes/route_retrieve.py::route_node` (`:140`) sets it from
+`retrieved["by_type"]["table"]`, and that `by_type` is assembled in
+`serve/nodes/pass_two.py:462-468` out of the hits `apply_budgets(...)` **kept** — a hit the
+budget dropped never enters it. Only `resolve_node` (`route_retrieve.py:172-181`, reference
+closure) and `connect_node` (Steiner points) widen the set afterwards, and neither restores a
+dropped table.
+
+[ADR 0006](adr/0006-execution-time-governance.md) §8 says the opposite in as many words —
+"Explicitly **not** the post-budget `by_type["table"]` — budgets shape what is *rendered*, and
+licensing what is *reachable*" — and describes `licensed` as an output of `connect`;
+[ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) §3.2 and §3.5 carried the same
+claim. All three of those sections now carry a 2026-08-22 correction block pointing here. So a gold table
+cut by the retrieval cap is unlicensed and Layer 6 refuses the statement `r_table_not_licensed`
+— a retrieval-budget outcome recorded as a governance verdict, which is exactly what those
+sections say cannot happen. Steiner points survive only because `connect` adds them after the
+budget has run; a budget-cut table that is neither a reference nor a Steiner point has no path
+back. The consequence for this section is that the refusal accounting above, and §1.5's coverage
+figure, measure a seam the ADRs do not describe.
+
+**The pending decision, in the ADRs' words: license the pre-budget table set, or accept the
+coupling and stop claiming the separation.** Not taken in this pass — either side moving is a
+governance behaviour change, and no code was touched for the note.
+
 ---
 
-### 3.13 The treatment must be declared, and only three arms have declared it
+### 3.13 The treatment must be declared, and only four arms have declared it
 
 `arms.toml` arrived on 2026-08-11 with audit D9's fix: `eval/report.py::knobs_comparable`
 refuses a pair that cannot name what changed, and the profile is where the name comes from.
-Three arms are declared — `v3_fold`, `v4`, `v5`. Any other artifact in `runs/eval/` is
+Four arms are declared — `v3_fold`, `v4`, `v5` and `ask_first`, the last added with
+`treatment = ["prompt_set"]` and `compare_to = "v4"` and no measured run behind it yet
+(`register/arms.toml:114-121`). Any other artifact in `runs/eval/` is
 `cannot_evaluate` in a comparison until someone writes down what it changed, which is the
 intended pressure and not a defect.
 
@@ -683,7 +738,7 @@ What is still owed:
   even past the absence branch the gate would report a replicate, correctly: the artifacts
   cannot show that the declared treatment moved. `prompt_set_hash` *does* differ (v3-fold
   `ef30252f`, v4 `b1f9e4d7`, v5 `7a9e7102`), so the arms are distinguishable and not nameable —
-  declared-not-consumed finding 7.
+  finding 7 of `git-history:docs/analysis/declared-not-consumed.md`, deleted by `2396ca2`.
 * **`compare_to`, `description` and `notes` now have a reader** (the driver prints them under
   `--arm`) but nothing checks `compare_to` against the pair a comparison is actually run on.
 * `GateResult.render()` prints `field`, `observed`, `population` and `detail` and **omits
@@ -705,11 +760,50 @@ therefore live again in the words they were written in:
 - **A1** — every route is unauthenticated, so anything that can open a socket to `:2024` can post
   a turn and execute governed SQL against the configured database.
 - **A7** — `/audit/turns` and `/audit/turns/{id}/trace` hand that caller every thread's SQL, the
-  full turn records, and an absolute path to the conversation database. **Wider since 2026-08-18**
+  full turn records, and an absolute path to the conversation database. Wider than that sentence
+  was written: `api/routes.py::trace_for` also returns both `clarifications` and `raised`
+  (`turn_log.clarifications_of` and `turn_log.raised_of`, keyed on the turn's own `thread_id`), so
+  the trace discloses the questions the engine asked, the answers a
+  person typed, and every reader-filed note — see the grant-seam item below, which is the same
+  surface from the write side. **Wider since 2026-08-18**
   ([ADR 0014](adr/0014-one-conversation-store.md)): the record accumulates on `ServeState.turns`,
   so the platform's own unauthenticated `/threads/{id}/state` — and any `values` stream frame —
-  now carries *every* prior turn of the thread rather than the newest one. That is audit B1's leak
-  surface enlarged by this change and mitigated by nothing.
+  carries the thread's recent turns rather than only the newest one. **Bounded, and the magnitude
+  matters:** the same commit that widened this capped the channel at `MAX_TURNS_RETAINED = 25`
+  (`src/governed_bi/serve/state.py:260-282`), so one unauthenticated read yields up to 25 whole
+  turn records and the older ones only through their own checkpoints. "Every prior turn" was wrong
+  and is withdrawn. Twenty-five turns of another thread's SQL to any caller that can open a socket
+  is still audit B1's leak surface enlarged by this change and mitigated by nothing.
+
+**Filed 2026-08-22: two mounted routes sit outside the ADR 0012 grant seam, and one of them is a
+write.** `api/visibility.py::visible()` is the withholding seam the browse surface passes through,
+and its only callers are `api/browse_routes.py:59` and four handlers in `api/routes.py`
+(`/corpus/assets`, `/graph`, `/knowledge-graph`, `/audit/corpus`) — nothing else in `api/` names
+it. `GET /clarifications/pending` (`api/clarification_routes.py:43`) and `POST /turns/{turn_id}/raised`
+(`:66`, appending onto checkpointed `ServeState.raised` through
+`api/raised_write.py:99`'s `aupdate_state(as_node="raise_note")`) call neither it nor anything else
+grant-aware. `clarification_routes.py:9-24` states the bill in the code's own words: the GET "hands
+any caller every unanswered question, and those questions can name assets", accepted because
+`/audit/turns` "already discloses every thread's SQL to the same caller"; and the POST is "a write:
+any caller reaching the port can file a note against any turn, so the pending queue an operator
+reads is attacker-writable", bounded only by `RAISED_NOTE_MAX_CHARS` per note on a store nothing
+sweeps. It is 409 on a paused or in-flight thread and resumes nothing — it reaches neither
+`command.update` nor `POST /threads/{id}/state` — but it does persist attacker-supplied text.
+
+**And the write feeds a read.** `api/routes.py::trace_for` returns *both* `clarifications` and
+`raised`, so `/audit/turns/{id}/trace` hands the same unauthenticated caller back the notes any
+caller could have filed, beside the clarification answers a person typed. That is one loop, not two findings.
+
+Filed as its own item rather than folded into A7 because A7 is a disclosure finding and the POST is
+not. The open work is the module's own closing sentence — under a real `AccessPolicy` "both verbs
+must apply the same withholding the tools do" — and neither wire exists. Matching corrections
+landed the same day at [ADR 0009](adr/0009-browsing-and-filtering-api.md) (the "every route this
+app mounts is a read" claim, now false) and
+[ADR 0012](adr/0012-access-seam-principal-and-authorization.md) §8, whose repaired sentence names
+the exclusions: a grant withholds nothing from `ask_user`, nor from these two routes. `ask_user` is
+the fifth entry in the tool list `serve/tools.py` returns, and the only bound on what its prompt
+may name is `serve/schema_term_guard.py::find_schema_leak` — called once, from `ask_user` itself,
+and a term heuristic that knows nothing about a grant.
 
 **This is a recorded choice, not an oversight.** The engine is one operator on `127.0.0.1` under
 `langgraph dev`, and LangGraph Studio's bootstrap fetches (`/info`, `/assistants/search`,
@@ -756,8 +850,9 @@ to ask for. A live turn paused at `ask_user`; the server process was killed and 
 the turn to a correct answer. This section warned about one way that could fail: under
 `langgraph dev` the thread index is `.langgraph_ops.pckl` on a ten-second flush while the checkpoint
 is SQLite, so the two halves can disagree. They did not. One observation is not a guarantee, and it
-was made by hand; the note in `docs/analysis/adopting-the-downstream-fork-2026-08-19.md` records the procedure so
-it can be repeated.
+was made by hand; the note at
+`git-history:docs/analysis/adopting-the-downstream-fork-2026-08-19.md` records the procedure so it
+can be repeated, and `2396ca2` deleted it, so repeating it starts with reading it out of git.
 
 **What is still open is what kind of answer the flag is.** `durable_checkpointer_configured()` reads
 `langgraph.json` and checks that the named module is on disk. Its own docstring is straight about
@@ -775,13 +870,24 @@ a configuration reading are not the same claim.
 argument is sound and the code says so at the line. It is still not the thing the flag's name
 promises, and nothing re-checks it per process.
 
-**And nothing automated drives the observed half.** Every human-in-the-loop test compiles through
-`compile_graph`, whose saver is `InMemorySaver`, and
-`tests/serve/test_the_durable_saver_survives_a_process.py` reaches the saver through `update_state`
-because that file is about persistence rather than the serve graph. So no test drives a real
-`ask_user` interrupt and resume across a process boundary through `AsyncSqliteSaver` — one hand-run
-observation is the whole of the evidence, and closing this needs a live server and a kill, not a
-unit test.
+**The observed half is automated as far as one process goes, 2026-08-20.**
+`tests/serve/test_a_pause_survives_a_restart_on_disk.py` (added by `04450d4`) drives a real
+`ask_user` tool call onto `AsyncSqliteSaver` through `serve.graph.compile_durable`, closes that
+graph, calls `compile_durable` again on the same file, and answers the pause from a graph that
+never wrote it. `test_a_pause_is_resumed_by_a_graph_that_did_not_write_it:163` asserts both halves
+— the turn completes *and* the text a person typed reached `clarifications` — and
+`test_the_identity_gate_reads_the_token_off_disk:206` asserts the ADR 0006 B9 gate reads the token
+off disk, wrong token first, so a resume that lost `identity` cannot pass by failing open. Three
+tests, passing, no model key. The sentence this section used to carry — "one hand-run observation
+is the whole of the evidence" — is withdrawn.
+
+**What is left open is the process boundary, and the test says so about itself.** Its header
+(`:14-23`) is explicit that a second `compile_durable` is a new event loop, connection, saver and
+compiled graph but **not** a new interpreter: the imported modules and every piece of module-level
+state survive, so a bug living in one of those passes there. Covering it means spawning
+`langgraph dev`, killing it, and waiting for a fresh process to bind, which needs a model key and
+a port — which is why the hand procedure above stays written down rather than automated. That,
+and nothing wider, is the residue.
 
 **The store has no ceiling, and the risk runs the way round nobody expects.** `langgraph.json` sets
 `checkpointer.ttl` to `strategy: delete` at `default_ttl: 129600` — minutes, so 90 days — and that
@@ -859,19 +965,45 @@ answer itself, rather than only in the arm-level counter and the trace.
 
 Three readers in `ui/lib/answer-delivery.ts` — `whyLines`, `routedSchemasLabel`,
 `corpusVersionLabel` — consume `provenance.uncertainty_flags`, `suspect_columns`,
-`routed_schemas` and `corpus_release_hash`. None of the four exists in `src/`, and
-`register/record.py`'s `RECORD_REGISTER` declares no such field; the nearest live equivalent to
-the last is the `corpus_content_hash` entry there. The functions are inert rather than wrong, and
-are annotated as such at each site. Repointing the hash is a behaviour change and wants a
-decision, not a patch.
+`routed_schemas` and `corpus_release_hash`. The load-bearing claim is about the *record*:
+`register/record.py`'s `RECORD_REGISTER` declares none of the four, and the nearest live
+equivalent to the last is its `corpus_content_hash` entry (`register/record.py:153`). "None of the
+four exists in `src/`" was too strong and is corrected: `suspect_columns` does exist as a corpus
+concept — `corpus/analyst.py:73` exposes it and `govern/check.py:97` normalises it into the
+COLUMNS layer — it simply never reaches `provenance`, which is why the reader is inert anyway.
+`uncertainty_flags` and `corpus_release_hash` are absent from `src/` outright, and `routed_schemas`
+appears only inside `eval/datalake.py`'s `tables_in_routed_schemas` counter, which is a different
+field. The functions are inert rather than wrong, and are annotated as such at each site.
+Repointing the hash is a behaviour change and wants a decision, not a patch.
 
-Separately, six UI files cite a handoff document that was deleted from this repository, at eight
+Separately, six UI files cited a handoff document that was deleted from this repository, at eight
 sites (`components/corpus/asset-edit-sheet.tsx`, `components/schema/column-related.tsx`,
 `hooks/use-stream-chat.ts` ×2, `lib/api-client.ts` ×2, `lib/capabilities.ts`,
-`lib/mock/fixtures.ts`). Twelve cite `D15` as a design decision.
+`lib/mock/fixtures.ts`) — that pair of numbers was files *and* sites, and both held when
+re-counted 2026-08-22. **Closed the same day:** all eight were repointed at the ADR that actually
+covers the claim (0007 §4/§6/§7, 0009 Amendment 1) or dropped where none does, and
+`asset-edit-sheet.tsx` was deleted outright with the unreachable edit affordance. The `D15` figure
+is the one that did not hold. `D15` is cited as a design decision at **31 sites
+across 12 files**, counted the same day over `ui/**/*.ts` and `ui/**/*.tsx` with build output
+excluded: `lib/schemas.ts` ×8, `lib/api-client.ts` ×5, `lib/mock/fixtures.ts` ×5,
+`components/schema/knowledge-graph.tsx` ×3, `hooks/queries.ts` and `lib/graph-scope.ts` ×2 each,
+and one apiece in `lib/capabilities.ts`, `lib/catalog.ts`, `lib/types.ts`, `app/schema/page.tsx`,
+`components/schema/er-diagram.tsx` and `components/schema/schema-search.tsx`. The earlier "twelve"
+was the file count written as if it were the site count.
 `docs/design-decisions.md` is an ADR index and carries no numbered D-entries, so those
 client citations are dead. Cross-schema joins themselves are still a live retrieval
 property (ADR 0005); only the D15 label is gone from `docs/`.
+
+A third client/engine divergence, found 2026-08-22 and left open because either repair is a
+behaviour change. `ui/lib/types.ts`'s `ASSET_TYPES` offers a `note` filter, but `note` is not a
+registered asset type: `register/assets.py`'s `ASSET_REGISTER` declares eight — `schema`, `table`,
+`column`, `term`, `metric`, `join`, `few_shot`, `negative_example` — and notes are inline `rules`
+on the asset that bears them (ADR 0003 was reversed in full by ADR 0005, which is where the
+standalone note asset went). So the Corpus page's `note` pill sends `type=note` to `asset_rows`,
+which validates against the register and returns `[]`: a filter that can never match anything.
+The mirror of it is that the client offers no `schema` or `column` pill, though both are real
+registered types `/corpus/assets` serves. Dropping the dead pill is a UI change; adding the two
+missing ones changes what the page lists. Neither is a prose repair, so neither was made.
 
 The split these drifted across is closed — the UI is `ui/` in this tree since `506ad9b` — but no
 gate reads it. `check_citations.py`'s `STRICT_ROOTS` is `("src", "tools", "docs", "tests")` and

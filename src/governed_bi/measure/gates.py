@@ -139,8 +139,11 @@ def _drift(arm: Population) -> str:
     """Which facet's which channel differed, for a gate that has already failed.
 
     Naming only — the verdict comes from the stamped ``facet_degraded`` counter. Judged
-    through :func:`~.degradation.channel_anomalies`, the same function ``serve.stamp``
-    decides the counter with, so this cannot disagree with the record it reports on.
+    through :func:`~.degradation.channel_anomalies`, which is *not* the function
+    ``serve.stamp`` decides the counter with (that is
+    :func:`~.degradation.facets_degraded`). The two share
+    :func:`~.degradation.channel_observations`, so they read the same observations, and they
+    differ on purpose: ``extra_channel`` is included here and excluded there.
     ``extra_channel`` is included: it is drift, and it did not refuse this run.
     """
     seen: dict[str, int] = {}

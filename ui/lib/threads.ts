@@ -1,11 +1,14 @@
 /**
  * Conversations — the LangGraph Server's threads, listed cheaply.
  *
- * **The engine has always persisted these; the client threw them away.** `langgraph dev`
- * checkpoints every thread to `.langgraph_api/*.pckl` and they survive a restart, so a
- * conversation was recoverable the whole time. What was missing was on this side: `useStream`
- * was called with no `threadId`, so it minted a fresh one on every page load and there was no
- * way to name, list or reopen the ones already on disk.
+ * **The engine has always persisted these; the client threw them away.** The served path
+ * checkpoints to SQLite through the `checkpointer.path` factory `langgraph.json` declares
+ * (`src/governed_bi/serve/checkpointer.py::conversation_checkpointer`, ADR 0014), which is
+ * what `/capabilities` reports as `checkpoint_durable`. So a conversation was recoverable
+ * the whole time. What was missing was on this side: `useStream` was called with no
+ * `threadId`, so it minted a fresh one on every page load and there was no way to name,
+ * list or reopen the ones already stored. (`.langgraph_api/*.pckl` is `langgraph dev`'s own
+ * default pickle store — not where this deployment's conversations live.)
  *
  * **`select` + `extract`, not a plain search, and the difference is three orders of magnitude.**
  * Measured against a local server holding 16 threads: `threads.search({limit: 50})` returns

@@ -187,7 +187,7 @@ class BM25:
         # This loop used to multiply each term by its raw `qf`, which is Okapi's `k3 -> infinity`
         # limit, so a repeated word bought unbounded score. Measured against one document:
         # `search("cuisine")` = 0.4498 and `search("cuisine cuisine cuisine")` = 0.7103. Not
-        # hypothetical, because the five facet rewriters *generate* these queries — a rewriter that
+        # hypothetical, because the four facet rewriters *generate* these queries — a rewriter that
         # happens to say a keyword twice then outranks one that says it once on identical evidence,
         # and its phrasing is a model's, not a person's.
         #

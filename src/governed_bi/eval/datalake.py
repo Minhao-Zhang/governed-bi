@@ -700,7 +700,7 @@ def observed_tokens(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
     ``calls`` prefers each row's own ``model_calls`` and falls back to counting the row. The
     fallback is not equivalent and the difference is the point: one row per model call holds
-    for the guard and the five rewriters, and **not** for ``agent_core``, which aggregates a
+    for the guard and the four rewriters, and **not** for ``agent_core``, which aggregates a
     whole tool loop into one row. Counting rows there reported 1 call for a turn that made up
     to 13, which understated the repeated share of the input -- the only part prompt caching
     can remove -- by an order of magnitude. Rows written before ``model_calls`` existed still

@@ -79,6 +79,15 @@ frontend via **`useStream`**.
 - **Runtime/vendor coupling** to LangGraph Platform conventions.
 - Supersedes "stateless API + frontend-owned persistence"; the offline/no-`agents`
   profile keeps a non-streaming `/chat` fallback.
+  **Corrected 2026-08-22: there is no such fallback.** `POST /chat` was deleted with
+  [ADR 0014](0014-one-conversation-store.md). What `api/routes.py` mounts is `/livez`,
+  `/capabilities`, `/corpus/assets`, `/graph`, `/knowledge-graph` and `/audit/*`, plus the
+  `browse_routes` and `clarification_routes` routers — no chat route of any kind, streaming or
+  otherwise. The streamed transport is the only one there is, and `/capabilities` reports
+  `can_stream: false` by rendering `<NoTransport/>` rather than by mounting a REST path
+  ([ADR 0007](0007-http-surface-and-the-ui-contract.md) §7). The superseding banner at the top
+  of this file scopes itself to graph shape and the custom-route list, so it does not reach this
+  bullet.
 
 ## Alternatives considered
 

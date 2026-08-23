@@ -11,10 +11,10 @@ instruction is not a control, which is the same lesson ADR 0005 §1.5 already dr
 ``governance.excluded``. This module is one.
 
 **Scoped to ``ask_user``, and not to refusals.** That a *refusal* may name a table is a
-recorded owner decision (``docs/analysis/adopting-the-downstream-fork-2026-08-19.md``, decision
-three: "Yes, as the fork does -- a refusal may name tables"). ``ask_user``'s ``question`` is a
-different surface: prose written for a reader to answer, not a verdict written to explain why a
-statement was stopped. A reader cannot answer a question about ``line_items.unit_price``.
+recorded owner decision (``git-history:docs/analysis/adopting-the-downstream-fork-2026-08-19.md``,
+decision three: "Yes, as the fork does -- a refusal may name tables"). ``ask_user``'s
+``question`` is a different surface: prose written for a reader to answer, not a verdict written
+to explain why a statement was stopped. A reader cannot answer a question about ``line_items.unit_price``.
 
 **Shape-based, not corpus-based, on purpose.** Comparing against a corpus's known physical
 names would false-positive constantly: a column named ``status`` or ``name`` is an ordinary

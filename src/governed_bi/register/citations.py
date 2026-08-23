@@ -38,8 +38,16 @@ class Citation:
     """One measured fact, with provenance."""
 
     claim: str
-    #: Where the measurement lives. Repo-relative path, or ``git-history:<path>``
-    #: when the producing code is gone. Never empty.
+    #: Where the measurement lives. Repo-relative path, or ``git-history:<path>`` when the
+    #: producing code is gone. Never empty.
+    #:
+    #: **``git-history:`` cannot cover an artifact under ``runs/``, which ``.gitignore``
+    #: excludes wholesale** — no run output was ever committed, so prefixing one would assert
+    #: a place to look that has never held it. Three states, and they are different claims:
+    #: on disk here; gitignored and on the maintainer's machine (every ``runs/eval/*.jsonl``,
+    #: which ``arms.toml`` says so explicitly); gitignored and gone. The ``runs/ablation/``
+    #: and ``runs/datalake/`` paths below are all in the third state and are kept as the
+    #: names the measurements were taken under, which is all they can be.
     artifact: str
     #: ISO date the measurement was taken.
     measured: str
@@ -47,6 +55,14 @@ class Citation:
 
 
 CITATIONS: tuple[Citation, ...] = (
+    # **None of the ``runs/ablation/`` artifacts below is on disk or in git.** The
+    # ``summary-form-1351`` pair can be re-measured: ``tools/densify_summaries.py`` builds the
+    # dense arm and ``tools/query_summary_alignment.py`` runs the query-form cells, both still
+    # here, both taking ``--out`` from the caller. ``e1-shortlist-curated`` and ``e3-fusion``
+    # cannot: their producer was ``git-history:scripts/routing_ablation.py``, deleted with v1 on
+    # 2026-08-02, and ``tools/routing_recall.py`` exists to measure shortlist recall in this
+    # tree instead of quoting them. "Re-measurable" and "unreproducible" are the two statuses
+    # worth telling apart before either number is quoted again.
     # ── the indexed text ────────────────────────────────────────────────────
     Citation(
         "indexing prose instead of an identifier list: gold-table coverage "

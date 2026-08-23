@@ -432,9 +432,10 @@ def build_tools(
     #:
     #: **Two ``ask_user`` calls in one assistant message cross-wire the answer.** LangGraph
     #: dispatches one ``Send`` per pending tool call and both interrupt; the surfacing order is
-    #: a race, ``_clarification`` returns the first interrupt, and ``Command(resume=...)`` always
-    #: lands on the first tool call. Measured: the user is shown "which region?", answers it, and
-    #: the answer is recorded against — and handed to the model as — "which year?". The resume
+    #: a race, the client is shown whichever ``interrupt()`` surfaced first, and
+    #: ``Command(resume=...)`` always lands on the first tool call. Measured: the user is shown
+    #: "which region?", answers it, and the answer is recorded against — and handed to the model
+    #: as — "which year?". The resume
     #: surface has no way to say which question is being answered, so the fix is upstream: there
     #: is only ever one question outstanding.
     #:
@@ -560,7 +561,7 @@ def build_tools(
         # (``serve/resume.py``'s module docstring measures why), and it cannot refuse
         # ``command.resume`` wholesale without deleting the paused-turn protocol.
         #
-        # Before the line, not after: ``_clarification_answer`` is where an unauthorised caller's
+        # Before the line, not after: ``parse_resume`` below is where an unauthorised caller's
         # text would first become something the model is handed and the record keeps.
         try:
             authorise_resume(state, config)

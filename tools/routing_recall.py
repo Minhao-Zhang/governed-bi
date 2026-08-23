@@ -3,16 +3,18 @@
 This script exists because the routing recall figures the project used to argue from — recall@10 =
 0.953 and recall@3 = 0.852 — came out of ``git-history:scripts/routing_ablation.py``, deleted with
 v1 on 2026-08-02, so nothing in this tree reproduces them. ``register/citations.py`` sources them
-to ``runs/ablation/e1-shortlist-curated.json`` (2026-07-31) and records what they may be compared
-to: a single-channel shortlist, not v2's five-facet route. Measure recall here or quote that.
+to ``runs/ablation/e1-shortlist-curated.json`` (2026-07-31) — a path that is not in this tree
+either, ``runs/`` being gitignored — and records what they may be compared to: a single-channel
+shortlist, not v2's five-facet route. Measure recall here or quote that.
 
-Two arms, because ``eval.datalake.routing_recall`` needs no *agent* model but the five facet query
-rewriters use the **utility** model, falling back to the raw question when none is configured. The
-same function therefore measures two different systems depending on what the session carries:
+Two arms, because ``eval.datalake.routing_recall`` needs no *agent* model but the four facet query
+rewriters (``FACET_EXTRACTS``; ``facet_schema`` does not rewrite) use the **utility** model,
+falling back to the raw question when none is configured. The same function therefore measures two
+different systems depending on what the session carries:
 
-* ``--no-rewrite`` — the corpus and the router alone, on the user's own words. Free.
-* ``--rewrite``   — five short rewrites per question, which is what production does. ~150 tokens
-  a call, so a 100-question arm is ~75k utility tokens.
+* omitting ``--rewrite`` — the corpus and the router alone, on the user's own words. Free.
+* ``--rewrite``          — four short rewrites per question, which is what production does. ~150
+  tokens a call, so a 100-question arm is ~60k utility tokens.
 
 Run both on one question set and the difference is the rewriter's contribution to routing.
 
@@ -64,8 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--rewrite",
         action="store_true",
-        help="configure the utility model, so the five facet rewriters run as they do in "
-        "production. Costs ~150 tokens x 5 per question.",
+        help="configure the utility model, so the four facet rewriters run as they do in "
+        "production. Costs ~150 tokens x 4 per question.",
     )
     parser.add_argument("--embed", action="store_true", default=True)
     parser.add_argument("--no-embed", dest="embed", action="store_false")

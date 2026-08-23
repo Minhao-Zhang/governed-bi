@@ -108,9 +108,13 @@ _ASSET_BUDGETS: Final[tuple[tuple[str, Any], ...]] = tuple(
 KNOB_REGISTER: tuple[Knob, ...] = (
     # ── corpus and validation ───────────────────────────────────────────────
     _k("summary_max_chars", 250, Role.comparability,
-       "the index's unit of text. Enforced in the model rather than at the tool "
-       "boundary, so every writer is covered; over-length is a validation error, "
-       "never a truncation"),
+       "the index's unit of text. Enforced at LOAD time, not in construction -- there is no "
+       "Pydantic model, the asset types are frozen dataclasses, and "
+       "`corpus/validate.py::problems_with` is reached from `corpus/store.py` and "
+       "`corpus/seed.py`. So a writer that goes through the store or the seed is covered and "
+       "an asset built in memory and handed straight to a consumer is NOT (ADR 0005 section "
+       "1.1, corrected 2026-08-22). Over-length is a validation error there, never a "
+       "truncation"),
     _k("summary_min_chars", 1, Role.comparability,
        "a blank document is a live provider hazard: OpenAI returns a vector that "
        "can score above zero and pollute a ranking, Bedrock Titan rejects it and "
@@ -186,13 +190,14 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "two v1 ladders differed ONLY in this and compared as one experiment; it "
        "moved the baseline arm past that ladder's detection threshold (sizes retired)"),
     _k("llm_utility_model", None, Role.comparability,
-       "the model behind the guard's scope gate and the five facet query rewriters. "
-       "Separate from llm_model because a cheaper rewriter phrases the schema query "
-       "worse, which moves routing recall and everything downstream. Written even when "
-       "it falls back to llm_model: 'shared one model' and 'split them' are two "
-       "treatments, and a blank makes them compare as one"),
+       "the model behind the guard's scope gate and the four facet query rewriters "
+       "(`FACET_EXTRACTS`; `facet_schema` does not rewrite). Separate from `chat_model` "
+       "because a cheaper rewriter phrases the schema query worse, which moves routing "
+       "recall and everything downstream. Written even when it falls back to `chat_model`: "
+       "'shared one model' and 'split them' are two treatments, and a blank makes them "
+       "compare as one"),
     _k("llm_provider", "openai", Role.comparability,
-       "which gateway served the model. `llm_model` records only the id, and `model_id` "
+       "which gateway served the model. `chat_model` records only the id, and `model_id` "
        "reads it off the client -- so the same id behind two gateways resolves to one config "
        "hash and two runs compare as one treatment, though the routing, the snapshot behind "
        "the id and the failure modes all differ. Added 2026-08-07 with the the internal proxy, whose "
@@ -239,7 +244,7 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "default at 3 retries is a 40-minute hang. Retries defend against 429/5xx and "
        "timeouts against hangs; raising one without the other multiplies the ceiling"),
     _k("llm_utility_timeout_s", 30.0, Role.comparability,
-       "wall clock for the small calls -- the scope gate, the five facet rewriters, and "
+       "wall clock for the small calls -- the scope gate, the four facet rewriters, and "
        "the embedder, same latency class on the same critical path. Measured at 1.2-1.5s "
        "each and all run before anything appears on screen, so the SDK's 600s default "
        "stalled a turn for ten minutes; every one of those call sites already degrades "
@@ -356,7 +361,8 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "operational because it changes which turns are delivered, which is the coverage half "
        "of every selective-accuracy number: v4 is the control and must keep meaning what it "
        "meant. OFF because the trade has not been measured -- the policy withholds turns the "
-       "engine currently answers, and `docs/analysis/selective-delivery-v4.md` is 300 lines "
+       "engine currently answers, and `git-history:docs/analysis/selective-delivery-v4.md` "
+       "is 300 lines "
        "about how easy it is to buy accuracy with coverage and call it a win. Turning it on is "
        "one paired arm, and the paired arm is the point of the knob"),
 
@@ -383,7 +389,7 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "than like it is switched off'. A default-off knob with no persistence is a feature "
        "nobody ever runs, and that route is declined here for a second reason (runtime-mutable "
        "knobs make knobs_resolved stop being session identity, which is what the quotability "
-       "gates rest on -- docs/analysis/adopting-the-downstream-fork-2026-08-19.md). "
+       "gates rest on -- git-history:docs/analysis/adopting-the-downstream-fork-2026-08-19.md). "
        "PRICE OF THE KEY, verified: eval/report.py::knobs_comparable compares every "
        "comparability knob except the declared treatment, and absent stays apart from None ('a "
        "key missing from the mapping is the arm declining to say'). So an arm measured before "

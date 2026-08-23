@@ -3,9 +3,11 @@
 The regression these guard is not cosmetic. ``chat_model`` and ``llm_utility_model`` are
 ``Role.comparability`` knobs, and on Bedrock every turn recorded the LangChain *class* name
 ``amazon_bedrock_converse_chat`` instead of the model id — so two arms serving different
-Anthropic models published the same value and the drift gate compared them equal
-(``runs/serve/2026-08-18.jsonl``, both turns, while actually running
-``us.anthropic.claude-sonnet-5``).
+Anthropic models published the same value and the drift gate compared them equal (observed
+2026-08-18 on both turns of that day's served turn log, while actually running
+``us.anthropic.claude-sonnet-5``). The artifact is gone and cannot be reopened: ``runs/serve/``
+was an untracked local log, deleted with ``api/trace_store.py`` by ADR 0014, so it is not in
+git history either. This test is what replaced it.
 """
 
 from __future__ import annotations

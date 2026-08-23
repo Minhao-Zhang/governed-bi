@@ -31,7 +31,10 @@ Non-ADR judgements that still matter in code:
   number is refused (ADR 0002 / 0006), and no per-axis stamp replaces it. What a turn
   carries is `outcome`, `guardrail_errors`, `terminal_reason` and the per-attempt
   ledger, each derived from something observed. `safety_clearance` and
-  `semantic_assurance` are barred from `src/` by a test.
+  `semantic_assurance` are barred from the abstention policy by a test, not from `src/` at large:
+  `tests/serve/test_the_abstention_policy_is_declared.py::test_the_verdict_carries_no_trust_signal`
+  AST-walks `serve/nodes/abstain.py` for eight forbidden names and nothing scans the rest of the
+  tree. Corrected 2026-08-22.
 - **UI is in tree, out of the import graph.** The interactive chat UI is `ui/`. It shares the
   repository and nothing else: no module either way, and every payload it reads crosses the HTTP
   surface of ADR 0007.

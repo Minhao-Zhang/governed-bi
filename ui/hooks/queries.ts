@@ -3,11 +3,12 @@
  * Components. Param-less keys stay stable so the whole app shares one cache;
  * scoped keys embed the scope so each D15 scope caches independently.
  *
- * **The scope hooks are no longer capability-gated.** They were, and the flat fallbacks they
- * gated are gone: `GET /schema` is deleted, and `can_scope === false` (which is also what an
- * unresolved `/capabilities` looks like) sent the graphs out unscoped and straight into the
- * client's alphabetical truncation — 150 nodes, 0 edges. `can_search` is still a real gate,
- * because the client Fuse index it falls back to genuinely works.
+ * **No hook here is capability-gated.** They were, and the fallbacks they gated are gone:
+ * `GET /schema` is deleted, and `can_scope === false` (which is also what an unresolved
+ * `/capabilities` looks like) sent the graphs out unscoped and straight into the client's
+ * alphabetical truncation — 150 nodes, 0 edges. `useServerSearch` went the same way: it gated
+ * `GET /search`, a route ADR 0009 Amendment 1 says was deliberately never built, so the hook
+ * was permanently disabled and the Fuse index in `lib/catalog.ts` is the whole search story.
  */
 
 "use client";
@@ -20,7 +21,6 @@ import {
 } from "@tanstack/react-query";
 
 import { api } from "@/lib/api-client";
-import { canSearch } from "@/lib/capabilities";
 import {
   buildCatalogIndex,
   searchCatalog,
@@ -152,17 +152,7 @@ export function useCatalogSearch(
   );
 }
 
-/** Server-ranked search (GET /search; gated on can_search, else no-op). */
-export function useServerSearch(query: string) {
-  const { data: caps } = useCapabilities();
-  const enabled = canSearch(caps) && query.trim().length >= 2;
-  return useQuery({
-    queryKey: ["search", query],
-    queryFn: () => api.search(query),
-    enabled,
-    placeholderData: keepPreviousData,
-  });
-}
+// `useServerSearch` is gone with `api.search`: there is no `GET /search` to rank against.
 
 export function useAssets(type?: string) {
   return useQuery({

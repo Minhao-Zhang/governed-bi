@@ -1,8 +1,10 @@
 """Token rows for every model call the turn makes — one builder, used by every caller.
 
-``usage`` used to be written by ``agent_core`` alone, so the guard's BI-scope gate and the five
-facet query rewriters spent tokens no record mentioned. On an answered turn those six hid behind
-the agent's several thousand; on a **refused** turn they were the only calls that happened, so
+``usage`` used to be written by ``agent_core`` alone, so the guard's BI-scope gate and the four
+facet query rewriters spent tokens no record mentioned — four, not five: there are five facet
+*nodes* and ``facet_schema`` is the one that calls no model. On an answered turn those five hid
+behind the agent's several thousand; on a **refused** turn they were the only calls that happened,
+so
 the record reported ``usage = []`` for a turn that really cost 136 tokens, and every token total
 in the repository was low.
 

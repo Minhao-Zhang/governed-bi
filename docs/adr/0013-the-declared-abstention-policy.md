@@ -45,7 +45,7 @@ is the part worth reading before proposing an alternative:
 
 - **The reflector scored OOF AUC 0.597**, worse than counting the agent's output tokens, and
   combining the two is worse than the token count alone (open-work §3.11,
-  [risk coverage](../analysis/risk-coverage-v4.md) §6). Its `unsure` bucket is **as likely to be
+  `git-history:docs/analysis/risk-coverage-v4.md` §6). Its `unsure` bucket is **as likely to be
   right (0.766) as its `correct` bucket (0.763)** — a judge with no perception of its own
   uncertainty to express.
 - **Everything that does not read meaning caps at 0.721.**
@@ -53,7 +53,7 @@ is the part worth reading before proposing an alternative:
   0.7144 at coverage 0.9460 — arithmetic, not agreement: a ranking reorders turns the engine
   already agreed to answer. Buying accuracy costs answers, and the best available trade loses
   **162 right answers to gain 8.1 accuracy points**
-  ([selective delivery](../analysis/selective-delivery-v4.md) §4).
+  (`git-history:docs/analysis/selective-delivery-v4.md` §4).
 
 So a graded `certainty` field is confidence theatre, and these are the measurements that
 make the word fair rather than rude.

@@ -39,15 +39,22 @@ const BILLING = "billing";
 /* ── /capabilities — offline, no live model (mock mode) ──────────────────── */
 
 export const MOCK_CAPABILITIES: Capabilities = {
-  environment: "dev",
-  dialect: "sqlite",
-  can_edit: true,
-  edit_mode: "file",
+  // The two values a live engine actually sends: `capabilities_for` returns the literal
+  // `"local"` and the served app builds a `PostgresConnector` unconditionally. These used to
+  // read `"dev"` / `"sqlite"`, neither of which any engine emits.
+  environment: "local",
+  dialect: "postgres",
+  // False, as on every live engine (ADR 0007 §7: the curator is out of scope). This was `true`
+  // with `edit_mode: "file"`, which mounted an edit sheet that posted to a route that has
+  // never existed — the sheet is deleted and so is the affordance.
+  can_edit: false,
+  edit_mode: "none",
   can_stream: false, // no LangGraph Server attached in mock mode
   has_live_model: false,
   model: "offline (no model attached)",
-  // Mock exercises the D15 scoped flow end-to-end; server /search stays deferred
-  // (client Fuse index is the default), so can_search is false.
+  // Mock exercises the scoped flow end-to-end. `can_search` is false because `GET /search`
+  // was deliberately never built (ADR 0009 Amendment 1) — the client Fuse index is not a
+  // fallback, it is the only ranking there is.
   can_scope: true,
   can_search: false,
   // Mock exercises the HITL clarification flow offline (trigger words in
@@ -62,9 +69,11 @@ export const MOCK_CAPABILITIES: Capabilities = {
     utility: { id: null, provider: null, effort: null },
     embedding: { id: "deterministic:mock", provider: "deterministic", dimensions: 64 },
   },
-  // Mock mode is the SQLite profile, which is a file — no host, no port, and nothing to
-  // redact. Exercises the settings card's "absent, not empty" branch.
-  connection: { dialect: "sqlite", database: "gbi_demo_sales.db" },
+  // A deliberately partial projection. `connection_for` copies whatever the connector's
+  // `endpoint` mapping carries and nothing more, so `host`/`port` can be absent — which is
+  // the settings card's "absent, not empty" branch. It used to claim a SQLite file; there is
+  // no SQLite profile to claim (see ui/README.md, Deployment).
+  connection: { dialect: "postgres", database: "gbi_demo_sales" },
 };
 
 /* ── /schema ─────────────────────────────────────────────────────────────── */
@@ -775,7 +784,7 @@ export const MOCK_AGENT_ANSWER: AnswerView = {
 /* ── Serve-time clarification (HITL) ─────────────────────────────────────────
  * The question the mock agent "interrupts" with when a trigger word is asked
  * (see use-chat.ts CLARIFY_PATTERN). Both a constrained pick AND freeform, to
- * exercise the full prompt (contract §3). When a backend raises a real
+ * exercise the full prompt (the interrupt payload is ADR 0007 §6). When a backend raises a real
  * `interrupt()`, this fixture is unused. */
 
 export const MOCK_CLARIFICATION: ClarificationRequest = {
@@ -866,7 +875,7 @@ export const MOCK_REFUSAL: AnswerView = {
   },
 };
 
-/* ── /columns/{column_id}/related (§14) — derived from the mock schema/graph ──
+/* ── /columns/{column_id}/related — derived from the mock schema/graph ──
  * So the click-a-column feature is demoable offline. Resolves the column out of
  * MOCK_SCHEMA and synthesizes plausible terms/rules/joins/metrics/FKs from the
  * existing mock assets (all lists mirror the live contract shape). */
@@ -977,13 +986,14 @@ export function mockColumnRelated(columnId: string): ColumnRelated {
     terms.push({ id: "term_label", name: "label", synonyms: ["name", "title"], confidence: 0.85, provenance_status: "certified" });
   }
 
-  // notes scoping this column (wire key remains `rules`; handoff §14).
+  // notes scoping this column. The wire key is `rules`, not `notes` — see
+  // `columnRelatedResponseSchema`, which is the declaration of record for this shape.
   const rules: ColumnRelated["rules"] =
     table.id === "table_b"
       ? [{ id: "note_boolean_flags", kind: "business_rule", statement: "0/1 integer columns are booleans.", confidence: 0.8, provenance_status: "certified" }]
       : [];
 
-  // metrics on this table (table-grain only, §14.4).
+  // metrics on this table (table-grain only, as on the live route).
   const metrics: ColumnRelated["metrics"] = (MOCK_METRICS_BY_TABLE[table.id] ?? []).map((m) => ({
     ...m,
     granularity: "table",

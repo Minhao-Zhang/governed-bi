@@ -131,6 +131,16 @@ engage. `can_search` stays **false**: `/search` is not built, and reporting a se
 server cannot do would make the omnibox blame the corpus for an empty result. The flag is
 flipped by building the thing, never to unlock a UI path.
 
+> **Noted 2026-08-22: `can_scope` is not an observation, it is a literal.**
+> `api/routes.py:356` returns `"can_scope": True` hardcoded. The value happens to be correct — every
+> scoped route this decision describes is mounted, as `docs/openapi.json` shows — but nothing reads
+> the route table to decide it, so if one of them were deleted the flag would keep reporting `true`.
+> Its neighbours in the same dict *are* derived: `can_stream = served_graph_declared()` walks
+> `langgraph.json` and stat()s the module, and `checkpoint_durable` /
+> `hitl_survives_process_restart` come from `durable_checkpointer_configured()`. This decision's
+> rule — "flipped by building the thing, never by editing the line" — is therefore stated for
+> `can_scope` and enforced only for the others.
+
 ### D5 — Filtering runs server-side over the loaded corpus, not in the database
 
 The corpus is already in memory in the session — it is what retrieval runs on. Filtering it
@@ -258,13 +268,14 @@ whole claim of this decision surviving contact with the thing it was waiting for
 > transport rather than a description of one. `can_stream and agent_model is not None` is still
 > the expression and still correct -- there is now only one transport for it to be true of.
 
-### The sufficient set: 12 read routes
+### The sufficient set: 14 reads and one write
 
 `GET /capabilities` | `GET /livez` | `GET /schema/summary` |
 `GET /schema/{table_id}` | `GET /corpus/fields` | `GET /corpus/rows` |
 `GET /columns/{column_id}/related` | `GET /graph` | `GET /knowledge-graph` |
 `GET /audit/turns` | `GET /audit/turns/{id}/trace` | `GET /audit/corpus` -- and, since
-2026-08-18, **that is the whole set**: the chat pair `POST /chat` and `POST /chat/resume` is
+2026-08-18, **that is the whole set** *(superseded — a write has since been mounted; see the
+2026-08-22 correction below)*: the chat pair `POST /chat` and `POST /chat/resume` is
 deleted ([ADR 0014](0014-one-conversation-store.md)), so every route this app mounts is a read and
 none of them needs a model. A turn is served only by the graph `langgraph.json` mounts, over the
 platform's own `/threads/{id}/runs/stream`. `make_app` lost its `graph` parameter with the pair,
@@ -279,6 +290,40 @@ apart from `degradations`. The heading is now the count.
 > `ask_user` prompts, oldest first, out of interrupt state
 > (`api/clarification_routes.py`). `/corpus/assets` was already mounted beside the twelve.
 > The heading above is the 2026-08-18 count, not the current one.
+
+> **Correction, 2026-08-22. "Every route this app mounts is a read" is false, and the route that
+> makes it false is unauthenticated.** `POST /turns/{turn_id}/raised` is mounted
+> (`api/clarification_routes.py:66`) and declared in `docs/openapi.json`. It writes: the handler
+> validates `kind` and a `RAISED_NOTE_MAX_CHARS`-bounded `note`, resolves the turn's `thread_id`
+> through `turn_log.get_turn`, and `api/raised_write.py:99` appends the row onto checkpointed
+> `ServeState.raised` via `aupdate_state(as_node="raise_note")`. It is 409 on an in-flight or
+> paused thread and it resumes nothing, but it does persist attacker-supplied text into the
+> conversation store. The 2026-08-19 note above patched the *count* of reads and never mentioned
+> that a verb other than `GET` had appeared.
+>
+> Nothing on this surface authenticates — `api/routes.py:37-45` records A7 as knowingly open and
+> the credential middleware as deliberately removed — so **any caller that can reach the port can
+> file a note against any turn**. The queue an operator reads at `/clarifications/pending` is
+> therefore caller-writable, and the only bound on how much a single caller can grow a store
+> nothing sweeps is `RAISED_NOTE_MAX_CHARS` per note. `api/clarification_routes.py:9-24` states
+> the same thing in the code's own words, including that the POST "deliberately cannot *act*" —
+> it reaches neither `command.update` nor `POST /threads/{id}/state`.
+>
+> **Neither clarification route goes through `api/visibility.py::visible()`.** Its only callers are
+> `api/browse_routes.py`'s session dependency and the four `visible(get_session())` call sites in
+> `api/routes.py`, so `GET /clarifications/pending`
+> and `POST /turns/{turn_id}/raised` both sit outside the ADR 0012 grant withholding — the GET as a
+> read path around a grant, the POST as a write path around one, which is exactly the consequence
+> `clarification_routes.py`'s docstring says must be carried forward "under a real `AccessPolicy`".
+> Tracked as an open item in `docs/open-work.md`; this note records the exposure, not a plan.
+>
+> **The inventory of record is `docs/openapi.json`, not this list.** It has 15 paths — the fourteen
+> `GET`s (`/livez`, `/capabilities`, `/corpus/assets`, `/corpus/fields`, `/corpus/rows`,
+> `/schema/summary`, `/schema/{table_id}`, `/columns/{column_id}/related`, `/graph`,
+> `/knowledge-graph`, `/audit/turns`, `/audit/turns/{turn_id}/trace`, `/audit/corpus`,
+> `/clarifications/pending`) plus the one `POST`. The list above is kept as the 2026-08-04 record
+> of what the audited *sufficient* set was; it is not maintained as an inventory, because it has now
+> drifted from the mounted surface three times. The heading is the current count.
 
 `GET /search` is deliberately **not** built: `can_search: false` is the honest answer and the
 client's index over the lean catalog works. `GET /corpus/assets` survives unbounded, on notice:

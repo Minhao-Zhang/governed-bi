@@ -25,7 +25,7 @@ class ArmSpec:
 
     name: str
     build_configurable: BuildConfigurable
-    #: When True, harness uses :mod:`oracle` instead of ``compile_graph``.
+    #: When True, harness uses :mod:`oracle` instead of ``compile_durable``.
     oracle_only: bool = False
     extra: Mapping[str, Any] = field(default_factory=dict)
 

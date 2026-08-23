@@ -31,9 +31,11 @@ is ``return (0, 0)`` and no caller exists in ``site-packages``, so this file gro
 That a conversation survives a restart was watched by hand on 2026-08-19: a clarification paused,
 the process was killed with nothing left listening, a fresh one re-mounted the prompt from
 checkpointed interrupt state, and answering it resumed the turn to a correct answer
-(``docs/analysis/adopting-the-downstream-fork-2026-08-19.md``). **No test drives that path.** The
-suite's HITL tests all run on ``InMemorySaver``, and the one file that opens this saver for real
-uses ``update_state`` rather than a turn.
+(``git-history:docs/analysis/adopting-the-downstream-fork-2026-08-19.md``).
+``tests/serve/test_a_pause_survives_a_restart_on_disk.py`` has driven that path since 2026-08-20:
+a real ``ask_user`` interrupt written onto this saver through ``graph.compile_durable``, then
+answered by a second graph over the same file. What it does **not** cross is a process boundary --
+its own header says so -- so the interpreter dying is still covered only by the hand run above.
 
 **Two databases, one mechanism.** :data:`CONVERSATION_DB` holds served conversations. The CLI and
 eval get :data:`HARNESS_DB` instead, because their traffic is measurement. Measured 2026-08-20: a

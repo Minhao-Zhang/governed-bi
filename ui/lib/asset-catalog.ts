@@ -1,12 +1,15 @@
 /**
  * The unified corpus catalog: every asset kind in one searchable list.
  *
- * `/corpus/assets` deliberately serves only the NON-table assets, so the Corpus
- * page used to under-report the corpus — 3,464 rows against the 4,169 assets
- * `/health` counts, the difference being 705 tables. But a table *is* a corpus
- * asset in the domain model (curator-written description and grain,
- * `provenance_status`, `confidence`, `excluded`), so this module folds the table
- * catalog back in and gives the whole set one Fuse index and one filter model.
+ * A table *is* a corpus asset in the domain model (curator-written description and grain,
+ * `provenance_status`, `confidence`, `excluded`), but this page reads the non-table assets
+ * from `/corpus/assets` and would under-report the corpus by every table it holds. So this
+ * module folds the table catalog from `/schema/summary` back in and gives the whole set one
+ * Fuse index and one filter model.
+ *
+ * The counts this note used to quote came from `GET /health`, a route that is deleted, on a
+ * corpus that was rewritten from scratch afterwards. Ask `/audit/corpus` for today's
+ * numbers rather than trusting a figure in a comment.
  *
  * Tables keep their own scoped browser on the Schema tab; that view answers "what
  * is in *this* namespace, with columns, beside the diagram". This one answers
@@ -42,8 +45,10 @@ const TYPE_PREFIXES = ["metric_", "note_", "term_", "join_", "neg_", "tbl_", "fs
  * `AssetRowResponse` carries no namespace, so this is a client-side derivation —
  * but not a guess: it strips the type prefix and then matches the remainder
  * against the **authoritative** schema list from the table catalog, longest name
- * first so `sales` can never shadow `sales_in_weather`. Measured against the live
- * 67-schema corpus it resolves 3,464/3,464 assets.
+ * first so `sales` can never shadow `sales_in_weather`. It resolved every asset it was
+ * measured against, but that measurement was taken on a corpus this repository no longer
+ * has (the corpus was rewritten from scratch on 2026-08-09), so the figure is not quoted
+ * here — re-measure before relying on it.
  *
  * Returns null when nothing matches (a genuinely global asset, or a corpus whose
  * ids don't embed the schema). Callers must treat null as "unknown", never as a

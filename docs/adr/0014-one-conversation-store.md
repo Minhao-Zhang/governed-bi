@@ -108,6 +108,35 @@ is no second sink to write to. `make_app` lost its `graph` parameter with the ch
 `npm run check:api` serve as the regression test for a change of store — measured after the swap:
 **16/16 routes parse, 0 fail.**
 
+> **Amended 2026-08-22 — the seam has a third dependency, the trace is no longer byte-identical,
+> and "16 routes" was never the mounted count.**
+>
+> - **The signature is `make_app(session, turn_log, pending)`** (`api/routes.py:67`). The third
+>   dependency arrived with the pending-clarification queue: a reader exposing
+>   `pending(limit=, offset=)` and `PENDING_FIELDS`, production class
+>   `api/thread_turns.PendingClarifications`. It is separate from `turn_log` for the reason
+>   `make_app`'s own docstring gives — an open question has no turn yet, so thread state does not
+>   record it. `make_app` still has no `graph`; that part of the sentence stands.
+> - **`turn_log`'s duck type has grown too, and it is no longer reader-only.** `trace_for` calls
+>   `clarifications_of` and `raised_of` on it (`api/routes.py:638-646`;
+>   `api/thread_turns.py:253,283`), and `POST /turns/{turn_id}/raised` calls `append_raised`
+>   (`api/thread_turns.py:305`), which writes. The four names listed above are still what
+>   `make_app`'s docstring asks for.
+> - **The trace payload changed shape.** `/audit/turns/{id}/trace` gained `clarifications` and
+>   `raised` keys (`api/routes.py:638-646`, read beside the envelope rather than joined into
+>   `stages`, because neither is a `RECORD_REGISTER` field). So it is no longer byte-identical
+>   across the store swap this section is about, and `check:api` can no longer serve as *that*
+>   regression test for this route — it still validates the response against the client's zod
+>   schema, which is the other thing it does.
+> - **"16/16 routes" counts `check:api` cases, not mounted routes.** `ui/scripts/check-api-contract.ts`
+>   builds 11 fixed cases plus up to 5 discovered ones (`/schema/{id}`, `/graph?schema=`,
+>   `/knowledge-graph?schema=`, `/columns/{id}/related`, `/audit/turns/{id}/trace`) — 16 when the
+>   corpus and the log make all five discoverable, over **12** distinct paths, since `/graph` and
+>   `/knowledge-graph` are each visited three times with different query strings. The **mounted**
+>   surface is 15 routes (`docs/openapi.json`: 14 `GET` and
+>   one `POST`), and `check:api` has no case for `/clarifications/pending` or for
+>   `POST /turns/{turn_id}/raised`.
+
 Reads go through `get_client(url=None)`, documented to *"first attempt an in-process connection via
 ASGI transport"* — valid because this module only runs inside the server that mounts it. No port, no
 loopback request, no credential. `extract={"turns": "values.turns"}` rather than selecting `values`:
@@ -138,12 +167,20 @@ landed is thread state surviving a hard kill. The clarification half **was** wat
 2026-08-19: a turn paused on `ask_user`, the process was killed with nothing left listening, a
 fresh one re-mounted the prompt from checkpointed interrupt state, and answering it resumed the
 turn to a correct answer
-(`docs/analysis/adopting-the-downstream-fork-2026-08-19.md`). That is **one hand-run observation
-and no test coverage**: every HITL test compiles through `compile_graph`, whose saver is
-`InMemorySaver`, and `tests/serve/test_the_durable_saver_survives_a_process.py` reaches the saver
-through `update_state` because that file is about persistence rather than the serve graph. So
-nothing automated drives a real `ask_user` interrupt and resume across a process boundary
-through `AsyncSqliteSaver`.
+(`git-history:docs/analysis/adopting-the-downstream-fork-2026-08-19.md`). When this ADR landed that
+was **one hand-run observation and no test coverage**: every HITL test compiled through
+`compile_graph`, whose saver is `InMemorySaver`, and
+`tests/serve/test_the_durable_saver_survives_a_process.py` reaches the saver through `update_state`
+because that file is about persistence rather than the serve graph.
+
+> **Amended 2026-08-22.** The automated half landed on 2026-08-20:
+> `tests/serve/test_a_pause_survives_a_restart_on_disk.py` drives a real `ask_user` interrupt onto
+> `AsyncSqliteSaver` through `compile_durable`, then answers it from a second `compile_durable` over
+> the same file that did not write it (`test_a_pause_is_resumed_by_a_graph_that_did_not_write_it`),
+> and reads the resume identity off disk (`test_the_identity_gate_reads_the_token_off_disk`). What
+> remains uncovered is narrower than the sentence above, and that test's own header says so: it is a
+> second graph, loop and connection, **not** a second process, so the interpreter and module state
+> survive. Nothing automated crosses a real process boundary.
 
 ### 4. Retention is a TTL that **deletes**, and there is no gentler option
 

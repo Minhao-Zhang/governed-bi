@@ -20,11 +20,34 @@
 - **Supersedes:** ADR 0003 in full (`NoteAsset`, `NoteKind`, `NoteActivation`,
   `NormativeForce`, `Trigger`/PIN, the "tri-modal" framing); the `RVGD` name;
   the `description` field name.
+- **Amended by** (added 2026-08-22 — four later ADRs declared amendments to this one and none
+  was pointed at from here):
+  - [0008](0008-identifiers-end-to-end.md) at **§1.2 / §2.8.2** — D1's key/name split, and D4
+    withdrawing §2.8.2's "a physical name, bare or qualified" reference kind.
+  - [0011](0011-two-model-split-and-facet-query-rewriting.md) at **§2.3** — four of the five
+    facets call a model; only `facet_schema` searches the raw question.
+  - [0012](0012-access-seam-principal-and-authorization.md) §3 — `licensed` is narrowed to
+    "what retrieval found this turn", with authorization as a second, independent question, so a
+    licensed table can still be refused `r_table_not_authorized`. It reaches **§3.2 / §3.5**
+    here, where `licensed` is declared and the tool bounds are stated. (0012's own header cites
+    the target as "0005 §8"; this ADR has no §8 — §8 is ADR 0006's tool-bounds section.) 0012
+    was cited nowhere in this file before this line.
+  - [0014](0014-one-conversation-store.md) at **§4** — which fields a record carries, and the
+    `turns` channel as the place a whole conversation survives.
 
 > **This repository does not produce the served corpus.** The curator is absent from
-> `src/`, and there is no rebuild kit. The semantic layer is the sibling
-> [BIRD-corpus](https://github.com/Minhao-Zhang/BIRD-corpus) checkout; this engine
-> loads it. Versioned is not reproducible-from-this-tree.
+> `src/`, and there is no rebuild kit. The semantic layer is a **sibling checkout named by
+> `GOVERNED_BI_CORPUS_DIR`**; this engine only loads it. Versioned is not
+> reproducible-from-this-tree.
+>
+> > **Corrected 2026-08-22.** This used to say the semantic layer *is* the sibling
+> > [BIRD-corpus](https://github.com/Minhao-Zhang/BIRD-corpus) checkout, present tense. It is
+> > not what the tree loads today: `.env` sets
+> > `GOVERNED_BI_CORPUS_DIR=../MS Fabric Facilities/corpus` with the BIRD line commented out,
+> > and `GOVERNED_BI_PG_DSN` points at the facilities warehouse — the corpus directory and the
+> > DSN are one switch and must move together. Read `.env` for what is served. Measurements
+> > below that name their corpus hash stay quotable *on the corpus they name*; none of them
+> > describes the default configuration.
 >
 > The §3.1 topology has drifted from `serve/graph.py`. Use
 > [architecture.md](../architecture.md) or the graph itself: `abstain`, `reflect`,
@@ -116,7 +139,7 @@ class XxxAsset:
     body: str | None          # unbounded. Used on hit.
 
     governance: Governance    # D6 — on EVERY asset (§1.5)
-    confidence: Confidence | None   # curation-time belief, NOT an outcome score
+    confidence: float | None        # curation-time belief, NOT an outcome score
     audit: Audit | None
 ```
 
@@ -126,6 +149,16 @@ outcome-derived score are different quantities with different lifetimes.
 
 **Validation lives in the Pydantic model**, not at the tool boundary, so every
 writer is covered — tool calls, the seed, hand-edited YAML, the loader.
+
+> **Corrected 2026-08-22, and the correction inverts the point.** There is no Pydantic model.
+> The asset types are frozen `dataclasses` — `corpus/schema.py` imports `dataclasses` only, and
+> its own module docstring says "Validation is `.validate`, not construction." The rules in the
+> table below are enforced at **load time**: `corpus/validate.py::problems_with` plus
+> `corpus/identity.py::validate_asset_id`, reached from `corpus/store.py` and
+> `corpus/seed.py`. So "every writer is covered" holds only for writers that go *through the
+> store or the seed*. An asset constructed in memory and handed straight to a consumer is
+> **not** validated — which is exactly the gap the sentence was written to deny. Moving
+> validation into construction, or keeping it at load and saying so, is an open choice.
 
 | rule | applies to |
 |---|---|
@@ -177,7 +210,8 @@ confused with, known traps) · `rules` · `grain`, `schema`, `physical_name`,
 ##### `ColumnAsset` — renamed from `Column`, still inline
 
 Stored inline; **id derived by the loader** (`derive_column_id(table_id,
-physical_name)`) — columns carry no `id` in YAML. Renamed for consistency: it
+physical_name)`, which folds the name through `corpus/identity.py::slug` — ADR 0008 D1;
+see the correction under §3.5) — columns carry no `id` in YAML. Renamed for consistency: it
 has a derived id, governance, audit and reliability. (D9 lists `column` among
 eight YAML asset types; that inconsistency predates this ADR and is resolved in
 favour of inline storage.)
@@ -295,6 +329,12 @@ be one:
 
 A corpus with many `rules` is one whose curation failed to assetise. CI check,
 not guideline.
+
+> **Corrected 2026-08-22: the CI check does not exist.** `tools/check_corpus_conformance.py`
+> declares seventeen gates, `V0`-`V16`, and none of them counts or caps `rules`. The field's
+> text is *read* by `V10` (no disclosure of how an unreliable column was made) and by `V13`'s
+> body cap, but nothing measures how much of the corpus lives in it. So this is a guideline
+> until the gate is written.
 
 `JoinAsset`/`MetricAsset`/`TermAsset` have no `rules` because they are already
 normative: a metric's `expression` **is** the definition; a term's `binding`
@@ -942,6 +982,27 @@ exactly as above.
 
 *Added 2026-08-03, because none of the above was reachable.*
 
+> **Amended by [ADR 0008](0008-identifiers-end-to-end.md), pointer added 2026-08-22.** 0008's
+> header declares that it amends this section and §1.2, and until now nothing here said so.
+> Two parts:
+>
+> **D1 — a key is not a name.** Ids fold the physical name through
+> `corpus/identity.py::slug`; `table_id` and `derive_column_id` are the single spellings. That
+> shipped, and the paragraph on `table_id` below already cites it.
+>
+> **D4 — the "physical name, bare or qualified" reference kind is withdrawn.** 0008 D4 names
+> the paragraph below by that phrase, calls it "a third kind" of identifier-bearing field,
+> records that it cost 25% of the corpus's joins, and rules that normalisation happens once in
+> the loader with `structure.py` doing exact lookups only. **That withdrawal is decided and not
+> built.** What shipped is the loader half: 0008's own header reports the reference *fields*
+> normalised in `../BIRD-corpus` (all 5,947 `parent_table`s, all 1,412 join endpoints, all 478
+> metric `base_table`s, 602 of 603 term bindings are asset ids). What did not ship is the
+> tolerance's removal: `retrieve/structure.py::table_lookup` still documents and builds **four
+> spellings per table** — the asset id, `table_id(schema, physical_name)`, the bare
+> `physical_name`, and the engine spelling `{schema}.{physical_name}` — and `bind_endpoint`
+> resolves against any of them. So the section below still describes live behaviour; it just no
+> longer describes the decision.
+
 `resolve` and `connect` are both total functions of data neither of them has.
 On 2026-08-03 `serve/state.py` declared five inputs for them — `join_edges`, `references`,
 `asset_types`, `table_schemas`, `schema_tags` — under the comment *"F1 test /
@@ -1089,6 +1150,13 @@ different models compare as one experiment. The session is where the model is ch
 is where the knob is resolved. This is also what unblocks the `usage` gate condition in
 decision #45(a).
 
+> **Names corrected 2026-08-22.** Two of the three knobs this paragraph cites as precedent are
+> right and one never existed. `llm_reasoning_effort` and `embedding_model` are in
+> `KNOB_REGISTER` as `Role.comparability`; **`llm_temperature` is not, and there is no
+> temperature knob of any name.** The decision itself shipped, under a different name: the chat
+> model is `chat_model` (`register/knobs.py`), joined since by `facet_model`, `rewrite_model`
+> and `llm_utility_model`. There is no `llm_model`.
+
 ##### 2.8.2.2.1 The original statement of the gap
 
 The declared wiring above says the projection is built beside the index and passed
@@ -1164,11 +1232,11 @@ START
   │  └─ hit ────────────────────────────────────────────────→ [decline] ─┤
   ▼                                                                      │
 ──── fan-out (one super-step, concurrent) ──────────────┐                │
-  ├─ [facet:schema]   raw question    → lex + sem       │                │
-  ├─ [facet:term]     LLM extract     → lex + sem       │                │
-  ├─ [facet:metric]   LLM extract     → lex + sem       │                │
-  ├─ [facet:entity]   LLM extract     → lex + sem       │                │
-  └─ [facet:example]  raw question    → sem             │                │
+  ├─ [facet_schema]   raw question    → lex + sem       │                │
+  ├─ [facet_term]     LLM extract     → lex + sem       │                │
+  ├─ [facet_metric]   LLM extract     → lex + sem       │                │
+  ├─ [facet_entity]   LLM extract     → lex + sem       │                │
+  └─ [facet_example]  raw question    → sem             │                │
 ──── fan-in (implicit barrier; per-facet channel) ──────┘                │
   ▼                                                                      │
 [route]      aggregate → top-N → pass two → budgets                      │
@@ -1329,11 +1397,19 @@ namespacing is a mitigation, not authentication.
 
 #### 3.2 State
 
+**The listing below is a partial one and always was.** `serve/state.py::ServeState` is the
+authority: it is declared `total=False` and carries forty-eight keys, six of which hold
+decisions this section never mentions — `turns` ([ADR 0014](0014-one-conversation-store.md)),
+`abstention` ([ADR 0013](0013-the-declared-abstention-policy.md)), `path_kind` /
+`terminal_reason` (how a turn ended), `answer_text` (`narrate`'s prose, distinct from
+`answer["text"]`) and `reflect_verdict`. Read the module before believing a field is absent.
+*(Partial-listing note and the two type corrections inside the block added 2026-08-22.)*
+
 ```python
-class ServeState(TypedDict):
+class ServeState(TypedDict, total=False):   # partial listing — see serve/state.py
     question: str
     thread_id: str
-    identity: Identity              # provenance, NOT enforcement (ADR 0006 §10)
+    identity: dict[str, Any]        # provenance, NOT enforcement (ADR 0006 §10)
 
     guard: GuardVerdict             # total; written on every turn
     rewrite: RewriteResult | None   # None = node did not run (first turn)
@@ -1344,7 +1420,7 @@ class ServeState(TypedDict):
     schemas: list[str]
     retrieved: RetrievalResult
     crossings: list[SchemaCrossing]
-    licensed: frozenset[str]        # table ids the turn may reach — see below
+    licensed: list[str]             # table ids the turn may reach — see below
 
     delivery: Delivery              # what actually reached the model (§3.6)
     messages: Annotated[list, add_messages]
@@ -1359,6 +1435,29 @@ class ServeState(TypedDict):
 `by_type["table"]`. Budgets shape what is *rendered*; licensing shapes what is
 *reachable*. A Steiner point must be licensed or every multi-hop query refuses
 at ADR 0006's table layer — which is what `connect` exists to prevent.
+
+> **Correction, 2026-08-22 — the code does the opposite, and the consequence is a wrong
+> refusal.** The separation asserted above is not what ships.
+> `serve/nodes/route_retrieve.py::route_node` seeds the set directly from the post-budget
+> rendering: `licensed = retrieved["by_type"]["table"]`, and that `by_type` is assembled in
+> `serve/nodes/pass_two.py` from the hits `apply_budgets(...)` **kept** — the ones the budget
+> dropped never enter it. Only `resolve_node` (reference closure) and `connect_node` (Steiner
+> points) widen the set afterwards; nothing restores a table the budget cut.
+>
+> So budgets do gate what is reachable. A gold table that loses its slot to the retrieval cap
+> is unlicensed, and ADR 0006's table layer then refuses the statement with
+> `r_table_not_licensed` — a *retrieval-budget* outcome wearing a *governance* label. Steiner
+> points are protected only because `connect` adds them after the fact; a budget-cut table that
+> is neither a reference nor a Steiner point is simply gone.
+>
+> Which way this should be fixed — license the pre-budget table set, or keep the coupling and
+> stop claiming otherwise — is a pending decision, tracked in
+> [`docs/open-work.md`](../open-work.md). Nothing in code was changed for this note. The same
+> false claim stood at [ADR 0006](0006-execution-time-governance.md) §8 and carries the same
+> correction there. Note also that `licensed`'s *meaning* was narrowed by
+> [ADR 0012](0012-access-seam-principal-and-authorization.md) §3: it is "what retrieval found
+> this turn" and nothing more, so a licensed table can still be refused
+> `r_table_not_authorized` by the grant (`govern/check.py`, `govern/layers.py`).
 
 ```
 licensed = { table ids from facet hits }
@@ -1453,7 +1552,7 @@ wired up — *"half this repo's defects have that shape."*
 | `guard` | `question` | `guard` | **no** — rules (ADR 0006) |
 | `rewrite` | `question`, `messages` | `rewrite` | yes (small), only with prior turns |
 | `negative_gate` | effective question | `negative` | no |
-| `facet:*` ×5 | effective question | `facets[name]` | 4 of 5, utility model — `facet_schema` searches the raw question and calls nothing (ADR 0011) |
+| `facet_*` ×5 | effective question | `facets[name]` | 4 of 5, utility model — `facet_schema` searches the raw question and calls nothing (ADR 0011) |
 | `route` | `facets` | `schemas`, `retrieved` | no |
 | `resolve` | `retrieved` | `retrieved` | no |
 | `connect` | `retrieved` | `retrieved`, `crossings` | no |
@@ -1498,6 +1597,15 @@ request; a hit costs 10% of an input token, **a write costs 125%**, minimum
 cacheable prefix is 1,024 tokens (**2,048 on Haiku-class models**, which likely
 makes facet calls uncacheable), default TTL 5 minutes.
 [Anthropic prompt caching docs, retrieved 2026-08-02.]
+
+> **What shipped, recorded 2026-08-22: one breakpoint, and only on Bedrock.**
+> `serve/nodes/agent_core.py::_cache_point` duck-types on `model.create_cache_point` — the
+> Converse API is the only provider here that takes an explicit marker — and returns `None` for
+> everything else, so OpenAI and the OpenAI-compatible proxy get no marker at all and rely on
+> whatever automatic prefix caching the gateway does. The string `cache_control` does not appear
+> in `src/` outside a historical citation in `register/citations.py`. The pricing figures above
+> are the vendor's and are not measured here; the proxy has reported no `cache_read_tokens` in
+> any run so far, which is why `usage.model_calls` exists.
 
 **The prefix worth caching is the accumulated tool returns, not the context
 block.** On a turn with `n_tool_calls + 1` model calls, everything before the
@@ -1564,6 +1672,30 @@ column names reached the routing index. `read_body` accepts only ids in
 emits a governance event and returns an identical message whether the asset is
 out of scope or does not exist, so the model cannot probe for existence.
 
+> **Corrected 2026-08-22, in three places.**
+>
+> **1. The `AnalystCorpus` type is enforced on one tool, not every tool.** Only
+> `serve/fetch.py::sample_rows` tests it (`isinstance(corpus, AnalystCorpus)`, raising
+> `GovernanceUsageError` on anything else). `read_body` and `inspect_schema` take
+> `assets: Mapping[str, Any]`, and exclusion is pre-filtered *upstream* by
+> `serve/session.py::_visible` before that mapping is built. That filter is real and its
+> reasoning is worth reading — but it is a caller contract, which is to say the documented
+> convention this sentence says it is not.
+>
+> **2. `licensed` is the post-budget `by_type["table"]`, plus later widenings.**
+> `serve/nodes/route_retrieve.py::route_node` sets it from `retrieved["by_type"]["table"]`,
+> built in `serve/nodes/pass_two.py` from what `apply_budgets(...)` kept; `resolve` and
+> `connect` add to it. See the fuller correction under §3.2 — including the consequence, that a
+> budget-cut gold table refuses as `r_table_not_licensed`.
+>
+> **3. The bounds carry more than these two fields now**
+> ([ADR 0012](0012-access-seam-principal-and-authorization.md) §6, mirroring the note already
+> in ADR 0006 §8). `govern/bounds.py::ToolBounds` declares `licensed`, `readable_assets`,
+> `grant: ResolvedGrant` and `withheld`; `__post_init__` **raises** when a restrictive grant
+> arrives without a `withheld` set, because an optional control argument is a control that will
+> go un-wired. `inspect_schema` and `sample_rows` therefore ask the grant as well as the
+> licence; `read_body` deliberately does not.
+
 This is not optional hardening. Column ids are **derived and therefore
 guessable** (`derive_column_id(table_id, physical_name)`), and D6 exclusion
 happens at corpus-filter time — so an unbounded `read_body` in a pooled
@@ -1571,6 +1703,15 @@ happens at corpus-filter time — so an unbounded `read_body` in a pooled
 richest prose. v1's lesson, stated three lines from this table and not applied
 to its own new tool: **"a tool that grants privilege must have a bound the model
 cannot widen."**
+
+> **"Guessable" is weaker than stated, 2026-08-22 ([ADR 0008](0008-identifiers-end-to-end.md)
+> D1).** `derive_column_id` returns `f"{table_id}.{slug(physical_name)}"`, and
+> `corpus/identity.py::slug` returns the name unchanged **only** when it is already a bare
+> identifier — otherwise it sanitises unsafe characters to `_` and appends a six-hex SHA-256
+> digest of the exact name (`Air Carriers` → `Air_Carriers_66c534`). A digested id is not
+> guessable from the physical name. On the shipped BIRD corpus that is 1 table of 656 and 1
+> column of 5,947, so the argument for bounding `read_body` survives essentially intact — but
+> the bound is the reason, not the id's shape.
 
 `read_body` takes a list to avoid round-trips; **total return capped at ~20k
 tokens** — the threshold was chosen against Deep Agents' filesystem middleware, which
@@ -1850,7 +1991,7 @@ Renamed/removed: `route` (v1 = ingest rail; v2 = schema selection, v1's
 `schema_pick`), `assemble` (v1 spans retrieval + build; v2 = rendering only),
 `refuse_gate` → `negative_gate`, `search_corpus`/`read_notes`/`grep_notes`
 (deleted), `shortlist`/`schema_pick`/`retrieve`/`license` (subsumed). New:
-`guard`, `rewrite`, `facet:*`, `resolve`, `connect`, `read_body`, `stamp`.
+`guard`, `rewrite`, `facet_*`, `resolve`, `connect`, `read_body`, `stamp`.
 
 **The enum diff is a precondition of step 9.** Port the design rules verbatim:
 two orthogonal axes, gradeability excluded as a third thing,
@@ -1892,7 +2033,8 @@ identically. No knob is settable only from an eval CLI (v1 benchmarked a routing
 configuration no deployment could run).
 
 > **The register in force is `register/knobs.py::KNOB_REGISTER`, and it is larger than
-> these two tables.** 57 knobs, of which 47 carry `Role.comparability` and therefore enter
+> these two tables.** 60 knobs (recounted 2026-08-22; it said 57), of which 50 carry
+> `Role.comparability` (it said 47) and therefore enter
 > `comparability_keys()` and the config hash; the rest are `Role.operational` (git sha,
 > worker counts) and `Role.scope` (arms, split, question subset). The two ADR tables name
 > the retrieval and security defaults *decided here*; everything the code has grown since —

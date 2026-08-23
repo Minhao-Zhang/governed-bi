@@ -5,8 +5,9 @@
  *
  * There is no test runner in `ui/` — `scripts/check-api-contract.ts` and
  * `scripts/check-stream-messages.ts` are the whole convention, and this follows it rather than
- * adding a framework. It is not wired to an `npm run` alias, because that would mean editing
- * `package.json`, which this change is not allowed to touch.
+ * adding a framework. It runs as `npm run check:answer-delivery`. Like `check:stream-messages`
+ * it is hermetic: it imports `lib/answer-delivery.ts` and needs no engine, no corpus and no
+ * network, so it is safe to run in CI.
  *
  * What is pinned here is the part that can silently degrade: the `no_sql` split (one token, two
  * materially different turns), the fall-through that keeps an unrecognised terminal visible, and

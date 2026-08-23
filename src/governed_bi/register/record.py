@@ -273,8 +273,10 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
 
     # ── outcome ─────────────────────────────────────────────────────────────
     _f("outcome", Tier.outcome, Absence.never, Stage.stamp,
-       "stamped at the source; classify_row prefers it over re-derivation so a row "
-       "scored under a newer classifier is not re-derived under an older one",
+       "stamped at the source and never re-derived: `stages.classify_outcome` under `stamp` "
+       "is the only derivation, and nothing downstream recomputes it. The second entry point "
+       "that preferred the stamp over re-derivation was deleted (audit section 10), so a row "
+       "whose stamped `outcome` does not parse is a broken row, not a row to guess about",
        gate="no turn classified crashed"),
     _f("terminal_reason", Tier.outcome, Absence.not_applicable, Stage.stamp,
        "WHY a turn declined: missing_join_path / no_schema_matched / "
@@ -312,7 +314,7 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "measurement harness. A turn that executed nothing records null -- every refused turn, "
        "and any capped turn whose attempts were all declined; a capped turn that did execute "
        "carries its last executed statement. The proposal is recoverable from the transcript "
-       "through `serve.messages.last_proposed_sql`, which is where `eval/harness.py` reads it "
+       "through `serve.messages.last_proposed_sql`, which is where `eval/projection.py` reads it "
        "to price an abstention. A consumer that re-runs this field must still gate on "
        "`outcome == 'answered'`, or it reports a decline as a broken statement -- which is "
        "how 14 capped turns looked like an engine defect on 2026-08-04 "

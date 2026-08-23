@@ -14,11 +14,34 @@ measured on. A number is only true of the engine it came from.
 the two treatment identities `corpus_content_hash` and `prompt_set_hash`. `model_calls` is a key
 inside each `usage` record, not a field on the row.
 
-**Arm configuration**: agent Claude-Opus-4.8/high, utility Claude-Sonnet-5/high, embed, top-n 10,
-10 workers, `run_query_attempt_cap=5`.
+**Arm configuration, as `knobs_resolved` records it** — read off all 1,351 rows of
+`runs/eval/proxy_v4_corpus30872d3.jsonl` on 2026-08-22, identical on every row: `chat_model`
+Claude-Opus-4.8, `llm_utility_model` Claude-Sonnet-5, `embedding_model`
+`proxy:text-embedding-3-large`, `llm_provider` `custom:007df842` (the proxy), `route_top_n` 10,
+`run_query_attempt_cap` 5, `context_budget_chars` 80000, **`llm_max_retries` 4**.
+
+**Inferred, not recorded** — stated separately because a header that mixes the two lets an
+unrecorded setting be quoted as a measurement. `llm_reasoning_effort` and `serve_workers` are
+`null` on every row. The "/high" therefore comes from the arm-name string alone
+(`live_Claude-Opus-4.8_high_top10_embed_proxy_analystv4`), there is no field for the utility
+surface's effort at all, and the worker count is recorded nowhere — an earlier version of this
+header said "10 workers" and no artifact supports it. `llm_max_retries` 4 is a comparability
+knob and today's driver default is 8, so a rerun at the default is a different arm.
 
 > The corpus is the treatment identity of every measurement. Every number on this page holds only
 > on corpus `30872d3`. The corpus is in git, and it cannot be regenerated from anything committed.
+
+> **And so is the model.** Every number on this page was measured with Claude-Opus-4.8 as the
+> agent and Claude-Sonnet-5 as the utility surface, through the `proxy` gateway. **That is not
+> what this repo selects today**: `tools/run_datalake_eval.py` defaults to `--model
+> gpt-5.6-luna` and `--provider openai`, and `model/provider.py` hard-codes no chat model at all
+> — `default_embedding_model` is the only model default in it. Nothing on this page has been
+> replicated on the model the driver now picks. The newest full 1,351-question arm on disk is
+> `runs/eval/proxy_v4_reflect_corpus30872d3.jsonl` (2026-08-10); the newest artifact of any kind
+> is a two-row aborted probe, `runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl`
+> (2026-08-12). There is no `runs/index.jsonl` and no `stage_events.jsonl` anywhere in the tree,
+> so the artifacts in `runs/eval/` are the whole record — there is no run ledger to check this
+> page against. Verified 2026-08-22.
 
 The to-do list is [open work](open-work.md). This page is the evidence it cites.
 
@@ -40,9 +63,24 @@ from `refused_by`.
 a wrong prediction — output shape only — then **re-execute and re-fingerprint**. That turns a
 correlation into a countable causal upper bound.
 
-**Method validity check**: 60 recorded predictions, re-executed at random, reproduced the recorded
-`pred_fingerprint` 60 times out of 60. The database state matches the state at run time, so every
-re-execution result below holds.
+**Method validity check** — ⚠ **hand-run, no producer in the tree**: 60 recorded predictions,
+re-executed at random, reproduced the recorded `pred_fingerprint` 60 times out of 60. The database
+state matched the state at run time, so every re-execution result below held *when it was taken*.
+
+> ⚠ **What "hand-run, no producer in the tree" means, and why it is marked at every number that
+> depends on it.** Everything in the third discipline above requires re-executing statements
+> against the evaluation Postgres under a modification. **Nothing in `tools/` or `src/` does
+> that.** `tools/regrade.py` re-executes a prediction and its gold *as they are* and re-grades;
+> it applies no repair, and there is no `RECOVERED` symbol, no repair grid and no oracle pass
+> anywhere in the tree (searched 2026-08-22). So these figures cannot be re-derived, cannot be
+> checked, and cannot be regenerated after a database change — they are a record of a session at
+> a keyboard, not of a producer. They are kept because they are real history and deleting them
+> would lose the finding; they are marked because a reader must not spend them as if they were
+> reproducible. **The populations they were computed over do reproduce** from the artifacts alone,
+> and each is given below, so a maintainer rebuilding the producer knows exactly what to point it
+> at. Rebuilding it means: a script that takes an artifact, applies a declared transform to
+> `generated_sql`, executes it, and re-fingerprints against `gold_fingerprint` — the same shape as
+> `tools/regrade.py` with one transform argument.
 
 ---
 
@@ -175,7 +213,7 @@ EX within this layer is 0.715.
 
 | Feature | Rate when wrong | Rate when right | **Lift** |
 |---|---:|---:|---:|
-| projection width differs (107 wider / 12 narrower) | 0.366 / 0.041 | **0.000** | **∞** |
+| projection width differs (106 wider / 12 narrower) | 0.363 / 0.041 | **0.000** | **∞** |
 | **missing DISTINCT** | 0.068 | 0.007 | **10.0×** |
 | GROUP BY differs | 0.103 | 0.014 | 7.5× |
 | extra join | 0.106 | 0.019 | 5.6× |
@@ -187,24 +225,52 @@ EX within this layer is 0.715.
 | LIMIT differs | 0.781 | 0.898 | 0.87× |
 | shape identical | 0.271 | 0.795 | 0.34× |
 
+**The two populations reproduce; most of the comparison rules were never written down.** Both
+denominators recompute exactly off `runs/eval/proxy_full_opus_high_corpus30872d3.jsonl` (recounted
+2026-08-22): 292 rows with `outcome == answered`, `correct == false` and every gold table
+licensed, against 732 correct rows with full coverage. What no file in the tree states is *how*
+each feature was compared, and the rates are sensitive to that at the third decimal. Recomputing
+them with the obvious sqlglot definitions: the two DISTINCT rows land exactly (missing 20/292 =
+0.068 against 5/732 = 0.007; extra 28/292 = 0.096 against **53**/732 = 0.072), both join rows land
+exactly (extra 31/292 and 14/732; missing 29/292 and 30/732), `LIMIT differs` lands on 0.898 when
+the top-level `LIMIT` is what is compared (657/732), and projection width lands on 106/12 under
+the rule §11 states. **`GROUP BY differs`, `ORDER BY differs`, `aggregate differs` and `subquery
+structure differs` do not land** — the nearest definitions give 0.106–0.140 against 0.017–0.022
+for GROUP BY, 0.072–0.082 against 0.023–0.030 for ORDER BY, and 0.182–0.219 against 0.083–0.086
+for aggregates. Their direction and rough size are the finding; the third decimal is not
+quotable, because the rule that produced it is gone.
+
 Two readings to hold on to:
 
 - **An extra DISTINCT is close to harmless.** Lift 1.32, and **53 correct answers carry one too**.
   A directional "use DISTINCT less" rule would break them. The real signal is a **missing**
   DISTINCT.
-- **Projection width has infinite lift** — no correct answer differs in width. The grader hashes
-  the result set, so a width mismatch is a sufficient condition for failure. As a diagnosis it is
-  a tautology; the real question is whether the query is right once the extra columns come off.
-- The safety `LIMIT 200001` is inert: lift 0.87, and 695 correct answers carry it.
+- **Projection width has infinite lift** — no correct answer differs in width. Recounted
+  2026-08-22: **0 of the 732** controls differ, against 106 wider and 12 narrower among the 292.
+  (One further wrong row, `train_8505`, is excluded rather than counted wider, because the *gold*
+  projects `SELECT *` and §11's rule skips star pairs. Counting it is where this table's earlier
+  `107` came from.) The grader hashes the result set, so a width mismatch is a sufficient
+  condition for failure. As a diagnosis it is a tautology; the real question is whether the query
+  is right once the extra columns come off.
+- The safety `LIMIT 200001` is inert: lift 0.87, and **650 of the 732 correct answers in the
+  control carry it** — 0.888, counted 2026-08-22 as the literal `200001` appearing in
+  `generated_sql`. One denominator, stated: an earlier version of this line said "695", which is
+  the same count taken over **all 782** of the arm's correct rows rather than over the 732 this
+  table's control is built from, and reading it against 732 makes the safety limit look more
+  common than it is.
 
 ### 4.2 Causal repair: fix it, then run it again
+
+⚠ **Hand-run, no producer in the tree** — see the Method note. Every count in this block came
+from re-executing repaired statements against the evaluation Postgres in a session whose script
+was never committed. They cannot be re-derived today.
 
 The repair grid is: drop the safety LIMIT × DISTINCT on or off × keep any k projection columns,
 where k is the gold's width. An oracle picks the best repair, so this is an **upper bound**.
 
 ```
-population (answered, wrong, full coverage) : 292
-  RECOVERED:projection      52
+population (answered, wrong, full coverage) : 292      <- reproduces exactly
+  RECOVERED:projection      52                        <- hand-run
   RECOVERED:distinct        27      (15 by adding, 12 by removing)
   semantic                 213
 
@@ -212,8 +278,17 @@ recoverable by output shape alone : 79/292 = 27.1%
 irreducible semantic errors       : 213/292 = 72.9%
 ```
 
-**With output shape perfect, EX goes 0.579 → 0.637 (+5.85pp).** Projection alone: of the 107
-over-projecting statements, **51 (47.7%) are correct once the extra columns come off**.
+**With output shape perfect, EX goes 0.579 → 0.637 (+5.85pp).** Projection alone: of the
+over-projecting statements the hand-run counted as 107, **51 (47.7%) were correct once the extra
+columns came off**.
+
+What *is* checkable here is the frame around the hand-run, and it holds: the population of 292 and
+the arithmetic reproduce off `runs/eval/proxy_full_opus_high_corpus30872d3.jsonl` (2026-08-22) —
+782 of 1,351 correct is EX 0.5788, 79 more is 0.6373, and 79/1351 is 5.85pp, so 52 + 27 recovered
+is exactly the claimed lift. The over-projecting population is **106** by today's recount (§4.1),
+not 107, so the 51 and the 47.7% are one row out of step with the population they were measured
+over. Both numbers stay as the hand-run wrote them rather than being rescaled to a denominator the
+hand-run did not use.
 
 The typical shape is "ask for one thing, return that thing plus the measure used to rank or filter
 it":
@@ -263,6 +338,12 @@ wrong            103
 exec_error         7
 ```
 
+⚠ **Hand-run, no producer in the tree** — the timings above and this three-way split alike. Both
+required executing a capped turn's statement, which is exactly what the harness declines to do
+(that is the finding), and no committed tool does it either; see the Method note. The **population
+does** reproduce: `runs/eval/proxy_full_opus_high_corpus30872d3.jsonl` has 133 rows with `outcome
+== capped`, and 23 + 103 + 7 accounts for all of them (recounted 2026-08-22).
+
 > **23 capped turns ended on a statement that was the correct answer, and scored zero.**
 
 The mechanism is in `eval/projection.py` (`eval/harness.py` until 2026-08-19): a prediction is
@@ -280,8 +361,18 @@ it. The scoring rule is unchanged.
 The mechanism that produces it is in `serve/tools.py`: every `run_query` spends one attempt,
 **including one the governance layers refuse**, and only an infrastructure exception refunds
 (`AttemptBook.refund`, on the generic `except` — a `GovernanceUsageError` re-raises and a refusal
-is charged). The agent is never told how many attempts remain, so it budgets blind. Both examples
-are run1 turns; v3-fold and v4 answer all four of the questions named in this section correctly:
+is charged).
+
+> **The "budgets blind" half of this item is closed.** Every `run_query` reply has ended with
+> `attempt N of M` since 2026-08-20 — `serve/tools.py::_attempt_budget`, applied on the capped
+> reply, the error reply and the successful reply alike, unconditionally rather than behind an arm.
+> The arms on this page were all measured before that, so their capped turns really were spent
+> blind; a rerun would not be. What that does to the bucket is unmeasured, and it makes the earlier
+> `v4` a different arm from today's `v4` under an identical `prompt_set_hash` — see
+> [measurement](measurement.md#what-prompt_set_hash-does-not-cover).
+
+Both examples are run1 turns; v3-fold and v4 answer all four of the questions named in this
+section correctly:
 
 ```
 train_5116 (address)  gold needs congress ⋈ zip_congress
@@ -296,6 +387,12 @@ train_3510 (authors)  gold needs Journal ⋈ Paper
 
 *(run1, 213 cases.)*
 
+⚠ **Hand-run, no producer in the tree** — see the Method note. Classifying two result sets by how
+they relate means executing both, and nothing committed does that under this taxonomy; the labels
+below exist in no module. The 213 is the residue of §4.2's hand-run grid, so it inherits that
+block's status rather than reproducing on its own. The shares are internally consistent (183/213 =
+85.9%, and the six rows account for 212 of the 213 — one case carries no label).
+
 Execute both the prediction and the gold, then classify by how the result sets relate:
 
 | Difference | n | Share | Meaning |
@@ -307,8 +404,9 @@ Execute both the prediction and the gold, then classify by how the result sets r
 | same row count, different values | 4 | 1.9% | deduplication semantics |
 | prediction empty | 3 | 1.4% | filter too tight, or a wrong literal |
 
-**151 of the 183 disjoint cases are single-row results.** The dominant semantic failure is
-computing one scalar and getting it wrong. It is not a list problem; it is an arithmetic problem.
+**151 of the 183 disjoint cases are single-row results** (hand-run, as above). The dominant
+semantic failure is computing one scalar and getting it wrong. It is not a list problem; it is an
+arithmetic problem.
 
 ### Case studies
 
@@ -326,9 +424,20 @@ The agent did not know that `ORIGIN` stores the airport code directly, so it joi
 table and matched the description with a wildcard. Column values and enumerations are exactly what
 the corpus is supposed to carry.
 
-**Cross-schema crossings — 22 across the lake.** Every pair is a semantically adjacent decoy set;
-see [open work §1.4](open-work.md). The gold schema **was** routed on these turns, so this is
-disambiguation inside the licensed set, not a recall failure.
+**Cross-schema crossings — 22 across the lake, and the 22 cannot be read back.** ⚠ **No
+producer, and no artifact field.** `crossings` is declared on the measurement row, but it appears
+on **none** of the seven `proxy_*` artifacts (grepped 2026-08-22, zero hits in each), so nothing
+on disk holds this count. The definition that survives is [open work
+§1.4](open-work.md)'s — failures whose prediction and gold statement share no schema at all —
+and it does not land on 22 either: reconstructing it by parsing the schema prefixes out of
+`generated_sql` and `gold_sql` over every row whose `correct` is not `true` gives **23 to 29
+across the seven arms** (24 on v3-fold, 28 on v4, 25 on run1), and the gold schema was routed in
+19 to 24 of them — **never in all of them**. So the sentence that used to stand here, that the
+gold schema *was* routed on these turns, is not supported on any arm; open work already says 20 of
+22. Read the claim as directional: **a double-digit number of answers on every arm are written
+against a schema the gold never touches, mostly with the gold schema sitting in the shortlist** —
+disambiguation inside the licensed set rather than a recall failure. The exact count wants
+`crossings` actually written to an artifact before it is quoted again.
 
 **A questionable gold — train_7810 (hockey), 340 rows against 339.** The gold carries a redundant
 `AND NOT spieler_id IS NULL`. This is the category [Pervasive Annotation Errors Break Text-to-SQL
@@ -403,17 +512,33 @@ detector.**
 ### 8.1 What the contrast arm does to that claim
 
 The argument above needs a governance-off arm to be a conclusion, and one is already on disk.
-WrenAI runs the same 1,351 questions on the same database with `refusal_rate: 0.0`. **It never
-abstains.**
+WrenAI runs the same 1,351 questions on the same database and **abstains once**:
+`refusal_rate: 0.0007`, a single turn of 1,351, against v4's 73. For this contrast that is
+governance-off in practice.
+
+Two gradings of that run are on disk, and they disagree by one answer in each cell. **Quote the
+newer one**: `runs/eval/wrenai/preds_full_usage_graded.jsonl` (2026-08-07) grades the
+token-logged re-run, which is the run whose usage totals `runs/eval/wrenai/RESULTS.md` reports, and
+it is the grading `runs/eval/wrenai/preds_full_usage_graded_summary.json` publishes. The older
+`preds_full_graded.jsonl` (2026-08-03) graded the earlier non-logged pass; it is the same generator
+at temperature 0 and it reproduces to within a question, which is the determinism check, not a
+second opinion.
 
 ```
-the 73 questions v4 declines : WrenAI answers all of them, 41 correct = 56.2%
-the 1278 v4 commits to       : WrenAI gets 875 correct       = 68.5%
-ratio 1.22×
+                                        08-07 (quote this)      08-03 (superseded)
+the 73 questions v4 declines            42 correct = 57.5%      41 correct = 56.2%
+the 1278 v4 commits to                 873 correct = 68.3%     875 correct = 68.5%
+ratio                                            1.19x                   1.22x
+refusals over all 1351                     1 (0.0007)              0 (0.0)
+exec_error                                        14                      13
 ```
+
+Recomputed 2026-08-22 by joining both graded artifacts to the 73 abstained and 1,278 committed
+`question_id`s of `runs/eval/proxy_v4_corpus30872d3.jsonl`; the two files carry set-identical ids,
+so nothing is lost in the join.
 
 **If abstention tracked question difficulty, an ungoverned engine should collapse on the declined
-set. It loses twelve points.** So those questions are mostly answerable. What abstention tracks is
+set. It loses eleven points.** So those questions are mostly answerable. What abstention tracks is
 not difficulty but **whether this engine had enough context on this turn** — and that is almost
 entirely retrieval: 19 of 20 refusals end on `r_table_not_licensed`, and 4 of 4 clarifications
 licensed nothing.
@@ -457,8 +582,11 @@ tables anywhere in the tree, discard it and fall back to the old behaviour.
 
 > **Those two resolver defects were fixed 2026-08-12** (open-work recorded the repair; both
 > had zero hits on this arm — all 1,342 statements and all 656 tables were scanned — so the
-> numbers below are unaffected). A later CTE-scope hole of the same family is
-> [binding-scope-and-statement-timeout-2026-08-19](analysis/binding-scope-and-statement-timeout-2026-08-19.md).
+> numbers below are unaffected). A later CTE-scope hole of the same family is written up in
+> `git-history:docs/analysis/binding-scope-and-statement-timeout-2026-08-19.md`, deleted with the
+> rest of `docs/analysis/` by `2396ca2`; read it with
+> `git show 2396ca2^:docs/analysis/binding-scope-and-statement-timeout-2026-08-19.md`. [Open work
+> §3.2a](open-work.md) points at the same write-up the same way.
 
 **Result** (v3-pinned → v3-fold, same prompt):
 
@@ -564,9 +692,11 @@ because measuring it costs a whole second arm.
 
 **Two over-readings to avoid.**
 
-- It does not follow that 0.635 is the honest number. WrenAI's 0.678 contains a shape component
-  too, and that one cannot be measured from outside. Subtracting on this side only makes the
-  comparison less accurate, not more.
+- It does not follow that 0.635 is the honest number. WrenAI's 0.6773 — 915 of 1,351, the
+  `EX_lenient_over_all` of `runs/eval/wrenai/preds_full_usage_graded_summary.json`, 2026-08-07 —
+  contains a shape component too, and that one cannot be measured from outside. Subtracting on
+  this side only makes the comparison less accurate, not more. (The `0.678` this line used to
+  carry is the same field in the superseded 08-03 grading; §8.1 has the pair.)
 - It does not follow that v5 reasons worse. v5's **abstention precision went up** (0.774 → 0.847),
   and neither the abstention rate nor the refusal mix collapsed. The regression is concentrated in
   shape: over-projection 43 → 125, and almost the whole delta sits in that cell. What got worse is

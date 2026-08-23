@@ -103,9 +103,10 @@ def last_proposed_sql(messages: Sequence[Any]) -> str | None:
     declared as "the statement the engine SENT" and two callers execute it.
 
     It lives here, public and named for what it is, because exactly one consumer wants it —
-    ``eval/harness._abstained_fingerprint``, which prices what a refusal cost by running the
-    proposal read-only. Extracting it there from the transcript would be a second implementation
-    of "which tool call was the last run_query", and this repository has paid for that shape.
+    ``eval/projection._abstained_fingerprint`` (``projection.py:58``, called at ``:404``), which
+    prices what a refusal cost by running the proposal read-only. Extracting it there from the
+    transcript would be a second implementation of "which tool call was the last run_query",
+    and this repository has paid for that shape.
     """
     last: str | None = None
     for message in messages:

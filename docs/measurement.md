@@ -18,6 +18,20 @@ boundary a client crosses and an eval question does not. Every stage from
 Findings produced this way live in [failure modes](failure-modes.md); what they
 imply is in [open work](open-work.md).
 
+> **Nothing measured is measured on the defaults this page documents.** Every arm in
+> `runs/eval/` was served by Claude-Opus-4.8 with Claude-Sonnet-5 on the utility surface,
+> through the `proxy` gateway. The flags below default to `--model gpt-5.6-luna` and
+> `--provider openai`, and `model/provider.py` hard-codes no chat model at all —
+> `default_embedding_model` is the only model default in it, so the driver's flag *is* the
+> selection. The newest full 1,351-question arm on disk is
+> `runs/eval/proxy_v4_reflect_corpus30872d3.jsonl` (2026-08-10); the newest artifact of any
+> kind is a two-row aborted probe on today's default model,
+> `runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl` (2026-08-12). Also: there
+> is no `runs/index.jsonl` and no `stage_events.jsonl` anywhere in the tree, so the artifacts
+> themselves are the whole record — a run that is not in `runs/eval/` left no trace to read.
+> Verified 2026-08-22. Reading a figure from [failure modes](failure-modes.md) as this
+> configuration's behaviour is a model substitution nobody measured.
+
 ## Before you run
 
 - A Postgres DSN in `GOVERNED_BI_PG_DSN` or `PG_RENAME_DECOY_DSN`. See
@@ -85,7 +99,7 @@ A full arm takes hours. Expect to interrupt it and resume it.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--arm` | unnamed | The arm this run is, by name, from [`register/arms.toml`](../src/governed_bi/register/arms.toml). The profile's declared `corpus_content_hash` is reconciled against the session's **before the first paid question**, and every row is reconciled again in the report. An unknown name or a malformed file exits 2; a mismatch exits 5. Unnamed runs are allowed and are simply unreconciled — but a comparison against an arm with no profile is `cannot_evaluate`, because the profile is also where the arm's `treatment` is declared |
+| `--arm` | unnamed | The arm this run is, by name, from [`register/arms.toml`](../src/governed_bi/register/arms.toml). **Two identities are reconciled, not one**: the profile's declared `corpus_content_hash` *and* its `question_subset` are both compared against the session's **before the first paid question**, and every row is reconciled again in the report. Both fields are mandatory in `arms.toml` — `register/arm_profiles.py` refuses the file without either — and all four declared arms carry `dataset` + `question_subset`. The second one is there because the pre-flight passed the corpus alone until 2026-08-20, so `--arm v4` against a *different* `--dataset` agreed with the profile on everything compared and was caught at report time, over the finished artifact, after the money was spent. An unknown name or a malformed file exits 2; a mismatch on **either** identity exits 5. Unnamed runs are allowed and are simply unreconciled — but a comparison against an arm with no profile is `cannot_evaluate`, because the profile is also where the arm's `treatment` is declared |
 
 **Models**
 
@@ -118,7 +132,7 @@ A full arm takes hours. Expect to interrupt it and resume it.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--reflect` | off | Turn on the post-hoc reflector (`reflect_enabled`). It writes a verdict and changes no control flow, so EX should not move — that is the arm's own sanity check. Costs one call per turn on `reflect_model` if one is set and on the utility model otherwise, and it is a comparability knob, so a reflected arm and an unreflected one are two arms. Measured once: [risk coverage](analysis/risk-coverage-v4.md) §6 |
+| `--reflect` | off | Turn on the post-hoc reflector (`reflect_enabled`). It writes a verdict and changes no control flow, so EX should not move — that is the arm's own sanity check. Costs one call per turn on `reflect_model` if one is set and on the utility model otherwise, and it is a comparability knob, so a reflected arm and an unreflected one are two arms. Measured once, and the artifact is the part that survives: `runs/eval/proxy_v4_reflect_corpus30872d3.jsonl` (1,351 rows, 2026-08-10, `reflect_enabled: true` in `knobs_resolved`). The write-up of it is `git-history:docs/analysis/risk-coverage-v4.md` §6, deleted with the rest of `docs/analysis/` by `2396ca2`; `git show 2396ca2^:docs/analysis/risk-coverage-v4.md` |
 
 **Policy**
 
@@ -174,7 +188,7 @@ many it is discarding first.
 | `2` | No credential for one of the model surfaces, no database credential, or `--arm` names a profile that cannot be loaded |
 | `3` | The corpus has fatal problems; each one is printed |
 | `4` | `--resume` found no artifact but sibling artifacts exist and `--force-fresh` was not passed; or an artifact already exists at `--out`, `--resume` was not passed, and `--truncate` was not passed; or `--resume` found an artifact whose recorded identity contradicts this run's |
-| `5` | `--arm` was passed and the profile's declared corpus is not the corpus this session loaded. Raised before the first paid question |
+| `5` | `--arm` was passed and the profile's declared identity is not this session's — **either** `corpus_content_hash` (not the corpus this session loaded) **or** `question_subset` (not the question set this session covers). Raised before the first paid question, and the message names which of the two mismatched, because a question-set mismatch reported as a corpus mismatch sends the reader to `--corpus-dir` |
 
 ## Select a prompt variant
 

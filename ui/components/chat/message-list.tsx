@@ -11,7 +11,8 @@ import type { TimelineStep } from "@/lib/steps";
  * The transcript. User turns are right-aligned bubbles; assistant turns render
  * a full <AnswerCard/>. While the agent is running (before its answer lands), a
  * placeholder assistant bubble shows the running progress — the live agent
- * timeline, or a plain spinner before the first event / on the REST fallback.
+ * timeline, or a plain spinner before the first event (and in `business` mode, which is not
+ * shown the trace). There is no REST fallback to spin for — `POST /chat` is deleted.
  * Auto-scrolls to the newest turn as messages arrive or progress advances.
  */
 export function MessageList({

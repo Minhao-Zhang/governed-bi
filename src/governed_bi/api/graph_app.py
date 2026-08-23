@@ -413,21 +413,21 @@ def record_node() -> Any:
             answer = state.get("answer") or {}
             record_dict = answer.get("record") or {}
             if not isinstance(record_dict, Mapping) or not record_dict.get("turn_id"):
-                # A paused turn (``ask_user``) has no record yet. Neither sink gets a row: an
-                # entry with no ``turn_id`` is unaddressable by ``get_turn`` either way.
+                # A paused turn (``ask_user``) has no record yet. Nothing is appended: an
+                # entry with no ``turn_id`` is unaddressable by ``get_turn``.
                 return {}
             entry: TurnEntry = {
-                # Stamped here rather than read back from the log, because ``append_turn`` takes
-                # no ``asked_at`` and derives its own. The two can therefore differ by up to a
-                # second; state's value is the one the audit surface sorts on
-                # (``api/thread_turns``), so it is the one that must exist even when the log
-                # write fails.
+                # This node is the only place ``asked_at`` is set -- nothing else writes a turn
+                # envelope. ``api/thread_turns`` sorts on it (``thread_turns.py:227``,
+                # ``:803``) and ``summarise_turn`` projects it onto the wire
+                # (``thread_turns.py:104``), so a row that omits it sorts on the empty string.
                 "asked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "question": str(state.get("question") or "") or None,
                 "answer_text": surface_answer_text(answer, state),
-                # ``append_turn``'s own fallback, applied here instead of relying on it: the
-                # value below is what the log will store (it prefers a non-None argument), so
-                # resolving it once is what keeps the two rows equal rather than nearly equal.
+                # ``answer["outcome"]`` is absent on some paths and the record carries its
+                # own, so the fallback is resolved here rather than by a reader: this node is
+                # the only writer, and a reader that re-derived it would be a second answer to
+                # what the turn's outcome was.
                 "outcome": (answer.get("outcome") if answer.get("outcome") is not None else record_dict.get("outcome")),
                 "record": dict(record_dict),
             }

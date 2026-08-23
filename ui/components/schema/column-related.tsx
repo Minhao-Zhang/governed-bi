@@ -1,9 +1,13 @@
 "use client";
 
 /**
- * "Click a column → every semantic-layer item that touches it" (handoff §14).
- * Fetches GET /columns/{column_id}/related lazily and renders terms, notes
- * (wire key `rules`), FK in/out, server-resolved joins, and table-grain metrics.
+ * "Click a column → every semantic-layer item that touches it". The route is
+ * `GET /columns/{column_id}/related`, added by ADR 0009 Amendment 1; the response shape is
+ * declared by `columnRelatedResponseSchema` in `lib/schemas.ts`, which is what actually
+ * checks it (`npm run check:api`).
+ *
+ * Fetched lazily, and renders terms, notes (wire key `rules`), FK in/out, server-resolved
+ * joins, and table-grain metrics.
  * All links carry provenance / confidence so draft / low-confidence items flag
  * the same way they do elsewhere. Joins are pre-resolved server-side — we never
  * parse ON strings.
@@ -82,8 +86,9 @@ function metricExpression(summary: string): string {
 }
 
 function RelatedBody({ data }: { data: ColumnRelated }) {
-  // Metric definitions aren't on the column endpoint (table-grain, §14.4), so
-  // enrich each metric with its expression + provenance from the corpus assets.
+  // Metric definitions aren't on the column endpoint — the linkage the engine resolves is
+  // table-grain — so enrich each metric with its expression + provenance from the corpus
+  // assets.
   const { data: metricAssets } = useAssets("metric");
   const metricDefs = new Map((metricAssets ?? []).map((a) => [a.id, a]));
 
@@ -171,7 +176,8 @@ function RelatedBody({ data }: { data: ColumnRelated }) {
               {expr && (
                 <span className="mt-0.5 block font-mono text-xs text-muted-foreground">{expr}</span>
               )}
-              {/* §14.4: metric linkage is table-grain, never column-precise. */}
+              {/* Metric linkage is table-grain, never column-precise: the engine resolves a
+                  metric to its base table, so this cannot claim the column is in it. */}
               <span className="text-[10px] text-muted-foreground">on this table</span>
             </Item>
           );

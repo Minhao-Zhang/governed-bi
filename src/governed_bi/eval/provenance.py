@@ -73,8 +73,10 @@ def _git(repo: Path, *args: str) -> str | None:
     **``encoding="utf-8", errors="replace"`` rather than ``text=True``, and it is not a style
     preference.** ``text=True`` decodes with the *locale* codec, which on Windows is cp1252, and
     cp1252 has no mapping for five bytes UTF-8 uses routinely. ``git diff HEAD`` over a working
-    tree containing one edited non-ASCII file — this repository has Chinese documents in
-    ``docs/analysis/`` — therefore killed the reader thread, left ``proc.stdout`` as ``None``, and
+    tree containing one edited non-ASCII file — in 2026-08 the Chinese documents under
+    ``git-history:docs/analysis/``; nothing in ``docs/`` carries CJK today, and one non-ASCII
+    byte anywhere in a diff is enough — therefore killed the reader thread, left
+    ``proc.stdout`` as ``None``, and
     made this function raise ``AttributeError`` on the next line. Found 2026-08-12 by editing one
     of those documents: four tests went red and, on a real run, ``harness_knobs()`` would have
     died before the first paid question. ``errors="replace"`` because the caller digests this
@@ -370,8 +372,9 @@ def _knob_problem(
     two configurations, and a comparison that coerced them would report drift as agreement.
 
     A key absent from every row **and** from this run is skipped — both sides declined to say.
-    No live run is in that state: ``session._resolved_knobs`` omits no key, so this run always
-    records all 47. Present on one side only is a **warning**: the likeliest cause is an
+    No live run is in that state: ``session._resolved_knobs`` starts from ``knobs.defaults()``
+    and omits no key, so this run always records all 60 the register declares. Present on one
+    side only is a **warning**: the likeliest cause is an
     artifact older than the knob, and refusing on it would strand every artifact on disk. That
     is the branch every artifact on disk hits — six comparability knobs are absent from all
     seven ``proxy_*`` artifacts in ``runs/eval/`` (``abstention_policy_enabled``,
@@ -522,9 +525,12 @@ def arm_startup_refusal(profile: Any, session_identity: Mapping[str, Any]) -> st
     anything: a run labelled ``v4`` against a corpus that is not v4's is a mislabelled artifact,
     and mislabelled artifacts are how a number is quoted against the wrong treatment.
 
-    ``session_identity`` is anything shaped like a measurement row — the driver passes
-    ``{"corpus_content_hash": session.corpus_content_hash}``, which is why ``reconcile`` was
-    written to read a row rather than a session.
+    ``session_identity`` is anything shaped like a measurement row — the driver passes both
+    reconcilable fields, ``{"corpus_content_hash": ..., "question_subset": ...}``
+    (``tools/run_datalake_eval.py``, before the first paid question), which is why ``reconcile``
+    was written to read a row rather than a session. It said ``corpus_content_hash`` alone until
+    2026-08-22; the second field has been mandatory since the profile gained it, as the comment
+    on the refusal text below records.
 
     Extracted from ``main`` for the reason :func:`append_refusal` was: the driver reaches this
     point only after a corpus, a dataset, a database and four models are built, so the branch

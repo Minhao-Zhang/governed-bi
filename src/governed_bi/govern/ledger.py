@@ -48,7 +48,9 @@ EXECUTOR_PATHS: tuple[ExecutorPath, ...] = ("agent", "graded", "sample", "profil
 class AttemptRecord(TypedDict):
     """One statement's trip through the stack (ADR 0006 §12).
 
-    ``verdict_layer`` is the layer's **name** (checkpoint-safe; matches ``trace()``).
+    ``verdict_layer`` is the layer's **name**, not the :class:`~.layers.Layer`, because a
+    checkpoint round-trips through JSON. ``eval/projection.py::_attempt_trace`` re-keys it to
+    ``layer`` for the measurement row, so the two spellings are one field.
     """
 
     verdict_layer: str | None

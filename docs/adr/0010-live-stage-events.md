@@ -140,6 +140,23 @@ consequences for this repo:
   `record` (added in the same function) are node names with no `Stage` member at all, so a client reading
   `updates` keys as steps gets two names §2 says do not exist.
 
+> **Recounted 2026-08-22: both sets are three, and they are not the same three.**
+> A `raise_note` node has been added since (`serve/graph.py:227`), so:
+>
+> - **Unwrapped** — no `wrap_node`, therefore no rail event — is `{stamp, record, raise_note}`.
+>   `graph.py:223` adds `stamp` bare, `:299` adds `record` bare, `:227` adds `raise_note` bare.
+>   Note `fanout` is **not** in this set: `graph.py:234` wraps it, just under a different name
+>   (`wrap_node("facet_schema", …)`), which is the whole reason it appears in the bullet above.
+> - **Node names with no `Stage` member** is `{fanout, record, raise_note}` — `register/stages.py`
+>   (`Stage`, lines 39-109) declares none of the three. So a client reading `updates` keys as steps
+>   gets **three** names §2 says do not exist, not two.
+>
+> `raise_note` is the odd one: it is **unattached** — no edge from `START`, so it never runs during
+> a turn. It exists only so `aupdate_state(as_node="raise_note")` has a node to attribute the write
+> to (`api/raised_write.py:99`, [ADR 0009](0009-browsing-and-filtering-api.md)'s
+> `POST /turns/{turn_id}/raised`). It therefore emits nothing on any stream and needs no `Stage`
+> member; what it needs is to not be mistaken for a step, which is what this note is for.
+
 **M6 — `custom` is the one channel LangGraph strips node identity from, and that single fact
 is why `events.py` exists.** Recorded 2026-08-07, late: this ADR shipped without it, and
 without it the module reads as gratuitous re-derivation of things the framework already says.
@@ -195,9 +212,11 @@ silently never appears:
 * **`serve/tools.py`** — the tools and the governance verdicts. They run inside the nested
   agent, which `wrap_node` never sees. This is a real exception to "one place", taken because
   these are the rows a user most wants and the only ones `updates` mode cannot supply (M5).
-* **`serve/nodes/stamp.py`** — the `final` event. `stamp` is the one node deliberately left
-  unwrapped (`graph.py`: wrapping the recorder turned "the recorder crashed" into a turn with
-  no answer and no reason), so its event has to come from inside it.
+* **`serve/nodes/stamp.py`** — the `final` event. `stamp` is one of the three nodes deliberately
+  left unwrapped — `{stamp, record, raise_note}`, recounted in the M5 note above
+  (`graph.py`: wrapping the recorder turned "the recorder crashed" into a turn with
+  no answer and no reason) — so its event has to come from inside it. It is the only one of the
+  three that emits at all: `record` emits nothing and `raise_note` never runs during a turn.
 
 ### 2. The step vocabulary is `register/stages.py`, and `run_query` is therefore not a step
 
@@ -314,6 +333,21 @@ is what admits them.
 has_live_model` and stays exactly that expression — flipping the first term is what unblocks
 `ask_user`, whose server half was already built.
 
+> **Updated 2026-08-22: `can_stream` is no longer asserted, it is derived — and its false branch
+> means something else now.** `api/routes.py:339` reads `can_stream = served_graph_declared()`,
+> which resolves `langgraph.json`'s `graphs.serve` into `module:factory` and requires the module
+> file to exist. So the value this section reports as `true` is now an observation of whether a
+> served graph is declared at all, and it flips by deleting that declaration rather than by editing
+> the line ([ADR 0009](0009-browsing-and-filtering-api.md) D4's rule, applied to the last flag that
+> had escaped it).
+>
+> The consequence for this ADR's Context: `can_stream: false` no longer selects the REST fallback
+> it describes. `ui/components/chat/chat-panel.tsx:39` renders `<NoTransport/>` — `POST /chat` and
+> `POST /chat/resume` were deleted with [ADR 0014](0014-one-conversation-store.md), so there is no
+> `<RestChat/>` to fall back to. `can_clarify` is unchanged in expression
+> (`api/routes.py:363`) and its first term is now trivially satisfied; the term that can still go
+> false is the model.
+
 ## The wire contract
 
 Envelope — ADR 0007 §5 kept the UI's `GovEvent` and so does this. Validated on `typeof kind
@@ -363,11 +397,11 @@ twice, and a seq-derived id would have shown the same step twice.
 | `agent_core` | rail | start, ok, error | `n_attempts` |
 | `read_body` | tool | start, ok, **blocked**, error | `n_asset_ids`, `error_type` |
 | `inspect_schema` | tool | start, ok, **blocked**, error | `table_id`, `error_type` |
-| `sample_rows` | tool | start, ok, **blocked**, error | `column_id`, `limit`, `error_type` |
-| `check` | tool | start, ok, blocked, error | `attempt`, `layer`, `reason_code` |
+| `sample_rows` | tool | start, ok, **blocked**, error | `column_id`, `limit`, `error_type`; plus `layer`, `reason_code`, `executed` and (when a statement ran) `sql_sha256` on `ok`/`blocked` — it is the one **executor path** among the corpus tools, so `_fetch` folds its verdict into this step's detail rather than emitting `check` + `execute` (`serve/tools.py:178-189`) |
+| `check` | tool | start, ok, blocked, error | `attempt` always; `layer`, `reason_code` on `ok`/`blocked`; `error_type` on `error` (`serve/tools.py:379,389`) |
 | `execute` | tool | ok, error | `sql`, `sql_sha256`, `row_count`, `truncated`, `n_columns` |
 | `cap` | tool | cap | `cap` |
-| `ask_user` | tool | start, ok, declined | `clarification_id` |
+| `ask_user` | tool | start, ok, declined, **refused** | `clarification_id` |
 | `reflect` | rail | ok, error | `verdict` (`answered` / `wrong` / `unsure`, or why it is unmeasured). **One row, not a start/resolve pair, and only on turns where the observer actually judged something** — it ships disabled (`reflect_enabled`), and a disabled observer that still put a start row on every turn would have changed the timeline of every arm measured so far. |
 | `narrate` | rail | start, ok, error | `source` (`narrated` / `none` / `skipped`), `n_chars` |
 | `refuse` | rail | start, refused, error | `terminal_reason` |
@@ -377,6 +411,24 @@ twice, and a seq-derived id would have shown the same step twice.
 `execute` has no `start`: it is emitted from the completed `AttemptRecord`, and a `start` for
 it would be a status derived from intent rather than observation (§3). `cap` is terminal by
 construction and has no `start` for the same reason.
+
+> **Added 2026-08-22 — `ask_user`'s fourth status, and three calls that emit nothing at all.**
+>
+> **`refused` ships.** `serve/tools.py:567-579`: on the resume pass, `authorise_resume(state, config)`
+> raises `ResumeRejected` — the [ADR 0006](0006-execution-time-governance.md) B9 identity gate, closed
+> 2026-08-18 — and `ask_user` emits `status="refused"` with the same `event_id` before re-raising, so
+> the open `start` row closes instead of spinning forever. `detail` stays the `clarification_id`
+> only; deliberately never the answer, which is the thing the refusal is withholding.
+>
+> **And three early returns emit nothing.** All three are `_reply(...)` before the `start` emit, so a
+> tool call can produce **zero** timeline rows: the one-outstanding refusal (`serve/tools.py:471`),
+> the `find_schema_leak` rejection (`:498`) and an unparseable `basis` (`:507`). Each hands the model
+> a `ToolMessage` it can act on, which is why nothing is stranded in the *graph* — but §3's rule
+> ("status is observed, never declared") does not anticipate a step with no status at all, and a
+> client reducing on `event_id` has nothing to reduce. What a reader sees on the timeline is the
+> model calling a tool and the turn continuing, with no row saying it did. Recorded, not resolved:
+> emitting here would mean either a `start`/resolve pair before the latch is taken or a resolve with
+> no `start`, and choosing between those is a wire-contract decision this note does not make.
 
 Three rows in that table are easy to read as mistakes and are not:
 

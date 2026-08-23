@@ -19,7 +19,8 @@
   Amendment 3 — not retrieval (ADR 0005), not the statement's shape (ADR 0006).
 - **Related:** [0006](0006-execution-time-governance.md) is the layer stack this amends;
   [0008](0008-identifiers-end-to-end.md) D1/D2 is why keys fold where they do;
-  [0005](0005-v2-memory-layer-and-faceted-retrieval.md) §8 owns `licensed`.
+  [0005](0005-v2-memory-layer-and-faceted-retrieval.md) §3.2 / §3.5 own `licensed`
+  (corrected 2026-08-22 from "§8", which is ADR 0006's tool-bounds section, not 0005's).
 - **Amends 0006** in three places. §1's `check()` reads authorization from `GovernancePolicy`;
   §8's table "the licensed set" is now two sets with two meanings; §12's Consequences said row-level
   security and per-user identity were out of scope for the "enterprise fork" — the *seam* for both
@@ -297,6 +298,27 @@ set, which is the correction of 2026-08-12**:
 | `sample_rows` | column's table in `licensed`, then the layer stack | plus not withheld, plus authorized, plus not denied **on a folded key**, then the layer stack |
 | `run_query` | the table layer | the table layer, now three rules |
 
+> **Added 2026-08-22: there is a fifth tool, and it is not in the table above.** `serve/tools.py:615`
+> returns `[read_body, inspect_schema, sample_rows, run_query, ask_user]`. This section was written
+> when there were four, and `ask_user` (`serve/tools.py:453`) appears neither here nor in §8.7.
+>
+> `ask_user` **asks the grant nothing.** It builds no statement, so the layer stack never sees it,
+> and it takes no `ToolBounds` — it takes `question`, `basis` and `why`, and its output reaches a
+> human through `GET /clarifications/pending`, which does not call `visible()` either. Its one guard
+> is `serve/schema_term_guard.py::find_schema_leak(question, why)` (`serve/tools.py:499`), which
+> rejects the call and asks the model to rephrase when the text looks like an identifier. That guard
+> is **shape-based, not corpus-based, by its own design statement** — a dotted path, a camelCase run
+> or a snake_case token — so it has no corpus, no principal and no grant, and it cannot distinguish
+> a withheld asset from a disclosed one. It exists for a different reason: `ask_user`'s text goes to
+> a business reader, and the fork it was ported from requires plain language by name.
+>
+> So `ask_user` → `/clarifications/pending` is a **grant-shaped hole narrowed by a heuristic and not
+> closed by one**: a model that names a withheld table in plain prose ("the facilities billing
+> table") trips nothing, and one that names it as `billing.amount` trips a rule that is about
+> register rather than about authorization. Whether the heuristic is *adequate* is a design call and
+> this note does not make it; what is recorded here is that the control in the path is not
+> grant-aware, and that §6's contract does not cover this tool.
+
 **Two sets, and the division of labour between them is the fix.** `grant` answers at *table*
 granularity about a *folded key*. `ToolBounds.withheld` holds the asset ids
 `serve/context.py::withheld_by_grant` computed for this turn — the same set the renderer skipped —
@@ -352,6 +374,21 @@ the failure message.
 > and the Consequences section below simultaneously said the seam covered nothing "in `serve/` or
 > `api/`". Both cannot be true and neither was. §8.4 through §8.6 are what the sentence above now
 > rests on, and §8.7 is the list of what it deliberately excludes.
+>
+> **Corrected 2026-08-22 — both halves of that sentence have drifted. The version to quote now:**
+> *A grant withholds an asset from the model's prompt, from four of the agent's **five** tools, and
+> from every HTTP route that calls `api/visibility.py::visible()` — and it does not withhold
+> anything from `ask_user`, from the two clarification routes, from a database, from a row, from an
+> answer's prose, or from the curation problems `/audit/corpus` reports.*
+>
+> - **Five tools, not four.** `serve/tools.py:615` returns
+>   `[read_body, inspect_schema, sample_rows, run_query, ask_user]`. §6's bounds table covers the
+>   first four; `ask_user` asks the grant nothing — see the §6 note below.
+> - **`visible()`, not "every route".** Its only callers are `api/browse_routes.py:59` and
+>   the four `visible(get_session())` call sites in `api/routes.py`. `GET /clarifications/pending` and
+>   `POST /turns/{turn_id}/raised` (added after 2026-08-12, `api/clarification_routes.py`) call
+>   neither it nor anything else grant-aware, so §8.7's exclusion list was incomplete; it is
+>   extended below.
 
 Four wires landed on 2026-08-12, the day after the rest of this ADR; §8.5 and §8.6 landed the same
 day, after review. What each one is, and what it cost:
@@ -490,6 +527,27 @@ sentence is the root of this section: it is what made a raw-key comparison look 
   nothing about who may read a turn that already ran. The change of store widened the *other*
   leak beside them: `values` and `get_state` on the platform's unauthenticated `/threads` routes
   now carry every prior turn's record rather than the newest one.
+
+**Added 2026-08-22 — two more routes and one more tool belong on this list.** The list above was
+complete for the surface of 2026-08-12; three things have been mounted since.
+
+- **`ask_user` is not bounded by the grant at all.** It is the fifth tool
+  (`serve/tools.py:615`), it is absent from §6's bounds table, and its only guard is the
+  shape-based `find_schema_leak` heuristic. See the note under §6.
+- **`GET /clarifications/pending` is not filtered.** It projects unanswered `ask_user` prompts,
+  and those prompts are prose the model wrote about assets. It does not call `visible()`
+  (`api/visibility.py`'s only callers are `api/browse_routes.py:59` and
+  the four `visible(get_session())` call sites in `api/routes.py`), so it is a read path around a
+  grant.
+- **`POST /turns/{turn_id}/raised` is not filtered either, and it is a *write*.** It appends a
+  bounded reader note onto checkpointed `ServeState.raised`
+  (`api/clarification_routes.py:66` → `api/raised_write.py:99`,
+  `aupdate_state(as_node="raise_note")`). Like the GET beside it, it consults nothing grant-aware,
+  so it is a write path around a grant. `api/clarification_routes.py:9-24` states the same
+  consequence in the code's own words: "under a real `AccessPolicy` (ADR 0012) both verbs must
+  apply the same withholding the tools do". Both routes are also unauthenticated, for the reason
+  `api/routes.py:37-45` records under A7 — that is [ADR 0009](0009-browsing-and-filtering-api.md)'s
+  concern, not this one, but it is what makes the gap reachable. Tracked in `docs/open-work.md`.
 
 ### 9. The adversarial suite
 

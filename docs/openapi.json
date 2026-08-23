@@ -662,7 +662,7 @@
           "audit"
         ],
         "summary": "Audit Turns",
-        "description": "Served turns, newest first, out of LangGraph thread state (ADR 0014).\n\n`thread_id` narrows to one conversation. Rows are collected per thread and then sorted by `asked_at`, because conversations interleave in time and per-thread order is not global order. `limit` counts **turns**, not threads, so the reader pages until the budget is met; it stops scanning at 1 000 threads and the response has no field that says so.",
+        "description": "Served turns, newest first, out of LangGraph thread state (ADR 0014).\n\n`thread_id` narrows to one conversation. Rows are collected per thread and then sorted by `asked_at`, because conversations interleave in time and per-thread order is not global order. `limit` counts **turns**, not threads, so the reader pages until the budget is met; it stops scanning at 1 000 threads and the response has no field that says so.\n\nNothing on this route authenticates (audit A7 open). `api/routes.py` names this route and `/audit/turns/{turn_id}/trace` as exactly what that costs: together they hand every thread's SQL, the full turn records and an absolute path to the conversation store to anything that can reach the port. `thread_id` narrows what one request returns and withholds nothing, because the unnarrowed read is available to the same caller. The absolute store path is this route's `meta.log_dir`.",
         "operationId": "audit_turns_audit_turns_get",
         "parameters": [
           {
@@ -724,7 +724,7 @@
           "audit"
         ],
         "summary": "Audit Trace",
-        "description": "One recorded turn's record, grouped by the stage that owns each field. Found by scanning thread state; an unknown turn_id answers 200 with `found: false`, not 404.",
+        "description": "One recorded turn's record, grouped by the stage that owns each field. Found by scanning thread state; an unknown turn_id answers 200 with `found: false`, not 404.\n\nNothing on this route authenticates (audit A7 open). `api/routes.py` names this route and `/audit/turns` as exactly what that costs: together they hand every thread's SQL, the full turn records and an absolute path to the conversation store to anything that can reach the port. This is the deeper half of the pair -- `/audit/turns` serves a projection of each record plus the store path in `meta.log_dir`, while this route serves one turn's record whole, every recorded field of it.",
         "operationId": "audit_trace_audit_turns__turn_id__trace_get",
         "parameters": [
           {
@@ -884,16 +884,51 @@
         },
         "responses": {
           "200": {
-            "description": "The row that was appended."
+            "description": "An envelope, **not the row at the top level**. The handler returns `{\"ok\": true, \"row\": {...}}` (`api/clarification_routes.py::raise_on_turn`), and this route carried a description-only 200 until 2026-08-22 -- so a client written from the old sentence read `kind` and `report_id` off the envelope and found nothing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RaisedNoteAcceptedResponse"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Turn not found, or the envelope has no thread_id."
+            "description": "Turn not found, or the envelope has no thread_id, or the thread the turn names is not in the store (`ThreadNotFound`). `detail` is a sentence, not a list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
           },
           "409": {
-            "description": "The thread is paused, has an in-flight run, or runs on a runtime whose run table this server cannot read. Filing would consume the live interrupt, or would race a run nobody checked."
+            "description": "The thread is paused, has an in-flight run, or runs on a runtime whose run table this server cannot read. Filing would consume the live interrupt, or would race a run nobody checked. `detail` is `str(ThreadBusy)`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPError"
+                }
+              }
+            }
           },
           "422": {
-            "description": "Unknown kind, or a `note` longer than 4000 characters after stripping. The detail names the limit. Checked before the turn is read, so a rejected note never reaches the writer."
+            "description": "**Two different bodies under one status.** The handler's own rejections -- an unknown `kind`, or a `note` longer than 4000 characters after stripping -- raise `HTTPException` and so answer `HTTPError`, whose `detail` is a string that names the limit; both are checked before the turn is read, so a rejected note never reaches the writer. FastAPI's own request validation (a body that is not a JSON object, or absent) answers `HTTPValidationError`, whose `detail` is a **list**. A client must handle both shapes on this status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HTTPError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
+                }
+              }
+            }
           }
         }
       }
@@ -1495,8 +1530,16 @@
             "title": "Asked At"
           },
           "question": {
-            "type": "string",
-            "title": "Question"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question",
+            "description": "**Nullable, and it was declared non-nullable until 2026-08-22.** On an interrupt row the handler passes `value.get(\"question\")` straight through (`api/thread_turns.py::_open_questions_of`), so a clarification interrupt whose payload carries no `question` key reaches the wire as null. Raised notes always carry a string -- the note, or a fixed sentence naming the kind."
           },
           "why": {
             "anyOf": [
@@ -1532,8 +1575,16 @@
             "title": "Turn Id"
           },
           "thread_id": {
-            "type": "string",
-            "title": "Thread Id"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id",
+            "description": "**Nullable, and it was declared non-nullable until 2026-08-22.** Both walks pass `thread.get(\"thread_id\")` through unchanged (`api/thread_turns.py::_open_questions_of` and `::_open_raised_of`), so a thread row that arrives without the field reaches the wire as null rather than being dropped."
           },
           "source": {
             "type": "string",
@@ -1563,6 +1614,23 @@
             ],
             "title": "Report Id",
             "description": "The `raised` note this row came from; null on interrupt rows. Declared in `meta.columns` because the client keys a note's card on it -- a note has no `clarification_id`."
+          },
+          "interrupt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interrupt Id",
+            "description": "**On the wire but not in `meta.columns`, and absent rather than null on half the rows.** `api/thread_turns.py::_open_questions_of` adds `item.get(\"id\")` to every interrupt row -- so the key is present there, and null if the platform's `Interrupt` carried no id -- while `::_open_raised_of` omits it entirely, because a finished refusal names no resume. So a client must tell absent from null here, which is the opposite of the rule the declared columns follow. Added to this schema on 2026-08-22; the field itself predates it."
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id",
+            "description": "The key of the thread's `interrupts` mapping (`{task_id: [Interrupt, ...]}`), so a JSON object key and never null. **Absent on raised-note rows**, same as `interrupt_id`. Together the two are what a resume would have to name; this surface carries them and does not use them -- answering from here is refused (ADR 0006 B9) until the corpus write path has a provenance gate."
           }
         },
         "type": "object",
@@ -1577,7 +1645,8 @@
           "basis",
           "report_id"
         ],
-        "title": "PendingClarificationRowResponse"
+        "title": "PendingClarificationRowResponse",
+        "description": "One row of the pending queue, unioned from two populations: an unanswered `ask_user` interrupt and an open `raised` note.\n\n**Two rules, and they differ.** The nine columns `PENDING_FIELDS` declares are *always present*, null where they do not apply -- `clarification_id`/`basis` on every note, `report_id` on every interrupt -- because a client forced to tell \"no value\" from \"no such key\" ends up guessing which kind of row it holds. `interrupt_id` and `task_id` are *carried* rather than declared, and are genuinely absent on a note. `source` says which kind of row this is and is the one column never null."
       },
       "PendingClarificationsMetaResponse": {
         "properties": {
@@ -1643,6 +1712,83 @@
           "meta"
         ],
         "title": "PendingClarificationsResponse"
+      },
+      "RaisedRowResponse": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "from_refusal",
+              "wrong_answer"
+            ],
+            "title": "Kind",
+            "description": "Enumerated here, unlike `outcome` on a turn summary, because `serve/raised.py::raised_row` raises on anything outside `RAISED_KINDS` -- the server cannot emit a third value."
+          },
+          "report_id": {
+            "type": "string",
+            "title": "Report Id",
+            "description": "`rpt-{turn_id}-{12hex}`, minted server-side by `serve/raised.py::mint_report_id`. The join key the pending queue and the trace read a note back by."
+          },
+          "turn_id": {
+            "type": "string",
+            "title": "Turn Id",
+            "description": "Echoed from the path, as a string."
+          },
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id",
+            "description": "**Resolved server-side** from the turn envelope's `record.thread_id`, never taken from the caller. Non-empty: an envelope without one is a 404 rather than a row."
+          },
+          "reported_at": {
+            "type": "string",
+            "title": "Reported At",
+            "description": "UTC ISO-8601 to the second, stamped by the server."
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "description": "The caller's note, **stripped** and capped at `RAISED_NOTE_MAX_CHARS` (4000). Empty string when the caller sent nothing or only whitespace -- padding is not a note."
+          },
+          "open": {
+            "type": "boolean",
+            "title": "Open",
+            "description": "Always `true` on a freshly filed row: nothing closes one yet. The pending queue's note walk narrows on this."
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "report_id",
+          "turn_id",
+          "thread_id",
+          "reported_at",
+          "note",
+          "open"
+        ],
+        "title": "RaisedRowResponse",
+        "description": "One `ServeState.raised` row, as appended (`serve/raised.py::raised_row`). Every field is present and none is nullable -- the constructor returns a seven-key literal and mints what the caller did not send."
+      },
+      "RaisedNoteAcceptedResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "title": "Ok",
+            "description": "Always `true`. Every failure on this route is a status code, so this field distinguishes nothing; it is declared because it is on the wire, not because a client should branch on it."
+          },
+          "row": {
+            "$ref": "#/components/schemas/RaisedRowResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "row"
+        ],
+        "title": "RaisedNoteAcceptedResponse",
+        "description": "`POST /turns/{turn_id}/raised`'s 200 body. **A wrapper**, so the row is at `row` and not at the top level."
       },
       "BoundaryEdgeResponse": {
         "properties": {
@@ -1715,6 +1861,27 @@
         "title": "BoundaryEdgeResponse",
         "description": "A curated join leaving the scope for another namespace, as a navigable stub. One stub per (in-scope table, far table), whatever the number of joins between them."
       },
+      "CapabilitiesModelsResponse": {
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/ModelSurfaceResponse"
+          },
+          "utility": {
+            "$ref": "#/components/schemas/ModelSurfaceResponse"
+          },
+          "embedding": {
+            "$ref": "#/components/schemas/EmbeddingSurfaceResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent",
+          "utility",
+          "embedding"
+        ],
+        "title": "CapabilitiesModelsResponse",
+        "description": "The three model surfaces this run resolved, for the settings page (`api/routes.py::models_for`). All three keys are always present -- the function returns a literal three-key mapping -- so a surface with nothing resolved arrives as three nulls rather than as an absent key."
+      },
       "CapabilitiesResponse": {
         "properties": {
           "environment": {
@@ -1762,7 +1929,13 @@
               }
             ],
             "title": "Model",
-            "description": "Resolved agent model id, from knobs_resolved.llm_model."
+            "description": "Resolved agent model id, from `knobs_resolved.chat_model` (`api/routes.py::capabilities_for`). **Not `llm_model`**, which this description named until 2026-08-22 and which `register/knobs.py` has never declared -- the string survives only inside other knobs' description text, so a client written from the old sentence went looking for a knob that does not exist. Same value as `models.agent.id`; kept as a top-level field because the header chip reads it."
+          },
+          "models": {
+            "$ref": "#/components/schemas/CapabilitiesModelsResponse"
+          },
+          "connection": {
+            "$ref": "#/components/schemas/ConnectionResponse"
           },
           "can_scope": {
             "type": "boolean",
@@ -1798,6 +1971,8 @@
           "can_stream",
           "has_live_model",
           "model",
+          "models",
+          "connection",
           "can_scope",
           "can_search",
           "can_clarify",
@@ -1806,6 +1981,132 @@
         ],
         "title": "CapabilitiesResponse",
         "description": "What this server can actually do. The UI blocks on it, so every key is always present."
+      },
+      "ModelSurfaceResponse": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "The model id, read out of `knobs_resolved` rather than off the live client, so the settings page shows the identity a run is actually recorded under. `agent.id` is the `chat_model` knob and `utility.id` is `llm_utility_model`. Null when nothing resolved one -- an offline profile with no model wired."
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider",
+            "description": "Which gateway served the id (`llm_provider` / `llm_utility_provider`). Carried beside the id and never folded into it: the same id behind two gateways is two treatments. Both knobs default to `openai`, so this is null only when `knobs_resolved` carries no entry at all."
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effort",
+            "description": "Reasoning effort in the engine's vocabulary. `agent.effort` is the `llm_reasoning_effort` knob; `utility.effort` is **observed off the live client** by `model/provider.py::reasoning_effort_of`, because the register declares no utility-effort knob. Null means either no live utility client or a client that sends no reasoning configuration -- a real state, not a failure to look."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "effort"
+        ],
+        "title": "ModelSurfaceResponse",
+        "description": "One chat surface's resolved identity (`api/routes.py::models_for`). Every field is present and every field is nullable."
+      },
+      "EmbeddingSurfaceResponse": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "The `embedding_model` knob, **provider-qualified** (`bedrock:amazon.titan-embed-text-v2:0`) and reported verbatim. Do not split it on `:` -- the qualifier is part of the vector cache-key identity (`retrieve.semantic.cache_key` is `model|dimensions|text`) and the id itself can contain a colon, so parsing it corrupts the one field that keeps two gateways' vectors apart."
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider",
+            "description": "The `embedding_provider` knob, carried beside the qualified id rather than parsed out of it."
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimensions",
+            "description": "The `embedding_dimensions` knob -- the served width, probed off the embedder (`model/embedder.py` records `int(embedder.dimensions)`) rather than declared. Null when no embedder resolved."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "dimensions"
+        ],
+        "title": "EmbeddingSurfaceResponse",
+        "description": "The embedding surface (`api/routes.py::models_for`). Same three-key shape as a chat surface, with `dimensions` where a chat surface carries `effort`."
+      },
+      "ConnectionResponse": {
+        "properties": {
+          "dialect": {
+            "type": "string",
+            "title": "Dialect",
+            "description": "Always present: every connector declares one, and the handler falls back to `postgres` for a partial session."
+          },
+          "host": {
+            "type": "string",
+            "title": "Host",
+            "description": "**Absent, not null**, when the connector's endpoint does not carry one -- SQLite is a file, and Postgres omits any DSN field it could not parse. `datasource/postgres.py::endpoint` stringifies every value it emits."
+          },
+          "port": {
+            "type": "string",
+            "title": "Port",
+            "description": "A **string**, not a number: `datasource/postgres.py::endpoint` emits `str(value)` for host, port and database alike. Absent for SQLite and for an unparseable DSN."
+          },
+          "database": {
+            "type": "string",
+            "title": "Database",
+            "description": "The database name, or for SQLite the file name rather than the absolute path. Absent when the endpoint does not carry one."
+          }
+        },
+        "type": "object",
+        "required": [
+          "dialect"
+        ],
+        "title": "ConnectionResponse",
+        "description": "Which warehouse this engine is pointed at (`api/routes.py::connection_for`), **credential-free by construction**: the redaction lives in the connector that owns the DSN (`datasource/postgres.py::endpoint`), which never parses `user` or `password` out at all, so there is no field here for a caller to leak. Only `dialect` is guaranteed -- the other three are whatever `connector.endpoint` returned, and an unparseable DSN returns an empty mapping."
       },
       "ColumnIdentityResponse": {
         "properties": {

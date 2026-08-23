@@ -12,10 +12,11 @@ describe what happened, not what was supposed to happen.** Every v1 number this 
 retired died of the same thing — a field that reported the configuration rather than the
 observation, so a broken run and a clean run produced identical artifacts.
 
-**Every `file.py:NN` coordinate in the "Fixture shape" paragraphs below is as of 2026-08-03
-and has since rotted** — checked 2026-08-12: of the thirty-odd of them only `conftest.py:27`
-and `agent_core.py:39` still land on the line they name. They are kept because they record
-where the reviewer was looking, not as directions. Read the file name; ignore the number.
+**The prose below names a file and a symbol, never a line number.** It used to carry a
+`file.py:NN` coordinate for every fixture; by 2026-08-12 all but two of the thirty-odd had
+rotted, and the warning that they had rotted outlived several rounds of the numbers themselves
+— including four coordinates that had leaked into assertion messages, where a developer reads
+them at failure time with no header in view. A name a reader can grep for does not rot that way.
 """
 
 from __future__ import annotations
@@ -46,7 +47,9 @@ from turn_contract_fixtures import (  # noqa: E402
 
 from contracts import needs  # noqa: E402
 
-#: Every test here is a **specification with no body yet**, so each is a strict xfail.
+#: Most of this file began as a **specification with no body**, each a strict xfail. One
+#: marker is left today — the ``@CONVICTS`` on the last test — and ``UNWRITTEN`` is declared
+#: below with no current user, kept as the vocabulary the next specification written here uses.
 #:
 #: Two reasons for the marker rather than a red suite or a deletion. A red suite gets
 #: ignored, and this repository already has evidence of what happens next. And
@@ -61,13 +64,18 @@ from contracts import needs  # noqa: E402
 #: the docstring specifies, then deleting that one marker.
 #:
 #: The marker is **per test**, deliberately, and this is not a style choice. Held at module
-#: level it was one line whose deletion disarmed all ten tripwires simultaneously -- and
+#: level it is one line whose deletion disarms every tripwire in the file at once -- and
 #: deleting it is what a fix *forces*, because the moment a real fix lands, ``strict=True``
 #: turns the newly-passing test red and the module-level marker is the only thing in reach.
 #: A tripwire whose removal is the documented next step is not a tripwire.
+#:
+#: Nothing enforces any of this. ``tools/check_declared_is_consumed.py`` does not scan
+#: ``tests/``, which is how the count above went from ten markers to one without a gate
+#: saying so, and how ``UNWRITTEN`` came to be declared here and never applied.
 pytestmark = [needs("F")]
 
-#: A specification with no body. The assertion has not been written yet.
+#: A specification with no body. The assertion has not been written yet. Unapplied at
+#: present: ``@CONVICTS`` below is the only marker this file uses.
 UNWRITTEN = pytest.mark.xfail(strict=True, reason="contract specified, body not yet written")
 
 #: A body that has been written and **convicts a live defect**. Delete this marker in the
@@ -109,22 +117,23 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered(
     Build a turn where the model emits SQL the corpus does not license. Assert the
     outcome is a refusal or a decline, and that no attempt in the ledger says `passed`.
 
-    **Fixture shape.** `compile_graph()` (`serve/graph.py:156`), then
+    **Fixture shape.** `compile_graph()` (`serve/graph.py`), then
     `.invoke(turn, {"configurable": conf})`.
 
-    * `turn` — copy `_base_turn()` from `test_pass_two_and_context.py:54`. Its 14 keys are
+    * `turn` — copy `_base_turn()` from `test_pass_two_and_context.py`. Its 15 keys are
       not decoration: `missing_required` requires 15 fields and `stamp` supplies only 7,
       so a thin turn fails on absence rather than on the property under test.
-    * `conf["policy"]` — mandatory. `nodes/guard.py:21` subscripts it unguarded.
+    * `conf["policy"]` — mandatory. `nodes/guard.py` subscripts it unguarded.
     * `conf["agent_model"]` — `ScriptedChatModel(responses=[...])`
-      (`serve/scripted_model.py:14`). Copy the two-message `run_query` construction from
-      `eval/arms.py:89-101` verbatim; put an unlicensed table in `args["sql"]`.
-    * `conf["corpus"]` — a **real** `for_analyst([...])` (`corpus/analyst.py:78`) that does
-      not license that table, plus `conf["assets_by_id"]` (`tools.py:51`). Omitting the
-      corpus makes `tools.py:80` substitute an empty one, so the refusal would come from
+      (`serve/scripted_model.py`). Copy the two-message `run_query` construction from
+      `eval/arms.py` verbatim; put an unlicensed table in `args["sql"]`.
+    * `conf["corpus"]` — a **real** `for_analyst([...])` (`corpus/analyst.py`) that does
+      not license that table, plus `conf["assets_by_id"]` (`tools.py`'s `resolve_assets`).
+      Omitting the corpus makes `resolve_assets` substitute an empty one, so the refusal
+      would come from
       F-5c's defect and not from governance.
     * `conf["connector"]` — a real `PostgresConnector(dsn)`; reuse the `dsn` fixture and
-      its skip from `tests/datasource/test_seed_contract.py:71-104`. **This is the reason
+      its skip from `tests/datasource/test_seed_contract.py`. **This is the reason
       the test had to wait for parcel C.** `connector=None` raises
       `GovernanceUsageError` (2026-08-10 audit, C2), so the turn crashes rather than
       refusing for a reason that has nothing to do with licensing — either way it is not
@@ -161,8 +170,13 @@ def test_a_turn_whose_every_sql_attempt_was_refused_is_not_answered(
         "connector": probe.connector,
         "agent_model": _scripted_run_query(unlicensed_sql, calls=run_query_calls),
     }
-    assert isinstance(conf["corpus"], AnalystCorpus), "a real for_analyst() corpus, not tools.py:80's empty one"
-    assert conf["connector"] is not None, "a real connector, not tools.py:343's r_not_a_read refusal"
+    assert isinstance(conf["corpus"], AnalystCorpus), (
+        "a real for_analyst() corpus, not the empty one tools.py's resolve_assets substitutes"
+    )
+    assert conf["connector"] is not None, (
+        "a real connector: with None, serve/fetch.py's run_query raises GovernanceUsageError "
+        "rather than refusing, so the turn crashes instead of testing licensing"
+    )
     turn = _base_turn(question="customers", db_id=probe.schema, turn_id=f"turn-{case}")
     out = compile_graph().invoke(turn, {"configurable": conf})
     answer, record = out["answer"], out["answer"]["record"]
@@ -203,12 +217,13 @@ def test_execution_terminal_agrees_with_the_attempts_it_carries(
     lets a fix satisfy the invariant by hard-coding whichever terminal that turn produces.
 
     The property: `terminal == "answered"` implies some attempt has `passed is True`. Read
-    the vocabulary from `govern/ledger.py:97` rather than restating it — plain strings,
-    `"answered" | "graded" | "refused" | "capped" | "no_sql"`.
+    the vocabulary from `govern/ledger.py`'s `ExecutionRecord` rather than restating it — plain
+    strings, `"answered" | "graded" | "refused" | "capped" | "no_sql" | "crashed"`.
 
-    Two of those five are declared and never written by `serve/`: `"graded"` belongs to the
-    eval path, and nothing reaches `"capped"` at all (see the cap note above). Do **not**
-    assert that all five are reachable; assert that whichever one appears agrees with the
+    One of those six is declared and never written by `serve/`: `"graded"` belongs to the
+    graded-delivery path. `"capped"` is reachable now — `serve/ledger.py`'s
+    `execution_from_attempts` tests the cap before the pass (see the cap note above). Do **not**
+    assert that every member is reachable; assert that whichever one appears agrees with the
     attempts beside it.
     """
     from typing import get_args, get_type_hints
@@ -285,17 +300,17 @@ def test_a_facet_with_no_index_reports_its_channel_as_failed() -> None:
     from governed_bi.serve.nodes.facets import facet_entity_node
 
     # Fixture shape: `{"question": <non-empty str>}` is the whole minimum state --
-    # `facets.py:50` does `str(state["question"])` and every other read is `.get`-guarded.
-    # An empty `configurable` leaves `index=None` (`facets.py:83`), which is the condition
+    # `facets.py` does `str(state["question"])` and every other read is `.get`-guarded.
+    # An empty `configurable` leaves `index=None` (`facets.py`), which is the condition
     # under test: nothing could have consulted anything.
     #
     # Note the key. The node returns `{"facets": {stage: {..., "channels": {...}}}}`
-    # (`facets.py:173`); `facet_channels` is a *record* field that `stamp.py:153` projects
+    # (`facets.py`); `facet_channels` is a *record* field that `stamp.py`'s `_facet_channels` projects
     # from `state["facets"][key]["channels"]`. An earlier draft of this test read
     # `facet_channels` off the node and so convicted on the wrong thing -- if you assert
     # this end-to-end instead, read `answer["record"]["facet_channels"]`.
     #
-    # `FACET_CHANNELS[Stage.facet_entity]` is `{lexical, semantic}` (facets.py:114), so
+    # `FACET_CHANNELS[Stage.facet_entity]` is `{lexical, semantic}` (`facets.py`), so
     # `expected_channel_state` is `ran` and `_channels_for` reports it verbatim.
     out = asyncio.run(facet_entity_node({"question": "how many customers"}, {"configurable": {}}))
     channels = out.get("facets", {}).get(Stage.facet_entity.value, {}).get("channels", {})
@@ -394,13 +409,15 @@ def test_an_absent_guard_is_not_recorded_as_error_failed_open() -> None:
     not happen. L-R1 with the sign flipped: absence became a specific, alarming value
     rather than zero.
 
-    **Fixture shape.** No graph. `stamp` (`serve/nodes/stamp.py:172`) takes state only —
-    `def stamp(state)`, no `config`, because `wrap.py:42` invokes it state-only. So call it
+    **Fixture shape.** No graph. `stamp` (`serve/nodes/stamp.py`) takes state only —
+    `def stamp(state)`, no `config`, and `wrap.py` forwards `config` only to a node that
+    declares the parameter, so this one is invoked state-only. So call it
     directly with a `_base_turn()`-shaped mapping that **omits** `guard`, and read
     `answer["record"]["guard"]`.
 
-    The substitution is `stamp.py:193-195`, three lines sitting under a comment that states
-    the invariant they break (`# Absence.never: guard must be a real value on every path`).
+    The substitution was three lines in `stamp.py`, sitting under a comment that stated the
+    invariant they broke. They are gone: the comment at that spot now says an absent `guard`
+    stays absent and `missing_required` names it.
 
     Either outcome is acceptable and the test must accept both: `stamp` raises, or the
     record's `guard` stays absent and `missing_required(record)` names `"guard"`. What must
@@ -416,7 +433,7 @@ def test_an_absent_guard_is_not_recorded_as_error_failed_open() -> None:
     state = _base_turn(turn_id="turn-no-guard")
     assert "guard" not in state, "precondition: no guard ran, so the state carries none"
     assert "config" not in inspect.signature(stamp_module.stamp).parameters, (
-        "precondition: stamp takes state only (wrap.py:42 invokes it state-only)"
+        "precondition: stamp takes state only, so serve/wrap.py invokes it without config"
     )
 
     try:
@@ -447,22 +464,23 @@ def test_a_real_model_call_does_not_record_zero_tokens() -> None:
     `Measured.unmeasured(why)`; `register/quantity.py` exists for this.
 
     **Fixture shape.** No graph — call `agent_core_node(state, config)`
-    (`serve/nodes/agent_core.py:27`) with `conf["agent_model"]` set to a
+    (`serve/nodes/agent_core.py`) with `conf["agent_model"]` set to a
     `ScriptedChatModel`, and read `out["usage"][0]`.
 
-    The literal is `agent_core.py:70-77`, and note *which* branch it is in: that is the
-    **real-model** path, not `_stub`. The `model` field beside it is computed
+    The literal sat in `agent_core.py`, and note *which* branch it was in: the **real-model**
+    path, not `_stub`. The row builder has since moved to `serve/usage.py`, whose
+    `NO_TOKEN_USAGE` names why a count is missing. The `model` field beside it is computed
     (`getattr(model, "_llm_type", None)`, so `"scripted"`), which is what makes the two
     zeros beside it read as measurements.
 
-    The state needs `turn_index`, because `_usage_for_turn` (`stamp.py:16-20`) keeps only
+    The state needs `turn_index`, because `_usage_for_turn` (`stamp.py`) keeps only
     rows whose `turn_index` matches and a mismatched row vanishes before any assertion.
 
     Assert `input_tokens` is not the integer `0`. It should be a `Measured` in the
     unmeasured state, or absent — `ScriptedChatModel` reports no usage, so unmeasured is
     the truthful answer here and a real provider's count is the other case.
 
-    Expect the fix to reach `state.py:92`'s `UsageRecord`, which types both token fields
+    Expect the fix to reach `state.py`'s `UsageRecord`, which types both token fields
     `NotRequired[int]`. A `Measured` cannot be stored under that annotation, so a fix that
     leaves the TypedDict alone is a fix that lied to the type checker.
     """
@@ -484,7 +502,7 @@ def test_a_real_model_call_does_not_record_zero_tokens() -> None:
     assert usage, "precondition: the turn recorded a usage row at all"
     row = usage[0]
     assert row.get("turn_index") == state["turn_index"], (
-        "precondition: turn_index matches, or _usage_for_turn (stamp.py:16-20) drops the row"
+        "precondition: turn_index matches, or stamp.py's _usage_for_turn drops the row"
     )
     assert row.get("model") == "scripted", (
         f"precondition: the real-model branch, not _stub (model='stub'); got {row.get('model')!r}"
@@ -612,13 +630,13 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path(
     **Fixture shape.** F-1's config plus a real index, and the preconditions asserted
     *first*, in the test body, not left to a reviewer:
 
-    * `conf["agent_model"] is not None` — otherwise `agent_core.py:39` takes `_stub`.
+    * `conf["agent_model"] is not None` — otherwise `agent_core_node` takes `_stub`.
     * `conf["index"] is not None` — `build_two_schema_corpus()` at
-      `tests/serve/conftest.py:27` returns `(UnifiedIndex, assets_by_id)` with a real BM25
+      `tests/serve/conftest.py` returns `(UnifiedIndex, assets_by_id)` with a real BM25
       over 20 assets. That is the only working asset→`IndexEntry` mapping in the repo;
       there is no helper in `src/`.
     * `conf["connector"] is not None`.
-    * `"facet_route_hits" not in turn` — `harness.py:57-59` injects route hits when the
+    * `"facet_route_hits" not in turn` — `eval/harness.py` injects route hits when the
       index is missing, which bypasses retrieval entirely. The predecessor test did this.
     * `STUB_ANSWER not in answer["text"]`.
 
@@ -662,12 +680,12 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path(
         }
         # Preconditions, asserted here rather than left to a reviewer: the predecessor supplied only
         # thread_id and policy, so it ran with no model, index or connector and injected route hits.
-        assert conf["agent_model"] is not None, f"{name}: with no model agent_core.py:39 stubs"
+        assert conf["agent_model"] is not None, f"{name}: with no model agent_core_node stubs"
         assert conf["index"] is not None, f"{name}: a real index, not injected route hits"
         assert conf["connector"] is not None, f"{name}: a real connector"
         turn = _base_turn(question=question, db_id=probe.schema, turn_id=f"turn-req-{name}")
         assert "facet_route_hits" not in turn, (
-            f"{name}: harness.py:57-59 injects route hits with no index, bypassing retrieval entirely"
+            f"{name}: eval/harness.py injects route hits with no index, bypassing retrieval entirely"
         )
         out = compile_graph().invoke(turn, {"configurable": conf})
         answer = out["answer"]
@@ -703,13 +721,13 @@ def test_the_stub_path_is_unreachable_when_a_model_is_configured(
     reason attached — which is stronger than asserting on the output string, since a future
     stub with different text would slip past that.
 
-    The stub must stay **reachable on purpose**: `eval/arms.py:54` pops `agent_model` to
+    The stub must stay **reachable on purpose**: `eval/arms.py` pops `agent_model` to
     build the no-model arm, so this test is not asking for `_stub`'s deletion. It asks that
     the stub cannot be reached *silently* — reached while a model was configured, or reached
     and then recorded as an ordinary answer.
 
     So add the second half: a stub-path record must be distinguishable from a real one
-    without string-matching `STUB_ANSWER`. Today it is not — `agent_core.py:94` returns
+    without string-matching `STUB_ANSWER`. Today it is not — `agent_core.py`'s `_stub` returns
     `path_kind: "answered"` and a `usage` row whose only tell is `model: "stub"`, and no
     gate reads that. Assert that some field a gate already reads separates them.
     """
@@ -748,7 +766,7 @@ def test_the_stub_path_is_unreachable_when_a_model_is_configured(
     )
     monkeypatch.undo()
 
-    # Half two: the stub stays reachable **on purpose** (eval/arms.py:54 pops agent_model for the
+    # Half two: the stub stays reachable **on purpose** (eval/arms.py pops agent_model for the
     # no-model arm), so its record must be distinguishable by a field some gate already reads.
     stub = compile_graph().invoke(
         _base_turn(question=question, db_id="ops_b", turn_id="turn-stub"),

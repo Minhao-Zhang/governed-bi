@@ -1,8 +1,9 @@
 """Run N Cursor CLI agents in parallel, each in its own git worktree.
 
-Headless ``-p`` needs ``--trust``. ``-w`` isolates trees (soft boundary under
-``--yolo``). Worktree names carry a per-run token; :func:`_verify_base` fails
-agents not on the expected commit; :func:`_dirty_paths` refuses dirty trees
+Headless ``-p`` needs ``--trust``. ``-w`` isolates trees (a soft boundary: under
+``--force`` the agent can write and run shell anywhere, so the worktree bounds blast
+radius by convention, not by sandbox). Worktree names carry a per-run token;
+:func:`_verify_base` fails agents not on the expected commit; :func:`_dirty_paths` refuses dirty trees
 unless ``--allow-dirty``. Delegate only machine-checkable work; run gates after.
 """
 

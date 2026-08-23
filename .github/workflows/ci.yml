@@ -173,6 +173,14 @@ jobs:
       - name: Build
         run: npm run build
 
+      # A closure gate, not a reproduction: every `CATALOG_GLIMPSE_REFUSALS` member must have a
+      # `REFUSED_BY_SENTENCE` entry, or a refusal renders as a bare catalog with no sentence. It
+      # imports `lib/answer-delivery.ts` and nothing else — no engine, no corpus, no network — so
+      # it belongs here. Unwired until 2026-08-22 only because the change that added the script
+      # was not allowed to touch `package.json`, which left the check with no runner at all.
+      - name: Answer-delivery closure
+        run: npm run check:answer-delivery
+
       # `npm run check:api` and `npm run check:stream-messages` are deliberately NOT here.
       # `check:api` needs a live engine and a loaded corpus (ADR 0009 says so in the section that
       # introduces it); `check:stream-messages` is pure and could run, but it is a red/green

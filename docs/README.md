@@ -60,22 +60,7 @@ Git history is the record of what changed.
 |---|---|
 | [Measurement](measurement.md) | how to produce a finding: the eval driver's flags, the prompt registry, the measurement row schema, and the quotability gates |
 | [Failure modes](failure-modes.md) | how the engine answers wrongly, per failure class, with the causal repair experiments — arm `v4`, engine `3c0079a`, corpus `30872d3` |
-| [Risk coverage on `v4`](analysis/risk-coverage-v4.md) | whether a better operating point exists at all: out-of-fold precision on delivered answers under a coverage constraint, with bootstrapped intervals — arm `v4`, corpus `30872d3`, replicated on `v3-fold` |
-| [Selective delivery on `v4`](analysis/selective-delivery-v4.md) | whether any signal the artifact records beats the engine's own operating point: risk-coverage curves, AURC against an oracle and a no-ranking reference, and what each trade costs in right answers — arm `v4`, corpus `30872d3`, replicated across all seven artifacts in `runs/eval/` |
-| [Declared machinery with no consumer](analysis/declared-not-consumed.md) | a sweep for the knobs, record fields, state channels and env vars that something declares and nothing reads — six artifacts, 1,351 rows each, corpus `30872d3` |
-| [Which questions the published arms ran](analysis/dataset-identity-2026-08-20.md) | the question set behind every published *n*=1,351, and the pre-flight that now refuses a mismatch — closed for the three shipped arms |
 | [Open work](open-work.md) | the unfinished items those findings imply, re-verified against the current tree |
-
-## Audits and reviews
-
-Not measurements — readings of the tree. Each names the commit it was taken at, and **line numbers
-in all of them have drifted**: resolve a citation by symbol.
-
-| Doc | What it covers |
-|---|---|
-| [Decisions taken working the 2026-08-10 audit](analysis/decisions-2026-08-10.md) | every call made without asking, with the reasoning and what would reverse it, so a reviewer can disagree with one without re-deriving it |
-| [A false ambiguity, and the 25-minute turn](analysis/binding-scope-and-statement-timeout-2026-08-19.md) | CTE-scope false `r_ambiguous_reference` plus `run_query` having no statement timeout, at tree `031b955` |
-| [Adopting from the downstream fork 2026-08-19](analysis/adopting-the-downstream-fork-2026-08-19.md) | what was taken from the `governed-bi-utkuai` fork, what was rebuilt because its designs predate ADR 0014, and what was declined — with the measurement showing why a clarification ledger must not live under `corpus_root` |
 
 ## Frontend, and external data
 

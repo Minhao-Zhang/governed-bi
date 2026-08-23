@@ -16,6 +16,13 @@
   Amends
   [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §1.2/§2.8.2 and
   [ADR 0006](0006-execution-time-governance.md) §3/§4.
+  **Three decisions the two sentences above neither claim nor disclaim, audited 2026-08-22** —
+  each now carries a dated status note at its own heading: **D3** is in no phase and is not built,
+  and the conformance test its premise rested on has been deleted; **D10** is half built — the
+  prompt registry ships, the `default_schema` rule does not; and **D4**'s withdrawal of ADR 0005
+  §2.8.2 reached 0005 on 2026-08-22 but has never reached `retrieve/structure.py`. D7 is built
+  for its three comparability knobs and for `spellings`, and not for `default_schema`, which D7
+  itself names.
 - **Deciders:** project owner + design session (2026-08-04)
 - **Scope:** every string in this system that names a schema, a table or a column —
   in the corpus, on the filesystem, in the retrieval structure, in the governance
@@ -357,6 +364,37 @@ two implementations of one convention held together by a conformance test —
 collapse into one function, and the conformance test becomes unnecessary rather
 than load-bearing.
 
+> **Status of D3, recorded 2026-08-22: not built, in no phase, and the safety net it planned to
+> retire is gone anyway.** D3 is absent from all three phases below — Phase 0 is P1/P5.3/D7, Phase 1
+> is D1/D4/D9, Phase 2 is D5/D6/D8 — so the ADR's Status line has never either claimed or disclaimed
+> it. **It belongs to no phase**; recording that here rather than assigning one, because the premise
+> below changed the shape of the work.
+>
+> What is actually in the tree:
+>
+> - **Step 3 does not compare exact keys.** `govern/check.py:92-100` normalises *both* sides —
+>   `licensed` through `normalise_table_key`, and `excluded_columns` / `suspect_columns` /
+>   `allowed_columns` through `normalise_column_key` — before any comparison. Those functions route
+>   through `table_key` / `column_key` (`govern/identifiers.py:74,79`), which fold. So the equality
+>   at the check is fold-based, which is the relation D3 exists to remove from that position.
+> - **Step 2 is not the only caller of `fold()`.** `govern/binding.py` calls it at lines
+>   140, 145, 150, 213, 217, 228 and 239, and `govern/scopes.py` and `govern/identifiers.py`'s own
+>   key builders call it too.
+> - **The two key functions still exist separately** — `corpus/analyst.py:26` and
+>   `govern/identifiers.py:77`. They have not collapsed into one.
+> - **And the conformance test is gone.** `column_key_for` has zero references in `tests/` or
+>   `tools/`; its only callers are two lines in its own module (`corpus/analyst.py:90,94`).
+>   `corpus/analyst.py:29-38` says so in the code, having stopped claiming otherwise on 2026-08-12,
+>   and names a divergence this decision does not: the two functions **fold the table part
+>   differently** — `column_key_for` takes the last dot-segment of `parent_table` verbatim while
+>   `identifiers.column_key` runs it through `slug`. They agree only while `parent_table` holds an
+>   asset id, which already carries the slug (D4), and diverge on a corpus that stores a bare
+>   physical name there — a corpus `retrieve/structure.py::table_lookup`'s surviving tolerance
+>   still accepts (see Phase 1 below).
+>
+> So the state is not "D3 pending". It is D3's premise — two foldings of one convention — with the
+> conformance test that held them together removed, and a named way for them to disagree.
+
 ### D4 — A reference field points at an **asset id**, exactly, or the corpus is broken
 
 There are exactly two kinds of identifier-bearing field, and no field may be both:
@@ -369,6 +407,17 @@ cost 25% of the corpus's joins. It is withdrawn. Normalisation happens **once, i
 the loader**, and `structure.py` then performs exact lookups only — `_table_lookup`'s
 three-spellings-per-table tolerance is what allowed bare references to persist
 unnoticed, and it goes away.
+
+> **Status of that withdrawal, recorded 2026-08-22: decided here, now propagated, still not
+> built.** The tolerance is **live in code**: `retrieve/structure.py:136-156` (`table_lookup`)
+> still answers to four spellings per table — the asset id, `table_id(schema, physical_name)`, the
+> bare `physical_name`, and the engine spelling `{schema}.{physical_name}` — and `bind_endpoint`
+> resolves against any of them. Until 2026-08-22 this sentence was also the *only* place the
+> withdrawal existed: [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §2.8.2 stated the
+> tolerance with nothing saying it had been withdrawn, so a reader arriving at 0005 first was told
+> the opposite. 0005 §2.8.2 now carries the note. What remains outstanding is the deletion in
+> `structure.py`; Phase 1 below records the same thing from the build's side, including that the
+> tolerance is unexercised on the shipped corpus.
 
 Consequences, by field:
 
@@ -457,6 +506,29 @@ resolves the run's selected variant at call time. The qualification rule is ther
 property of a *variant*, and every variant that ships states it — a variant that dropped
 it would reopen P8 while `prompt_set_hash` recorded the change, which is the point of
 having the registry own the text.
+
+> **Split status, recorded 2026-08-22. The prompt half shipped; the `default_schema` half did not,
+> and it is an instance of the defect D7 exists to close.**
+>
+> - **Built.** `register/prompts.py:52` is `ANALYST`, carrying variants `v1`–`v5` with
+>   `default="v4"` (`:242`), and `serve/tools.py:63::analyst_prompt` resolves the run's selected
+>   variant. The paragraph above is accurate.
+> - **Not built.** `default_schema` is passed at **neither** `prepare()` call site —
+>   `serve/fetch.py:280` (`sample_rows`) and `:358` (`run_query`) both omit it, so it takes its
+>   `None` default. There is no "iff every licensed table shares one schema" test anywhere; nothing
+>   computes the condition. `serve/delivery.py:41-42` records the omission as the design rather than
+>   as a gap: *"`default_schema=None` because that is what the serve path gives `prepare()` — see
+>   `serve/fetch.py`, which passes no `default_schema` at either call site."*
+>
+> That is worth naming precisely, because **D7 cites `default_schema` (*"never passed"*) as one of
+> the un-wired controls it exists to eliminate**, and the Status line claims D7 shipped by naming
+> only the three comparability knobs (`route_top_n`, `max_steiner_points`, `max_crossings`).
+> Of the two parameters D7 names, only `spellings` became required — it has no default and
+> `prepare()` raises `GovernanceUsageError` on `None` (`govern/pipeline.py:382`, raise at `:398`).
+> `ambiguous_folds` still defaults to `frozenset()` (`:383`), and `default_schema` to `None`
+> (`:385`) — the latter still the optional control argument no production caller passes. So D7 is
+> built for its three comparability knobs and for `spellings`, and not for the instance D10
+> depends on.
 
 ---
 

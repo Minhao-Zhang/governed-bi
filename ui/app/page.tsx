@@ -10,7 +10,7 @@ export default function ChatPage() {
   return (
     <PageShell
       title="Chat"
-      description="Ask a question and audit the governed answer — reliability, SQL, result, and provenance."
+      description="Ask a question and audit the governed answer — outcome, SQL, result, and provenance."
     >
       <ChatPanel />
     </PageShell>

@@ -19,18 +19,22 @@
  * had never heard of each other: you found the thing here and looked it up again
  * by hand there.
  *
- * An "Edit" affordance appears when `capabilities.can_edit`; it opens a sheet that
- * POSTs to `/corpus/edit` and shows validation findings + diff.
+ * **There is no edit affordance, and there cannot be one.** A pencil button used to appear
+ * when `capabilities.can_edit`, opening a sheet that POSTed to `/corpus/edit`. Neither the
+ * route nor the flag exists: `api/routes.py::capabilities_for` hardcodes `can_edit: false`
+ * with `edit_mode: "none"` because the curator is out of scope of the served surface
+ * (ADR 0007 §7), so the button was reachable only under the mock transport, where it posted
+ * nowhere and reported "Editing requires a connected dev backend." Writing the corpus is a
+ * git/PR job against the corpus repository. Deleted with `<AssetEditSheet/>`.
  */
 
 import { useDeferredValue, useMemo, useRef, useState } from "react";
-import { Pencil, Search, X } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { cn } from "@/lib/utils";
-import { CORPUS_ASSET_TYPES, type AssetRow } from "@/lib/types";
-import { canEdit } from "@/lib/capabilities";
-import { useAssets, useCapabilities, useCatalog } from "@/hooks/queries";
+import { CORPUS_ASSET_TYPES } from "@/lib/types";
+import { useAssets, useCatalog } from "@/hooks/queries";
 import {
   EMPTY_FILTERS,
   applyStructured,
@@ -43,7 +47,6 @@ import {
   type AssetFilters,
 } from "@/lib/asset-catalog";
 import { QueryState } from "@/components/common/query-state";
-import { AssetEditSheet } from "@/components/corpus/asset-edit-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -77,14 +80,11 @@ export function AssetBrowser({
 }) {
   const assets = useAssets();
   const { items: tables, isLoading: tablesLoading } = useCatalog();
-  const { data: caps } = useCapabilities();
   // Query is separate state from the structured filters ON PURPOSE — see the note
   // on AssetFilters. Bundling them made every keystroke invalidate the memos twice.
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<AssetFilters>(EMPTY_FILTERS);
-  const [editRow, setEditRow] = useState<AssetRow | null>(null);
 
-  const editable = canEdit(caps);
   const set = <K extends keyof AssetFilters>(key: K, value: AssetFilters[K]) =>
     setFilters((prev) => ({ ...prev, [key]: value }));
 
@@ -243,24 +243,11 @@ export function AssetBrowser({
                 searching && "opacity-60",
               )}
             >
-              <AssetList
-                rows={rows}
-                editable={editable}
-                onEdit={setEditRow}
-                onLocate={onLocate}
-              />
+              <AssetList rows={rows} onLocate={onLocate} />
             </div>
           )
         }
       </QueryState>
-
-      <AssetEditSheet
-        row={editRow}
-        open={editRow !== null}
-        onOpenChange={(next) => {
-          if (!next) setEditRow(null);
-        }}
-      />
     </div>
   );
 }
@@ -268,13 +255,9 @@ export function AssetBrowser({
 /** Virtualized asset rows under a sticky column header. */
 function AssetList({
   rows,
-  editable,
-  onEdit,
   onLocate,
 }: {
   rows: AssetCatalogItem[];
-  editable: boolean;
-  onEdit: (row: AssetRow) => void;
   onLocate?: (row: { id: string; asset_type: string }) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -298,7 +281,8 @@ function AssetList({
         <span>Summary</span>
         <span>Schema</span>
         <span>Provenance</span>
-        <span className="text-right">{editable ? "Edit" : ""}</span>
+        {/* The sixth column carries the exclusion / suspect badges, which need no header. */}
+        <span aria-hidden />
       </div>
 
       {/* The virtualizer's scroll element, and now it is sized by the page rather than by a
@@ -316,12 +300,7 @@ function AssetList({
                 className="absolute left-0 top-0 w-full"
                 style={{ transform: `translateY(${virtualRow.start}px)` }}
               >
-                <AssetListRow
-                  row={row}
-                  editable={editable}
-                  onEdit={onEdit}
-                  onLocate={onLocate}
-                />
+                <AssetListRow row={row} onLocate={onLocate} />
               </div>
             );
           })}
@@ -333,13 +312,9 @@ function AssetList({
 
 function AssetListRow({
   row,
-  editable,
-  onEdit,
   onLocate,
 }: {
   row: AssetCatalogItem;
-  editable: boolean;
-  onEdit: (row: AssetRow) => void;
   onLocate?: (row: { id: string; asset_type: string }) => void;
 }) {
   const locate = onLocate ? () => onLocate({ id: row.id, asset_type: row.asset_type }) : undefined;
@@ -394,29 +369,6 @@ function AssetListRow({
           <Badge variant="outline" className="border-tier-lineage/50 text-tier-lineage">
             suspect
           </Badge>
-        )}
-        {/* Tables are edited through the Schema surface, and `/corpus/edit` takes the
-            non-table asset shape — so no Edit affordance on a table row. */}
-        {editable && row.asset_type !== "table" && (
-          <Button
-            variant="ghost"
-            size="xs"
-            // The row is now a button too, and a click on Edit is not also a request to go
-            // look at the thing somewhere else.
-            onClick={(e) => {
-              e.stopPropagation();
-              onEdit({
-                id: row.id,
-                asset_type: row.asset_type,
-                summary: row.summary,
-                provenance_status: row.provenance_status,
-                excluded: row.excluded,
-              });
-            }}
-          >
-            <Pencil />
-            Edit
-          </Button>
         )}
       </span>
     </div>

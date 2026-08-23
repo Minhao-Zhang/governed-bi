@@ -298,8 +298,10 @@ async def _rewritten_query(
     question's wording and a schema summary's wording often share nothing for either channel to
     match on.
 
-    ``spent`` is an out-parameter carrying this call's cost — five rewrites are five model calls
-    a turn, and a call the ledger does not know about is a turn priced below what it spent.
+    ``spent`` is an out-parameter carrying this call's cost — four rewrites are four model calls
+    a turn (``FACET_QUERY_PROMPTS`` has four entries; ``facet_schema`` is the fifth facet node
+    and returns early above), and a call the ledger does not know about is a turn priced below
+    what it spent.
 
     ``Channel.extraction`` is added to ``ran`` **only when a rewrite actually came back**. A
     model that errors or returns nothing falls back to the raw question and the channel reports
@@ -321,8 +323,8 @@ async def _rewritten_query(
     try:
         reply = await model.ainvoke(
             [SystemMessage(prompt_text(prompt_name, prompt_variants(config))), HumanMessage(question)],
-            # Named after the registered prompt, so the five concurrent rewrites are five
-            # distinguishable rows in LangSmith rather than five `ChatOpenAI`s.
+            # Named after the registered prompt, so the four concurrent rewrites are four
+            # distinguishable rows in LangSmith rather than four `ChatOpenAI`s.
             config={"run_name": prompt_name},
         )
         rewritten = str(getattr(reply, "text", "") or "").strip()

@@ -6,7 +6,8 @@ quotes. This module draws the rest of the plane -- one curve per signal in
 :data:`~.signals.SIGNALS` -- so the engine's mechanical policy can be read against the
 alternatives instead of alone.
 
-It is deliberately not a confidence model. ``docs/analysis/risk-coverage-v4.md`` §4
+It is deliberately not a confidence model. ``git-history:docs/analysis/risk-coverage-v4.md``
+(cited below by its bare name; it is not in this tree) §4
 measured every structural signal on this artifact and capped them at OOF AUC 0.721,
 and §6 measured an LLM critic reading the SQL at 0.597. The honest object is therefore
 a plane with several curves on it, one of which is the engine's -- not a score.

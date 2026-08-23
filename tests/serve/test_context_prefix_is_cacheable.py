@@ -293,7 +293,9 @@ def test_assemble_writes_the_eviction_onto_the_delivery_it_returns() -> None:
 def test_the_served_record_carries_what_the_budget_evicted(
     two_schema_index, two_schema_assets
 ) -> None:
-    """End to end into ``record``, which is what ``runs/serve/*.jsonl`` is written from.
+    """End to end into ``record``, which is what the audit surface serves and what an eval
+    row is projected from. (``runs/serve/*.jsonl`` was that sink when this was written; it is
+    deleted — ADR 0004, ADR 0014 — and the record is read off thread state now.)
 
     ``stamp`` projects ``delivery`` into the record through an explicit key set, so ``evicted``
     is one name in one literal away from reaching the eval row and nothing else — and that is
@@ -330,8 +332,9 @@ def test_the_served_record_carries_what_the_budget_evicted(
 
     tight = _serve(120, "t-evict-tight")
     assert tight["evicted"], (
-        "the served record does not say the budget bit, so runs/serve/*.jsonl cannot "
-        "distinguish a table that was rendered from one dropped for space"
+        "the served record does not say the budget bit, so nothing downstream of it — the "
+        "audit surface, an eval row — can distinguish a table that was rendered from one "
+        "dropped for space"
     )
 
     roomy = _serve(None, "t-evict-roomy")

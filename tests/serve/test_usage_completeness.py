@@ -1,8 +1,10 @@
 """Every model call a turn makes lands in ``usage``, attributed to the stage that made it.
 
 **The defect.** ``usage`` was written by exactly one node, ``agent_core``, so the guard's
-BI-scope gate and the five facet query rewriters spent tokens no record ever mentioned. Measured
-on a real refusal, from ``runs/serve/``:
+BI-scope gate and the four facet query rewriters (``FACET_EXTRACTS``; ``facet_schema`` does not
+rewrite) spent tokens no record ever mentioned. Measured on a real refusal, read at the time off
+the served turn log ``runs/serve/`` -- an untracked local sink, since deleted by ADR 0014 and not
+recoverable from git history:
 
 .. code-block:: text
 

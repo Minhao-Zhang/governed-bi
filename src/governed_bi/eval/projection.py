@@ -134,7 +134,9 @@ def _routing_was_pinned(question: Mapping[str, Any], record: Mapping[str, Any]) 
 
 #: How many ranked entries the summarised retrieval fields keep.
 #:
-#: Measured over the turn records in ``runs/serve/2026-08-09.jsonl``, which are the same shape
+#: Measured over the turn records in ``runs/serve/2026-08-09.jsonl`` -- an untracked local sink,
+#: deleted with ``api/trace_store.py`` under ADR 0014 and never committed, so it is not
+#: recoverable from git history either. They are the same shape
 #: a BIRD turn produces: ``facet_hits`` is **58 KB** per turn (five facets x fifty hits, each
 #: hit carrying a score triple and a copy of the facet's query) and ``schema_ranking`` 2.0 KB,
 #: against a 6.4 KB measurement row. Carried verbatim they take a 1 351-question arm from
@@ -218,7 +220,7 @@ def _facet_hits(record: Mapping[str, Any]) -> dict[str, Any] | None:
     asset, so no feedback loop is possible" -- so the asset ids stay. What goes is the per-hit
     ``lexical`` / ``semantic`` / ``score`` triple, 36% of the 58 KB on its own, and every hit
     below rank ten. Together the summary is 1.8 KB, 97% smaller (measured over
-    ``runs/serve/2026-08-09.jsonl``).
+    ``runs/serve/2026-08-09.jsonl``, the untracked sink ADR 0014 deleted).
 
     ``queries`` is kept whole and is the load-bearing half: it is the only part of retrieval a
     model sampled, so it cannot be recovered by any replay, while the hits it produced are a

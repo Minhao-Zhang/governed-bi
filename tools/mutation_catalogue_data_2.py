@@ -249,7 +249,7 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
         replacement='    delivery_keys = {"context_hash", "delivery_hash", "tool_delivered"}',
         tests=("tests/serve/test_context_prefix_is_cacheable.py::"
                "test_the_served_record_carries_what_the_budget_evicted",),
-        finding="3.9 — one name in one literal away from runs/serve/*.jsonl",
+        finding="3.9 — one name in one literal away from the turn log ADR 0014 deleted",
     ),
     # ── open-work 3.6 / 3.7 / 3.13: the instrument's own identity ──────────────
     #

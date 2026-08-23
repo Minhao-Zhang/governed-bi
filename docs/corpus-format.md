@@ -6,21 +6,27 @@ reference.
 
 ## Where the corpus is
 
-The served semantic layer is its own repository,
-[BIRD-corpus](https://github.com/Minhao-Zhang/BIRD-corpus). Check it out as a sibling of this
-repository and point at it:
+The semantic layer is not in this repository. `GOVERNED_BI_CORPUS_DIR` names a sibling
+checkout, and the path resolves against this repository's root, not the process's working
+directory.
 
-```bash
-GOVERNED_BI_CORPUS_DIR=../BIRD-corpus
-```
+**Two trees are in play, and they are not interchangeable.** Read `.env` to see which one
+is live rather than assuming:
 
-The path resolves against this repository's root, not the process's working directory. `.env`
-already sets it.
+| | |
+|---|---|
+| **Served today** | `../MS Fabric Facilities/corpus` — the facilities warehouse's flattened serving layer, one namespace, against the `facilities` Postgres on 5432 |
+| **What the benchmark numbers were measured on** | [`../BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus) — commented out in `.env`, still checked out |
+
+`GOVERNED_BI_CORPUS_DIR` and `GOVERNED_BI_PG_DSN` are **one switch**: a corpus describes one
+warehouse, so swapping the corpus without swapping the DSN points the engine's semantic layer
+at tables that are not there. `.env` says so at the line above the pointer.
 
 **The corpus is the treatment identity of every measurement.** `corpus_content_hash` digests the
-tree, so a number is reproducible only if the corpus commit is known. Quote the commit alongside
-any figure, and write nothing into that checkout except assets — anything else becomes part of
-the corpus's identity.
+tree, so a number is reproducible only if the corpus commit is known — which is why the table
+above matters: a BIRD figure re-run against the facilities corpus is a different experiment, not
+a replication. Quote the commit alongside any figure, and write nothing into that checkout except
+assets — anything else becomes part of the corpus's identity.
 
 The corpus is versioned and **not rebuildable from this repository**. This engine loads the
 sibling checkout; producing that tree is not this project's job. Mechanical structure and

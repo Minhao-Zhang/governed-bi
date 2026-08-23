@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         type=pathlib.Path,
         default=None,
         help="a prior run's JSONL whose `schemas` shortlist this run reuses instead of routing "
-        "for itself. `route` is deterministic, but the five facet rewriters above it are model "
+        "for itself. `route` is deterministic, but the four facet rewriters above it are model "
         "calls, so an unpinned A/B cannot tell its own effect from a shortlist that moved. "
         "Pass two still re-searches inside the pinned schemas -- the residual is measured and "
         "printed as licensed drift, not assumed away.",

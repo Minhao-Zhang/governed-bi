@@ -9,7 +9,8 @@ consuming live in different files and nothing forces them to meet. Together they
 numbers here have twice been quotable and wrong:
 
 * ``reflect_verdict`` was projected into the turn record by ``stamp`` from the day the node
-  landed, and ``eval/harness.py::project_turn`` never carried it to the artifact -- so the arm
+  landed, and ``project_turn`` (defined in ``eval/projection.py``, re-exported from
+  ``eval/harness.py``) never carried it to the artifact -- so the arm
   the knob's own note demands ("stays off until tools/score_reflector.py shows the verdict
   beats the base rate") could not have been scored even if it had been run.
 * ``git_sha`` is an operational knob on every row and ``None`` on every row of every arm.
@@ -30,8 +31,9 @@ Four rules, one per direction the wire can be missing:
 **This gate is RED today, deliberately.** It was written against a tree with a known
 population of these defects and it finds them; a conformance check that went green on first
 run against this codebase would be the same mistake as the eight instrument tests that
-asserted constants against themselves. ``docs/analysis/declared-not-consumed.md`` ranks every
-finding by consequence. Turning a line green means wiring the declaration to a consumer or
+asserted constants against themselves. The ranking of each finding by consequence lived in
+``git-history:docs/analysis/declared-not-consumed.md``; the four bullets above are what survived
+it. Turning a line green means wiring the declaration to a consumer or
 deleting the declaration -- **not** adding it to a ``WAIVED`` table. A waiver is only honest
 when its reason can say why a declaration with no consumer is *correct*, which is true of
 about two of these.
@@ -512,8 +514,7 @@ def main() -> int:
                 print(f"  {p}", file=sys.stderr)
             print(file=sys.stderr)
         print(
-            "Each line is one instance of open-work.md §3.10. Ranked by consequence in "
-            "docs/analysis/declared-not-consumed.md.",
+            "Each line is one instance of open-work.md §3.10.",
             file=sys.stderr,
         )
         return 1

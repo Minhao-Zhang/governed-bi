@@ -142,7 +142,10 @@ def _print_curve_table(curves: dict[str, RiskCoverage], coverages: list[float]) 
     print("\n-- risk-coverage: selective accuracy at each coverage ------------------------")
     print("   rawAUC is in the artifact's own direction, not the declared one: below 0.5 means")
     print("   higher value -> more wrong, so every `lower_first` signal's mechanism claim holds")
-    print("   only if its rawAUC is below 0.5. Comparable to risk-coverage-v4.md section 4.")
+    print(
+        "   only if its rawAUC is below 0.5. Comparable to "
+        "git-history:docs/analysis/risk-coverage-v4.md section 4."
+    )
     head = "".join(f"{c:>14}" for c in coverages)
     print(f"\n  {'signal':<22}{'rawAUC':>8}{'AURC':>8}{'cuts':>6}{head}")
     for name, curve in curves.items():

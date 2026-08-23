@@ -2,7 +2,9 @@
  * Serve-time clarification (HITL) — the server ↔ frontend wire contract.
  *
  * When the governed agent hits genuine ambiguity mid-turn it asks ONE question
- * and waits, instead of guessing or refusing (docs/plans/hitl-clarification-contract.md).
+ * and waits, instead of guessing or refusing. The interrupt payload and the id/why fields
+ * are ADR 0007 §6; the plan that first specified this is
+ * `git-history:docs/plans/hitl-clarification-contract.md`.
  * This rides the SAME `useStream` connection as the answer and the governance
  * event stream — no new endpoint, no new socket:
  *

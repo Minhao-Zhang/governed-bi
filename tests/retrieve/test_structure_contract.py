@@ -34,6 +34,10 @@ from contracts import needs  # noqa: E402
 #: A specification with no body. Per test, never module-level: held at module level, one
 #: deletion disarms every tripwire at once, and deleting it is what the first passing fix
 #: forces. See ``tests/serve/test_turn_contract.py`` for the incident that established this.
+#:
+#: **Unapplied in this file today** — every specification below has a body. It is kept as the
+#: vocabulary for the next one written here; nothing checks that, because
+#: ``tools/check_declared_is_consumed.py`` does not scan ``tests/``.
 UNWRITTEN = pytest.mark.xfail(strict=True, reason="contract specified, body not yet written")
 
 pytestmark = [needs("E")]

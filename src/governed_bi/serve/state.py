@@ -200,24 +200,25 @@ class Answer(TypedDict):
 
 
 class TurnEntry(TypedDict, total=False):
-    """One finished turn's audit envelope — the same five keys the JSONL log writes.
+    """One finished turn's audit envelope — the five keys the deleted JSONL log wrote.
 
     These five keys were the JSONL log's line shape, kept when the log was deleted because the
     audit surface already read them and ``api/thread_turns.summarise_turn`` still projects them.
     ``api/graph_app.record_node`` builds one envelope; there is no second sink left to disagree
     with it.
 
-    ``question`` / ``answer_text`` sit beside ``record`` rather than inside it for
-    ``append_turn``'s reason: merged in, every record read back out fails ``undeclared_keys``.
+    ``question`` / ``answer_text`` sit beside ``record`` rather than inside it because merged
+    in, every record read back out fails ``undeclared_keys``.
 
-    ``total=False`` and not ``NotRequired`` per key: the log's own entries are written by a
-    function that always fills all five, so absence here means "an older row", not "optional
-    field", and a reader must tolerate it either way.
+    ``total=False`` and not ``NotRequired`` per key: ``record_node`` always fills all five, so
+    absence here means "an older row", not "optional field", and a reader must tolerate it
+    either way.
 
-    Three fields are ``| None`` because ``append_turn`` really writes ``None`` into them — a
-    refusal has no prose, and a turn derived from a non-text message has no question. Declaring
-    them ``str`` would describe a shape the production writer violates, and the readers
-    (``api/thread_turns.summarise_turn``, the audit routes) already treat null as "not present".
+    Three fields are ``| None`` because ``record_node`` really writes ``None`` into them
+    (``api/graph_app.py:425-431``) — a refusal has no prose, and a turn derived from a non-text
+    message has no question. Declaring them ``str`` would describe a shape the only writer
+    violates, and the readers (``api/thread_turns.summarise_turn``, the audit routes) already
+    treat null as "not present".
     """
 
     #: UTC isoformat to the second, stamped when the turn was recorded.
@@ -547,7 +548,7 @@ class ServeOutput(TypedDict, total=False):
     narrow. Two measurements on langgraph 1.2.11, of two different things, and the difference
     matters:
 
-    - the compiled ``accept`` graph's ``stream_channels_asis`` is all **47** declared channels;
+    - the compiled ``accept`` graph's ``stream_channels_asis`` is all **48** declared channels;
     - but the root ``values`` frames of an actual streamed run carried **only** ``answer`` and
       ``messages`` — 4 frames, 0 containing ``turns``, measured over the wire from the client.
 
@@ -557,9 +558,11 @@ class ServeOutput(TypedDict, total=False):
     ``delivery`` (the whole rendered corpus context block). This class is not a guarantee about
     either surface.
 
-    Count went 46 → 47 with :attr:`ServeState.turns`. That channel widens the §B1 remainder on the
-    **checkpoint-read** surfaces and not on the streamed one: what escapes there is one
-    ``answer["record"]`` per read today and every prior turn's record once ``turns`` is present.
+    Count went 46 → 47 with :attr:`ServeState.turns` and 47 → 48 with :attr:`ServeState.raised`
+    (48 re-measured 2026-08-22 on langgraph 1.2.11, by reading ``stream_channels_asis`` off the
+    compiled graph). Those channels widen the §B1 remainder on the **checkpoint-read** surfaces
+    and not on the streamed one: what escapes there is one ``answer["record"]`` per read plus
+    every prior turn's record, now that ``turns`` is present.
     Since ``GET /threads/*`` requires no credential (finding A7), that is the surface to price.
     """
 
@@ -596,8 +599,9 @@ class ServeState(TypedDict, total=False):
     schemas: list[str]
     #: Eval only: a shortlist replayed from a prior artifact, honoured by ``route`` in place of
     #: its own ranking (``eval/replay.py``). Absent on every served turn. It exists because the
-    #: five facet rewriters are model calls, so two runs of one question can hand ``route``
-    #: different hits — and an A/B that lets the shortlist move cannot attribute its own delta.
+    #: four facet rewriters (``register/facets.py``'s ``FACET_EXTRACTS`` — four of the five facet
+    #: nodes) are model calls, so two runs of one question can hand ``route`` different hits — and
+    #: an A/B that lets the shortlist move cannot attribute its own delta.
     pinned_schemas: list[str] | None
     #: Reduced by :func:`merge_delta`: ``route`` writes the whole result, ``resolve`` and
     #: ``connect`` write only the keys they change.

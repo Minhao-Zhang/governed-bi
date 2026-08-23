@@ -1,6 +1,11 @@
 /**
  * Validate every GET route of a **live** engine against the client's real zod schemas.
  *
+ * "Every" is checked against `../docs/openapi.json`, the inventory of record: all fourteen
+ * `GET`s are covered below, `/livez` by the reachability probe in `main()` rather than by a
+ * case. The one `POST` (`/turns/{turn_id}/raised`) is out of scope on purpose — this checker
+ * only reads, so it cannot append a note to somebody's turn log as a side effect of running.
+ *
  *     npm run check:api                    # against http://127.0.0.1:2024
  *     LANGGRAPH_URL=http://host:port npm run check:api
  *
@@ -34,8 +39,8 @@ import {
   corpusRowsSchema,
   erGraphSchema,
   knowledgeGraphSchema,
+  pendingQueueSchema,
   schemaSummaryResponseSchema,
-  searchResponseSchema,
   tableViewSchema,
 } from "../lib/schemas.ts";
 
@@ -93,6 +98,10 @@ async function discoverCases(): Promise<Case[]> {
     { path: "/corpus/rows?type=table&order=asc&offset=0&limit=5", schema: corpusRowsSchema },
     { path: "/audit/corpus", schema: auditCorpusSchema },
     { path: "/audit/turns?limit=5", schema: auditTurnsSchema },
+    // The newest route, and the one this checker existed for two weeks without covering. The
+    // client calls it (`api.pendingClarifications`) and parses it with `pendingQueueSchema`,
+    // so an undeclared field here is the same blank `/pending` page as every defect above.
+    { path: "/clarifications/pending?limit=5&offset=0", schema: pendingQueueSchema },
   ];
 
   // Discover ids from the lean catalog: the flat /schema dump is deleted.
@@ -124,8 +133,9 @@ async function discoverCases(): Promise<Case[]> {
     }
   }
 
-  const caps = (await fetchJson("/capabilities")).body as Record<string, unknown> | null;
-  if (caps?.can_search) cases.push({ path: "/search?q=a", schema: searchResponseSchema });
+  // No `/search` case: the route was deliberately never built (ADR 0009 Amendment 1) and
+  // `capabilities_for` hardcodes `can_search: false`, so the `caps` probe that used to gate
+  // one here could never fire.
 
   const turns = (await fetchJson("/audit/turns?limit=1")).body as Record<string, unknown> | null;
   const turnList = Array.isArray(turns?.turns) ? turns.turns : [];

@@ -77,8 +77,9 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
         ),
         "check_declared_is_consumed.py": (
             "reports 5 real violations today, down from 14 on 2026-08-11. **Tier 1 is now "
-            "clear** -- all five items in docs/analysis/declared-not-consumed.md's tier-1 "
-            "section are closed and each is asserted on its VALUE in "
+            "clear** -- all five items in that gate's tier-1 section (the note listing them, "
+            "git-history:docs/analysis/declared-not-consumed.md, is deleted) are closed and "
+            "each is asserted on its VALUE in "
             "tests/serve/test_the_record_follows_the_knob.py, so the condition this entry "
             "used to name is met. What still stops a CI step is the five remaining findings: "
             "the run would fail every commit, and waiving 5 genuine findings to make it "

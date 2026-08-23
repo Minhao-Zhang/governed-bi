@@ -10,8 +10,15 @@
   deterministic injection rules ship disabled (`guard_rules_enabled` is `UNSET` until
   OQ3's two numbers exist); the one rule enabled in the served app is `g_bi_scope`
   (`api/graph_app.py`). §11's retention table is withdrawn, not deferred — see the note
-  there. Amended by [ADR 0012](0012-access-seam-principal-and-authorization.md) at §8
-  and in Consequences. A hard dependency of
+  there. Amended by [ADR 0012](0012-access-seam-principal-and-authorization.md) in **three**
+  places, per its own header: **§1** (`check()` reads authorization from `GovernancePolicy`),
+  **§8** (the licensed set is now two sets with two meanings) and **§12's Consequences**
+  (row-level security and per-user identity were out of scope for an "enterprise fork" — the
+  *seam* for both is in scope as of 0012, the *product* is not). Also amended by
+  [ADR 0008](0008-identifiers-end-to-end.md) at **§3/§4** (identifier canonicalisation and the
+  key/name split), which its header declares.
+  *Both pointers repaired 2026-08-22: this line credited 0012 with one amendment instead of
+  three, and the string "0008" appeared nowhere in this file.* A hard dependency of
   [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md).
 - **Deciders:** project owner + design session (2026-08-02)
 - **Scope:** everything between "the agent produced a string" and "the database
@@ -558,6 +565,27 @@ Explicitly **not** the post-budget `by_type["table"]` — budgets shape what is
 or every multi-hop query refuses at the table layer, which is what `connect`
 exists to prevent.
 
+> **Correction, 2026-08-22 — the wiring is the opposite of the sentence above, and it costs a
+> wrong refusal.** `licensed` is seeded from the post-budget set.
+> `serve/nodes/route_retrieve.py::route_node` sets `licensed = retrieved["by_type"]["table"]`,
+> and that `by_type` is assembled in `serve/nodes/pass_two.py` out of the hits
+> `apply_budgets(...)` **kept** — a hit the budget dropped never appears in it. Two nodes widen
+> the set afterwards and neither restores a dropped table: `resolve_node` adds the reference
+> closure and `connect_node` adds Steiner points.
+>
+> So the two things this section separates are coupled in one direction: **a gold table cut by
+> the retrieval cap is unlicensed**, and Layer 6 then refuses the statement
+> `r_table_not_licensed` — a retrieval-budget outcome recorded as a governance verdict, which is
+> exactly what the paragraph above says cannot happen. Steiner points survive only because
+> `connect` adds them after the budget has run; a budget-cut table that is neither a reference
+> nor a Steiner point has no path back.
+>
+> The decision — license the pre-budget table set, or accept the coupling and stop claiming the
+> separation — is pending and tracked in [`docs/open-work.md`](../open-work.md). **No code was
+> changed for this note.** The identical false claim stood at
+> [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §3.2 and §3.5 and carries the same
+> correction there.
+
 **`resolve` gets the same crossing accounting `connect` has.** Few-shot SQL
 closure pulls in every table a gold statement touches, so without it a
 `FewShotAsset` hit is an unbounded, unaudited licensing expansion in a pooled
@@ -586,6 +614,13 @@ cannot probe for existence.
 **Every tool reads through `AnalystCorpus` as a type, not a convention** — B10
 was two definitions of "excluded" drifting apart because the contract was a
 docstring.
+
+> **Corrected 2026-08-22: one tool, not every tool.** Only `serve/fetch.py::sample_rows` tests
+> the type (`isinstance(corpus, AnalystCorpus)`, raising `GovernanceUsageError` otherwise).
+> `read_body` and `inspect_schema` take `assets: Mapping[str, Any]`; exclusion is pre-filtered
+> upstream in `serve/session.py::_visible` before that mapping is built — which is a caller
+> contract, i.e. the convention this sentence disclaims. Same correction in
+> [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §3.5.
 
 ### 9. Path validation
 
@@ -661,6 +696,8 @@ It never lets them answer or read one.
 > had **zero production callers** — one re-export and four lines in a test file,
 > with 45 green tests passing against dead code. `redaction_of()` and the
 > `Redaction` enum, declared on all 37 record fields, had zero callers anywhere.
+> *(Count as of 2026-08-06, left as written. `register/record.py::RECORD_REGISTER` declares
+> **42** fields as of 2026-08-22 — see ADR 0007 §2, which was quoting fifteen.)*
 > `ports.Sink`, which promised "every record is redacted before write", had no
 > implementation and named two adapter files that did not exist.
 >

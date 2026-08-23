@@ -22,7 +22,7 @@ from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.retrieve.index import UnifiedIndex
 from governed_bi.serve.nodes.route_retrieve import route_node
 
-# Same-directory import, the way ``test_chat_transport.py`` reaches
+# Same-directory import, the way ``test_turn_contract.py`` reaches
 # ``turn_contract_fixtures``: ``tests/serve`` has no ``__init__.py``, so a relative import has
 # no parent package and pytest's own path insertion is not in effect at collection time.
 sys.path.insert(0, str(Path(__file__).resolve().parent))

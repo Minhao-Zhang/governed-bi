@@ -1,17 +1,28 @@
 /**
- * Capability helpers. Every optional UI affordance is gated on `/capabilities`
- * so the UI adapts to whatever the attached backend can actually do (handoff §4)
- * rather than assuming.
+ * Capability helpers. Every optional UI affordance is gated on `/capabilities` so the UI
+ * adapts to whatever the attached backend can actually do rather than assuming. The contract
+ * is ADR 0007 §7 — every field is an observation, and `false` is a legitimate answer.
  */
 
 import type { Capabilities } from "@/lib/types";
 
-/** Editing affordances show only when the backend reports it can edit. */
+/**
+ * Whether the backend reports it can edit the corpus. **No render path calls this, and none
+ * should**: `capabilities_for` returns `can_edit: false` with `edit_mode: "none"` on every
+ * engine, because the curator is out of scope of the served surface (ADR 0007 §7). The edit
+ * sheet this used to gate posted to `POST /corpus/edit`, a route that does not exist, and is
+ * deleted. Kept because the flag is still on the wire and is still a true observation worth
+ * reading on an audit surface — not because there is an affordance behind it.
+ */
 export function canEdit(caps: Capabilities | undefined): boolean {
   return caps?.can_edit === true;
 }
 
-/** Live streaming chat (`useStream`) vs the non-streaming `/chat` fallback. */
+/**
+ * Whether chat can be served at all. There is one transport (`useStream`); the non-streaming
+ * `POST /chat` this used to fall back to is deleted, so `false` mounts `<NoTransport/>` rather
+ * than a degraded composer. See `components/chat/chat-panel.tsx`.
+ */
 export function canStream(caps: Capabilities | undefined): boolean {
   return caps?.can_stream === true;
 }
@@ -33,11 +44,18 @@ export function hasLiveModel(caps: Capabilities | undefined): boolean {
  * parameter whether or not it advertises `can_scope`.
  *
  * `can_scope` still arrives on the wire and is still declared, because it is a true observation
- * worth showing on an audit surface. It is just not a switch any render path may read.
- * See `docs/plans/api-design-review-2026-08-04.md` D-1.
+ * worth showing on an audit surface. It is just not a switch any render path may read. ADR 0009
+ * D4 is the rule it follows ("a flag is flipped by building the thing"); the review that first
+ * wrote it down is `git-history:docs/plans/api-design-review-2026-08-04.md` D-1.
  */
 
-/** D15: server-ranked `GET /search` is available (else the client Fuse index). */
+/**
+ * Whether a server-ranked `GET /search` is available. **Never true, and no render path calls
+ * this**: ADR 0009 Amendment 1 records that the route is "deliberately **not** built" and
+ * `capabilities_for` hardcodes `can_search: false`. Ranking is the client Fuse index
+ * (`lib/catalog.ts`, `lib/asset-catalog.ts`) — the only one there is. Kept for the same reason
+ * as `canEdit`: the flag is on the wire and this is the client's view of it.
+ */
 export function canSearch(caps: Capabilities | undefined): boolean {
   return caps?.can_search === true;
 }
