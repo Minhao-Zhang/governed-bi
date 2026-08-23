@@ -11,6 +11,91 @@ English: [The return path — working reference](return-path.md)。
 
 ---
 
+## 0. 这个环，从头到尾
+
+一条走查，好让本页余下部分读起来是一个功能，而不是一堆零件。例子取最常见的真实情形：分析师拿到一个
+错的数字，原因是某个业务术语在这个数仓里是另一个意思。
+
+**周一 09:14 —— 分析师。** Priya 问「上个月我们新增了多少活跃客户？」，拿到 4,102。她知道大概是 400。
+她点答案卡上的 **This answer is wrong**，一个五行列表就地展开。她点了「我问题里的某个词在这里是别的
+意思」。这一下**立即提交** —— 没有提交按钮，两次点击，零打字。回执出现在表单原来的位置，并给出两个
+可选输入框；她填了一个：`expected: "about 400, not 4102"`。不再要求她做任何事，而回执说清了会发生
+什么、不会发生什么：
+
+> 已提交。数据管理员按最早优先复核这些。这台引擎不知道你是谁，所以不会有人给你发邮件 —— 到
+> **My reports** 看结果。
+
+一条 `Observation` 落进 `runs/feedback.sqlite`，带 `category: term_mismatch`、`state: open`，以及该
+turn 的问题、SQL、许可表集合、outcome 和处理哈希的一份**拷贝**（§4）。
+
+**周一 11:30 —— steward。** Dev 打开 `/review`。队列按最早优先，并做结构化分组：Priya 那一行落在一个
+三条的 cluster 里，全是 `term_mismatch`，全在 `facilities.occupancy` 上。它上方的说明写着这个分组从未
+读过那些问题。他选中这个 cluster，详情面板在决策条**上方**展示七个证据块（§15）：问了什么、回来了
+什么；Priya 说了什么（她的 `expected` 被排版成它本来就是的那种引文）；SQL 和尝试 ledger，用的是她看到的
+同一批组件；这个 turn 被允许读什么，附带路由器的 top-5 排名；以及哪些语料 asset 在 context 里 ——
+并附上「rendered 这一列是派生的、不是记录下来的」这个注意事项。
+
+第 5 块就是答案所在：*active customer* 这个 `term` asset 在 context 里，而它的 `summary` 对 `status`
+列一个字都没说。引擎没有任何办法知道。他点 **Reproduce** —— 一次模型调用，而按钮就这么写着 ——
+仍然返回 4,102。
+
+他起草一处变更：一个字段，`term_active_customer.summary`，加上那个别名和那条规则。diff 按 register
+声明的字段序逐字段渲染，带一个对着上限的实时字数统计 —— 因为一个 251 字符的 summary 如果是在导出
+**之后**才发现，那就是一次白跑的往返。他把三条 observation 置为 `addressed`。
+
+**周一 11:41 —— 阶梯。** T0 用生产加载器解析暂存文件。T1 对语料的一份**快照**（不是语料本身）跑全树
+一致性、`build_structure` 和 `build_index`，按规则 id 报告无新增发现。T2 把这个 term 的 binding 对活体
+catalog 解析。T3 成对重放检索、agent 模型关闭：三道受影响的问题上 gold 表保持被覆盖，其余没有一道
+丢失 coverage。总挂钟时间约半分钟。总花费 **$0**（§11，M4）。
+
+因为这个补丁改的是 `summary`，T3 在这里是一个真实的验证器。如果它只改了 `body`，补丁会带一条说明
+「T3 看不见它，诚实的层级是 T4」—— 补丁触碰的字段决定它最便宜的诚实层级，而记录写明是哪一个。
+
+**周一 11:45 —— 工程师。** Dev 跑一条命令：
+
+```bash
+uv run --frozen python tools/export_bundle.py --patch pat-… --out ./bundles
+```
+
+拿到一个目录：外科式的 `changes.patch`（一行 diff，因为 `corpus/patch.py` 就地编辑字段而不是重新 dump
+整个文件）、一份不含任何读者 prose 的生成 `COMMIT_MSG.txt`、post-state 文件全文、以及 `evidence/`
+里每位读者原话（放在代码围栏里）。他在语料仓库里应用它：
+
+```bash
+cd ../BIRD-corpus && git checkout -b return/pat-… && git apply -p1 …/changes.patch
+git commit -F …/COMMIT_MSG.txt
+```
+
+那次 commit 经过语料仓库自己的评审和 CI —— 一致性检查、棘轮，以及一个必须能起来的 `build_index`。
+**这是整个环里对语料内容的唯一一次写入**，而且它是一个人做的。本仓库里没有任何东西能做这次写入。
+
+**周二 —— 环靠「读」自己闭合。** 引擎重新加载语料。落地的那个 asset 在 `Provenance.source_refs` 里带
+`obs:<observation_id>`，于是 `derived_state` 把 Priya 的 observation 与已加载语料对上，发现该 asset 在、
+且其 `summary` 等于 bundle 的 post-state。她那一行现在读作 `landed_verified`。没有 webhook，没有回调：
+**回执藏在内容里**，所以一条投诉只能被「变更真的在那里」标记为 addressed。
+
+**周二 —— Priya 去看。** *My reports* 显示她那一行，带一个动作：**Re-ask**。它打开一个新 thread，
+预填她原来的问题。她拿到 412。引擎**不**把这个和 4,102 做比较，也不因此标记任何东西为已解决：
+配置相同的两次运行有 12.7% 的问题会翻转，所以一次重问不是证据。它是读者在看 —— 而那是唯一可得的
+判断，也正是她周一请求的那个判断。
+
+**这个环在每一步都拒绝声明什么。** 状态是 `addressed`，绝不是 `resolved` —— 在每一张 gold 表都被许可
+的那些 turn 上，引擎的实测准确率是 0.7555，所以凭一次落地 commit 就关闭的投诉里大约每四个有一个仍然
+是错的。唯一的免费升级是 `retrieval_verified`，而它只说明那些表可以取到了。
+
+### 同一条走查，走歪的时候
+
+四个分支，因为一个功能同样由这些定义：
+
+| 发生了什么 | 去哪 |
+|---|---|
+| Dev 复现，发现现在答对了 | `declined` / `cannot_reproduce`，而 Priya 读到「在现在运行的语料上再问一遍，它答对了。如果你仍然能复现，请带上新答案重新提交一次。」 |
+| 缺陷在引擎而不在语料 —— 比如 `r_star_projection` | `declined` / `engine_defect`。没有东西可打补丁。一条得不出这个结论的流水线一定会去打补丁，这就是词汇表里有这个词的原因 |
+| `git apply` 冲突，或语料 CI 重排了文件 | `superseded`，在下一次读取时派生出来，并退回 steward。一个两状态模型会把它叫成「已交接，永远」—— 那正是今天关不掉的 `open: true` 在上一层的复现 |
+| Dev 定不下 *active customer* 是什么意思，而没人可问 | `blocked_on_a_person`，附一行必填说明。Priya 读到「正在等一个人：<说明>。没有任何东西在自动推进这件事。」没有指派人下拉框，因为没有用户存储可以填充它 |
+
+---
+
 ## 1. 词汇，以及它避开的那些冲突
 
 这个代码库已经把大部分显而易见的词用掉了。下表每一个规范术语，都是对着一个「会把两个含义压到一个名词上」
@@ -189,7 +274,7 @@ CREATE TABLE IF NOT EXISTS observation (
   refused_by       TEXT,
   generated_sql    TEXT,
   licensed_json    TEXT NOT NULL DEFAULT '[]',
-  delivered_json   TEXT NOT NULL DEFAULT '[]',   -- 需要那个新的 register 字段，§11
+  rendered_json    TEXT NOT NULL DEFAULT '[]',   -- 需要那个新的 register 字段 `rendered_asset_ids`，§15.5
   schema_ranking_json TEXT NOT NULL DEFAULT '[]',
   corpus_content_hash TEXT,
   prompt_set_hash  TEXT,
@@ -315,6 +400,8 @@ knob 放到每一行 serve 记录上，而 `measure/gates.py::_knobs_resolved_ga
 | `triaged` → `declined` | `steward` | `decline_reason` 已设置 |
 | `triaged` → `duplicate` | `steward` | `duplicate_of` 指向一个 open 或 addressed 的 observation，**并且这条 observation 加入那一条的 patch 集合** —— 否则落地时受影响的 observation 会算成一条而不是两条 |
 | `triaged` → `addressed` | `steward` | 至少有 1 个处于 `draft` 或 `exported` 的 patch |
+| `triaged` → `blocked_on_a_person` | `steward` | 一行 `blocked_note` 已填。**不是路由动作** —— 没有可以升级给的人，所以这是一个有名字的状态而不是一个指派人。它的文案说明没有任何东西在推进它 |
+| `blocked_on_a_person` → `triaged` \| `declined` \| `addressed` | `steward` | 阻塞解除 |
 | `declined` → 任何状态 | **拒绝。** 重新打开是一条**新的** observation，因为原件的证据包挂在产生它的那个 turn 上 | |
 
 ### 存储 —— patch
@@ -494,7 +581,7 @@ def apply_create(root: Path, *, asset_yaml: str, namespace: str) -> Path:
 # api/visibility.py，与 `visible` 并列
 def narrow_feedback_rows(rows: Sequence[Mapping[str, Any]],
                          withheld: frozenset[str]) -> list[dict[str, Any]]:
-    """丢掉其 patch 点名了被withheld asset 的行；把 `licensed`/`delivered` 里点名了这类 asset 的
+    """丢掉其 patch 点名了被withheld asset 的行；把 `licensed`/`rendered` 里点名了这类 asset 的
     条目清空。已声明的豁免，被断言而不是被撞见：
       * `note` 和 `expected` 原样承载 —— 人写的 prose，没有可收窄的东西
       * `generated_sql` 原样承载 —— `/audit/turns` 已经把它披露给同一个调用方，所以在这里扣住
@@ -518,7 +605,7 @@ bnd-pat-…/
   after/               post-state 文件全文，好让评审者读结果而不是读 diff
   evidence/
     observations.md    每位读者说了什么，原文，放在代码围栏里
-    turn-<id>.json     问题、SQL、ledger、licensed、delivered、schema_ranking
+    turn-<id>.json     问题、SQL、ledger、licensed、rendered、schema_ranking
     ladder.json        每一层的 GateResult，包括没跑的那些以及为什么没跑
     reproduction.md    复现器发现了什么，或者说明它没跑
 ```
@@ -885,8 +972,8 @@ T4 和 T5。它们花钱，所以由一个已经决定要花这笔钱的人来�
 |---|---|---:|---|
 | **0** | **给服务语料 `git init`**、首次提交，并修掉 `corpus/snapshot.py::snapshot` 那个无守卫的 `rmtree` | 0.5 | 落地那一半没有东西可落，而第一个 `snapshot` 调用者会把一个真实缺陷武器化 |
 | 1 | `feedback/{events,validate,lifecycle,cluster}.py` + `store.py` + `attribution.py`；`LAYERS`；两个读者动词写入存储；读取方并集存储与通道 | 4 | 在没有任何模型的情况下关掉「没有东西关闭一个 open 行」。**回答第一个真问题：投诉到底会不会聚类？** |
-| 2 | 分析师捕获 UX + `/observations` 读接口 + reports 页面 + **re-ask 按钮** | 3.5 | 文案不再是一个小谎，而读者可以自己验证 |
-| 3 | `corpus/patch.py` + `tools/export_bundle.py` + `tools/check_landed.py`（含 `--verify`）+ steward 界面 + 四个 admin 动词 | 5 | **一个不含任何 agent 的完整闭环。** steward 今天就能交给工程师一个 bundle |
+| 2 | 分析师捕获 UX（§15.2）+ `/observations` 读接口 + `/reports`（§15.3）+ **re-ask 按钮** + `review-copy.ts` 及其检查脚本 | 3.5 | 文案不再是一个小谎，而读者可以自己验证 |
+| 3 | `corpus/patch.py` + `tools/export_bundle.py` + `tools/check_landed.py`（含 `--verify`）+ `/review`（§15.4–15.8）+ 四个 admin 动词 | 5 | **一个不含任何 agent 的完整闭环。** steward 今天就能交给工程师一个 bundle |
 | 4 | 阶梯 T0–T2、六条新规则、棘轮、`corpus_release`、`ArmProfile.hypothesised_effect` | 4 | 免费闸门与可比性修复，两者都不依赖流水线 |
 | 5 | `tools/drain_raised.py`，然后删除 `serve/raised.py`、`api/raised_write.py`、`ThreadTurnLog.append_raised`/`raised_of` 以及读取并集 | 1.5 | **在** drain 报告为零并保持之后。通道删除单独成一步，因为它的风险完全是迁移风险 |
 | 6 | prompt 注册表拆分 + `triage/` 骨架 + `stop_after="diagnose"` 的 `diagnose` | 4 | **第一次花 token。** 先发布并度量 Diagnoser，再在它上面建东西 |
@@ -967,7 +1054,256 @@ T4 和 T5。它们花钱，所以由一个已经决定要花这笔钱的人来�
 
 ---
 
-## 15. 这份设计不做什么
+## 15. 界面
+
+三个角色，三块屏幕，以及一个拥有全部文案的模块。
+
+### 15.1 新增与改动的文件
+
+| 路径 | 做什么 |
+|---|---|
+| `ui/app/reports/page.tsx` | 新路由，面向分析师 |
+| `ui/app/review/page.tsx` | 新路由，面向 steward |
+| `ui/components/answer/raise-note.tsx` | 重写（§15.2） |
+| `ui/components/answer/category-picker.tsx` | 新增 |
+| `ui/components/reports/report-list.tsx` | 新增 |
+| `ui/components/reports/report-status.tsx` | 新增 —— 状态 chip **及其句子**，一个组件，好让 §5 只有一个渲染者 |
+| `ui/components/reports/re-ask-button.tsx` | 新增（§5） |
+| `ui/components/review/review-surface.tsx` | 新增 —— 双栏外壳 |
+| `ui/components/review/review-queue.tsx` | 新增 |
+| `ui/components/review/cluster-panel.tsx` | 新增 |
+| `ui/components/review/evidence-bundle.tsx` | 新增 |
+| `ui/components/review/reproducer.tsx` | 新增 |
+| `ui/components/review/asset-diff.tsx` | 新增 |
+| `ui/components/review/decision-bar.tsx` | 新增 |
+| `ui/components/review/handoff-panel.tsx` | 新增 —— 导出后的 bundle 下载与 manifest |
+| `ui/components/clarifications/pending-queue.tsx` | 一个链接加两段文案（§9） |
+| `ui/lib/category-taxonomy.ts` | 新增 —— `category` → 标签。唯一的映射 |
+| `ui/lib/review-copy.ts` | 新增 —— §3、§5、§15 里**每一句**面向用户的文案 |
+| `ui/lib/my-reports.ts` | 新增 —— `localStorage` 存储 |
+| `ui/lib/schemas.ts`、`types.ts`、`api-client.ts`、`hooks/queries.ts` | zod schema、`z.infer` 类型、9 个 client 方法、6 个 hook |
+| `ui/components/layout/nav.tsx` | 两个 `LINKS` 条目 |
+
+**`ui/lib/review-copy.ts` 是把「诚实文案」规则变成机械的。** 每一句都住在那里、按状态索引，而
+`ui/scripts/check-review-copy.ts` 和其他几个 `check-*.ts` 一样跟着 `npm run lint` 跑。它断言两件事：
+observation / patch / decline 三个状态联合的每一个成员都有一句文案；以及没有任何一句命中禁用词表 ——
+`robust`、`seamless`、`comprehensive`，以及这个项目最在意的两个：**`automatically`** 和
+**`will be fixed`**（除否定用法外）。两项检查在文案内联写在组件里时都不可能做，而这正是这个模块存在的
+全部理由。
+
+### 15.2 分析师：两次点击完成捕获
+
+三个状态，而分析师在第一个之后就可以停。
+
+**状态 1 —— 触发器。** 答案卡上一个 `variant="outline" size="sm"` 按钮，位置与今天相同、标签也相同
+（`"This answer is wrong"` / `"This refusal looks wrong"`）。它已经好用，而且它是读者认得的那一句。
+
+**状态 2 —— 选择器。** 点击后**就地**展开 —— 没有对话框、不跳转，因为分析师正要指着那个答案 ——
+展开成一个五行（已交付）或三行（被拒）的竖排列表，取自 §3。**每一行一次点击并立即提交。没有提交
+按钮。** 中位交互是两次点击、零打字，对比今天的两次点击加一个空文本框。
+
+**状态 3 —— 补充项，在提交成功**之后**展示。** 回执上两个可选单行输入框，各自可独立保存：
+
+- `expected` —— `"If you know it: what should the answer have been?"`，200 字符。**steward 能拿到的
+  单一最高价值字段**，因为它是这一页上唯一可证伪的断言，而且它不需要任何 schema 知识（一个数字、
+  一个名字、「大概 400，不是 40」）。
+- `note` —— 已有的自由文本，上限不变仍是 `RAISED_NOTE_MAX_CHARS = 4000`，标签改为
+  `"Anything else that would help (optional)"`。
+
+**这个倒置就是重点。** 今天是 note 卡着提交，所以一个不想写字的分析师什么都不给你。这里提交已经完成，
+补充项是额外的 —— 而那是它们唯一会被填的安排。
+
+**选择器刻意不做什么。** 它绝不点名任何表、列、metric 或 term。不是因为分析师不能从下拉框里挑一个，
+而是因为一个有 13,281 个 asset 的下拉框会把两次点击的动作变成一次搜索任务，而一次**错误的**选择比不选
+更糟：它把 steward 送到错的 asset 上，还带着一个看起来很确定的指针。`term_mismatch` 是这个界面能靠到
+最近的地方，而它点名的是一**类**对象，绝不是一个实例。定位 asset 是 steward 的工作，§15.4 给他们机械。
+
+**回执文案原文** —— 它移除了产品里今天就存在的一个谎（`"Filed. It is on the pending list."`，而那个
+列表从不被清空）：
+
+> 已提交。数据管理员按最早优先复核这些。这台引擎不知道你是谁，所以不会有人给你发邮件 —— 到
+> **My reports** 看结果。
+
+### 15.3 `/reports`：分析师之后看到什么
+
+`GET /observations`，按 `localStorage` 里的 id 过滤。**`ui/lib/my-reports.ts` 是浏览器记忆，而页面
+就这么说** —— 只有一个 principal、没有用户存储，所以在这里发明一个按用户的概念会是一个并不存在的边界：
+
+> 这个列表由这个浏览器记住，不由你的账号记住。这台引擎不知道你是谁，所以换一个浏览器会看到不同的列表。
+
+每一行：问题、提交时间、category 标签，以及一个状态 chip，其句子就是 §5 里该状态对应的那一句。
+`landed_verified`、`landed_matched` 和 `retrieval_verified` 带 **Re-ask** 动作（§5）。
+
+### 15.4 `/review`：steward 的屏幕，钱在这里
+
+一个新路由，导航条目放在 **Pending** 和 **Settings** 之间。**不是 `/audit` 上的第三栏**，理由是
+`pending-queue.tsx` 自己陈述过的那条再往前推一步：`/audit` 是最新优先、涵盖每一个 turn；这里是最早
+优先、只涵盖有人投诉过的，而把两个滚动方向放在一块屏幕上会让两者都更差。
+
+```tsx
+// ui/components/review/review-surface.tsx
+export function ReviewSurface(): JSX.Element {
+  // URL 里的 `?cluster=`，不是 useState：steward 在这里的整个工作就是把一个决定交给别人，
+  // 而「看这个」必须是一个链接。
+  const [cluster, setCluster] = useQueryParam("cluster");
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-6">
+      <ReviewQueue selected={cluster} onSelect={setCluster} />
+      {cluster && <ClusterPanel clusterId={cluster} />}
+    </div>
+  );
+}
+```
+
+`PageShell` 的 description，常驻在页面上 —— 一句话说清产品边界：
+
+> 人们标记出来的答案和拒答，按看起来是同一个问题分组。最早优先。在这里做决定会**起草**一处对语义层的
+> 变更 —— 它不会应用任何变更。
+
+**队列。** `GET /observations?state=open,triaged&group=cluster`，cluster 内联其成员（3–20 条短行；
+每次点击为此多一次往返毫无意义）。每一行：`n` 条 observation · category 标签 · schema · 最早的
+`filed_at` · 两三个表名 · 一个显示**不同问题数**的 badge —— 那个数字才说明这是一个人点了两次，还是
+五个人撞在同一面墙上。
+
+**按 cluster 最早成员的时间排序，不按规模。** 今早的五条 cluster 并不比等了一个月的一条更紧急，而按
+规模排序会让长尾永久不可见。
+
+cluster 标题下的说明常驻，因为这个分组是结构化的：
+
+> 按被报告的问题类型、以及那些 turn 被允许读的表分组。这里没有任何东西读过那些问题并判定它们是同一个
+> 意思 —— 在把它们当作一个问题处理之前，先看看这些行。
+
+**空状态：** `"Nothing to review. Every observation filed on this server has been triaged."` ——
+一句与 `/reports` 的空状态**不同**的话，因为「没人提交过任何东西」和「全部已分诊」是两个不同的事实，
+而把其中一个读成另一个，正是一个队列被弃用的方式。
+
+**刻意不在队列里的：** SQL、ledger、record。全都只有一次点击之遥。一个展示证据的队列是一个没人扫的队列。
+
+### 15.5 证据包：七个块，全部在决策之上
+
+`ui/components/review/evidence-bundle.tsx`。每选中一个 cluster 取一次。
+
+1. **问了什么、回来了什么。** 问题原文；然后 `outcome`，非 `answered` 的 turn 再加 `terminal_reason`
+   和 `refused_by`，经由已有的 `lib/answer-delivery.ts::terminalLabel` 渲染 —— **好让 steward 读到
+   分析师读到的同一句话**；然后 `answer_text`。
+2. **读者说了什么。** category 标签、`expected`、`note`。`expected` 被排版成引文，并在这一块里获得最大
+   视觉权重，因为它是这一页上唯一可证伪的断言。
+3. **那条语句。** `generated_sql` 放在已有的只读 `<SqlBlock/>` 里，加上经
+   `<AgentTimeline/>` / `buildStepsFromLedger(execution)` 渲染的尝试 ledger —— 与答案卡用的是同一批
+   组件。**与决策在同一块屏幕上，不在一个 tab 后面。** 一个必须跳走才能读 SQL 的 steward 会在不读它的
+   情况下做决定。
+4. **这个 turn 被允许读什么。** `licensed`（Layer 6 据以执行的允许清单）和 `schemas`（路由器的选择），
+   旁边是 `schema_ranking` 的 top 5 及分数 —— 因为「gold schema 排第 4」和「它从来不是候选」是两个
+   修法相反的问题，而那个 register 字段的存在就是为了区分它们。
+5. **哪些语料 asset 在 context 里。** 关键所在，三列，每个 asset 都链进 `/corpus`：
+   - **Found** —— 每个 `facet_hits` 条目一行，带 `asset_type`、找到它的 facet，以及它的
+     `lexical`/`semantic` 分数。
+   - **Reachable** —— `pulled_in`（`asset_id → resolve|connect`），合并并标记。
+   - **Rendered** —— *派生*：found ∪ pulled_in，减去 `budget_dropped`，减去 `evicted.dropped_ids`。
+
+   那条说明，也就是诚实的那部分，属于面板而不属于文档：
+
+   > 「Rendered」是派生的，不是记录下来的。没有任何 register 字段列出真正在模型读到的那个 block 里的
+   > asset id —— `context_hash` 是一个摘要，而 `evicted` 只点名了预算丢掉的那些。这一列是
+   > *found 减去上限和预算移除的部分*，而它与真实集合相同 —— 除非在检索和渲染之间有什么东西移除了一个
+   > asset 却没有说。
+
+   **那个一字段修复，好让这条说明是一个决定而不是一次摊手：把 `rendered_asset_ids` 加进
+   `RECORD_REGISTER` 的 `Stage.assemble`。** 一个 `Tier.treatment` 字段，其消费者就是这个面板，把一次
+   派生变成一次观察。它必须**与**这个面板一起落地、不能更早 ——
+   `tools/check_declared_is_consumed.py` 和 `test_the_declared_but_unconsumed_set_does_not_grow`
+   就是理由，而它们是对的。
+6. **复现器**（§15.6）。
+7. **完整 record**，折叠，仅 `atLeast(mode, "engineer")` —— 就是 `/audit` 的 `TracePanel` 已经渲染的那
+   份 `GET /audit/turns/{id}/trace` 载荷，复用而不是重新实现。若 `incomplete_fields > 0` 则它**不**
+   折叠，并携带：「这个 turn 的 record 缺 N 个必填字段。不要据此起草变更 —— 关于这个 turn 有些东西没被
+   记录下来。」
+
+**它刻意不展示什么：结果行。** `result_table` 按 ADR 0006 §11 只在实时时存在、不在 record 里，所以没有
+东西可展示，而一个为它留了位置的面板会读作「那些行没被保存」而不是「那些行不保留」。
+
+**披露情况，因为 ADR 0012 §8.7 要求说明。** 这个界面读 `turn_log`，它不是 grant-aware，所以它披露的
+恰好就是 `GET /audit/turns/{id}/trace` 已经向同一个未认证调用方披露的东西。**它不扩宽任何东西，也不
+收窄任何东西。** 而第 5 块里语料 asset 那一半**是**可收窄的、因此**就是**被收窄的：那些 asset 经由
+`visible(get_session())` 读取，所以一个被 withheld 的 asset 会像在 `/corpus/assets` 里那样被省略。
+这种不对称是唯一可用的那一种 —— 在隔壁路由照样提供 SQL 的情况下拒绝展示 SQL 是演戏，而在 `visible()`
+存在的情况下在这里扣住一个 asset 是一个洞。
+
+### 15.6 复现器
+
+steward 需要一个 record 给不了的事实：*这件事现在还发生吗？* `cannot_reproduce` 是一个驳回理由，所以
+它必须可核。**它是一个按钮，它花一次模型调用，而按钮就这么写着。** 它开一个**新**对话（绝不是投诉者的
+thread），而它的结果记在 observation 上，不记在语料上。
+
+### 15.7 diff：逐字段，绝不是文本 diff
+
+```tsx
+export type FieldEdit = {
+  path: string;             // "summary" | "body" | "reliability.note" | "columns[betrieb_id].body"
+  before: string | null;    // create 时为 null
+  after: string | null;     // 删除时为 null
+  kind: "scalar" | "block" | "list";
+};
+export function AssetDiff({ edit, fieldOrder }: {
+  edit: AssetEdit;
+  /** 该类型在引擎里声明的字段序，来自 `GET /corpus/fields?type=`。 */
+  fieldOrder: CorpusField[];
+}): JSX.Element;
+```
+
+**不是对 YAML 做文本 diff，而这不可商量** —— 它由 M1 推出。`to_mapping` 省略默认值，所以 `governance`
+和 `reliability` 在取默认值时根本不在文件里，于是设置其中一个时文本 diff 会显示一处**虚假的新增**；
+而 PyYAML 在 80 列处重排，所以对一个词的 `summary` 改动做文本 diff 会变成整段 diff。字段序从
+`GET /corpus/fields?type=` 读取，所以往 `corpus/schema.py` 加一个字段，它会出现在这里而这个组件不用改。
+
+- **`scalar`**（`summary`、`reliability.note`）—— 单行，行内**按词**diff，新增和删除都可见，加一个
+  对着上限的实时字数统计。一个 251 字符的 summary 如果是在导出**之后**才发现，那就是一次白跑的往返。
+- **`block`**（`body`）—— 双栏，**按行**。8,000 字符上做按词 diff 无法阅读，而 `body` 是真正到达 prompt
+  的那个字段，所以它在屏幕上占最大空间。
+- **`list`**（`synonyms`、`rules`、`source_refs`）—— 新增项和删除项做成 chip，**绝不做重排后的文本
+  diff**。YAML 序列顺序对这几个都不具语义，而把一次重排渲染成一次变更会训练评审者去略读。
+- **未改动字段折叠**而不是隐藏，藏在「显示这次没有改动的 9 个字段」后面 —— 否则一个不在 diff 里的字段
+  和一个不在 asset 里的字段看起来一模一样。
+
+**这个组件拒绝渲染两样东西**，而两者都是拒绝而不是缺口：任何形式的 `governance`（一个能提议排除的屏幕
+**就是**那个「其缺席即控制」的工具 —— ADR 0015 §8），以及对一张表内联 `columns` 的任何结构性改动（§6）。
+
+### 15.8 决策条
+
+吸底在详情栏底部，好让它在任何滚动位置都与证据同屏。这是这一页上最重要的布局决定，也是为什么这一栏
+内部滚动而不是让整页变长。
+
+```tsx
+export function DecisionBar({ cluster, patch, blocked }: {
+  cluster: ObservationCluster;
+  patch: PatchDraft | null;
+  /** 非空则禁用 Draft/Export，并原文渲染：一致性 + 内容 + governance。 */
+  blocked: readonly string[];
+}): JSX.Element;
+```
+
+四个动作，而第四个是大多数复核工具都省掉的那个：
+
+- **Draft a change** → §15.7 允许的字段集的编辑器，然后 `POST /patches`。
+- **Decline** → 一个覆盖八个 `decline_reason` 成员的 `Select`，每一项把它在 §5 的那句话渲染成
+  **该选项的描述**，好让 steward 在选之前就读到分析师将要读到的话。不接受纯自由文本驳回：一个没人能
+  聚合的理由是一个没人复核的理由。
+- **Fold into another observation** → `duplicate`，并加入那一条的 patch 集合（§5 —— 否则落地时受影响的
+  observation 会算成一条而不是两条）。
+- **Escalate。** 没有可以升级**给**的人 —— 一个 principal，没有指派人。所以它不是一个路由动作，它是
+  **一个有名字的状态**：`blocked_on_a_person`，加一行必填说明。面向分析师的文案：「正在等一个人：
+  <说明>。没有任何东西在自动推进这件事。」指派人下拉框被拒绝了：没有用户存储可以填充它，而一个只有
+  一项的下拉框是对工作流的一个谎。
+
+### 15.9 显示模式
+
+仅工程师可见的那些块（§15.5 第 7 块、`schema_ranking` 分数、阶梯细节）藏在已有的
+`ui/lib/display-mode.ts::atLeast(mode, "engineer")` 后面。不发明任何新东西：那个模块本来就带着「显示
+模式不是安全边界」的警告，而这份设计不把它变成一个。
+
+---
+
+## 16. 这份设计不做什么
 
 - **它不认证任何人。** 单一 principal，而碰到端口仍然就够了。admin 动词以未挂载状态发布；那是一个部署
   开关，不是一个身份。

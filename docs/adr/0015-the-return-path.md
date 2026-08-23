@@ -534,11 +534,13 @@ authorises nothing. The UI copy must say so.
 4. **On the one verb that ships enabled, this design narrows by arithmetic.** One row once,
    quota'd, sweepable — against today's row re-serialised into every later checkpoint of a thread
    in a store nothing sweeps.
-5. **One new register field.** The delivered asset set is not recoverable from a turn record —
-   `context_hash` digests it and is not invertible — and both the review surface and the
-   reproducer need it. It gets named consumers on the same commit, because a field with no reader
-   is the defect `tests/conformance/test_the_declared_but_unconsumed_set_does_not_grow.py` fails
-   the build over.
+5. **One new register field, `rendered_asset_ids` at `Stage.assemble`.** The set of assets that
+   were actually in the block the model read is not recoverable from a turn record —
+   `context_hash` digests it and is not invertible, and `evicted` names only what the budget
+   dropped. Without it the steward's evidence panel has to *derive* that column and say so in the
+   caption. It lands **with** its consumer and not before, because a field with no reader is the
+   defect `tests/conformance/test_the_declared_but_unconsumed_set_does_not_grow.py` fails the build
+   over.
 6. **`corpus/snapshot.py` gets its first caller** — the trial corpus T4 replays against. With the
    Adversary cut, that caller is a deterministic driver replaying a fixed question set rather than a
    model choosing what to replay, which is strictly better: it is auditable. §Open questions 2
