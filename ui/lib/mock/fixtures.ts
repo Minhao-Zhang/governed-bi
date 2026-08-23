@@ -1064,3 +1064,71 @@ export const MOCK_AUDIT_CORPUS: AuditCorpus = {
   problems: { fatal: [], degradations: [], n_fatal: 0, n_degradations: 0 },
   servable: false,
 };
+
+/* ── the return path (ADR 0015) ─────────────────────────────────────────────── */
+
+/**
+ * One imported observation, shaped like the real thing rather than like a happy path.
+ *
+ * `turn_id` and `thread_id` are **null** because an evaluation artifact carries neither on any of
+ * its rows, so a fixture that supplied them would let the panel be built against an artifact nobody
+ * produces. `question_is_held_out` is true, so the offline UI shows the warning the real one shows
+ * — a warning that only appears with a backend attached is a warning nobody sees while building.
+ */
+export const MOCK_OBSERVATIONS = {
+  rows: [
+    {
+      observation_id: "obs-20260823T120000Z-1a2b3c4d",
+      filed_at: "2026-08-23T12:00:00+00:00",
+      source: "eval",
+      kind: "wrong_answer",
+      category: "wrong_scope",
+      state: "open",
+      open: true,
+      note: "",
+      decline_reason: null,
+      duplicate_of: null,
+      blocked_note: "",
+      turn_id: null,
+      thread_id: null,
+      question: "Which brewery made the best-selling root beer in 2016?",
+      outcome: "answered",
+      refused_by: null,
+      generated_sql: "SELECT brauerei_name, COUNT(wurzelbier_id) AS cnt FROM beer_factory.brauerei",
+      licensed: ["beer_factory.brauerei"],
+      schemas: ["beer_factory"],
+      missing_tables: ["beer_factory.wurzelbier"],
+      gold_sql:
+        "SELECT brauerei_name FROM beer_factory.wurzelbier GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1",
+      gold_fingerprint: "gold-abc",
+      pred_fingerprint: "pred-def",
+      quality_flags: [],
+      arm: "v4",
+      question_id: "train_5274",
+      db_id: "beer_factory",
+      corpus_content_hash: "6e5c7b4be83d5682",
+      question_is_held_out: true,
+      patches: [] as Record<string, unknown>[],
+      history: [] as Record<string, unknown>[],
+    },
+  ],
+  meta: { n: 1, total: 1, truncated: false, limit: 50, offset: 0 },
+};
+
+export const MOCK_OBSERVATION_CLUSTERS = {
+  clusters: [
+    {
+      key: "wrong_scope|beer_factory",
+      category: "wrong_scope",
+      schema: "beer_factory",
+      n: 1,
+      n_distinct_questions: 1,
+      // Empty, and that is the common case rather than a gap: the members' missing tables are
+      // mostly different ones, which is why the key does not include them.
+      shared_missing_tables: [] as string[],
+      oldest_filed_at: "2026-08-23T12:00:00+00:00",
+      observations: MOCK_OBSERVATIONS.rows,
+    },
+  ],
+  meta: { n: 1, total: 1, truncated: false, limit: 200, offset: 0, grouped: 1 },
+};

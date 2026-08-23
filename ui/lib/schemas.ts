@@ -704,3 +704,84 @@ export const corpusRowsSchema = z.object({
   unknown_where: z.array(z.string()),
   detail: z.string().nullable().optional(),
 });
+
+/* ── /observations (ADR 0015) ───────────────────────────────────────────────── */
+
+/**
+ * One row of the return path's store.
+ *
+ * `open` is validated as its own boolean although it is derivable from `state`, because the server
+ * computes it and a client that recomputed it would be a second answer able to disagree with the
+ * first. `question_is_held_out` is carried rather than inferred from `source` for a sharper reason:
+ * it is a **warning**, and a warning the client derives is a warning the client can get wrong.
+ */
+export const observationSchema = z.object({
+  observation_id: z.string(),
+  filed_at: z.string(),
+  source: z.string(),
+  kind: z.string(),
+  category: z.string().nullable(),
+  state: z.string(),
+  open: z.boolean(),
+  note: z.string(),
+  decline_reason: z.string().nullable(),
+  duplicate_of: z.string().nullable(),
+  blocked_note: z.string(),
+  turn_id: z.string().nullable(),
+  thread_id: z.string().nullable(),
+  question: z.string(),
+  outcome: z.string().nullable(),
+  refused_by: z.string().nullable(),
+  generated_sql: z.string().nullable(),
+  licensed: z.array(z.string()),
+  schemas: z.array(z.string()),
+  missing_tables: z.array(z.string()),
+  gold_sql: z.string().nullable(),
+  gold_fingerprint: z.string().nullable(),
+  pred_fingerprint: z.string().nullable(),
+  quality_flags: z.array(z.string()),
+  arm: z.string().nullable(),
+  question_id: z.string().nullable(),
+  db_id: z.string().nullable(),
+  corpus_content_hash: z.string().nullable(),
+  question_is_held_out: z.boolean(),
+  /** Opaque on purpose: the patch shape is not settled, and pinning it here would fail the parse
+   * for every row in the response the day a field is added. */
+  patches: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  history: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+});
+
+export const observationQueueMetaSchema = z.object({
+  n: z.number(),
+  total: z.number(),
+  /** Load-bearing (ADR 0009): a silently short list reads as "this is everything". */
+  truncated: z.boolean(),
+  limit: z.number(),
+  offset: z.number(),
+  grouped: z.number().optional(),
+});
+
+export const observationsSchema = z.object({
+  rows: z.array(observationSchema),
+  meta: observationQueueMetaSchema,
+});
+
+export const observationClusterSchema = z.object({
+  key: z.string(),
+  category: z.string().nullable(),
+  schema: z.string(),
+  n: z.number(),
+  /** Whether this is one person hitting a wall repeatedly or several questions blocked by one gap.
+   * The two want different amounts of attention and `n` alone cannot tell them apart. */
+  n_distinct_questions: z.number(),
+  /** The **intersection** across members, not the union: a union grows with the cluster and stops
+   * describing what its members share. Empty is a real answer. */
+  shared_missing_tables: z.array(z.string()),
+  oldest_filed_at: z.string(),
+  observations: z.array(observationSchema),
+});
+
+export const observationClustersSchema = z.object({
+  clusters: z.array(observationClusterSchema),
+  meta: observationQueueMetaSchema,
+});

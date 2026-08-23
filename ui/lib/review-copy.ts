@@ -1,0 +1,136 @@
+/**
+ * Every user-facing string on the return path's surfaces, in one module.
+ *
+ * **Why one module.** This project's UI prose states what a surface *cannot* do — the pending
+ * queue's own component says answering from it is refused and why — and that discipline survives
+ * only if the strings are somewhere a person can read as a set. Scattered through components they
+ * drift: one says "reviewed and closed", the next says "resolved", and the second one is a claim
+ * this design refuses to make.
+ *
+ * **The one claim never made here.** No string says a landed change fixed anything. On turns where
+ * every gold table *was* licensed the engine's measured accuracy is 0.7555, so about one in four
+ * complaints closed on a landed commit would still be wrong. `addressed` is the stored word,
+ * `retrieval_verified` is the narrowest upgrade the free ladder licenses ("the tables needed are
+ * reachable"), and `resolved` is not in the vocabulary.
+ *
+ * Two phrases are banned outright and neither appears below outside a negation: **"automatically"**,
+ * because nothing here is chasing anything on its own, and **"will be fixed"**, because nobody
+ * knows that.
+ */
+
+/** Observation states the server can send, as the wire spells them. */
+export type ObservationState =
+  | "open"
+  | "triaged"
+  | "declined"
+  | "duplicate"
+  | "addressed"
+  | "blocked_on_a_person";
+
+/** What a reader sees for each stored state. A badge with no sentence is what teaches
+ *  an operator to ignore a queue, so every member has one. */
+export const STATE_COPY: Record<ObservationState, { label: string; sentence: string }> = {
+  open: {
+    label: "Open",
+    sentence: "Filed. Nobody has looked at it yet.",
+  },
+  triaged: {
+    label: "Being reviewed",
+    sentence: "Somebody has looked and is still deciding.",
+  },
+  declined: {
+    label: "Closed",
+    sentence: "Reviewed and closed without a change. The reason is on the row.",
+  },
+  duplicate: {
+    label: "Folded in",
+    sentence: "The same problem as another report, and it joins that one's change.",
+  },
+  addressed: {
+    label: "Change drafted",
+    sentence:
+      "A change to the semantic layer has been drafted. It is not in the engine until somebody commits it.",
+  },
+  blocked_on_a_person: {
+    label: "Waiting on a person",
+    sentence: "Waiting on a person. Nothing is chasing this on its own.",
+  },
+};
+
+/** Decline reasons. The reason **is** the notification — there is no badge without a sentence. */
+export const DECLINE_COPY: Record<string, string> = {
+  working_as_intended:
+    "Reviewed and closed: the engine was right. The answer matches what is in the data.",
+  not_a_corpus_problem:
+    "Reviewed and closed: the data itself is wrong or missing. The semantic layer cannot fix that, and this engine is not where it gets fixed.",
+  needs_a_schema_change:
+    "Reviewed and closed: answering this needs a table or column that does not exist in the warehouse. Someone has to build it first.",
+  engine_defect:
+    "Reviewed and closed as a defect in the engine, not the semantic layer. It has been written down where engine defects are written down.",
+  out_of_scope: "Reviewed and closed: this is not a question this engine is meant to answer.",
+  cannot_reproduce:
+    "Reviewed and closed: asked again against the corpus running now, it answered correctly. If you can still reproduce it, file it again with the new answer.",
+  insufficient_detail:
+    "Closed without a change: there was not enough here to act on. This engine does not know who filed this report, so nobody could be asked for more.",
+  wont_fix_cost:
+    "Reviewed and closed: fixing this properly is more work than it is worth right now. It is a real problem and it is not being fixed.",
+  dataset_defect:
+    "Closed as a defect in the benchmark rather than in the engine or the semantic layer: no query over this warehouse can match the reference answer.",
+};
+
+/** Categories, in the words a reader would use. Never names a table or a column. */
+export const CATEGORY_COPY: Record<string, string> = {
+  wrong_value: "The number is wrong",
+  wrong_scope: "It used the wrong data — wrong table, wrong filter, wrong dates",
+  wrong_rows: "It counted or combined the wrong records",
+  misread_question: "It answered a different question",
+  term_mismatch: "A word means something else here",
+  unverifiable: "Cannot tell whether this is right",
+  false_refusal: "This data exists — it should have been able to answer",
+  bad_clarification: "The question it asked back did not make sense",
+  unclear_refusal: "Right to decline, but it should have said why",
+  attempt_capped: "It ran out of attempts",
+  column_suspect: "A column's values look untrustworthy",
+  column_excluded: "A column should be hidden",
+  reusable_fact: "A fact worth keeping",
+};
+
+export const REVIEW_COPY = {
+  pageTitle: "Review",
+  /** The product boundary in one sentence, permanently on the page. */
+  pageDescription:
+    "Answers and refusals somebody flagged, grouped by what looks like the same problem. Oldest first. Deciding here drafts a change to the semantic layer — it does not apply one.",
+
+  /** Always shown under a cluster heading, because the grouping is structural. */
+  clusterCaption:
+    "Grouped by the kind of problem and the schema it happened in. Nothing here read the questions and decided they mean the same thing — check the rows before you treat them as one problem.",
+
+  /** Measured, and stated so nobody reads a cluster of one as a weak signal. */
+  clusterWeakness:
+    "On the 73 failures imported from the v4 arm, 37 of 54 clusters hold a single observation and the largest holds three. Grouping helps about half the queue and no more.",
+
+  queueEmpty: "Nothing to review. Every observation filed on this server has been triaged.",
+  /** Deliberately a different sentence from the queue's: "nobody filed anything" and "everything
+   *  is triaged" are different facts, and reading one as the other is how a queue is abandoned. */
+  storeEmpty:
+    "No observations. Nothing has been filed on this server, and nothing has been imported from an evaluation arm.",
+
+  selectPrompt: "Select a cluster to see what happened and what the reference answer was.",
+
+  /** Block 5 of the evidence panel does not exist, and the panel says why rather than omitting it
+   *  silently — a missing block reads as "we did not bother" instead of "there is no data". */
+  noAssetEvidence:
+    "Which corpus assets were in context is not shown, because an evaluation artifact does not record it: facet_hits and pulled_in are absent from every row. Locate the asset by hand in Corpus, or re-run retrieval.",
+
+  /** The warning that makes the held-out flag act like one. */
+  heldOutWarning:
+    "This question is from the held-out evaluation split. Do not copy its wording into a corpus asset — that contaminates the benchmark, and paraphrase leaks cannot be detected.",
+
+  goldHeading: "The reference answer",
+  goldCaption:
+    "The statement the benchmark grades against. It is compared by fingerprint, not read, which is why it is stronger evidence than a sentence anybody could type.",
+
+  missingTablesHeading: "Tables the reference answer needs that the turn was not allowed to read",
+  missingTablesCaption:
+    "The defect itself rather than a symptom. Empty means every table was reachable and the answer was still wrong, which is a different problem.",
+} as const;

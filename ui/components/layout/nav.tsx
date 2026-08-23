@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
   Boxes,
+  ClipboardCheck,
   History,
   MenuIcon,
   MessageCircleQuestion,
@@ -44,6 +45,10 @@ const LINKS = [
   // the ones it did not: a clarification nobody answered never became a turn. The two also read in
   // opposite directions -- a log newest-first, a queue oldest-first.
   { href: "/clarifications", label: "Pending", icon: MessageCircleQuestion },
+  // Between Pending and Settings: both are queues of things waiting on a person, and they read the
+  // same way (oldest first). Pending is questions the engine asked; Review is answers somebody
+  // said were wrong.
+  { href: "/review", label: "Review", icon: ClipboardCheck },
   // Last, and read-only: it answers "what is this engine running on", which is a question you
   // ask about a run you are already looking at, not a place you start.
   { href: "/settings", label: "Settings", icon: Settings },

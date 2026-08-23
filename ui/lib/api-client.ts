@@ -19,6 +19,8 @@ import {
   MOCK_AUDIT_CORPUS,
   MOCK_AUDIT_TRACE,
   MOCK_AUDIT_TURNS,
+  MOCK_OBSERVATIONS,
+  MOCK_OBSERVATION_CLUSTERS,
   MOCK_PENDING_QUEUE,
   MOCK_CAPABILITIES,
   MOCK_ER_GRAPH,
@@ -37,6 +39,9 @@ import {
   auditCorpusSchema,
   auditTraceSchema,
   auditTurnsSchema,
+  observationSchema,
+  observationClustersSchema,
+  observationsSchema,
   pendingQueueSchema,
   corpusFieldsSchema,
   corpusRowsSchema,
@@ -48,6 +53,9 @@ import {
   tableViewSchema,
 } from "@/lib/schemas";
 import type {
+  Observation,
+  ObservationClusters,
+  Observations,
   AssetRow,
   AuditCorpus,
   AuditTrace,
@@ -256,6 +264,53 @@ export const api = {
       `/clarifications/pending${qs({ limit, offset })}`,
       pendingQueueSchema,
       MOCK_PENDING_QUEUE,
+    ),
+
+  /**
+   * The review queue (`GET /observations`), **oldest first**.
+   *
+   * Oldest-first because the row that has waited longest is the one to act on — the opposite of
+   * `/audit`, where the newest event is the one you came for. Read `meta.truncated` before
+   * presenting `meta.total` as a count.
+   */
+  observations: (params: {
+    state?: string;
+    category?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<Observations> =>
+    get(
+      `/observations${qs({
+        state: params.state,
+        category: params.category,
+        limit: params.limit ?? 50,
+        offset: params.offset ?? 0,
+      })}`,
+      observationsSchema,
+      MOCK_OBSERVATIONS,
+    ),
+
+  /**
+   * The same queue, grouped structurally (`GET /observations?group=cluster`).
+   *
+   * The grouping is `(category, schema)` and nothing more — no embedding, no model, no cost — so
+   * the surface that renders it must carry the caption saying nothing read the questions. Measured
+   * on the 73 failures imported from the v4 arm: 37 of 54 clusters hold one observation and the
+   * largest holds three, so this helps about half the queue and no more.
+   */
+  observationClusters: (limit = 200): Promise<ObservationClusters> =>
+    get(
+      `/observations${qs({ group: "cluster", state: "open,triaged", limit })}`,
+      observationClustersSchema,
+      MOCK_OBSERVATION_CLUSTERS,
+    ),
+
+  /** One observation, its drafted patches, and its transition history. */
+  observation: (observationId: string): Promise<Observation> =>
+    get(
+      `/observations/${encodeURIComponent(observationId)}`,
+      observationSchema,
+      MOCK_OBSERVATIONS.rows[0],
     ),
 
   /**

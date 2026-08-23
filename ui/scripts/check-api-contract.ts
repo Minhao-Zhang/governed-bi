@@ -1,10 +1,17 @@
 /**
  * Validate every GET route of a **live** engine against the client's real zod schemas.
  *
- * "Every" is checked against `../docs/openapi.json`, the inventory of record: all fourteen
- * `GET`s are covered below, `/livez` by the reachability probe in `main()` rather than by a
- * case. The one `POST` (`/turns/{turn_id}/raised`) is out of scope on purpose — this checker
- * only reads, so it cannot append a note to somebody's turn log as a side effect of running.
+ * "Every" is checked against `../docs/openapi.json`, the inventory of record: every `GET` is
+ * covered below — fourteen until the return path added `/observations` in its two shapes, so
+ * sixteen — with `/livez` covered by the reachability probe in `main()` rather than by a case.
+ *
+ * The write verbs are out of scope on purpose, and now there are two of them
+ * (`POST /turns/{id}/raised`, `PATCH /observations/{id}`). This checker only reads, so running it
+ * cannot file an observation against somebody's turn as a side effect. That exclusion costs
+ * something real and is worth naming: the 201 envelope those routes return is verified by
+ * `tests/api/test_the_spec_matches_the_server.py` against `docs/openapi.json`, on the Python side,
+ * and **not** against the client's zod schema — so a client/server disagreement on the *write*
+ * response is the one shape neither checker sees.
  *
  *     npm run check:api                    # against http://127.0.0.1:2024
  *     LANGGRAPH_URL=http://host:port npm run check:api
@@ -39,6 +46,8 @@ import {
   corpusRowsSchema,
   erGraphSchema,
   knowledgeGraphSchema,
+  observationClustersSchema,
+  observationsSchema,
   pendingQueueSchema,
   schemaSummaryResponseSchema,
   tableViewSchema,
@@ -102,6 +111,18 @@ async function discoverCases(): Promise<Case[]> {
     // client calls it (`api.pendingClarifications`) and parses it with `pendingQueueSchema`,
     // so an undeclared field here is the same blank `/pending` page as every defect above.
     { path: "/clarifications/pending?limit=5&offset=0", schema: pendingQueueSchema },
+    // The return path (ADR 0015). Both shapes, because the grouped one is not the flat one with a
+    // wrapper: it carries `n_distinct_questions` and the members' *intersection* of missing tables,
+    // neither of which the flat row has. A route with no case here is a route nothing verifies.
+    {
+      path: "/observations?limit=5&offset=0",
+      schema: observationsSchema,
+      note: "empty until something is filed or an eval arm is imported",
+    },
+    {
+      path: "/observations?group=cluster&state=open,triaged&limit=20",
+      schema: observationClustersSchema,
+    },
   ];
 
   // Discover ids from the lean catalog: the flat /schema dump is deleted.

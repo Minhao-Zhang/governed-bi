@@ -15,6 +15,10 @@ import type {
   auditTraceStageSchema,
   auditTurnSummarySchema,
   auditTurnsSchema,
+  observationClusterSchema,
+  observationClustersSchema,
+  observationSchema,
+  observationsSchema,
   pendingClarificationSchema,
   pendingQueueSchema,
   corpusFieldSchema,
@@ -155,5 +159,12 @@ export type AssetType = (typeof ASSET_TYPES)[number];
  * validates `type` against `ASSET_REGISTER`, which *includes* `table`, and returns `[]` only
  * for a type outside the register. The `/health` count it also cited is gone with the route.
  */
+/* ── the return path (ADR 0015) ─────────────────────────────────────────────── */
+
+export type Observation = z.infer<typeof observationSchema>;
+export type Observations = z.infer<typeof observationsSchema>;
+export type ObservationCluster = z.infer<typeof observationClusterSchema>;
+export type ObservationClusters = z.infer<typeof observationClustersSchema>;
+
 export const CORPUS_ASSET_TYPES = ["table", ...ASSET_TYPES] as const;
 export type CorpusAssetType = (typeof CORPUS_ASSET_TYPES)[number];

@@ -346,3 +346,38 @@ export function useCorpusRowsInfinite(params: {
     placeholderData: keepPreviousData,
   });
 }
+
+/* ── the return path (ADR 0015) ─────────────────────────────────────────────── */
+
+/**
+ * The review queue, grouped structurally.
+ *
+ * No `staleTime`: the queue is a worklist, and a steward who triages a row wants the next read to
+ * reflect it. That is the opposite of `useCorpusFields`, whose five minutes are right because a
+ * field descriptor changes when the engine is redeployed and not otherwise.
+ */
+export function useObservationClusters(limit = 200) {
+  return useQuery({
+    queryKey: ["observation-clusters", limit] as const,
+    queryFn: () => api.observationClusters(limit),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** The flat queue, for the states a caller names. `undefined` means every state. */
+export function useObservations(params: { state?: string; category?: string } = {}) {
+  return useQuery({
+    queryKey: ["observations", params.state ?? null, params.category ?? null] as const,
+    queryFn: () => api.observations(params),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** One observation with its patches and history. Skipped while nothing is selected. */
+export function useObservation(observationId: string | null) {
+  return useQuery({
+    queryKey: ["observation", observationId] as const,
+    queryFn: () => api.observation(observationId as string),
+    enabled: Boolean(observationId),
+  });
+}
