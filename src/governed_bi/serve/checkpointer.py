@@ -80,7 +80,7 @@ from typing import Any, AsyncIterator
 # `exec_module` on a spec built from `checkpointer.path`), so it has no parent package and
 # `from ..paths import ...` raises `ImportError: attempted relative import with no known parent
 # package`. `api/graph_app.py` is loaded the same way and imports absolutely for the same reason.
-from governed_bi.paths import REPO_ROOT
+from governed_bi.paths import REPO_ROOT, assert_not_a_warehouse
 
 __all__ = [
     "CONVERSATION_DB",
@@ -93,30 +93,6 @@ __all__ = [
 
 #: Markers of a *server* connection string. A checkpointer takes a filesystem path, so any of
 #: these means the operator handed us a warehouse DSN -- the one thing this must never be.
-_WAREHOUSE_MARKERS: tuple[str, ...] = (
-    "postgres://",
-    "postgresql://",
-    "redshift://",
-    "host=",
-    "dbname=",
-    "password=",
-)
-
-
-def assert_not_a_warehouse(value: str, *, source: str) -> str:
-    """Return ``value``, or raise if it names a database server rather than a file."""
-    lowered = value.lower()
-    for marker in _WAREHOUSE_MARKERS:
-        if marker in lowered:
-            raise ValueError(
-                f"{source} looks like a database connection string ({marker!r} in it), not a "
-                "file path. Conversation state is checkpointed to its own SQLite file and must "
-                "never share a database with the analytics warehouse. Set it to a path such as "
-                "'runs/conversations.sqlite'."
-            )
-    return value
-
-
 def _db_path(env: str, default_name: str) -> Path:
     raw = os.environ.get(env)
     if raw:

@@ -31,6 +31,11 @@ LAYERS: tuple[tuple[str, ...], ...] = (
     ("register",),
     ("measure",),
     ("corpus",),
+    # The return path (ADR 0015). Here and not lower because a patch must be judged by
+    # `corpus/validate.py::problems_with` -- the same validator the loader uses -- rather than by a
+    # second copy of the rules. Here and not higher because nothing in it runs during a turn, and
+    # a store only an HTTP handler can reach is a store no script can audit.
+    ("feedback",),
     ("retrieve",),
     ("govern",),
     ("datasource",),
