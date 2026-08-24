@@ -18,15 +18,16 @@ SQLite is the offline test/CI substrate.
 8. [Open work](open-work.md) — what is unfinished, and the evidence for each.
 9. [Return path](return-path.md) — how reader and engineer feedback becomes a corpus change
    ([ADR 0015](adr/0015-the-return-path.md), **steps 0–6 built** on `design/return-path`; the
-   pipeline, T4 and T5 are not). Both pages open with a note on where the design and what shipped
-   differ, and the evidence is in [open work](open-work.md) §3.10a–3.10c. Chinese pair:
+   agentic pipeline, T4/T5, the capture UI and `/reports` are not). Both pages open with a note on
+   where the design and what shipped differ, and the evidence is in
+   [open work](open-work.md) §3.10a–3.10c. Chinese pair:
    [return-path.zh.md](return-path.zh.md), [ADR 0015 zh](adr/0015-the-return-path.zh.md).
 
    The tools, in the order a change moves through them:
 
    | | |
    |---|---|
-   | `tools/import_eval_failures.py` | an eval artifact's failures become observations. The only row source in this cut |
+   | `tools/import_eval_failures.py` | an eval artifact's failures become observations. Not the only row source: `POST /turns/{id}/raised` ships mounted and enabled and `PATCH /observations/{id}` amends a row — the importer is the only source with a *caller*, because the capture UI is not built |
    | `tools/verify_patch.py` | the free ladder, T0–T2. Delta gates over the patched tree, in memory |
    | `tools/reproduce_observation.py` | T3: does this question still miss a gold table? Free, and **run it with `--embed`** |
    | `tools/export_bundle.py` | a bundle an engineer applies with `git apply`. Two content checks are fatal here and nowhere else |
@@ -62,7 +63,7 @@ build in the present tense after that build was deleted.
 | [0012](adr/0012-access-seam-principal-and-authorization.md) | The access seam: principal, authorization, and the Layer 6 split |
 | [0013](adr/0013-the-declared-abstention-policy.md) | The declared abstention policy |
 | [0014](adr/0014-one-conversation-store.md) | One conversation store, on a durable LangGraph checkpointer — **supersedes 0004 §5** |
-| [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **Accepted; steps 0–6 built** (the agentic pipeline, T4 and T5 are not) |
+| [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **Accepted; steps 0–6 built** (the agentic pipeline, T4/T5, the capture UI and `/reports` are not) |
 
 ## Measurement findings
 

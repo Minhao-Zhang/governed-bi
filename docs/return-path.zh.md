@@ -1,42 +1,16 @@
 # 回流路径 —— 工作参考
 
-> ## 实际交付了什么，以及与本页的差异（2026-08-23）
->
-> 第 **0-6 步已建成，在 `design/return-path` 分支上**。本页是当初商定的设计；有六处在实测后结果不同，
-> 按本页而不是按本注记去做的读者，每一处都会做错。证据在 `docs/open-work.md` §3.10a-3.10c。
->
-> 1. **`tools/check_closed_domains.py` 不存在，且 T2 不需要数据库。** §11 把 metric expression 解析器
->    放在活体 catalog 后面。它不需要：corpus 自己声明了表、列和 join，而 expression 必须与*那些*一致
->    —— 仓库（warehouse）是 serve 时 `govern/` 的事。T2 就是打过补丁的树上的一致性规则 **V17b**，离线且
->    免费。
-> 2. **V18 砍掉了。** 五条新规则，不是六条。它没有活体样本、也没有校准过的误报率，上线只会是一条谁也
->    没法定量的规则。
-> 3. **实测发现数，这也是这些规则与凭直觉写出来的规则的区别所在：** V17a **107 条，分布在 478 个
->    metric 中的 94 个**（设计里的 28 出自一个只做解析的原型 —— `DIVIDE(a, b)` 作为 SQL 能解析通过，
->    而它命名的函数任何 dialect 都没有，所以上线的规则还会去问
->    `govern/functions.py::PERMITTED_FUNCTIONS`）；V17b **17**；V19 **0**；V21 **1**，正是设计里点名的
->    那个文件；V23 **0**。棘轮（ratchet）钉住了 **101** 个身份。
-> 4. **投诉的聚类很弱**，这以一个否定结果回答了 §12 的开放问题 7：最大的簇是 3，只有 49% 的行落在任何
->    一个簇里。设计里的批处理论证撑不住这个数字，所以 `/review` 是一个列表加可选分组。
-> 5. **复现器必须带 `--embed` 跑。** §11 的 T3 建成了 `tools/reproduce_observation.py`，实际驱动它时
->    发现：只走 lexical 的复查会报出 2 张缺失的 gold 表，而该行记录的是 1 —— 一个假的「仍然复现」，读起来
->    和真发现一模一样。
-> 6. **上报 UI 和 `/reports` 没有建，本轮也不打算建。** 这套部署上所有角色都由同一个人担任，所以通知
->    回路和按读者划分的报告列表没有服务对象。输入是 eval artifact：`tools/import_eval_failures.py`。
->    §15 里的上报界面（`raise-note.tsx` 重写、`category-picker.tsx`、`my-reports.ts`、
->    `report-status.tsx`）是给一个还不存在的第二类受众做的设计。
->
-> 同样没有建、且在 §13 里就被列为后续步骤而非本轮的：agentic pipeline（`triage/`）、T4、T5，以及
-> 超出 `corpus_release` 这个 knob 之外的任何 `CorpusRelease`。
-
 读者与工程师的反馈如何变成一次语料变更。约束性决策在
-[ADR 0015](adr/0015-the-return-path.zh.md)；本页是工程师照着实现的东西。
+[ADR 0015](adr/0015-the-return-path.zh.md)；本页描述的是 `design/return-path` 上的代码。设计与实测
+不一致的地方，写在这里的是代码的行为；被砍掉的设计已经从本页删除，而不是被标注。
 English: [The return path — working reference](return-path.md)。
 
-**本页所有内容都还不存在。** 每一个路径、签名、路由和测试名都是设计。凡是描述代码树里已有代码的句子，
-文中都会说明并点名文件。标注 **实测** 的数字取自 `governed-bi@464d1cb`，对
-`../MS Fabric Facilities/corpus` 和 `../BIRD-corpus@74ff80c4`，测于 2026-08-22/23；其余数字都是估算，
-且文中会说明。
+有三个界面在下文被描述、但**没有建**，而且各自在出现的地方就说明了：分析师上报 UI（§12.2）、
+`/reports`（§12.3）、以及 re-ask 按钮（§5）。这套部署上所有角色都由同一个人担任，所以通知回路和按读者
+划分的报告列表没有服务对象 —— 输入是 eval artifact：`tools/import_eval_failures.py`。
+
+标注 **实测** 的数字取自 `../MS Fabric Facilities/corpus` 与 `../BIRD-corpus`，测于 2026-08-22/23；
+其余数字都是估算，且文中会说明。
 
 ---
 
@@ -59,26 +33,26 @@ turn 的问题、SQL、许可表集合、outcome 和处理哈希的一份**拷�
 
 **周一 11:30 —— steward。** Dev 打开 `/review`。队列按最早优先，并做结构化分组：Priya 那一行落在一个
 三条的 cluster 里，全是 `term_mismatch`，全在 `facilities.occupancy` 上。它上方的说明写着这个分组从未
-读过那些问题。他选中这个 cluster，详情面板在决策条**上方**展示七个证据块（§15）：问了什么、回来了
+读过那些问题。他选中这个 cluster，详情面板在决策条**上方**展示证据（§12）：问了什么、回来了
 什么；Priya 说了什么（她的 `expected` 被排版成它本来就是的那种引文）；SQL 和尝试 ledger，用的是她看到的
 同一批组件；这个 turn 被允许读什么，附带路由器的 top-5 排名；以及哪些语料 asset 在 context 里 ——
 并附上「rendered 这一列是派生的、不是记录下来的」这个注意事项。
 
 第 5 块就是答案所在：*active customer* 这个 `term` asset 在 context 里，而它的 `summary` 对 `status`
-列一个字都没说。引擎没有任何办法知道。他点 **Reproduce** —— 一次模型调用，而按钮就这么写着 ——
-仍然返回 4,102。
+列一个字都没说。引擎没有任何办法知道。他跑面板给出的那条复现命令 —— 它不花钱 —— 而它仍然返回 4,102。
 
-他起草一处变更：一个字段，`term_active_customer.summary`，加上那个别名和那条规则。diff 按 register
-声明的字段序逐字段渲染，带一个对着上限的实时字数统计 —— 因为一个 251 字符的 summary 如果是在导出
-**之后**才发现，那就是一次白跑的往返。他把三条 observation 置为 `addressed`。
+他起草一处变更：一个字段，`term_active_customer.summary`，加上那个别名和那条规则。diff 就这一个字段
+按词渲染，并标出是哪个字段 —— 因为改 `summary` 改的是「什么会被找到」，改 `body` 改的是「模型读到
+什么」。他把三条 observation 置为 `addressed`。
 
-**周一 11:41 —— 阶梯。** T0 用生产加载器解析暂存文件。T1 对语料的一份**快照**（不是语料本身）跑全树
-一致性、`build_structure` 和 `build_index`，按规则 id 报告无新增发现。T2 把这个 term 的 binding 对活体
-catalog 解析。T3 成对重放检索、agent 模型关闭：三道受影响的问题上 gold 表保持被覆盖，其余没有一道
-丢失 coverage。总挂钟时间约半分钟。总花费 **$0**（§11，M4）。
+**周一 11:41 —— 阶梯。** 一条命令，`tools/verify_patch.py`。T0 用生产加载器解析被编辑的那个 asset。
+T1 在内存里把这次编辑替换进整棵树，跑全树一致性、`build_structure` 和 `build_index`，按规则 id 报告
+无新增发现。T2 把这个 term 的 binding 对语料自己声明的表和 join 解析。T3 ——
+`tools/reproduce_observation.py --embed` —— 在 agent 模型关闭的情况下重放检索：三道受影响的问题上
+gold 表保持被覆盖，其余没有一道丢失 coverage。总挂钟时间约半分钟。总花费 **$0**（§10）。
 
-因为这个补丁改的是 `summary`，T3 在这里是一个真实的验证器。如果它只改了 `body`，补丁会带一条说明
-「T3 看不见它，诚实的层级是 T4」—— 补丁触碰的字段决定它最便宜的诚实层级，而记录写明是哪一个。
+因为这个补丁改的是 `summary`，T3 在这里是一个真实的验证器。如果它只改了 `body`，T3 根本看不见它 ——
+`body` 从不进检索索引 —— 而记录会这么写，不会报一个通过。补丁触碰的字段决定有没有任何免费层级能检查它。
 
 **周一 11:45 —— 工程师。** Dev 跑一条命令：
 
@@ -171,35 +145,31 @@ git commit -F …/COMMIT_MSG.txt
 ```
 src/governed_bi/feedback/          # 存储与词汇。没有模型，没有 graph。
   __init__.py                      仅 docstring（包的房屋规则）
-  events.py                        封闭词汇表 + Observation / Patch / Attribution
-  validate.py                      problems_with(Observation) / problems_with(Patch) -> list[str]
-  lifecycle.py                     TRANSITIONS, ACTORS, is_open(), derived_state()
+  events.py                        封闭词汇表 + Observation / Patch
+  validate.py                      faults_with(Observation) / faults_with(Patch) -> list[str]
+  lifecycle.py                     TRANSITIONS, PATCH_TRANSITIONS, is_open(), derived_state()
   store.py                         FeedbackStore —— 深模块
-  attribution.py                   attribution_from_turn(entry) -> Attribution
   cluster.py                       cluster_key(), clusters()
 
-src/governed_bi/triage/            # 流水线。import feedback, corpus, retrieve, govern, serve, eval。
-  __main__.py                      唯一入口点，也是 triage 唯一读 os.environ 的地方
-  state.py  graph.py  wrap.py  scope.py  tools.py  stamp.py  trial.py  records.py
-  nodes/{intake,reproduce,triangulate,diagnose,author,validate,arbitrate,assemble,close}.py
-
-src/governed_bi/corpus/patch.py    # 新增，与 store.py 并列：外科式字段编辑（§6）
+src/governed_bi/corpus/patch.py    # 与 store.py 并列：外科式字段编辑（§6）
 src/governed_bi/api/feedback_routes.py
-src/governed_bi/api/triage_routes.py   # 只读。没有任何路由能启动一次 triage 运行（§10）
 
+tools/import_eval_failures.py      # 一份 eval artifact 的失败 -> observation
+tools/verify_patch.py              # 免费阶梯，T0-T2（§10）
+tools/reproduce_observation.py     # T3：这个失败现在还发生吗？（§10）
 tools/export_bundle.py             # patch -> bundle
 tools/check_landed.py              # 语料 source_refs -> 派生落地状态；--verify 重新核对
-tools/drain_raised.py              # ServeState.raised -> 存储，并报告还剩多少
-tools/check_proposal_fields_are_consumed.py
 ```
 
-没有 `api/triage_app.py`，也没有 `ask_sme`/`refute` 节点：流水线不是一个被服务的 graph（§10），
-而 Adversary 被裁掉了（ADR 0015 §5）。
+**没有流水线这个包。** agentic triage 那套设计 —— 一个 Diagnoser、一个 Author、一个带自己入口点的
+`triage/` graph —— 在本轮被砍掉，它的文件一个都不存在。steward 拿到的是复核界面（§12）、免费阶梯
+（§10），以及他自己的判断。也没有 `attribution.py`：一个 turn 贡献的那些字段就是 observation 行上的列
+（§4），一个单独携带它们的类型会是它们住的第二个地方。
 
 ### Import 分层
 
 `tools/check_imports.py::LAYERS` 必须穷举 `src/governed_bi` 下的每个包 —— `undeclared()` 在它没穷举时
-让整次运行失败，而一个被列表漏掉的包**完全没有**约束。插两处：
+让整次运行失败，而一个被列表漏掉的包**完全没有**约束。插一处：
 
 ```python
 LAYERS = (
@@ -207,7 +177,6 @@ LAYERS = (
     ("corpus",),
     ("feedback",),        # <- 新增：需要 register + corpus，不需要更上层
     ("retrieve",), ("govern",), ("datasource",), ("model",), ("serve",), ("eval",),
-    ("triage",),          # <- 新增：需要 serve（reproduce）+ eval（replay）+ feedback
     ("api",),
 )
 ```
@@ -245,6 +214,7 @@ LAYERS = (
 | 这个数据确实存在 —— 它应该能回答 | `false_refusal` | **新建** `join` / `term` / `schema.rules`；或**都不是**（检索缺陷） |
 | 它反问我的那个问题不成立 | `bad_clarification` | **都不是** —— 一个 prompt 或策略问题 |
 | 它说不了是对的，但它该说明为什么 | `unclear_refusal` | **都不是** |
+| 它试了又试，始终没到 | `attempt_capped` | 通常**都不是**。它自成一个成员而不是归入 `unverifiable`：「我看不出」是关于读者的陈述，这一条是关于引擎的 |
 
 仅操作员可提交的，靠 `source` 而不是靠 `kind` 区分：
 
@@ -255,7 +225,7 @@ LAYERS = (
 | `reusable_fact` | `operator` | 操作员对一次澄清的回答，被提升（§9） |
 
 **`source` 是与 `category` 分开的列**，因为同一个 observation 来自三个人群（`reader`、`operator`、
-`agent`），而队列对它们的排序不同。把它折进去会用十二个值回答九个问题。
+`agent`），而队列对它们的排序不同。把它折进去会用十三个值回答十个问题。
 
 ### 哪些情况是新 asset、是编辑、还是都不是
 
@@ -269,7 +239,7 @@ LAYERS = (
 | 本该成功的拒答，gold 表从未被许可 | **新建** `term`/`join` 让它可被检索到 —— 或者**都不是**，如果那张表其实被许可了而层栈是因为别的理由拒绝的 |
 | 本该成功的拒答，`r_star_projection` | **都不是** —— 一个引擎缺陷 |
 | 缺一个同义词 | **编辑**已有 `term` 的 `summary`，不是新建 asset。别名住在 `summary` 里，因为那才是检索通道（见 M3，ADR 0015） |
-| metric expression 写错了 | **编辑**。而且这是唯一一个有**免费**验证器的类别：478 个 expression 里 28 个解析不了、23 个在任何地方都解析不到（**实测**） |
+| metric expression 写错了 | **编辑**。而且这是唯一一个有**免费**验证器的类别：478 个 expression 里 85 个解析不了（共 107 条发现），另有 17 条点名了在任何地方都解析不到的标识符（**实测**） |
 | 一个该标 `suspect` 的列 | **编辑** `column.reliability` |
 | 一个该被 `excluded` 的列 | **从这个环的视角看是「都不是」** —— 它发出一条请求，由人手动编辑 |
 | 一次澄清的回答其实是一个可复用事实 | **新建** `term` 或 `few_shot` —— 或者**都不是**，如果它只是一次性的过滤条件 |
@@ -281,64 +251,73 @@ LAYERS = (
 ### Schema
 
 ```sql
--- feedback/store.py::_SCHEMA。由 _migrate() 在一个事务里施加。
-PRAGMA journal_mode = WAL;          -- 一写多读；操作员队列是读者
+-- feedback/store.py::_SCHEMA，由 _migrate() 施加。`PRAGMA journal_mode = WAL` 在事务之外设置，
+-- 因为它是数据库级属性，不是一次变更。
 
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 
 CREATE TABLE IF NOT EXISTS observation (
-  observation_id   TEXT PRIMARY KEY,
-  filed_at         TEXT NOT NULL,          -- ISO-8601 UTC，秒
-  source           TEXT NOT NULL,          -- reader | operator | agent
-  kind             TEXT NOT NULL,          -- from_refusal | wrong_answer
-  category         TEXT,                   -- §3，可空：第一次点击可能就是全部了
-  note             TEXT NOT NULL DEFAULT '',   -- <= 4000 字符，已 strip
-  expected         TEXT NOT NULL DEFAULT '',   -- <= 200 字符。价值最高的可选字段
-  state            TEXT NOT NULL,          -- open | triaged | declined | duplicate | addressed
-  decline_reason   TEXT,                   -- state = declined 时必填；§5
-  duplicate_of     TEXT REFERENCES observation(observation_id),
-  triaged_at       TEXT,
-  -- 归属信息，是「拷贝」不是「join」（见下）
-  turn_id          TEXT NOT NULL,
-  thread_id        TEXT NOT NULL,
-  run_id           TEXT,
-  question         TEXT NOT NULL,
-  outcome          TEXT,
-  terminal_reason  TEXT,
-  refused_by       TEXT,
-  generated_sql    TEXT,
-  licensed_json    TEXT NOT NULL DEFAULT '[]',
-  rendered_json    TEXT NOT NULL DEFAULT '[]',   -- 需要那个新的 register 字段 `rendered_asset_ids`，§15.5
-  schema_ranking_json TEXT NOT NULL DEFAULT '[]',
+  observation_id      TEXT PRIMARY KEY,
+  filed_at            TEXT NOT NULL,          -- ISO-8601 UTC，秒
+  source              TEXT NOT NULL,          -- reader | operator | agent
+  kind                TEXT NOT NULL,          -- from_refusal | wrong_answer
+  category            TEXT,                   -- §3，可为空：第一下点击可能就是全部
+  note                TEXT NOT NULL DEFAULT '',   -- <= 4000 字符，已 strip
+  state               TEXT NOT NULL,          -- open | triaged | declined | duplicate | addressed
+                                              -- | blocked_on_a_person
+  decline_reason      TEXT,                   -- state = declined 时必填；§5
+  duplicate_of        TEXT REFERENCES observation(observation_id),
+  blocked_note        TEXT NOT NULL DEFAULT '',   -- blocked_on_a_person 时必填；§5
+  triaged_at          TEXT,
+  -- attribution，是拷贝而不是 join（见下）
+  turn_id             TEXT,
+  thread_id           TEXT,
+  question            TEXT NOT NULL DEFAULT '',
+  outcome             TEXT,
+  refused_by          TEXT,
+  generated_sql       TEXT,
+  licensed_json       TEXT NOT NULL DEFAULT '[]',
+  schemas_json        TEXT NOT NULL DEFAULT '[]',
+  missing_tables_json TEXT NOT NULL DEFAULT '[]',
+  -- 一条导入失败的基准那一半。对未认证调用方由 §7 的允许清单扣住。
+  gold_sql            TEXT,
+  gold_fingerprint    TEXT,
+  pred_fingerprint    TEXT,
+  quality_flags_json  TEXT NOT NULL DEFAULT '[]',
   corpus_content_hash TEXT,
-  prompt_set_hash  TEXT,
-  git_sha          TEXT
+  prompt_set_hash     TEXT,
+  git_sha             TEXT,
+  arm                 TEXT,
+  question_id         TEXT,
+  db_id               TEXT,
+  external_key        TEXT UNIQUE             -- 导入方重读同一份 artifact 是幂等的
 );
-CREATE INDEX IF NOT EXISTS ix_obs_state  ON observation(state, filed_at);
-CREATE INDEX IF NOT EXISTS ix_obs_turn   ON observation(turn_id);
+CREATE INDEX IF NOT EXISTS ix_obs_state    ON observation(state, filed_at);
+CREATE INDEX IF NOT EXISTS ix_obs_turn     ON observation(turn_id);
 CREATE INDEX IF NOT EXISTS ix_obs_category ON observation(category, state);
+CREATE INDEX IF NOT EXISTS ix_obs_cluster  ON observation(db_id, category);
 
 CREATE TABLE IF NOT EXISTS patch (
-  patch_id         TEXT PRIMARY KEY,
-  created_at       TEXT NOT NULL,
-  author           TEXT NOT NULL,          -- operator | agent
-  intent           TEXT NOT NULL,          -- new_asset | edit_asset | exclusion_request
-                                           -- | shared_request | engine_defect | no_change
-  state            TEXT NOT NULL,          -- draft | exported | withdrawn
-  triage_run_id    TEXT,
-  rationale        TEXT NOT NULL DEFAULT '',
-  -- 改什么
-  asset_type       TEXT,
-  namespace        TEXT NOT NULL,
-  asset_id         TEXT,                   -- new_asset 在 id 派生出来之前为 null
-  field_path       TEXT,                   -- 例如 "summary"、"reliability.status"、"binding.target_id"
-  was              TEXT,                   -- 起草时从活体语料读出
-  becomes          TEXT,
-  asset_yaml       TEXT,                   -- 整个文档，仅 new_asset
+  patch_id                     TEXT PRIMARY KEY,
+  created_at                   TEXT NOT NULL,
+  author                       TEXT NOT NULL,   -- operator | agent
+  intent                       TEXT NOT NULL,   -- new_asset | edit_asset | exclusion_request
+                                                -- | engine_defect
+  state                        TEXT NOT NULL,   -- draft | exported | withdrawn
+  namespace                    TEXT NOT NULL,
+  rationale                    TEXT NOT NULL DEFAULT '',
+  -- 改了什么
+  asset_type                   TEXT,
+  asset_id                     TEXT,            -- new_asset 在 id 派生出来之前为 null
+  field_path                   TEXT,            -- 只能是 "summary" 或 "body"（§6）
+  was                          TEXT,            -- 起草时从活体语料读出
+  becomes                      TEXT,
+  asset_yaml                   TEXT,            -- 整份文档，仅 new_asset
   -- 它是对着什么被验证的
-  base_corpus_content_hash     TEXT NOT NULL,
-  expected_corpus_content_hash TEXT,       -- bundle 构建之前为 null
-  ladder_json      TEXT NOT NULL DEFAULT '{}'   -- tier -> GateResult
+  base_corpus_content_hash     TEXT NOT NULL DEFAULT '',
+  expected_corpus_content_hash TEXT,            -- bundle 建成之前为 null
+  ladder_json                  TEXT NOT NULL DEFAULT '{}',  -- 层 -> GateResult
+  withdrawn_reason             TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS ix_patch_state ON patch(state, created_at);
 
@@ -349,16 +328,20 @@ CREATE TABLE IF NOT EXISTS observation_patch (
 );
 
 CREATE TABLE IF NOT EXISTS transition (       -- 只追加。审计轨迹。
-  rowid_           INTEGER PRIMARY KEY AUTOINCREMENT,
-  at               TEXT NOT NULL,
-  entity           TEXT NOT NULL,          -- observation | patch
-  entity_id        TEXT NOT NULL,
-  from_state       TEXT NOT NULL,
-  to_state         TEXT NOT NULL,
-  moved_by         TEXT NOT NULL,          -- 行动者，永不为空。§5
-  detail           TEXT NOT NULL DEFAULT ''
+  rowid_     INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  entity     TEXT NOT NULL,                   -- observation | patch
+  entity_id  TEXT NOT NULL,
+  from_state TEXT,
+  to_state   TEXT NOT NULL,
+  moved_by   TEXT NOT NULL,                   -- 那个行动者，绝不为空。§5
+  detail     TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS ix_transition_entity ON transition(entity, entity_id, rowid_);
 ```
+
+**`expected` 不是一个列。** 提交路由接受它、上限 200 字符，并把它作为一行 `expected: …` 前置到 `note`
+里（§7）。为读者自己的一行文字单独开一列不值一次迁移，而复核界面就连着 note 的其余部分一起读它。
 
 **归属信息是拷贝的，不是 join 的。** turn 自己的记录是那个自然外键，而它是错的那个：
 `MAX_TURNS_RETAINED = 25` 会把较旧的记录从 `ServeState.turns` 上省略掉，而 thread 索引是一个 pickle，
@@ -381,42 +364,51 @@ class FeedbackStore:
 
     # 写
     def file(self, obs: Observation) -> str: ...               # -> observation_id
-    def transition(self, entity: str, entity_id: str, *, to: str,
-                   moved_by: str, detail: str = "",
-                   decline_reason: str | None = None) -> None: ...
+    def move(self, observation_id: str, *, to: ObservationState,
+             moved_by: Actor | None = None, detail: str = "",
+             decline_reason: DeclineReason | None = None,
+             duplicate_of: str | None = None,
+             blocked_note: str = "") -> Observation: ...
+    def move_patch(self, patch_id: str, *, to: PatchState,
+                   moved_by: Actor | None = None, detail: str = "",
+                   withdrawn_reason: str = "",
+                   expected_corpus_content_hash: str | None = None) -> Patch: ...
     def draft(self, patch: Patch, *, observations: Sequence[str]) -> str: ...
+    def amend_note(self, observation_id: str, note: str) -> None: ...
     def record_ladder(self, patch_id: str, tier: str, result: Mapping[str, Any]) -> None: ...
 
     # 读
     def get(self, observation_id: str) -> Observation | None: ...
-    def queue(self, *, state: str | None = None, category: str | None = None,
-              limit: int = 50, offset: int = 0) -> Page[Observation]: ...
-    def patches_of(self, observation_id: str) -> list[Patch]: ...
-    def observations_of(self, patch_id: str) -> list[Observation]: ...
-    def history(self, entity_id: str) -> list[dict[str, Any]]: ...
-
-    # 维护
-    def sweep(self, *, older_than_days: int, dry_run: bool = True) -> SweepReport: ...
+    def get_patch(self, patch_id: str) -> Patch | None: ...
+    def queue(self, *, states: Sequence[ObservationState] | None = None,
+              category: Category | None = None,
+              limit: int = 50, offset: int = 0) -> Page: ...
+    def patches(self, *, states: Sequence[PatchState] | None = None,
+                limit: int = 50, offset: int = 0) -> Page: ...
+    def observations_for_turn(self, turn_id: str) -> tuple[Observation, ...]: ...
+    def patches_of(self, observation_id: str) -> tuple[Patch, ...]: ...
+    def observations_of(self, patch_id: str) -> tuple[Observation, ...]: ...
+    def history(self, entity_id: str) -> tuple[dict[str, Any], ...]: ...
+    def counts_by(self, column: str) -> dict[str, int]: ...
 ```
 
-`sweep` 删除早于截止点的终态行，并对非终态行**只报告、不触碰** —— 后半句才是重要的那半，因为
-「90 天里没人分诊过这一条」是操作员需要知道的事实，而一次删除会把它藏起来。
+`move` 和 `move_patch` 在同一个 `BEGIN IMMEDIATE` 事务里、带 `AND state = ?` 守卫，把新状态**和**它的
+转移行一起写下，所以两个 steward 同时决定同一行不会把审计轨迹弄断链。没有保留期清扫：行会累积，没有
+任何东西删它们。
 
-`serve/checkpointer.py` 的 `assert_not_a_warehouse` 原样复用在这个路径值上，理由与它在那里存在的理由相同。
+`paths.py` 的 `assert_not_a_warehouse` 施加在这个路径值上，理由与它存在的理由相同。
 
 ### Knob
 
 ```
 GOVERNED_BI_FEEDBACK_DB      默认 runs/feedback.sqlite，相对 REPO_ROOT 解析
-GOVERNED_BI_FEEDBACK_ADMIN   未设置 -> 四个工程师动词根本不挂载
-GOVERNED_BI_PROPOSAL_DIR     默认 .governed_bi/proposals
-GOVERNED_BI_TRIAL_SCRATCH    未设置 -> 试验模式关闭，T4 拒绝运行
+GOVERNED_BI_FEEDBACK_ADMIN   未设置 -> steward 的四个动词根本不挂载
 ```
 
-**这些一个都不许变成 `register/knobs.py` 的 knob。** `serve/session.py::_resolved_knobs` 把每一个已声明
+**这两个都不许变成 `register/knobs.py` 的 knob。** `serve/session.py::_resolved_knobs` 把每一个已声明
 knob 放到每一行 serve 记录上，而 `measure/gates.py::_knobs_resolved_gate` 会比较它们，所以在那里声明
 一个，就为一个没有任何 turn 消费的值移动了每一个 arm 的配置哈希 —— 构造上就是 `expand_hops` 缺陷。
-由 `tests/feedback/test_no_comparability_knob_names_the_feedback_store.py` 钉住。
+由 `tests/feedback/test_the_feedback_store_is_not_a_comparability_knob.py` 钉住。
 
 ---
 
@@ -479,15 +471,14 @@ def derived_state(patch: Patch, *, loaded_corpus_hash: str,
 
 ### re-ask，以及为什么它不是可选项
 
-```
-ui/components/reports/re-ask-button.tsx     （新增，约 0.5 天）
-```
+**没有建。** `ui/components/reports/re-ask-button.tsx` 不存在，它要落脚的那个 reports 页面也不存在。
+写下它是因为它留下的缺口是真的。
 
-每一个落地状态的文案都在叫读者再问一遍，而设计会议没有交付任何做这件事的途径。所以：
-`landed_verified`、`landed_matched` 和 `retrieval_verified` 在 reports 页面上带一个 **Re-ask** 动作。
+每一个落地状态的文案都在叫读者再问一遍，而没有任何东西交付了做这件事的途径。所以：
+`landed_verified`、`landed_matched` 和 `retrieval_verified` 应当在 reports 页面上带一个 **Re-ask** 动作。
 它在一个**新** thread 上打开聊天界面，预填存储早已从 turn 记录上抄下来的问题文本（§4）。
 
-用新 thread 而不是原来那个：写进别人的 thread 正是 `api/raised_write.py` 长篇记录过「不要做」的事，
+用新 thread 而不是原来那个：写进别人的 thread 正是已删除的 `api/raised_write.py` 长篇记录过「不要做」的事，
 而在旧 thread 上再开一个 turn 会继承最多 `MAX_TURNS_RETAINED` 个 turn 的上下文，而那不该进入这次比较。
 
 **它不给自己打分。** 引擎不比较新答案和旧答案，也不因为这次重问而推动任何状态。一次重问不是证据 ——
@@ -515,7 +506,7 @@ ui/components/reports/re-ask-button.tsx     （新增，约 0.5 天）
 
 ---
 
-## 6. 写 YAML：`store.write` 负责创建，`corpus/patch.py` 负责编辑
+## 6. 写 YAML：`corpus/patch.py` 就地替换一个字段
 
 **实测（M1）。** 加载一个 table asset、改 `summary`、再调 `corpus/store.py::write`，产生了
 **第二个同 asset id 的文件**；`store.load` 返回 1,434 个 asset 且 **problems 为零**；随后 `build_index`
@@ -528,7 +519,7 @@ allow_unicode=True)`，没有 `width`，而 `parse.py::to_mapping` 「omits defa
 字段序重排。
 
 ```python
-# src/governed_bi/corpus/patch.py  —— 新模块，与 store.py 同层
+# src/governed_bi/corpus/patch.py  —— 与 store.py 同层
 def locate(path: Path, *, asset_id: str, field_path: str) -> Span:
     """在声明了 `asset_id` 的那个文件里，某一字段值的字节区间。
 
@@ -545,10 +536,18 @@ def apply_edit(path: Path, *, asset_id: str, field_path: str,
     block/引号风格，因为把一个没被碰过的邻居的 `>` 改成 `"`，是一处评审者不得不读的 diff。
     """
 
-def apply_create(root: Path, *, asset_yaml: str, namespace: str) -> Path:
-    """一个新 asset。它**就是** `store.write`，只是先经过 `from_mapping`，好让落盘的文件是加载器
-    接受的那种。"""
 ```
+
+除这两个之外还有：`read_field`、`Span`，以及作为异常类型的那几条拒绝 —— `FieldNotLocatable`、
+`StaleValue`、`UnwritableValue`。**没有创建原语。** `new_asset` 是一个可声明的 patch intent，
+`asset_yaml` 也会被校验，但没有任何工具导出它：`export_bundle.py` 拒绝除 `edit_asset` 以外的每一种
+intent，因为只有一次编辑才产生工程师能应用的 diff。一个全新的 asset 是一个手写的文件。
+
+**只有两个字段路径，再无其他。** `patch.py::EDITABLE` 是 `{summary, body}` —— 刻意与
+`feedback/validate.py::EDITABLE_FIELD_PATHS` 允许的那一组相同，并有一个 import 期守卫在两者不一致时
+失败。理由是 `lifecycle.derived_state`：它靠比较 `summary`/`body` 文本来确认落地，所以一个改了它读不到
+的字段的补丁会落地、然后永远读作 `superseded`。`reliability`、`binding` 和 `rules` 是手工编辑。另外有
+四个根键无论调用方怎么要求都不可触及：`governance`、`provenance`、`audit`、`columns`。
 
 `patch.py` 拒绝碰三样东西，而三者都是拒绝，不是 TODO：
 
@@ -562,8 +561,8 @@ def apply_create(root: Path, *, asset_yaml: str, namespace: str) -> Path:
   一个独立 `column` 文件，若其对应列已被所属表声明，就让加载器拿到同一个 asset id 两次 ——
   `store.load` 会带着 **problems 为零** 接受它（M1），随后 `build_index` 里抛出
   `ValueError: duplicate index id`，让每一次 `Session` 构建都失败。一次完整的服务中断，发生在 commit
-  之后，绕过了一个看不见它的检查器。对一个列的 `summary` 或 `reliability` 的编辑，走**那张表的**文件上
-  的 `locate`/`apply_edit`；而一个新列是数仓变更，不是语料变更。
+  之后，绕过了一个看不见它的检查器。对一个列的 `summary` 的编辑，走**那张表的**文件上的
+  `locate`/`apply_edit`；而一个新列是数仓变更，不是语料变更。
 
 ---
 
@@ -640,21 +639,22 @@ steward 动词同一次读取。对未认证调用方扣留的：
 
 ```
 bnd-pat-…/
-  MANIFEST.yaml        补丁、它的 observation、阶梯结果、两个哈希、引擎 sha
+  MANIFEST.yaml        补丁、它的 observation 与 question id、阶梯结果、base 哈希
   COMMIT_MSG.txt       生成的。首行 <= 72 字符。点名 observation id，不含 prose
   changes.patch        可 `git apply -p1`，针对 base_corpus_content_hash 产生
   after/               post-state 文件全文，好让评审者读结果而不是读 diff
   evidence/
     observations.md    每位读者说了什么，原文，放在代码围栏里
-    turn-<id>.json     问题、SQL、ledger、licensed、rendered、schema_ranking
-    ladder.json        每一层的 GateResult，包括没跑的那些以及为什么没跑
-    reproduction.md    复现器发现了什么，或者说明它没跑
+    ladder.json        每一层跑过的 GateResult
 ```
 
 ```bash
 uv run --frozen python tools/export_bundle.py --patch pat-… --out ./bundles
 uv run --frozen python tools/export_bundle.py --patch pat-… --dry-run   # 打印 diff，不写任何东西
 ```
+
+`MANIFEST.yaml` 刻意不放 `expected_corpus_content_hash`。它是一棵还没人写出来的树的摘要，而一个
+谁也无法比较的、长得像哈希的字符串比一处缺失更糟；`tools/check_landed.py` 在 commit 之后算它。
 
 `COMMIT_MSG.txt` **不携带任何读者 prose**。commit message 由带类型的字段模板化或模型化生成；读者那句话
 住在 `evidence/observations.md` 的代码围栏里，那里它不会变成某个别的工具日后未转义渲染的一行 commit log。
@@ -688,10 +688,13 @@ uv run --frozen python tools/check_landed.py --verify --bundle ./bundles/bnd-pat
 
 ## 9. 操作员的回答如何在不恢复任何人 thread 的前提下变成一个语料事实
 
-`ui/components/clarifications/pending-queue.tsx` 按设计是只读的：在那里回答等于恢复一个「这位操作员并非
-被问方」的 thread（ADR 0006 B9）。这个约束不变。
+**没有建。** `ui/components/clarifications/pending-queue.tsx` 上没有任何通往复核界面的链接，而
+`Category.reusable_fact` 没有任何生产者。词汇在，界面不在。
 
-pending 队列新增**一个链接，不是一个按钮。** 这个链接打开 steward 界面，预填一条 `reusable_fact`
+`pending-queue.tsx` 按设计是只读的：在那里回答等于恢复一个「这位操作员并非被问方」的
+thread（ADR 0006 B9）。这个约束不变。
+
+它需要的是**一个链接，不是一个按钮。** 这个链接打开 steward 界面，预填一条 `reusable_fact`
 observation，携带那个暂停 turn 的问题和澄清文本。文案是明说的：
 
 > 那个暂停的对话仍然保持暂停，而提问的人不会收到回复。你在这里写下的东西会变成对语义层的一个提议变更，
@@ -702,237 +705,82 @@ observation，携带那个暂停 turn 的问题和澄清文本。文案是明说
 
 ---
 
-## 10. triage 流水线
-
-**不注册进 `langgraph.json`。** 它是一个由本地入口点编译并调起的 `StateGraph`：
-
-```bash
-uv run --frozen python -m governed_bi.triage --cluster cls-… --stop-after diagnose
-```
-
-**为什么不做成被服务的 graph。** `api/auth.py::_no_state_writes_on_a_new_run` 只拒绝 `command.update`
-和 `command.goto`；一个 `{"assistant_id": "triage", "input": …}` 形状的载荷根本不带 `command`，于是
-`_command_of` 返回 `None`，钩子一声不吭地返回。平台本来就允许匿名调用方在 `serve` 上花预算 ——
-`api/routes.py` 原话如此 —— 但注册 `triage` 会把每次请求的上限从一个 turn（约 45k token）抬到一次只由
-操作员设定的 cap 兜底的 fan-out（默认约 290k），而且是在那个还会写文件的 graph 上。`api/` 里任何地方都
-没有限流器。一个本地入口点不花任何代价。
-
-**所以没有 `interrupt()`，也没有 HITL 暂停。** 当 Diagnoser 无法定夺一个语义问题时，这次运行**结束**，
-并向存储写入一条 `category: needs_sme` 的 observation；由 steward 在复核界面上回答，那个动作起草补丁。
-这从设计里删掉了 `serve/resume.py::authorise_resume`，连带删掉了它解决不了的那个问题：在单一 principal 下，
-这道闸门比较的是批次**发起者**和恢复者，而不是投诉的那位读者，所以它谁也区分不了。
-
-节点：
-
-```
-START -> intake
-intake --(Send x K)--> reproduce_one -> triangulate
-intake --(没有可复现的)--> triangulate
-triangulate --> {diagnose, close}
-diagnose    --> {author, close}                # locus 为 no_asset_* 或 needs_sme 时走 close
-author      --> validate                       # 阶梯 T0-T2
-validate    --> {refute, arbitrate}
-refute      --> arbitrate                      # 阶梯 T3（启用时含 T4）
-arbitrate   --> {author, assemble, withdraw}   # 有界：revision < max_revisions
-assemble    --> close
-withdraw    --> close
-close       --> END
-```
-
-Reducer：`reproductions`、`critiques`、`usage`、`sme_answers` 上用 `operator.add`。`diagnosis` 和
-`patch` 上**不用 reducer** —— 修订循环覆写它们，而在那里用 `operator.add` 会让「那个补丁」变成一个
-list，而每一个下游节点都得记得取最后一个元素。
-
-`arbitrate` 返回 `Command[Literal["author", "assemble", "withdraw"]]`，而且它出边上**不能**有
-`add_edge`，只能有 `add_conditional_edges` —— 否则每个目标都会跑。
-
-### 按角色划分的工具面
-
-读：`read_asset`（去掉 `audit`、去掉 `governance`）、`list_assets`、`retrieval_trace`、`sample_column`、
-`probe_query`、`read_diagnosis`。**没有任何工具重放问题** —— 试验语料属于阶梯（§11 T4），不属于 agent。
-写：**一个**，`stage_asset`，外加 `stage_exclusion_request`、`stage_shared_request`、`withdraw_staged`。
-
-`stage_asset` 按这个顺序做六件事，而顺序本身就是控制：
-
-1. 经 `corpus/store.py::_loader_class()` 做 `yaml.load` —— 同一个加载器，所以 YAML 1.1 的 `on:` 别名
-   和 utf-8-sig 的行为与生产一致。
-2. `triage/stamp.py::restamp_model_authored` **丢掉** `governance`，**覆写** `provenance` 为
-   `source: curator, status: proposed`。
-3. `corpus/parse.py::from_mapping`，然后 `corpus/validate.py::problems_with`。problems 作为
-   **模型可以据此行动的工具回复**返回，不抛异常 —— 好让它能自己修 summary 长度。
-4. `corpus/identity.py::validate_asset_id` 和 `validate_path_component(namespace)`。
-5. 写入 `<proposal dir>/<id>/assets/<namespace>/<id>.yaml`。
-6. 把暂存行记到 state 上。
-
-**asset id 是派生的，绝不从模型那里取**（ADR 0008 §1.2）。模型提供的 `id` 是一个 problem，不是一个覆盖值。
-
-### `audit` 层从不到达模型
-
-`corpus/schema.py::Audit`：「Never enters the analyst context.」一个 triage agent 不是分析师，但把这条
-规则外推是便宜的选择，而日后拿着证据推翻它是某人可以做的决定。`governance` 被扣住的理由不同：一个能读到
-它的 Author 就能对它做模式匹配，而这里的边界是它不能**写**一个；让它看到形状，是教它伪造的前半步。
-
-### Prompt
-
-在 `register/prompts.py` 里，放在一个**第二注册表**中，带自己的摘要：
-
-```python
-TRIAGE_PROMPT_REGISTRY: Mapping[str, Prompt] = {...}
-def triage_prompt_set_hash(overrides=None) -> str: ...
-
-def _assert_the_two_registries_partition_this_module() -> None:
-    """模块作用域里每一个 `Prompt` 恰好在一个注册表里。
-
-    `prompt_set_hash` 是 serve arm 的处理身份，而它完整摘要 PROMPT_REGISTRY，所以一个 triage
-    prompt 放进去，会在一次不改变任何 serve 行为的编辑上移动每个 serve arm 的身份。两个摘要是
-    解法；代价是一个 prompt 现在可能**两边都不在**，那是一个没有任何哈希覆盖的 prompt ——
-    比原问题严格更糟。所以有这条断言。
-    """
-```
-
-### 试验语料
-
-`triage/trial.py::corpus_under_trial(...)` —— **T4 的**设施，也是暂存 prose 唯一被渲染进真实 prompt 的
-地方。它原本被设计成一个 Adversary 的 agent 工具，而那个角色现在被裁掉了（ADR 0015 §5）；把它移进阶梯
-严格更好，因为一个重放固定题集的确定性驱动，其可审计性是一个自己挑选重放对象的模型所不具备的。这也是
-`corpus/snapshot.py` 终于拿到调用者的原因。
-
-- `mode="off"` —— `GOVERNED_BI_TRIAL_SCRATCH` 未设置时的默认。T4 拒绝运行。fail closed，因为一次静默
-  改动活体语料的试验，是这个包里可能出现的最昂贵的失败。
-- `mode="copy"` —— `corpus/snapshot.py::snapshot(corpus_root, scratch)`，然后把暂存树盖到拷贝上，然后
-  在拷贝上建一个 `Session`。`corpus_root` 从不被碰。
-- `mode="in_place"` —— 需显式开启，由一个独占的 `<corpus_root>.trial.lock` 守护，而这个锁
-  **拒绝而不等待**（持锁者可能是一次 1,351 题的 arm），并且总是 `restore`，附带一个
-  `not drifted(corpus_root, expected)` 的后置条件。后置条件失败是一次 crash，不是一个警告。
-
-> **在写这个调用者之前先修 `snapshot`。** `corpus/snapshot.py:83` 是
-> `if dest.exists(): shutil.rmtree(dest)`，只由 `_refuse_nesting` 守护；而 `_identify_corpus` ——
-> 那个「这到底是不是一个语料」检查 —— 只守 `restore`。**实测：** 指向一个放着无关文件的临时目录，
-> 那些文件被删掉了。红队给出的实例：在今天的 `.env` 路径下，
-> `GOVERNED_BI_TRIAL_SCRATCH=C:\Users\zhang\Code\governed-bi` 能通过对
-> `../MS Fabric Facilities/corpus` 的嵌套检查，并删掉工作树。
->
-> 三处修复，全部必需：`dest` 存在时 `snapshot` 对它施加 `_identify_corpus`，于是它只会替换一个本来
-> 就是语料的东西；`corpus_under_trial` 要求 scratch 路径**不存在、或是一个可识别的语料**，否则拒绝；
-> 以及 scratch 路径组合为 `<GOVERNED_BI_TRIAL_SCRATCH>/<run id>`，其中 run id 由进程铸造，于是没有
-> 任何 caller 提供的字符串会到达 `rmtree`。
-
-### 成本
-
-估算，来自 cap 结构而不是来自一次度量，而且整张表对第一行高度敏感。一个交付的 context block 由一致性
-规则 V16 限制在 20,000 渲染字符，所以每次 agent 调用约 5k token。
-
-| | 模型调用 | token（估算） |
-|---|---:|---:|
-| 一个 serve turn（基本单位） | 约 8 | **约 45k** |
-| `reproduce_one` × 3 | 3 个 serve turn | 135k |
-| `diagnose` | 约 7 | 27k |
-| `author` | 约 5 | 18k |
-| **默认 cluster** | 约 12 + 3 个 serve turn | **约 180k** |
-
-**账单的大头是那几个 serve turn。** 这个设计里所有便宜的东西，之所以便宜，都是因为它们不跑引擎。
-
-一个 cluster 里多一条 observation 的边际成本：**+45k**，直到 reproduce cap，之后为**零**。这就是批处理
-论证的量化形式。
-
-应该发布的便宜路径，按顺序：
-
-1. `stop_after="diagnose"`、`reproduce_mode="from_record"` —— **约 30k，十分之一。** 产出是一个已定位
-   的发现，完全不写 YAML。**先发这个。**
-2. `reproduce_cap=1` —— 约 80k。补丁记录 `assurance: unrefuted`，而 steward 会读到那个词。
-3. `reproduce_mode="from_record"` 但开启撰写 —— 约 45k。记录里写 `reproduced: null`，所以没人会以为
-   投诉被重新核对过。
-
-`reproduce_workers = 1`（串行）为默认。LangGraph 会并发跑一个 super-step 的每一个 `Send`，且不提供
-按 fan-out 的并发上限，所以串行化的做法是一次只 fan out N 个再重入路由；N=1 时那就是一条链。项目经验：
-一个策展人规模的 turn 约占本地 TPM 配额的 60%，付费工作在服务器上跑。
-
----
-
-## 11. 验证阶梯
+## 10. 验证阶梯
 
 每一层都是**增量闸门**。服务语料本身就产生 361 个 `build_structure` problem（**实测**），所以一个
-「零 problem」的闸门会拒掉生产、会被豁免，而豁免正是一个真实发现变绿的方式。
+「零 problem」的闸门会拒掉生产、会被豁免，而豁免正是一个真实发现变绿的方式。每一层问的都是：**这个
+补丁**有没有把事情弄得更糟。
 
-| 层 | 命令 | 成本（标注处为**实测**） | 通过条件 |
+T0 到 T2 是一条命令，不花任何钱：
+
+```bash
+uv run --frozen python tools/verify_patch.py --patch pat-…             # 一直跑到 T2
+uv run --frozen python tools/verify_patch.py --patch pat-… --tier T0   # 最快的有用答案
+```
+
+**没有任何东西被暂存到磁盘。** `corpus/patch.py::apply_edit` 返回新文本、不写任何文件，而全树检查是在
+把那一个文件的 mapping 替换进去之后的已解析树上跑的。所以既不需要每次运行拷贝一棵 7,357 个文件的树，
+更重要的是也不存在任何可供删除的目标目录：这个阶梯从不碰 `corpus/snapshot.py`，而它的 `rmtree` 曾被
+实测删掉一个装着无关文件的临时目录。
+
+| 层 | 跑什么 | 成本（标注处为**实测**） | 通过条件 |
 |---|---|---|---|
-| **T0** | 对暂存树跑 `tools/check_corpus_conformance.py` | 约 1.6 秒 | 文件能 parse、`from_mapping` 接受它、`problems_with` 为空、id 通过校验 |
-| **T1** | 全树一致性检查 + `build_structure` + `build_index` + `tools/govern_bench.py` | 3.4 秒（facilities）/ 26 秒（BIRD）**实测**；索引词法 0.03 秒、暖态语义 0.27 秒**实测**；govern_bench 1.7 秒**实测** | 按规则 id 没有**新增**发现；`build_index` 不抛异常；`build_structure` 的 problem 计数不上升 |
-| **T2** | `tools/check_closed_domains.py` + metric expression 解析器，对活体 catalog | 数秒，需要数据库，无模型 | metric `expression` 里每一个裸标识符都能在 `base_table` 上、或经一条已声明 join 解析到 |
-| **T3** | `tools/routing_recall.py --baseline`，成对，agent 模型关闭 | 数分钟，**约 $0** —— 向量缓存 100% 暖，且加一个 asset 只花 **2** 次 embed 调用**实测** | **逐题，不按比率**：没有任何一道题丢失 gold 表 coverage。并报告哪些题变好了。**不适用于只改 `body` 的补丁** —— 见下 |
-| **T4** | 对该 cluster 的问题做定向重放 | 数十次付费调用 | 那个具体机制变了 —— 见下 |
-| **T5** | 一对成对 arm | 在 `workers=10` 下约 52 分钟挂钟、约 74M 输入 token，**实测自 `runs/eval/driver_v4.log`** | 一个 **release** 闸门。绝不是一个补丁闸门 |
+| **T0** | 只看被编辑的那个 asset | 约 1.6 秒 | 文件能 parse、`from_mapping` 接受它、`problems_with` 为空、id 通过校验 |
+| **T1** | 全树一致性检查 + `build_structure` + `build_index` | 3.4 秒（facilities）/ 26 秒（BIRD）**实测**；索引词法 0.03 秒、暖态语义 0.27 秒**实测** | 按规则 id 没有**新增**发现；`build_index` 不抛异常；`build_structure` 的 problem 计数不上升 |
+| **T2** | 在打过补丁的树上跑 metric expression 解析器 | 离线、免费、不需要数据库 | metric `expression` 里每一个裸标识符都能在 `base_table` 上、或经一条已声明 join 解析到 |
+| **T3** | `tools/reproduce_observation.py --embed`，agent 模型关闭 | 数分钟，**约 $0** —— 向量缓存 100% 暖，且加一个 asset 只花 **2** 次 embed 调用**实测** | **逐题，不按比率**：没有任何一道题丢失 gold 表 coverage。并报告哪些题变好了。**不适用于只改 `body` 的补丁** —— 见下 |
 
-**`tools/govern_bench.py` 在 T1 里，但它不是一个补丁闸门。** 它跑的是 `govern/adversarial.toml` 自己
-声明的虚构世界（`open-work.md` §3.11 就这么说，而一份原型确认了在语料打补丁前后它的输出逐字节相同）。
-它在那里是为了抓住同一个 commit 里搭车的**代码**变更，而设计把这一点说出来，而不是让某人以为这个套件
-在盯着语料。
+**T2 不需要活体 catalog，而这是对设计的一处更正。** ADR 0015 把这个解析器放在数据库后面，理由是解析一个
+标识符需要数仓。它不需要：语料自己声明了表、列和 join，而 expression 必须与*那些*一致 —— 数仓是 serve
+时 `govern/` 的事。`check_closed_domains.py` 是设计给这一层起的名字，而这个文件不存在。
+
+**T3 必须带 `--embed` 跑。** 不带它这次复查只走 lexical，而那些 arm 是带 embedder 测出来的。实际两种
+方式各驱动一次同一条 observation：该行记录的是 **1** 张缺失的 gold 表，而只走 lexical 的复查报出 **2**
+—— 一个假的「仍然复现」，读起来和真发现一模一样。通道名在每次运行的输出里，而走 lexical 的那次会告警。
+
+**T3 回答的问题比其他几层都窄**，而它的输出每次都说明是哪一个：参考答案要读的那些表又能取到了。不是
+说答案对了。在每一张 gold 表**都**被许可的那些 turn 上，实测准确率是 0.7555。
+
+**T3 之上没有任何层。** 对一个 cluster 的问题做定向付费重放、以及一对成对 arm，都是由某个人决定花钱才
+启动的东西，两者都没有建。所以一个只改 `body` 的补丁根本没有验证器：`body` 不进检索索引，T3 看不见这次
+变更，而记录会点名三种理由里的哪一种适用，而不是报一个通过。
 
 ### 按 category 的读数
 
-除 T5 之外，这个清单上没有 EX。`docs/open-work.md` §3.12 给了理由：MDE 约 2.3pp，而 §1.5 最大的单个
-coverage 桶是 7 道题 —— 0.52pp。
+这个清单上没有 EX。`docs/open-work.md` §3.12 给了理由：MDE 约 2.3pp，而 §1.5 最大的单个 coverage 桶是
+7 道题 —— 0.52pp。
 
 | category | 主读数 | 层 | 分辨率 |
 |---|---|---|---|
 | `false_refusal` | 该 turn 的 `terminal_reason` 不再是 `r_table_not_licensed`，且 coverage 变为真 | T3 | 一道题 |
 | `wrong_scope`（coverage） | 逐题的 `all_gold_tables_licensed`；`pulled_in.n_connect` | T3 | 一道题 |
-| 许可集合内选错了表 | `licensed` 集合 diff + `schema_ranking` 的 gold 排名 | T3 报告，T4 确认答案翻转 | 精确 |
-| `wrong_value`（定义） | metric 解析器通过，随后 T4 的 `generated_sql` 绑定到预期列 | T2 + T4 | 精确 |
-| 答案形状（projection、DISTINCT） | `BINDING/r_star_projection` 的 turn 命中计数，在指标上做 McNemar | T5 | 约 1.1pp |
-| `bad_clarification` | `outcome == clarification` 与 `licensed == ∅` 的计数 | T4 | 逐题 |
-| 一个良性语句被拒 | 对抗套件的良性一半 | T1 | 零噪声 |
+| 许可集合内选错了表 | `licensed` 集合 diff，以及哪些 gold 表缺失 | T3 | 精确 |
+| `wrong_value`（定义） | metric 解析器通过 | T2 | 精确 |
 | 进入 prompt 的 prose | 新增的内容规则 | T0/T1 | 精确 |
 
 那张表里每一个零都经由 `measure/stats.py::rule_of_three` 报告，于是 `0/53` 渲染成「≤ 5.7%」，无法被
 引用成「0% 误拒」。那个函数已经存在。
 
-### T4/T5 的读数：机制选出分层，分层上的 EX 才是判决
-
-这是批判轮之后存活下来的更正，而推理比配方更重要，因为前两次尝试都错了。
-
-**尝试 1 —— 在整个 arm 上读 EX。** 在 v3_fold → v4 这一对上、同样 1,351 题，EX 是 +1.18pp，126 个
-不一致，对上 MDE 2.33pp。不决定性，而且它精确复现 `open-work.md` §3.1 —— 这一点正是下面一切的许可证。
-
-**尝试 2 —— 退役 EX，改读一个机制指标**，理由是 `BINDING/r_star_projection` 走 −1.94pp、29 个不一致
-对、MDE 1.12pp，所以更稀有的事件在同样的 n 上分辨得更好。**撤回：这是单位错误。** MDE 以全体人群的
-百分点计量，而两个读数的基线率差两个数量级。那个指标的**最大可能**效应是 2.15pp，所以它在饱和之前只有
-**1.92 个可分辨档位**，而 EX 有 28.5 个。`COLUMNS/r_column_not_allowed` 是 1.16 倍 —— 已经饱和 ——
-而那张表的初稿把它标成了 decisive。
-
-**站得住的是尝试 3。** 限制到两个 arm 中任一命中该机制的 30 个 turn 上，**EX 走 +23.33pp，9 个不一致
-对，精确 McNemar p = 0.0391。** 显著。初稿判它「not decisive」是因为 23.33pp 低于该分层自己的事后 MDE
-28.02pp —— 而事后 MDE 不是显著性阈值；`measure/stats.py::mde` 自己的 docstring 就这么说。
-
-所以流程是：**用机制计数选出补丁可能触碰的人群，再在那个人群上用精确 McNemar 读 EX。** 两个仪器，
-两个职责。
-
-三条限制，都是承重的：
-
-1. **机制计数没有实测 null。** `run1`/`run2` —— 那个指定的重复实验 —— **ledger 行数为零**，所以磁盘上
-   没有任何东西说明一个指标在配置相同的两次运行之间会动多少，因而分层是在看过 arm 之后选的。用当前
-   harness 重跑一次 `run1` 的配置就能修好这一点，而且这是整份设计里最便宜的高价值实验。
-2. **`mechanism_indicator` 在 ledger 为空时必须返回 `None`，不是 `False`。** 那张表的初稿是按
-   `False`-on-empty 算的，而 1,351 对里有 12 对至少一侧 `attempts` 为空。在规定的约定下 `mcnemar` 会
-   正确地报告未度量；限制到 1,339 个双侧对之后效应是 −1.94pp、p 值不变。**缺陷在数字的来源，不在数字
-   本身** —— 而这正是为什么这个约定要写在代码里、带一个已声明的变异，而不是留在习惯里。
-3. **有一个数字被禁。** `BINDING/r_star_projection` 的 MDE **1.12pp** 不得被引用：它由该对自己的
-   不一致率事后算出、没有 null 可对照、而且只比它自己能表达的最大效应小 1.9 倍。它看起来像仪器精度，
-   实际上是一把只有两格量程的尺子。
+**没有任何一层读的是答案。** 一条 gold 表全都被许可、答案却仍然错的投诉是语义缺陷，而免费阶梯看不见
+它。那种情况下面板会这么说，而不是报一个通过。
 
 ### 新增一致性规则
 
-id 沿用 `tools/check_corpus_conformance.py` 的 `RULES` 表。六条里有四条**今天就有实测的活跃对象**，
+id 沿用 `tools/check_corpus_conformance.py` 的 `RULES` 表。五条里有三条**今天就有非空的实测对象**，
 这一点把它们与凭直觉写下的规则区分开。
 
 | 规则 | 谓词 | 活跃发现 |
 |---|---|---|
-| **V17a** | 一个 metric `expression` 在引擎的 dialect 下能解析为 SQL | BIRD 上 **478 个里 28 个**：`DIVIDE(…)`、`COUNT(x WHERE y)`、`<condition>` |
-| **V17b** | metric `expression` 里每一个裸标识符都能在 `base_table` 上解析到，或在经一条**已声明** join 可达的表上解析到 | **23 个 metric / 28 个列引用**；10 个只能经 join 可达，18 个在任何地方都不可达 |
-| **V18** | 一个封闭域断言（"one of"、"always"、"only"）在 `audit.evidence` 里携带一条观察 | 未测 |
+| **V17a** | 一个 metric `expression` 在引擎的 dialect 下能解析为 SQL | BIRD 上 **107 条，分布在 478 个 metric 中的 85 个**：`DIVIDE(…)`、`COUNT(x WHERE y)`、`<condition>` |
+| **V17b** | metric `expression` 里每一个裸标识符都能在 `base_table` 上解析到，或在经一条**已声明** join 可达的表上解析到 | **17** |
 | **V19** | 任何模型可见的 **`body`** 不许点名一个 `governance.excluded` 的列或 asset。**是 `body`，不是 `summary`** —— `summary` 从不进入 prompt（`serve/context.py`），它进的是检索索引 | **零**，因为两个语料里被排除的 asset 数都是零。加上它是免费的；不可能造成回退 |
 | **V21** | 模型可见文本通过 `govern/guard.py::GUARD_RULES` —— 复用它们，不是把它们重述一遍 | **一条**：`public_review_platform/few-shots/fs_public_review_platform_0012.yaml` 携带两个 `U+200B` |
 | **V23** | asset id 在全树唯一 | **今天为零**，而这条规则存在的理由是：一个重复 id 能通过一致性检查，然后在 `build_index` 里抛 `ValueError: duplicate index id`（**实测**） |
+
+设计里给 V17a 的计数是 **28**，出自一个只做解析的原型：`DIVIDE(a, b)` 作为 SQL 能解析通过，而它命名的
+函数任何 dialect 都没有，所以上线的规则还会去问 `govern/functions.py::PERMITTED_FUNCTIONS`。还设计过
+第六条并砍掉了 —— 一个封闭域断言要在 `audit.evidence` 里携带一条观察 —— 因为它没有活体样本、也没有
+校准过的误报率，上线只会是一条谁也没法定量的规则。
 
 **V10 和 V12 不是披露规则，不得被当作既有控制来引用。** V10 是「no text discloses how an unreliable
 column was made」—— 它为 BIRD 的混淆诱饵而存在 —— 而 V12 管 held-out 问题泄漏。两条都在管基准完整性。
@@ -940,6 +788,8 @@ column was made」—— 它为 BIRD 的混淆诱饵而存在 —— 而 V12 管
 
 **棘轮。** 既有发现在语料仓库里**按名字**钉住。这个集合可以自由缩小、不可增长，而关闭其中一条会让构建
 像新增一条那样响亮地失败 —— 是名字而不是计数，因为 28 条发现和 28 条**不同的**发现是同一个整数。
+**在 `../BIRD-corpus` 上实测：**125 条发现，收敛成 **101** 个形如 `(rule, file:asset)` 的钉住身份 ——
+其中 24 条发现与另一条共享同一个身份。
 
 ### 可比性
 
@@ -951,8 +801,8 @@ column was made」—— 它为 BIRD 的混淆诱饵而存在 —— 而 V12 管
    都声明 `86ed1dbf…`。中间那两个 commit 只加了 `LICENSE` 和 `README.md` —— 没有任何 asset 变化 ——
    摘要还是动了。**所以今天用 `--arm v4` 跑当前 checkout 会被拒绝。**
 
-所以：一个新的可比性 knob `corpus_release`，命名一个 **tag** 而不是一个目录。补丁持续落地；arm 钉住
-release。再加 `ArmProfile` 上的 `hypothesised_effect` 和 `readout`，它们终于给
+所以：一个可比性 knob `corpus_release`，命名一个 **tag** 而不是一个目录。补丁持续落地；arm 钉住
+release。再加 `ArmProfile` 上的 `hypothesised_effect` 和 `readout`，它们给
 `eval/power.py::require_power` 提供了 `open-work.md` §3.10 记录它缺失的那个调用者 —— 到那时，一个探测
 不到自己假设的 arm 会在花掉任何东西之前失败。
 
@@ -963,29 +813,29 @@ EX 的 MDE 2.33pp：**整个欠账里只有 1.7 个可探测的 release。** 而
 得自己买一条控制组：约 150M 输入 token、约 104 分钟。
 
 因此 **release 的头条读数是 T3 的逐题 coverage delta** —— 分辨率一道题（0.08pp），成本约 $0 —— 而一对
-成对 arm 是**代码**变更需要定价时才买的东西。一条 release arm 本会花掉的 token，更该花在上面那个读数
-目前缺失的 null 上。`ArmProfile.hypothesised_effect` 存在的部分目的就是让这个拒绝自动化：一个声明
-+0.5pp 假设的 release arm 会在花掉任何东西之前被 `require_power` 拒绝。
+成对 arm 是**代码**变更需要定价时才买的东西。`ArmProfile.hypothesised_effect` 存在的部分目的就是让
+这个拒绝自动化：一个声明 +0.5pp 假设的 release arm 会在花掉任何东西之前被 `require_power` 拒绝。
 
-**本设计的声明里，只有两项真正被 CI 抓住。** `tools/check_declared_is_consumed.py` 有四条规则，覆盖
-knob、record 字段和 state 通道。`corpus_release` 是一个 knob，所以缺少读取方会按名字让构建失败。
-`ArmProfile.hypothesised_effect`、`.readout`、机制注册表的条目、存储的 SQLite 列、以及 `Attribution`
-的字段住在那四条规则都不遍历的命名空间里 —— 所以对它们而言，「声明了但没有读取方」是由评审而不是由 CI
-守着的。补上它是再加一条同形状的规则；在那之前，这一段就是那个控制。
+**这些声明里只有一项真正被 CI 抓住。** `tools/check_declared_is_consumed.py` 有四条规则，覆盖 knob、
+record 字段和 state 通道。`corpus_release` 是一个 knob，所以缺少读取方会按名字让构建失败。
+`ArmProfile.hypothesised_effect`、`.readout`、以及存储的 SQLite 列住在那四条规则都不遍历的命名空间里
+—— 所以对它们而言，「声明了但没有读取方」是由评审而不是由 CI 守着的。补上它是再加一条同形状的规则；
+在那之前，这一段就是那个控制。
 
 ---
 
-## 12. CI
+## 11. CI
 
 ### 引擎仓库 —— `.github/workflows/ci.yml` 的 `test` job
 
 ```bash
-uv run --frozen python tools/check_imports.py                    # LAYERS 里有 feedback 和 triage
-uv run --frozen python tools/check_proposal_fields_are_consumed.py
-uv run --frozen pytest tests/feedback tests/triage -rs
+uv run --frozen python tools/check_imports.py    # LAYERS 里有 feedback
+uv run --frozen pytest -q -rs                    # 其中包含 tests/feedback 与 tests/corpus
 ```
 
-夜间的 `mutate` job 加上回流路径已声明的那些变异（§13）。
+回流路径没有任何属于自己的 CI 步骤，也不需要。`check_imports.py::undeclared` 会在 `LAYERS` 漏掉一个包
+时失败，这就覆盖了新增的那一层；其余是全套 `pytest`，而它是好几个 `tools/` 检查唯一的调用者，所以其中
+一个坏掉时它会响亮地失败。
 
 ### 语料仓库
 
@@ -1000,139 +850,48 @@ uv run --frozen python -c "from governed_bi.retrieve import build_index; ..."   
 
 ### 两边都不跑什么
 
-T4 和 T5。它们花钱，所以由一个已经决定要花这笔钱的人来启动，而产出的 artifact 记录它花了多少。
+T3，以及任何要花钱的东西。T3 需要一条携带 gold 语句的 observation —— 那是操作员存储里的一行，不是本仓库
+里的一个 fixture —— 还需要一个暖的向量缓存。它跑起来免费，而它是手动跑的。
 
 ---
 
-## 13. 构建顺序
+## 12. 界面
 
-第 0–4 步不花任何钱，而且各自独立有用。第 6 步是这份设计第一次可能以「花钱」的方式出错的地方。人日估算
-按一位熟悉这棵树的工程师计。
+交付了一块屏幕，没交付两块，以及一个拥有全部文案的模块。
 
-| # | 做什么 | 人日 | 为什么在这个位置 |
-|---|---|---:|---|
-| **0** | **给服务语料 `git init`**、首次提交，并修掉 `corpus/snapshot.py::snapshot` 那个无守卫的 `rmtree` | 0.5 | 落地那一半没有东西可落，而第一个 `snapshot` 调用者会把一个真实缺陷武器化 |
-| 1 | `feedback/{events,validate,lifecycle,cluster}.py` + `store.py` + `attribution.py`；`LAYERS`；两个读者动词写入存储；读取方并集存储与通道 | 4 | 在没有任何模型的情况下关掉「没有东西关闭一个 open 行」。**回答第一个真问题：投诉到底会不会聚类？** |
-| 2 | 分析师捕获 UX（§15.2）+ `/observations` 读接口 + `/reports`（§15.3）+ **re-ask 按钮** + `review-copy.ts` 及其检查脚本 | 3.5 | 文案不再是一个小谎，而读者可以自己验证 |
-| 3 | `corpus/patch.py` + `tools/export_bundle.py` + `tools/check_landed.py`（含 `--verify`）+ `/review`（§15.4–15.8）+ 四个 admin 动词 | 5 | **一个不含任何 agent 的完整闭环。** steward 今天就能交给工程师一个 bundle |
-| 4 | 阶梯 T0–T2、六条新规则、棘轮、`corpus_release`、`ArmProfile.hypothesised_effect` | 4 | 免费闸门与可比性修复，两者都不依赖流水线 |
-| 5 | `tools/drain_raised.py`，然后删除 `serve/raised.py`、`api/raised_write.py`、`ThreadTurnLog.append_raised`/`raised_of` 以及读取并集 | 1.5 | **在** drain 报告为零并保持之后。通道删除单独成一步，因为它的风险完全是迁移风险 |
-| 6 | prompt 注册表拆分 + `triage/` 骨架 + `stop_after="diagnose"` 的 `diagnose` | 4 | **第一次花 token。** 先发布并度量 Diagnoser，再在它上面建东西 |
-| 7 | `replay` 模式的 `reproduce`；把 T3 接成闸门 | 3 | |
-| 8 | `stamp.py`、`stage_asset`、`author`、`assemble` | 4 | |
-| 9 | `trial.py`（含 `snapshot` 修复）与 T4；`arbitrate`、有界修订循环 | 3 | 试验语料是一个阶梯设施，所以即便第 6 步杀掉了流水线，这一步仍然有用 |
-
-**第 0–3 步就是最小可行闭环：约 13 人日，而且其中不含任何一次模型调用。** 从第 6 步起的一切都以第 6 步
-的度量为条件。没有 `ask_sme` 那一步，也没有 Adversary 那一步：两者都被裁掉了（ADR 0015 §5）。
-
-### 设计无法知道的三件事，以及各自最便宜的实验
-
-| 未知 | 实验 | 什么时候 |
-|---|---|---|
-| 投诉会聚类吗？ | 第 1 步交付 `cluster_key`，`GET /observations` 报告规模分布。零成本 | 约 30 条真实 observation 之后 |
-| 一个模型能把缺陷定位到一个 asset 上吗？ | 第 6 步的 diagnosis-only 模式跑 20 条 observation，约 600k token。与一位 steward 自己的定位对分 | 第 8 步之前 |
-| 分析师会用那个选择器吗？ | 第 2 步把 `category` 做成可选。度量携带它的 observation 占比 | 约 30 条之后 |
-
-如果 Diagnoser 是 reflector 那个水平（在更容易的任务上 OOF AUC 0.597），**停在第 7 步**，而诚实的产品
-是一个不带撰写功能的分诊队列。
-
----
-
-## 14. 测试名
-
-按「什么会坏」分组。名字是句子，遵循本库惯例。
-
-**存储与生命周期**
-- `tests/feedback/test_every_stored_state_names_its_actor.py` —— 遍历 `TRANSITIONS`，对行动者为空的存储态失败
-- `tests/feedback/test_a_declined_observation_cannot_be_reopened.py`
-- `tests/feedback/test_a_duplicate_joins_the_patch_set_of_its_original.py` —— 原型发现落地时受影响 observation 算成了 1 而不是 2
-- `tests/feedback/test_a_note_can_be_filed_on_a_paused_thread.py` —— 那个消失了的 409
-- `tests/feedback/test_no_comparability_knob_names_the_feedback_store.py`
-- `tests/feedback/test_the_derived_landing_states_are_not_stored.py`
-- `tests/feedback/test_a_superseded_patch_does_not_read_as_handed_off.py`
-
-**语料写入**
-- `tests/corpus/test_an_edit_does_not_create_a_second_file_with_the_same_id.py` —— M1，作为回归
-- `tests/corpus/test_a_one_word_summary_edit_is_a_one_line_diff.py`
-- `tests/corpus/test_an_edit_refuses_when_the_current_value_is_not_was.py`
-- `tests/corpus/test_patch_refuses_a_governance_field.py`
-- `tests/corpus/test_snapshot_refuses_a_destination_that_is_not_a_corpus.py` —— 那个 rmtree 发现
-
-**流水线**
-- `tests/triage/test_a_full_run_leaves_corpus_content_hash_unmoved.py` —— 以及 asset id 集合不变
-- `tests/triage/test_the_author_cannot_write_a_governance_block.py`
-- `tests/triage/test_source_human_status_certified_is_restamped_curator_proposed.py`
-- `tests/triage/test_the_reproduction_rate_never_lands_in_confidence.py`
-- `tests/triage/test_the_revision_loop_is_bounded.py` —— 一个其补丁永远通不过 `validate` 的脚本化模型
-- `tests/triage/test_a_trial_replay_leaves_the_corpus_root_byte_identical.py`
-- `tests/triage/test_an_in_place_trial_restores_and_asserts_no_drift.py`
-
-**身份与可比性**
-- `tests/conformance/test_the_two_prompt_registries_are_disjoint.py::test_prompt_set_hash_is_unmoved_by_a_triage_prompt_edit` —— 断言 `b1f9e4d7d230cb97`
-- `tests/conformance/test_corpus_conformance_rules_fire.py` —— 扩展到 M2 的全部四个破坏
-- `tests/eval/test_a_corpus_release_is_a_declarable_treatment.py`
-- `tests/api/test_the_return_path_respects_the_grant.py::test_the_reader_note_is_a_declared_exemption`
-
-### 已声明的变异
-
-放在 `tools/mutation_catalogue_data_2.py` 里，用 `rp-` 前缀，因为 `open-work.md` §3.9 讲的正是「不可能
-失败的测试」：
-
-| id | 变异 | 必须被谁抓住 |
-|---|---|---|
-| `rp-1` | `restamp_model_authored` 原样返回输入 | restamp 测试 |
-| `rp-2` | `stage_asset` 写进 `corpus_root` | `test_a_full_run_leaves_corpus_content_hash_unmoved` |
-| `rp-3` | `derived_state` 永远返回 `handed_off` | `test_a_superseded_patch_does_not_read_as_handed_off` |
-| `rp-4` | `apply_edit` 去掉 `was` 检查 | `test_an_edit_refuses_when_the_current_value_is_not_was` |
-| `rp-5` | V19 的谓词不返回任何发现 | 一致性 fixture |
-| `rp-6` | V23 的谓词不返回任何发现 | 重复 id fixture |
-| `rp-7` | `narrow_feedback_rows` 原样返回输入 | grant 测试 |
-| `rp-8` | admin router 无条件挂载 | 未设置环境变量时的 404 断言 |
-| `rp-9` | `sweep` 删除非终态行 | sweep 测试 |
-| `rp-10` | `mechanism_indicator` 在 ledger 为空时返回 `False` 而不是 `None` | 一个断言「`mcnemar` 在 `attempts` 为空的对上报告未度量」的测试 —— 这个约定曾让一个正确的数字带上错误的来源，所以它被钉住而不是被记住 |
-| `rp-11` | `derived_state` 不重跑 fixture 就升级到 `retrieval_verified` | 一个断言升级需要一次通过的 T3 重跑的测试 |
-| `rp-12` | `check_landed.py` 把一个匹配不上的 `source_refs` id 当作匹配 | 一个带故意拼错 `obs:` ref 的测试，断言它被报告为 dangling |
-
----
-
-## 15. 界面
-
-三个角色，三块屏幕，以及一个拥有全部文案的模块。
-
-### 15.1 新增与改动的文件
+### 12.1 新增与改动的文件
 
 | 路径 | 做什么 |
 |---|---|
-| `ui/app/reports/page.tsx` | 新路由，面向分析师 |
-| `ui/app/review/page.tsx` | 新路由，面向 steward |
-| `ui/components/answer/raise-note.tsx` | 重写（§15.2） |
-| `ui/components/answer/category-picker.tsx` | 新增 |
-| `ui/components/reports/report-list.tsx` | 新增 |
-| `ui/components/reports/report-status.tsx` | 新增 —— 状态 chip **及其句子**，一个组件，好让 §5 只有一个渲染者 |
-| `ui/components/reports/re-ask-button.tsx` | 新增（§5） |
-| `ui/components/review/review-surface.tsx` | 新增 —— 双栏外壳 |
-| `ui/components/review/review-queue.tsx` | 新增 |
-| `ui/components/review/cluster-panel.tsx` | 新增 |
-| `ui/components/review/evidence-bundle.tsx` | 新增 |
-| `ui/components/review/reproducer.tsx` | 新增 |
-| `ui/components/review/asset-diff.tsx` | 新增 |
-| `ui/components/review/decision-bar.tsx` | 新增 |
-| `ui/components/review/handoff-panel.tsx` | 新增 —— 导出后的 bundle 下载与 manifest |
-| `ui/components/clarifications/pending-queue.tsx` | 一个链接加两段文案（§9） |
-| `ui/lib/category-taxonomy.ts` | 新增 —— `category` → 标签。唯一的映射 |
-| `ui/lib/review-copy.ts` | 新增 —— §3、§5、§15 里**每一句**面向用户的文案 |
-| `ui/lib/my-reports.ts` | 新增 —— `localStorage` 存储 |
-| `ui/lib/schemas.ts`、`types.ts`、`api-client.ts`、`hooks/queries.ts` | zod schema、`z.infer` 类型、9 个 client 方法、6 个 hook |
-| `ui/components/layout/nav.tsx` | 两个 `LINKS` 条目 |
+| `ui/app/review/page.tsx` | steward 的路由 |
+| `ui/components/review/review-surface.tsx` | 双栏外壳 |
+| `ui/components/review/review-queue.tsx` | 队列（§12.4） |
+| `ui/components/review/cluster-panel.tsx` | 详情面板 |
+| `ui/components/review/evidence-bundle.tsx` | 证据（§12.5） |
+| `ui/components/review/reproduce-panel.tsx` | 第 6 块（§12.6） |
+| `ui/components/review/asset-diff.tsx`、`ui/lib/asset-diff.ts` | 单字段 diff，以及它背后的词级 diff（§12.7） |
+| `ui/components/review/decision-bar.tsx` | 四个动作（§12.8） |
+| `ui/components/review/handoff-panel.tsx` | 导出后的 bundle 命令与 manifest |
+| `ui/lib/review-copy.ts` | §3、§5、§12 里**每一句**面向用户的文案 |
+| `ui/lib/schemas.ts`、`types.ts`、`api-client.ts`、`hooks/queries.ts` | zod schema、`z.infer` 类型、client 方法与 hook |
+| `ui/scripts/check-asset-diff.ts` | diff 的最小性，密闭运行 —— `npm run check:asset-diff` |
+| `ui/components/layout/nav.tsx` | 一个 `LINKS` 条目，**Review** |
 
-**`ui/lib/review-copy.ts` 是把「诚实文案」规则变成机械的。** 每一句都住在那里、按状态索引，而
-`ui/scripts/check-review-copy.ts` 和其他几个 `check-*.ts` 一样跟着 `npm run lint` 跑。它断言两件事：
-observation / patch / decline 三个状态联合的每一个成员都有一句文案；以及没有任何一句命中禁用词表 ——
+**没有建。** 下面每一个路径在代码树里都不存在：`ui/app/reports/page.tsx`、
+`ui/components/answer/category-picker.tsx`、`ui/components/reports/report-list.tsx`、
+`report-status.tsx`、`re-ask-button.tsx`、`ui/lib/category-taxonomy.ts`、`ui/lib/my-reports.ts`、
+`ui/scripts/check-review-copy.ts`。`ui/components/answer/raise-note.tsx` 在，而且没有被重写。
+
+**`ui/lib/review-copy.ts` 本该把「诚实文案」规则变成机械的，而它只做了一半。** 每一句都住在那里、按状态
+索引，这正是让这条规则可检查的前提 —— 但检查没写。`ui/scripts/check-review-copy.ts` 不存在，所以没有
+任何东西断言 observation / patch / decline 三个状态联合的每一个成员都有一句文案，也没有任何东西禁掉
 `robust`、`seamless`、`comprehensive`，以及这个项目最在意的两个：**`automatically`** 和
-**`will be fixed`**（除否定用法外）。两项检查在文案内联写在组件里时都不可能做，而这正是这个模块存在的
-全部理由。
+**`will be fixed`**（除否定用法外）。这个模块让检查成为可能；今天靠评审来执行它。
 
-### 15.2 分析师：两次点击完成捕获
+### 12.2 分析师：两次点击完成捕获
+
+**没有建。** `raise-note.tsx` 仍然是通过一个文本框提交 note，下面这三个状态一个都不存在。写下它是因为
+这一轮真正使用的输入 —— 一份 eval artifact —— 里根本没有分析师，而它将来需要的那个形状最容易被做错。
 
 三个状态，而分析师在第一个之后就可以停。
 
@@ -1157,7 +916,7 @@ observation / patch / decline 三个状态联合的每一个成员都有一句�
 **选择器刻意不做什么。** 它绝不点名任何表、列、metric 或 term。不是因为分析师不能从下拉框里挑一个，
 而是因为一个有 13,281 个 asset 的下拉框会把两次点击的动作变成一次搜索任务，而一次**错误的**选择比不选
 更糟：它把 steward 送到错的 asset 上，还带着一个看起来很确定的指针。`term_mismatch` 是这个界面能靠到
-最近的地方，而它点名的是一**类**对象，绝不是一个实例。定位 asset 是 steward 的工作，§15.4 给他们机械。
+最近的地方，而它点名的是一**类**对象，绝不是一个实例。定位 asset 是 steward 的工作，§12.4 给他们机械。
 
 **回执文案原文** —— 它移除了产品里今天就存在的一个谎（`"Filed. It is on the pending list."`，而那个
 列表从不被清空）：
@@ -1165,7 +924,9 @@ observation / patch / decline 三个状态联合的每一个成员都有一句�
 > 已提交。数据管理员按最早优先复核这些。这台引擎不知道你是谁，所以不会有人给你发邮件 —— 到
 > **My reports** 看结果。
 
-### 15.3 `/reports`：分析师之后看到什么
+### 12.3 `/reports`：分析师之后看到什么
+
+**没有建。** 不存在 `/reports` 路由。只有一个 principal，也就没有第二个读者需要一个按读者划分的列表。
 
 `GET /observations`，按 `localStorage` 里的 id 过滤。**`ui/lib/my-reports.ts` 是浏览器记忆，而页面
 就这么说** —— 只有一个 principal、没有用户存储，所以在这里发明一个按用户的概念会是一个并不存在的边界：
@@ -1175,7 +936,7 @@ observation / patch / decline 三个状态联合的每一个成员都有一句�
 每一行：问题、提交时间、category 标签，以及一个状态 chip，其句子就是 §5 里该状态对应的那一句。
 `landed_verified`、`landed_matched` 和 `retrieval_verified` 带 **Re-ask** 动作（§5）。
 
-### 15.4 `/review`：steward 的屏幕，钱在这里
+### 12.4 `/review`：steward 的屏幕，钱在这里
 
 一个新路由，导航条目放在 **Pending** 和 **Settings** 之间。**不是 `/audit` 上的第三栏**，理由是
 `pending-queue.tsx` 自己陈述过的那条再往前推一步：`/audit` 是最新优先、涵盖每一个 turn；这里是最早
@@ -1206,110 +967,116 @@ export function ReviewSurface(): JSX.Element {
 `filed_at` · 两三个表名 · 一个显示**不同问题数**的 badge —— 那个数字才说明这是一个人点了两次，还是
 五个人撞在同一面墙上。
 
-**按 cluster 最早成员的时间排序，不按规模。** 今早的五条 cluster 并不比等了一个月的一条更紧急，而按
+**按 cluster 最早成员的时间排序，不按规模。** 今早的三条 cluster 并不比等了一个月的一条更紧急，而按
 规模排序会让长尾永久不可见。
 
-cluster 标题下的说明常驻，因为这个分组是结构化的：
+cluster 标题下的说明常驻，因为这个分组是结构化的 —— 键就是 `(category, schema)`，再无其他，没有
+embedding、没有模型、没有成本：
 
 > 按被报告的问题类型、以及那些 turn 被允许读的表分组。这里没有任何东西读过那些问题并判定它们是同一个
 > 意思 —— 在把它们当作一个问题处理之前，先看看这些行。
 
+**而实测的弱点就写在它下面。** 在导入的那批失败上，最大的簇是 **3**，而只有 **49%** 的行落在任何一个簇
+里。设计当初是靠「簇会很大」来论证批处理的；它们不大，所以这是一个带可选分组的列表，绝不是一条批处理
+流水线。
+
 **空状态：** `"Nothing to review. Every observation filed on this server has been triaged."` ——
-一句与 `/reports` 的空状态**不同**的话，因为「没人提交过任何东西」和「全部已分诊」是两个不同的事实，
+一句与「没人提交过任何东西」**不同**的话，因为那一句和「全部已分诊」是两个不同的事实，
 而把其中一个读成另一个，正是一个队列被弃用的方式。
 
 **刻意不在队列里的：** SQL、ledger、record。全都只有一次点击之遥。一个展示证据的队列是一个没人扫的队列。
 
-### 15.5 证据包：七个块，全部在决策之上
+### 12.5 证据包：六个块，全部在决策之上
 
-`ui/components/review/evidence-bundle.tsx`。每选中一个 cluster 取一次。
+`ui/components/review/evidence-bundle.tsx`。每选中一个 cluster 取一次。**设计规定了七个块，交付了
+六个**，因为一份 evaluation artifact 不记录其中两个要展示的东西。
 
-1. **问了什么、回来了什么。** 问题原文；然后 `outcome`，非 `answered` 的 turn 再加 `terminal_reason`
-   和 `refused_by`，经由已有的 `lib/answer-delivery.ts::terminalLabel` 渲染 —— **好让 steward 读到
-   分析师读到的同一句话**；然后 `answer_text`。
-2. **读者说了什么。** category 标签、`expected`、`note`。`expected` 被排版成引文，并在这一块里获得最大
-   视觉权重，因为它是这一页上唯一可证伪的断言。
-3. **那条语句。** `generated_sql` 放在已有的只读 `<SqlBlock/>` 里，加上经
-   `<AgentTimeline/>` / `buildStepsFromLedger(execution)` 渲染的尝试 ledger —— 与答案卡用的是同一批
-   组件。**与决策在同一块屏幕上，不在一个 tab 后面。** 一个必须跳走才能读 SQL 的 steward 会在不读它的
-   情况下做决定。
-4. **这个 turn 被允许读什么。** `licensed`（Layer 6 据以执行的允许清单）和 `schemas`（路由器的选择），
-   旁边是 `schema_ranking` 的 top 5 及分数 —— 因为「gold schema 排第 4」和「它从来不是候选」是两个
-   修法相反的问题，而那个 register 字段的存在就是为了区分它们。
-5. **哪些语料 asset 在 context 里。** 关键所在，三列，每个 asset 都链进 `/corpus`：
-   - **Found** —— 每个 `facet_hits` 条目一行，带 `asset_type`、找到它的 facet，以及它的
-     `lexical`/`semantic` 分数。
-   - **Reachable** —— `pulled_in`（`asset_id → resolve|connect`），合并并标记。
-   - **Rendered** —— *派生*：found ∪ pulled_in，减去 `budget_dropped`，减去 `evicted.dropped_ids`。
+在一切之上、当这一行携带 held-out 问题时：一张警告卡，不是一句说明。问题文本来自 held-out 划分，而一个
+据它写语料 prose 的人会不可见地污染基准。一致性规则 V12 抓得住逐字引用；改写则完全无法被检测，所以最后
+一道防线是一个知道自己在读什么的读者。
 
-   那条说明，也就是诚实的那部分，属于面板而不属于文档：
+1. **问了什么、回来了什么。** 问题原文；`outcome` 和 `refused_by`；该状态的标签及其 §5 句子；有驳回
+   理由或阻塞备注时一并给出。
+2. **grader 说了什么。** category、quality flag、note —— 以及并排的参考指纹与产出指纹。这是设计里
+   「读者说了什么」那一块，被换成了一个可证伪的东西：一条导入的行没有读者，而一次指纹不匹配不是意见。
+3. **那条语句。** `generated_sql` 放在已有的只读 `<SqlBlock/>` 里，而当这一行携带参考语句时，**参考语句
+   就并排在旁边**。读者没有 gold 答案；一条基准行有，这让它成为这一页上最强的证据。一个没跑任何语句的
+   turn 会这么说 —— 那是它自己的一个缺陷类别，不是一个缺失字段。
+4. **参考答案需要而没拿到什么。** `missing_tables`，也就是那个最直接的陈述；`schema_ranking` 不在
+   artifact 里，所以设计里「gold schema 排第 4」和「它从来不是候选」在这里分不开。`licensed` 和被路由到
+   的 schema 藏在 `atLeast(mode, "engineer")` 后面。空列表才是有意思的那种情况，而它会这么说：参考答案
+   要读的每一张表都能取到，而答案仍然是错的 —— 那是免费阶梯看不见的语义问题。
+5. **哪些语料 asset 在 context 里** —— 这就是在这里无法存在、并且直说这一点的那一块。在 v4 arm 上，
+   `facet_hits`、`pulled_in` 和 `turn_id` 在 **1,351 行里有 0 行**（**实测**），所以这个位置放的是一句
+   话而不是一张表。一个渲染成空的块读起来是「我们没费这个心」而不是「没有这个数据」，而这就是这个位置
+   要留着的理由。
+6. **复现器**（§12.6）。
 
-   > 「Rendered」是派生的，不是记录下来的。没有任何 register 字段列出真正在模型读到的那个 block 里的
-   > asset id —— `context_hash` 是一个摘要，而 `evicted` 只点名了预算丢掉的那些。这一列是
-   > *found 减去上限和预算移除的部分*，而它与真实集合相同 —— 除非在检索和渲染之间有什么东西移除了一个
-   > asset 却没有说。
-
-   **那个一字段修复，好让这条说明是一个决定而不是一次摊手：把 `rendered_asset_ids` 加进
-   `RECORD_REGISTER` 的 `Stage.assemble`。** 一个 `Tier.treatment` 字段，其消费者就是这个面板，把一次
-   派生变成一次观察。它必须**与**这个面板一起落地、不能更早 ——
-   `tools/check_declared_is_consumed.py` 和 `test_the_declared_but_unconsumed_set_does_not_grow`
-   就是理由，而它们是对的。
-6. **复现器**（§15.6）。
-7. **完整 record**，折叠，仅 `atLeast(mode, "engineer")` —— 就是 `/audit` 的 `TracePanel` 已经渲染的那
-   份 `GET /audit/turns/{id}/trace` 载荷，复用而不是重新实现。若 `incomplete_fields > 0` 则它**不**
-   折叠，并携带：「这个 turn 的 record 缺 N 个必填字段。不要据此起草变更 —— 关于这个 turn 有些东西没被
-   记录下来。」
+仅工程师可见、放在最下面的：**provenance** —— arm、question id、语料内容哈希，以及提交时间。设计里的第
+七块，即完整的 `GET /audit/turns/{id}/trace` 载荷，因为第 5 块同样的理由而缺席：一条导入的行没有
+`turn_id`，也就没有 trace 可取。
 
 **它刻意不展示什么：结果行。** `result_table` 按 ADR 0006 §11 只在实时时存在、不在 record 里，所以没有
 东西可展示，而一个为它留了位置的面板会读作「那些行没被保存」而不是「那些行不保留」。
 
-**披露情况，因为 ADR 0012 §8.7 要求说明。** 这个界面读 `turn_log`，它不是 grant-aware，所以它披露的
-恰好就是 `GET /audit/turns/{id}/trace` 已经向同一个未认证调用方披露的东西。**它不扩宽任何东西，也不
-收窄任何东西。** 而第 5 块里语料 asset 那一半**是**可收窄的、因此**就是**被收窄的：那些 asset 经由
-`visible(get_session())` 读取，所以一个被 withheld 的 asset 会像在 `/corpus/assets` 里那样被省略。
-这种不对称是唯一可用的那一种 —— 在隔壁路由照样提供 SQL 的情况下拒绝展示 SQL 是演戏，而在 `visible()`
-存在的情况下在这里扣住一个 asset 是一个洞。
+**披露情况。** 这个界面只读反馈存储，别的都不读，所以它能披露的恰好就是 §7 的允许清单放行的那些，而
+steward 更宽的视野就是挂载 steward 动词的那同一个 `GOVERNED_BI_FEEDBACK_ADMIN` 开关。这块屏幕上没有
+按 grant 的收窄。设计里有过一个 —— 第 5 块里经 `visible(get_session())` 读取语料 asset —— 而第 5 块不
+存在，所以那个收窄也不存在。
 
-### 15.6 复现器
+### 12.6 复现器
 
-steward 需要一个 record 给不了的事实：*这件事现在还发生吗？* `cannot_reproduce` 是一个驳回理由，所以
-它必须可核。**它是一个按钮，它花一次模型调用，而按钮就这么写着。** 它开一个**新**对话（绝不是投诉者的
-thread），而它的结果记在 observation 上，不记在语料上。
+steward 需要一个存储给不了的事实：*这件事现在还发生吗？* `cannot_reproduce` 是一个驳回理由，所以它必须
+可核。
 
-### 15.7 diff：逐字段，绝不是文本 diff
+**它是一条命令，不是一个按钮，而这才是诚实的形状。** 这次复查会在 agent 模型关闭的情况下把问题重新走一
+遍路由，那需要一个数仓连接和一个暖的向量缓存 —— 浏览器两样都没有，而服务器两样都得先配好。刻意没有对应
+的 HTTP 动词：一个在多数部署上会 404 的按钮，比一行能被人复制的命令更糟。`--embed` 就在被复制的那条命令
+里，而且不是可选项（§10）。
+
+**它不花钱**，而这是对设计的一处更正：对一条导入的失败，「这件事现在还发生吗」是一次 answering 模型关闭
+的 coverage 复查，不是一次模型调用。
+
+一个绿色结果许可了什么，常驻在面板上 —— 参考答案要读的那些表又能取到了，而不是答案对了 —— 而这次复查
+根本无法回答的那三种情况被点名而不是被藏起来，因为一个提供了无法回答的命令的面板，正是有人据此断定工具
+坏了的方式。
+
+### 12.7 diff：一个字段，逐词，绝不是文本 diff
 
 ```tsx
-export type FieldEdit = {
-  path: string;             // "summary" | "body" | "reliability.note" | "columns[betrieb_id].body"
-  before: string | null;    // create 时为 null
-  after: string | null;     // 删除时为 null
-  kind: "scalar" | "block" | "list";
-};
-export function AssetDiff({ edit, fieldOrder }: {
-  edit: AssetEdit;
-  /** 该类型在引擎里声明的字段序，来自 `GET /corpus/fields?type=`。 */
-  fieldOrder: CorpusField[];
-}): JSX.Element;
+export function AssetDiff({ assetId, fieldPath, was, becomes }: {
+  assetId: string;
+  /** "summary" 或 "body" —— 一个补丁能携带的仅此两条路径（§6）。 */
+  fieldPath: string;
+  was: string;
+  becomes: string;
+}): React.JSX.Element;
 ```
 
 **不是对 YAML 做文本 diff，而这不可商量** —— 它由 M1 推出。`to_mapping` 省略默认值，所以 `governance`
 和 `reliability` 在取默认值时根本不在文件里，于是设置其中一个时文本 diff 会显示一处**虚假的新增**；
-而 PyYAML 在 80 列处重排，所以对一个词的 `summary` 改动做文本 diff 会变成整段 diff。字段序从
-`GET /corpus/fields?type=` 读取，所以往 `corpus/schema.py` 加一个字段，它会出现在这里而这个组件不用改。
+而 PyYAML 在 80 列处重排，所以对一个词的 `summary` 改动做文本 diff 会变成整段 diff。一个补丁携带的是
+一条字段路径加两个字符串，所以 diff 就在那上面做，别的都不碰。
 
-- **`scalar`**（`summary`、`reliability.note`）—— 单行，行内**按词**diff，新增和删除都可见，加一个
-  对着上限的实时字数统计。一个 251 字符的 summary 如果是在导出**之后**才发现，那就是一次白跑的往返。
-- **`block`**（`body`）—— 双栏，**按行**。8,000 字符上做按词 diff 无法阅读，而 `body` 是真正到达 prompt
-  的那个字段，所以它在屏幕上占最大空间。
-- **`list`**（`synonyms`、`rules`、`source_refs`）—— 新增项和删除项做成 chip，**绝不做重排后的文本
-  diff**。YAML 序列顺序对这几个都不具语义，而把一次重排渲染成一次变更会训练评审者去略读。
-- **未改动字段折叠**而不是隐藏，藏在「显示这次没有改动的 9 个字段」后面 —— 否则一个不在 diff 里的字段
-  和一个不在 asset 里的字段看起来一模一样。
+**是哪个字段写在那一行上，因为这两个字段做的事不同。** `summary` 喂检索索引，`body` 喂模型的 prompt
+—— 改 `summary` 改的是*什么会被找到*，改 `body` 改的是*模型读到什么*。一个要判断某次编辑是否修好了一次
+coverage miss 的评审者必须知道自己在看哪一个，而只显示词的 diff 会让他去猜。
 
-**这个组件拒绝渲染两样东西**，而两者都是拒绝而不是缺口：任何形式的 `governance`（一个能提议排除的屏幕
+**颜色不是唯一的信号。** 每一段变化还带一个 `+`/`−` 标记。红绿 diff 对色盲评审者不可读，而这正是做决定
+的那块屏幕。
+
+**「+0 −0 词」是两种情况，给两句不同的话。** 替换值可以就是那里已有的文本，也可以只在空白上不同。两者都
+算零个词；只有第二种是 steward 真的敲进去、而且提交不了的值，`classifyEdit` 点名是哪一种。
+
+`ui/scripts/check-asset-diff.ts` 钉住的性质是**最小性**，不是「它产出了 span」。一个「一个词移动就把整句
+标成改过」的贪心走法照样能渲染、照样看起来像 diff，却悄悄让评审者看不见那处编辑。这个检查是密闭的 ——
+它 import `lib/asset-diff.ts`，不需要引擎、不需要语料、不需要网络。
+
+**这个组件渲染不到两样东西**，而两者都是拒绝而不是缺口：任何形式的 `governance`（一个能提议排除的屏幕
 **就是**那个「其缺席即控制」的工具 —— ADR 0015 §8），以及对一张表内联 `columns` 的任何结构性改动（§6）。
+两者都不是可编辑的字段路径，所以都到不了它这里。
 
-### 15.8 决策条
+### 12.8 决策条
 
 吸底在详情栏底部，好让它在任何滚动位置都与证据同屏。这是这一页上最重要的布局决定，也是为什么这一栏
 内部滚动而不是让整页变长。
@@ -1325,7 +1092,7 @@ export function DecisionBar({ cluster, patch, blocked }: {
 
 四个动作，而第四个是大多数复核工具都省掉的那个：
 
-- **Draft a change** → §15.7 允许的字段集的编辑器，然后 `POST /patches`。
+- **Draft a change** → §12.7 允许的字段集的编辑器，然后 `POST /patches`。
 - **Decline** → 一个覆盖八个 `decline_reason` 成员的 `Select`，每一项把它在 §5 的那句话渲染成
   **该选项的描述**，好让 steward 在选之前就读到分析师将要读到的话。不接受纯自由文本驳回：一个没人能
   聚合的理由是一个没人复核的理由。
@@ -1336,22 +1103,25 @@ export function DecisionBar({ cluster, patch, blocked }: {
   <说明>。没有任何东西在自动推进这件事。」指派人下拉框被拒绝了：没有用户存储可以填充它，而一个只有
   一项的下拉框是对工作流的一个谎。
 
-### 15.9 显示模式
+### 12.9 显示模式
 
-仅工程师可见的那些块（§15.5 第 7 块、`schema_ranking` 分数、阶梯细节）藏在已有的
-`ui/lib/display-mode.ts::atLeast(mode, "engineer")` 后面。不发明任何新东西：那个模块本来就带着「显示
-模式不是安全边界」的警告，而这份设计不把它变成一个。
+仅工程师可见的那些部分 —— §12.5 的 provenance 块，以及它那行 `licensed`/被路由到的 schema ——
+藏在已有的 `ui/lib/display-mode.ts::atLeast(mode, "engineer")` 后面。不发明任何新东西：那个模块本来就
+带着「显示模式不是安全边界」的警告，而这里不把它变成一个。
 
 ---
 
-## 16. 这份设计不做什么
+## 13. 回流路径不做什么
 
 - **它不认证任何人。** 单一 principal，而碰到端口仍然就够了。admin 动词以未挂载状态发布；那是一个部署
   开关，不是一个身份。
 - **它不知道是谁提交了一条 observation。** 没有 `filed_by`，因为 `api/auth.py` 返回单一 principal，
-  而在这里加一个按用户的字段会是一个并不存在的边界。reports 页面记住**这个浏览器**提交过什么，存在
-  `localStorage` 里，并标注为浏览器记忆。
+  而在这里加一个按用户的字段会是一个并不存在的边界。也没有任何东西告诉读者他那条投诉后来怎么了，因为
+  根本没有面向读者的界面（§12.3）。
 - **它不宣称一个落地的补丁修好了那个问题。** 见 §5。
 - **它不把 prose 注入扫描当作闸门。** V21 复用 `GUARD_RULES`，V19 覆盖一个具名披露。除此之外，姿态是
   ADR 0006 的：名字可以到达 prompt，而点名它的查询被拒。一个企业分叉必须自己决定这够不够。
-- **它不让本仓库变成策展人。** 流水线撰写候选；语料由人拥有、在本仓库之外受版本控制、且无法从本仓库重建。
+- **它不自己撰写候选变更。** 补丁由 steward 起草、由阶梯检查；本仓库里没有任何东西决定语料该说什么。
+  本该做这件事的 agentic 流水线被砍掉了（§2）。
+- **它不让本仓库变成策展人。** 语料由人拥有、在本仓库之外受版本控制、且无法从本仓库重建。整个环里对语料
+  内容唯一的一次写入，是某个人在那个仓库里的 `git commit`（§8）。

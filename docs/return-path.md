@@ -1,48 +1,18 @@
 # The return path — working reference
 
-> ## What shipped, and where it differs from this page (2026-08-23)
->
-> Steps **0-6 are built and on `design/return-path`**. This page is the design as agreed; six
-> things came out differently once measured, and a reader acting on the page rather than on this
-> note would get each of them wrong. `docs/open-work.md` §3.10a-3.10c carries the evidence.
->
-> 1. **`tools/check_closed_domains.py` does not exist, and T2 needs no database.** §11 put the
->    metric-expression resolver behind a live catalog. It does not need one: the corpus declares its
->    own tables, columns and joins, and *those* are what an expression must be consistent with — the
->    warehouse is `govern/`'s business at serve time. T2 is conformance rule **V17b** over the
->    patched tree, offline and free.
-> 2. **V18 is cut.** Five new rules, not six. It had no live population and no calibrated
->    false-positive rate, so it would have shipped as a rule nobody could size.
-> 3. **The measured findings, which are what separate these rules from rules written on a hunch:**
->    V17a **107 across 94 of 478 metrics** (the design's 28 was a parse-only prototype — `DIVIDE(a,
->    b)` parses as SQL and names a function no dialect has, so the shipped rule also asks
->    `govern/functions.py::PERMITTED_FUNCTIONS`); V17b **17**; V19 **0**; V21 **1**, the file the
->    design named; V23 **0**. The ratchet pins **101** identities.
-> 4. **Complaints cluster weakly**, which answers §12's open question 7 with a negative result: the
->    largest cluster is 3 and 49% of rows are in a cluster at all. The design's batching argument
->    does not survive it, and `/review` is a list with an optional grouping.
-> 5. **The reproducer must be run with `--embed`.** §11's T3 is built as
->    `tools/reproduce_observation.py`, and driving it found that a lexical-only re-check reported 2
->    missing gold tables where the row recorded 1 — a false "still reproduces" that reads exactly
->    like a real finding.
-> 6. **The capture UI and `/reports` are not built and are not planned in this cut.** One principal
->    holds every role on this deployment, so a notification loop and a per-reader report list have
->    nobody to serve. The input is the eval artifact: `tools/import_eval_failures.py`. §15's capture
->    surfaces (`raise-note.tsx`'s rewrite, `category-picker.tsx`, `my-reports.ts`,
->    `report-status.tsx`) are the design for a second audience that does not exist yet.
->
-> Also not built, and named in §13 as later steps rather than as this cut: the agentic pipeline
-> (`triage/`), T4, T5, and `CorpusRelease` as anything more than the `corpus_release` knob.
-
 How reader and engineer feedback becomes a corpus change. The binding decision is
-[ADR 0015](adr/0015-the-return-path.md); this page is what an engineer implements from.
+[ADR 0015](adr/0015-the-return-path.md); this page describes the code on `design/return-path`.
+Where the design and the measurement disagreed, what is written here is what the code does, and
+the design that was cut has been deleted from this page rather than marked.
 中文版：[回流路径 —— 工作参考](return-path.zh.md)。
 
-**Nothing on this page exists yet.** Every path, signature, route and test name is a design.
-Where a sentence describes code that is already in the tree it says so and names the file.
-Figures marked **measured** were taken on `governed-bi@464d1cb` against
-`../MS Fabric Facilities/corpus` and `../BIRD-corpus@74ff80c4` on 2026-08-22/23; every other
-number is an estimate and says so.
+Three surfaces are described below and are **not built**, and each says so where it appears: the
+analyst capture UI (§12.2), `/reports` (§12.3), and the re-ask button (§5). One principal holds
+every role on this deployment, so a notification loop and a per-reader report list have nobody to
+serve — the input is the eval artifact, `tools/import_eval_failures.py`.
+
+Figures marked **measured** were taken against `../MS Fabric Facilities/corpus` and
+`../BIRD-corpus` on 2026-08-22/23; every other number is an estimate and says so.
 
 ---
 
@@ -68,31 +38,32 @@ and a **copy** of the turn's question, SQL, licensed table set, outcome and trea
 **Monday, 11:30 — the steward.** Dev opens `/review`. The queue is oldest-first and grouped
 structurally: Priya's row sits in a cluster of three, all `term_mismatch`, all on
 `facilities.occupancy`. The caption above it says the grouping never read the questions. He selects
-the cluster and the detail pane shows seven evidence blocks *above* the decision bar (§15): what
+the cluster and the detail pane shows the evidence *above* the decision bar (§12): what
 was asked and what came back, what Priya said (her `expected` styled as the quotation it is), the
 SQL and the attempt ledger in the same components she saw, what the turn was allowed to read with
 the router's top-5 ranking, and which corpus assets were in context — with the caveat that the
 "rendered" column is derived rather than recorded.
 
 Block 5 is where he sees it: the `term` asset for *active customer* is in context, and its
-`summary` says nothing about the `status` column. The engine had no way to know. He clicks
-**Reproduce** — one model call, and the button says so — and it still returns 4,102.
+`summary` says nothing about the `status` column. The engine had no way to know. He runs the
+reproduce command the panel gives him — it costs nothing — and it still returns 4,102.
 
 He drafts a change: one field, `term_active_customer.summary`, adding the alias and the rule.
-The diff renders field-by-field in the register's declared order with a live character count
-against the cap, because finding out about a 251-character summary *after* the export is a wasted
-round trip. He sets the three observations to `addressed`.
+The diff renders that one field word by word, labelled with which field it is, because a change to
+`summary` changes what gets found and a change to `body` changes what the model reads. He sets the
+three observations to `addressed`.
 
-**Monday, 11:41 — the ladder.** T0 parses the staged file through the production loader. T1 runs
-whole-tree conformance, `build_structure`, and `build_index` against a **snapshot** of the corpus —
-not the corpus — and reports no new finding by rule id. T2 resolves the term's binding against the
-live catalog. T3 replays retrieval, paired, with the agent model off: on the three affected
-questions the gold tables stay covered and nothing else loses coverage. Total wall clock: about
-half a minute. Total spend: **$0** (§11, M4).
+**Monday, 11:41 — the ladder.** One command, `tools/verify_patch.py`. T0 parses the edited asset
+through the production loader. T1 runs whole-tree conformance, `build_structure` and `build_index`
+over the tree with the edit substituted in memory, and reports no new finding by rule id. T2
+resolves the term's binding against the corpus's own tables and joins. T3 —
+`tools/reproduce_observation.py --embed` — replays retrieval with the agent model off: on the three
+affected questions the gold tables stay covered and nothing else loses coverage. Total wall clock:
+about half a minute. Total spend: **$0** (§10).
 
 Because the patch touches a `summary`, T3 is a real verifier here. Had it touched only a `body`,
-the patch would carry a note saying T3 cannot see it and the honest tier is T4 — the field a patch
-touches decides its cheapest honest tier, and the record says which.
+T3 could not see it at all — `body` never enters the retrieval index — and the record would say so
+rather than report a pass. The field a patch touches decides whether any free tier can check it.
 
 **Monday, 11:45 — the engineer.** Dev runs one command:
 
@@ -195,36 +166,33 @@ and about half a day rather than the nothing this claimed.
 ```
 src/governed_bi/feedback/          # the store and the vocabulary. No models, no graph.
   __init__.py                      docstring only (house rule for packages)
-  events.py                        the closed vocabularies + Observation / Patch / Attribution
-  validate.py                      problems_with(Observation) / problems_with(Patch) -> list[str]
-  lifecycle.py                     TRANSITIONS, ACTORS, is_open(), derived_state()
+  events.py                        the closed vocabularies + Observation / Patch
+  validate.py                      faults_with(Observation) / faults_with(Patch) -> list[str]
+  lifecycle.py                     TRANSITIONS, PATCH_TRANSITIONS, is_open(), derived_state()
   store.py                         FeedbackStore — the deep module
-  attribution.py                   attribution_from_turn(entry) -> Attribution
   cluster.py                       cluster_key(), clusters()
 
-src/governed_bi/triage/            # the pipeline. Imports feedback, corpus, retrieve, govern, serve, eval.
-  __main__.py                      the ONLY entry point, and the only place triage reads os.environ
-  state.py  graph.py  wrap.py  scope.py  tools.py  stamp.py  trial.py  records.py
-  nodes/{intake,reproduce,triangulate,diagnose,author,validate,arbitrate,assemble,close}.py
-
-src/governed_bi/corpus/patch.py    # NEW, beside store.py: surgical field edits (§6)
+src/governed_bi/corpus/patch.py    # beside store.py: surgical field edits (§6)
 src/governed_bi/api/feedback_routes.py
-src/governed_bi/api/triage_routes.py   # reads only. No route starts a triage run (§10)
 
+tools/import_eval_failures.py      # an eval artifact's failures -> observations
+tools/verify_patch.py              # the free ladder, T0-T2 (§10)
+tools/reproduce_observation.py     # T3: does this failure still happen? (§10)
 tools/export_bundle.py             # patch -> bundle
 tools/check_landed.py              # corpus source_refs -> derived landing states; --verify re-checks
-tools/drain_raised.py              # ServeState.raised -> the store, and reports what is left
-tools/check_proposal_fields_are_consumed.py
 ```
 
-There is no `api/triage_app.py` and no `ask_sme`/`refute` node: the pipeline is not a served graph
-(§10) and the Adversary is cut (ADR 0015 §5).
+**There is no pipeline package.** The agentic triage design — a Diagnoser, an Author, a `triage/`
+graph with its own entry point — was cut from this build, and no file of it exists. What a steward
+gets instead is the review surface (§12), the free ladder (§10) and their own judgement. There is
+also no `attribution.py`: the fields a turn contributes are columns on the observation row (§4), so
+a type that carried them separately would be a second place they live.
 
 ### Import layering
 
 `tools/check_imports.py::LAYERS` must name every package under `src/governed_bi` — `undeclared()`
-fails the run when it does not, and a package the list omits has no constraints at all. Two
-insertions:
+fails the run when it does not, and a package the list omits has no constraints at all. One
+insertion:
 
 ```python
 LAYERS = (
@@ -232,7 +200,6 @@ LAYERS = (
     ("corpus",),
     ("feedback",),        # <- new: needs register + corpus, nothing above
     ("retrieve",), ("govern",), ("datasource",), ("model",), ("serve",), ("eval",),
-    ("triage",),          # <- new: needs serve (reproduce) + eval (replay) + feedback
     ("api",),
 )
 ```
@@ -271,6 +238,7 @@ On a refusal, `no_sql`, or an abandoned clarification (`kind: "from_refusal"`):
 | This data does exist — it should be able to answer | `false_refusal` | **new** `join` / `term` / `schema.rules`; or **neither** (retrieval defect) |
 | The question it asked me back didn't make sense | `bad_clarification` | **neither** — a prompt or policy question |
 | It's right that it can't answer, but it should have said why | `unclear_refusal` | **neither** |
+| It tried and tried and never got there | `attempt_capped` | **neither**, usually. Its own member and not `unverifiable`: "I cannot tell" is a statement about the reader, this one is about the engine |
 
 Operator-only, distinguished by `source` rather than by `kind`:
 
@@ -282,7 +250,7 @@ Operator-only, distinguished by `source` rather than by `kind`:
 
 **`source` is a separate column from `category`** because the same observation arrives from three
 populations (`reader`, `operator`, `agent`) and the queue sorts them differently. Folding it in
-would give twelve values for nine questions.
+would give thirteen values for ten questions.
 
 ### Which cases are a new asset, an edit, or neither
 
@@ -296,7 +264,7 @@ a pipeline that cannot conclude "there is nothing to patch" will patch.
 | a refusal that should have succeeded, gold table never licensed | **new** `term`/`join` to make it retrievable — or **neither**, if the table was licensed and the layer stack refused for a different reason |
 | a refusal that should have succeeded, `r_star_projection` | **neither** — an engine defect |
 | a missing synonym | **edit** the existing `term`'s `summary`, not a new asset. Aliases live in `summary` because that is the retrieval channel (see M3, ADR 0015) |
-| a wrong metric expression | **edit**. And it is the one class with a *free* verifier: 28 of 478 expressions do not parse and 23 resolve nowhere (**measured**) |
+| a wrong metric expression | **edit**. And it is the one class with a *free* verifier: 107 findings across 85 of 478 expressions do not parse, and 17 name an identifier that resolves nowhere (**measured**) |
 | a column that should be `suspect` | **edit** `column.reliability` |
 | a column that should be `excluded` | **neither, from the loop's point of view** — it emits a request and a human edits by hand |
 | a clarification answer that is a reusable fact | **new** `term` or `few_shot` — or **neither**, if it is a one-off filter |
@@ -308,64 +276,73 @@ a pipeline that cannot conclude "there is nothing to patch" will patch.
 ### Schema
 
 ```sql
--- feedback/store.py::_SCHEMA. Applied by _migrate() in one transaction.
-PRAGMA journal_mode = WAL;          -- one writer, many readers
+-- feedback/store.py::_SCHEMA, applied by _migrate(). `PRAGMA journal_mode = WAL` is set outside
+-- the transaction, because it is a database-level property and not a change.
 
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 
 CREATE TABLE IF NOT EXISTS observation (
-  observation_id   TEXT PRIMARY KEY,
-  filed_at         TEXT NOT NULL,          -- ISO-8601 UTC, seconds
-  source           TEXT NOT NULL,          -- reader | operator | agent
-  kind             TEXT NOT NULL,          -- from_refusal | wrong_answer
-  category         TEXT,                   -- §3, nullable: the first tap may be all there is
-  note             TEXT NOT NULL DEFAULT '',   -- <= 4000 chars, stripped
-  expected         TEXT NOT NULL DEFAULT '',   -- <= 200 chars. The highest-value optional field
-  state            TEXT NOT NULL,          -- open | triaged | declined | duplicate | addressed
-  decline_reason   TEXT,                   -- required when state = declined; §5
-  duplicate_of     TEXT REFERENCES observation(observation_id),
-  triaged_at       TEXT,
+  observation_id      TEXT PRIMARY KEY,
+  filed_at            TEXT NOT NULL,          -- ISO-8601 UTC, seconds
+  source              TEXT NOT NULL,          -- reader | operator | agent
+  kind                TEXT NOT NULL,          -- from_refusal | wrong_answer
+  category            TEXT,                   -- §3, nullable: the first tap may be all there is
+  note                TEXT NOT NULL DEFAULT '',   -- <= 4000 chars, stripped
+  state               TEXT NOT NULL,          -- open | triaged | declined | duplicate | addressed
+                                              -- | blocked_on_a_person
+  decline_reason      TEXT,                   -- required when state = declined; §5
+  duplicate_of        TEXT REFERENCES observation(observation_id),
+  blocked_note        TEXT NOT NULL DEFAULT '',   -- required by blocked_on_a_person; §5
+  triaged_at          TEXT,
   -- attribution, COPIED not joined (see below)
-  turn_id          TEXT NOT NULL,
-  thread_id        TEXT NOT NULL,
-  run_id           TEXT,
-  question         TEXT NOT NULL,
-  outcome          TEXT,
-  terminal_reason  TEXT,
-  refused_by       TEXT,
-  generated_sql    TEXT,
-  licensed_json    TEXT NOT NULL DEFAULT '[]',
-  rendered_json    TEXT NOT NULL DEFAULT '[]',   -- needs the new register field `rendered_asset_ids`, §15.5
-  schema_ranking_json TEXT NOT NULL DEFAULT '[]',
+  turn_id             TEXT,
+  thread_id           TEXT,
+  question            TEXT NOT NULL DEFAULT '',
+  outcome             TEXT,
+  refused_by          TEXT,
+  generated_sql       TEXT,
+  licensed_json       TEXT NOT NULL DEFAULT '[]',
+  schemas_json        TEXT NOT NULL DEFAULT '[]',
+  missing_tables_json TEXT NOT NULL DEFAULT '[]',
+  -- the benchmark half of an imported failure. Withheld from an unauthenticated caller by §7.
+  gold_sql            TEXT,
+  gold_fingerprint    TEXT,
+  pred_fingerprint    TEXT,
+  quality_flags_json  TEXT NOT NULL DEFAULT '[]',
   corpus_content_hash TEXT,
-  prompt_set_hash  TEXT,
-  git_sha          TEXT
+  prompt_set_hash     TEXT,
+  git_sha             TEXT,
+  arm                 TEXT,
+  question_id         TEXT,
+  db_id               TEXT,
+  external_key        TEXT UNIQUE             -- an importer re-reading one artifact is idempotent
 );
-CREATE INDEX IF NOT EXISTS ix_obs_state  ON observation(state, filed_at);
-CREATE INDEX IF NOT EXISTS ix_obs_turn   ON observation(turn_id);
+CREATE INDEX IF NOT EXISTS ix_obs_state    ON observation(state, filed_at);
+CREATE INDEX IF NOT EXISTS ix_obs_turn     ON observation(turn_id);
 CREATE INDEX IF NOT EXISTS ix_obs_category ON observation(category, state);
+CREATE INDEX IF NOT EXISTS ix_obs_cluster  ON observation(db_id, category);
 
 CREATE TABLE IF NOT EXISTS patch (
-  patch_id         TEXT PRIMARY KEY,
-  created_at       TEXT NOT NULL,
-  author           TEXT NOT NULL,          -- operator | agent
-  intent           TEXT NOT NULL,          -- new_asset | edit_asset | exclusion_request
-                                           -- | shared_request | engine_defect | no_change
-  state            TEXT NOT NULL,          -- draft | exported | withdrawn
-  triage_run_id    TEXT,
-  rationale        TEXT NOT NULL DEFAULT '',
+  patch_id                     TEXT PRIMARY KEY,
+  created_at                   TEXT NOT NULL,
+  author                       TEXT NOT NULL,   -- operator | agent
+  intent                       TEXT NOT NULL,   -- new_asset | edit_asset | exclusion_request
+                                                -- | engine_defect
+  state                        TEXT NOT NULL,   -- draft | exported | withdrawn
+  namespace                    TEXT NOT NULL,
+  rationale                    TEXT NOT NULL DEFAULT '',
   -- what changes
-  asset_type       TEXT,
-  namespace        TEXT NOT NULL,
-  asset_id         TEXT,                   -- null for new_asset until the id is derived
-  field_path       TEXT,                   -- e.g. "summary", "reliability.status", "binding.target_id"
-  was              TEXT,                   -- read from the live corpus at draft time
-  becomes          TEXT,
-  asset_yaml       TEXT,                   -- whole document, new_asset only
+  asset_type                   TEXT,
+  asset_id                     TEXT,            -- null for new_asset until the id is derived
+  field_path                   TEXT,            -- "summary" or "body", and nothing else (§6)
+  was                          TEXT,            -- read from the live corpus at draft time
+  becomes                      TEXT,
+  asset_yaml                   TEXT,            -- whole document, new_asset only
   -- what it was verified against
-  base_corpus_content_hash     TEXT NOT NULL,
-  expected_corpus_content_hash TEXT,       -- null until the bundle is built
-  ladder_json      TEXT NOT NULL DEFAULT '{}'   -- tier -> GateResult
+  base_corpus_content_hash     TEXT NOT NULL DEFAULT '',
+  expected_corpus_content_hash TEXT,            -- null until the bundle is built
+  ladder_json                  TEXT NOT NULL DEFAULT '{}',  -- tier -> GateResult
+  withdrawn_reason             TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS ix_patch_state ON patch(state, created_at);
 
@@ -376,16 +353,22 @@ CREATE TABLE IF NOT EXISTS observation_patch (
 );
 
 CREATE TABLE IF NOT EXISTS transition (       -- append-only. The audit trail.
-  rowid_           INTEGER PRIMARY KEY AUTOINCREMENT,
-  at               TEXT NOT NULL,
-  entity           TEXT NOT NULL,          -- observation | patch
-  entity_id        TEXT NOT NULL,
-  from_state       TEXT NOT NULL,
-  to_state         TEXT NOT NULL,
-  moved_by         TEXT NOT NULL,          -- the ACTOR, never empty. §5
-  detail           TEXT NOT NULL DEFAULT ''
+  rowid_     INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  entity     TEXT NOT NULL,                   -- observation | patch
+  entity_id  TEXT NOT NULL,
+  from_state TEXT,
+  to_state   TEXT NOT NULL,
+  moved_by   TEXT NOT NULL,                   -- the ACTOR, never empty. §5
+  detail     TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS ix_transition_entity ON transition(entity, entity_id, rowid_);
 ```
+
+**`expected` is not a column.** The filing route accepts it, caps it at 200 characters, and
+prepends it to `note` as a line reading `expected: …` (§7). A column of its own was not worth a
+migration for one line of the reader's own text, and the review surface reads it out of the note
+with the rest.
 
 **Attribution is copied, not joined.** The turn's own record is the natural foreign key and it is
 the wrong one: `MAX_TURNS_RETAINED = 25` elides older records off `ServeState.turns`, and the
@@ -410,45 +393,53 @@ class FeedbackStore:
 
     # writes
     def file(self, obs: Observation) -> str: ...               # -> observation_id
-    def transition(self, entity: str, entity_id: str, *, to: str,
-                   moved_by: str, detail: str = "",
-                   decline_reason: str | None = None) -> None: ...
+    def move(self, observation_id: str, *, to: ObservationState,
+             moved_by: Actor | None = None, detail: str = "",
+             decline_reason: DeclineReason | None = None,
+             duplicate_of: str | None = None,
+             blocked_note: str = "") -> Observation: ...
+    def move_patch(self, patch_id: str, *, to: PatchState,
+                   moved_by: Actor | None = None, detail: str = "",
+                   withdrawn_reason: str = "",
+                   expected_corpus_content_hash: str | None = None) -> Patch: ...
     def draft(self, patch: Patch, *, observations: Sequence[str]) -> str: ...
+    def amend_note(self, observation_id: str, note: str) -> None: ...
     def record_ladder(self, patch_id: str, tier: str, result: Mapping[str, Any]) -> None: ...
 
     # reads
     def get(self, observation_id: str) -> Observation | None: ...
-    def queue(self, *, state: str | None = None, category: str | None = None,
-              limit: int = 50, offset: int = 0) -> Page[Observation]: ...
-    def patches_of(self, observation_id: str) -> list[Patch]: ...
-    def observations_of(self, patch_id: str) -> list[Observation]: ...
-    def history(self, entity_id: str) -> list[dict[str, Any]]: ...
-
-    # maintenance
-    def sweep(self, *, older_than_days: int, dry_run: bool = True) -> SweepReport: ...
+    def get_patch(self, patch_id: str) -> Patch | None: ...
+    def queue(self, *, states: Sequence[ObservationState] | None = None,
+              category: Category | None = None,
+              limit: int = 50, offset: int = 0) -> Page: ...
+    def patches(self, *, states: Sequence[PatchState] | None = None,
+                limit: int = 50, offset: int = 0) -> Page: ...
+    def observations_for_turn(self, turn_id: str) -> tuple[Observation, ...]: ...
+    def patches_of(self, observation_id: str) -> tuple[Patch, ...]: ...
+    def observations_of(self, patch_id: str) -> tuple[Observation, ...]: ...
+    def history(self, entity_id: str) -> tuple[dict[str, Any], ...]: ...
+    def counts_by(self, column: str) -> dict[str, int]: ...
 ```
 
-`sweep` deletes terminal rows older than the cutoff and **reports** non-terminal ones without
-touching them — the second half is the important one, because "nothing triaged this in 90 days"
-is a fact an operator needs and a deletion would hide it.
+`move` and `move_patch` write the new state **and** its transition row inside one `BEGIN IMMEDIATE`
+transaction, guarded by `AND state = ?`, so two stewards deciding the same row at once cannot leave
+the audit trail unchained. There is no retention sweep: rows accumulate and nothing deletes them.
 
-`assert_not_a_warehouse` from `serve/checkpointer.py` is reused verbatim on the path value, for
-the reason it exists there.
+`assert_not_a_warehouse` from `paths.py` is applied to the path value, for the reason it exists
+there.
 
 ### Knobs
 
 ```
 GOVERNED_BI_FEEDBACK_DB      default runs/feedback.sqlite, resolved against REPO_ROOT
-GOVERNED_BI_FEEDBACK_ADMIN   unset -> the four engineer verbs are not mounted at all
-GOVERNED_BI_PROPOSAL_DIR     default .governed_bi/proposals
-GOVERNED_BI_TRIAL_SCRATCH    unset -> trial mode is off and T4 refuses to run
+GOVERNED_BI_FEEDBACK_ADMIN   unset -> the steward's four verbs are not mounted at all
 ```
 
-**None of these may become a `register/knobs.py` knob.** `serve/session.py::_resolved_knobs` puts
+**Neither of these may become a `register/knobs.py` knob.** `serve/session.py::_resolved_knobs` puts
 every declared knob on every serve row and `measure/gates.py::_knobs_resolved_gate` compares them,
 so declaring one here moves the config hash of every arm for a value no turn consumes — the
 `expand_hops` defect by construction. Pinned by
-`tests/feedback/test_no_comparability_knob_names_the_feedback_store.py`.
+`tests/feedback/test_the_feedback_store_is_not_a_comparability_knob.py`.
 
 ---
 
@@ -512,17 +503,16 @@ the free ladder licenses, and it says only that the tables are reachable.
 
 ### The re-ask, and why it is not optional
 
-```
-ui/components/reports/re-ask-button.tsx     (new, ~0.5 day)
-```
+**Not built.** `ui/components/reports/re-ask-button.tsx` does not exist, and neither does the
+reports page it would sit on. It is written down because the gap it leaves is real.
 
-Every landing state's copy tells the reader to ask again, and nothing in the design session shipped
-a way to. So: `landed_verified`, `landed_matched` and `retrieval_verified` carry a **Re-ask** action
-on the reports page. It opens the chat surface on a **new** thread, prefilled with the question text
+Every landing state's copy tells the reader to ask again, and nothing ships a way to. So:
+`landed_verified`, `landed_matched` and `retrieval_verified` should carry a **Re-ask** action on the
+reports page. It opens the chat surface on a **new** thread, prefilled with the question text
 the store already copied off the turn record (§4).
 
-A new thread, not the original: writing into someone else's thread is what
-`api/raised_write.py` documents at length about not doing, and a second turn on the old thread
+A new thread, not the original. Writing into someone else's thread is what the deleted
+`api/raised_write.py` documented at length about not doing, and a second turn on the old thread
 inherits up to `MAX_TURNS_RETAINED` turns of context that the comparison should not include.
 
 **It does not grade itself.** The engine does not compare the new answer to the old one and does not
@@ -552,7 +542,7 @@ same lie as the current pending list.
 
 ---
 
-## 6. Writing YAML: `store.write` creates, `corpus/patch.py` edits
+## 6. Writing YAML: `corpus/patch.py` replaces one field in place
 
 **Measured (M1).** Loading a table asset, changing `summary`, and calling
 `corpus/store.py::write` produced a **second file with the same asset id**; `store.load` returned
@@ -567,7 +557,7 @@ defaults". So a round trip on a human-authored file drops comments, reflows ever
 columns, drops any explicitly-written default, and reorders keys into dataclass field order.
 
 ```python
-# src/governed_bi/corpus/patch.py  — new module, same layer as store.py
+# src/governed_bi/corpus/patch.py  — same layer as store.py
 def locate(path: Path, *, asset_id: str, field_path: str) -> Span:
     """Byte span of one field's value inside the file that declares `asset_id`.
 
@@ -585,11 +575,20 @@ def apply_edit(path: Path, *, asset_id: str, field_path: str,
     patch carries `was` at all. Preserves the block/quoting style of the original scalar,
     because changing `>` to `"` on an untouched neighbour is a diff a reviewer has to read.
     """
-
-def apply_create(root: Path, *, asset_yaml: str, namespace: str) -> Path:
-    """A new asset. This IS `store.write`, called through `from_mapping` first so the file
-    that lands is one the loader accepts."""
 ```
+
+Beside those two: `read_field`, `Span`, and the refusals as exception types —
+`FieldNotLocatable`, `StaleValue`, `UnwritableValue`. **There is no create primitive.** `new_asset`
+is a declarable patch intent and `asset_yaml` is validated, but no tool exports one:
+`export_bundle.py` refuses every intent other than `edit_asset`, because only an edit produces a
+diff an engineer can apply. A whole new asset is a hand-written file.
+
+**Two field paths, and no others.** `patch.py::EDITABLE` is `{summary, body}` — deliberately the
+same set `feedback/validate.py::EDITABLE_FIELD_PATHS` allows, with an import-time guard that fails
+if the two disagree. The reason is `lifecycle.derived_state`: it confirms a landing by comparing
+`summary`/`body` text, so a patch to a field it cannot read would land and then read as
+`superseded` forever. `reliability`, `binding` and `rules` are hand edits. And four roots can never
+be reached whatever a caller asks for: `governance`, `provenance`, `audit`, `columns`.
 
 Three things `patch.py` refuses to touch, and all three are refusals rather than TODOs:
 
@@ -604,9 +603,9 @@ Three things `patch.py` refuses to touch, and all three are refusals rather than
   standalone `column` file for a column its table already declares gives the loader the same asset
   id twice — which `store.load` accepts with **zero problems** (M1) and which then raises
   `ValueError: duplicate index id` inside `build_index`, killing every `Session` build. A total
-  serve outage, arriving after the commit, past a checker that cannot see it. An edit to a column's
-  `summary` or `reliability` goes through `locate`/`apply_edit` on the **table's** file; a new
-  column is a warehouse change, not a corpus change.
+  serve outage, arriving after the commit, past a checker that cannot see it. An edit to a
+  column's `summary` goes through `locate`/`apply_edit` on the **table's** file; a new column is a
+  warehouse change, not a corpus change.
 
 ---
 
@@ -690,21 +689,23 @@ step and is not built.
 
 ```
 bnd-pat-…/
-  MANIFEST.yaml        the patch, its observations, the ladder results, both hashes, the engine sha
+  MANIFEST.yaml        the patch, its observations and question ids, the ladder results, the base hash
   COMMIT_MSG.txt       generated. First line <= 72 chars. Names the observation ids, not the prose
   changes.patch        `git apply -p1`-able, produced against base_corpus_content_hash
-  after/               the post-state files, full text, so a reviewer can read the result not the diff
+  after/               the post-state file, full text, so a reviewer can read the result not the diff
   evidence/
     observations.md    what each reader said, verbatim, in a fenced block
-    turn-<id>.json     question, SQL, ledger, licensed, rendered, schema_ranking
-    ladder.json        every tier's GateResult, including the ones that did not run and why
-    reproduction.md    what the reproducer found, or that it was not run
+    ladder.json        every tier's GateResult that ran
 ```
 
 ```bash
 uv run --frozen python tools/export_bundle.py --patch pat-… --out ./bundles
 uv run --frozen python tools/export_bundle.py --patch pat-… --dry-run   # prints the diff, writes nothing
 ```
+
+`MANIFEST.yaml` deliberately omits `expected_corpus_content_hash`. It is the digest of a tree
+nobody has written yet, and a hash-shaped string nobody can compare is worse than an absence;
+`tools/check_landed.py` computes it after the commit.
 
 `COMMIT_MSG.txt` carries **no reader prose**. The commit message is model- or template-generated
 from the typed fields; the reader's sentence lives in `evidence/observations.md`, inside a fence,
@@ -743,11 +744,14 @@ out from a conflict, which is a worse place to learn it.
 
 ## 9. An operator's answer becomes a corpus fact without resuming anyone's thread
 
-`ui/components/clarifications/pending-queue.tsx` is read-only by design: answering there would
-resume a thread this operator was not the one asked (ADR 0006 B9). That constraint holds
-unchanged.
+**Not built.** `ui/components/clarifications/pending-queue.tsx` carries no link to the review
+surface, and `Category.reusable_fact` has no producer. The vocabulary is there and the surface is
+not.
 
-The pending queue gains **a link, not a button.** The link opens the steward surface with a
+`pending-queue.tsx` is read-only by design: answering there would resume a thread this operator was
+not the one asked (ADR 0006 B9). That constraint holds unchanged.
+
+What it needs is **a link, not a button.** The link opens the steward surface with a
 prefilled `reusable_fact` observation carrying the paused turn's question and the clarification
 text. The copy is explicit:
 
@@ -760,263 +764,91 @@ read, never written.
 
 ---
 
-## 10. The triage pipeline
-
-**Not registered in `langgraph.json`.** It is a `StateGraph` compiled and invoked by a local entry
-point:
-
-```bash
-uv run --frozen python -m governed_bi.triage --cluster cls-… --stop-after diagnose
-```
-
-**Why not a served graph.** `api/auth.py::_no_state_writes_on_a_new_run` denies only
-`command.update` and `command.goto`; a payload of `{"assistant_id": "triage", "input": …}` carries
-no `command` at all, so `_command_of` returns `None` and the hook returns without objecting. The
-platform already lets an anonymous caller spend budget on `serve` — `api/routes.py` says so — but
-registering `triage` raises the ceiling per request from one turn (~45k tokens) to a fan-out bounded
-only by an operator-set cap (~290k at the default), on the one graph that also writes files. There
-is no rate limiter anywhere in `api/`. A local entry point costs nothing.
-
-**So there is no `interrupt()` and no HITL pause.** When the Diagnoser cannot settle a semantic
-question the run **ends** and writes an observation with `category: needs_sme` into the store; a
-steward answers it in the review surface, which drafts the patch. This deletes
-`serve/resume.py::authorise_resume` from the design along with the problem it could not solve: under
-one principal the gate compares the batch *launcher* against the resumer, not the reader who
-complained, so it distinguishes nobody.
-
-Nodes:
-
-```
-START -> intake
-intake --(Send x K)--> reproduce_one -> triangulate
-intake --(nothing to reproduce)--> triangulate
-triangulate --> {diagnose, close}
-diagnose    --> {author, close}                # `close` when locus is no_asset_* or needs_sme
-author      --> validate                       # the ladder, T0-T2
-validate    --> {refute, arbitrate}
-refute      --> arbitrate                      # the ladder, T3 (+T4 if enabled)
-arbitrate   --> {author, assemble, withdraw}   # bounded: revision < max_revisions
-assemble    --> close
-withdraw    --> close
-close       --> END
-```
-
-Reducers: `operator.add` on `reproductions`, `critiques`, `usage`, `sme_answers`. **No reducer**
-on `diagnosis` or `patch` — the revision loop overwrites them, and `operator.add` there would make
-"the patch" a list whose last element every downstream node has to remember to take.
-
-`arbitrate` returns a `Command[Literal["author", "assemble", "withdraw"]]` and must have **no**
-`add_edge` out of it, only `add_conditional_edges` — otherwise every destination runs.
-
-### Tools, by role
-
-Read: `read_asset` (minus `audit`, minus `governance`), `list_assets`, `retrieval_trace`,
-`sample_column`, `probe_query`, `read_diagnosis`. **No tool replays a question** — the trial
-corpus belongs to the ladder (§11 T4), not to an agent.
-Write: **one**, `stage_asset`, plus `stage_exclusion_request`, `stage_shared_request`,
-`withdraw_staged`.
-
-`stage_asset` does six things in this order, and the order is the control:
-
-1. `yaml.load` through `corpus/store.py::_loader_class()` — the same loader, so YAML 1.1 `on:`
-   aliasing and utf-8-sig behave as they do in production.
-2. `triage/stamp.py::restamp_model_authored` **drops** `governance` and **overwrites**
-   `provenance` to `source: curator, status: proposed`.
-3. `corpus/parse.py::from_mapping` then `corpus/validate.py::problems_with`. Problems come back as
-   a **tool reply the model can act on**, not an exception — so it can fix its own summary length.
-4. `corpus/identity.py::validate_asset_id` and `validate_path_component(namespace)`.
-5. Write into `<proposal dir>/<id>/assets/<namespace>/<id>.yaml`.
-6. Record the staged row on state.
-
-**The asset id is derived, never taken from the model** (ADR 0008 §1.2). A model-supplied `id` is
-a problem, not an override.
-
-### `audit` never reaches a model
-
-`corpus/schema.py::Audit`: "Never enters the analyst context." A triage agent is not an analyst,
-but extending the rule is the cheap choice and reversing it later is a decision someone can make
-with evidence. `governance` is withheld for a different reason: an Author that can read one can
-pattern-match one, and showing it the shape is the first half of teaching it to forge it.
-
-### Prompts
-
-`register/prompts.py`, in a **second registry** with its own digest:
-
-```python
-TRIAGE_PROMPT_REGISTRY: Mapping[str, Prompt] = {...}
-def triage_prompt_set_hash(overrides=None) -> str: ...
-
-def _assert_the_two_registries_partition_this_module() -> None:
-    """Every `Prompt` at module scope is in exactly one registry.
-
-    `prompt_set_hash` is the serve arm's treatment identity and digests PROMPT_REGISTRY in
-    full, so a triage prompt in it moves every serve arm's identity on an edit that changes no
-    serve behaviour. Two digests is the fix; the cost is that a prompt could be in NEITHER,
-    which is a prompt no hash covers — strictly worse than the problem. Hence the assert.
-    """
-```
-
-### Trial corpus
-
-`triage/trial.py::corpus_under_trial(...)` — **T4's** facility, and the only place staged prose is
-rendered into a real prompt. It was designed as an agent tool for an Adversary that is now cut
-(ADR 0015 §5); moving it into the ladder is strictly better, because a deterministic driver
-replaying a fixed question set is auditable in a way a model choosing what to replay is not. This
-is also what finally gives `corpus/snapshot.py` a caller.
-
-- `mode="off"` — the default when `GOVERNED_BI_TRIAL_SCRATCH` is unset. T4 refuses to run.
-  Fails closed, because a trial that silently mutates the live corpus is the most expensive failure
-  in this package.
-- `mode="copy"` — `corpus/snapshot.py::snapshot(corpus_root, scratch)`, then the staged tree over
-  the copy, then a `Session` on the copy. `corpus_root` is never touched.
-- `mode="in_place"` — opt-in, lock-guarded by an exclusive `<corpus_root>.trial.lock` that
-  **refuses rather than waits** (the holder may be a 1,351-question arm), and always `restore`s
-  with a post-condition `not drifted(corpus_root, expected)`. A failed post-condition is a crash,
-  not a warning.
-
-> **Fix `snapshot` before writing this caller.** `corpus/snapshot.py:83` is
-> `if dest.exists(): shutil.rmtree(dest)`, guarded only by `_refuse_nesting`; `_identify_corpus` —
-> the "is this actually a corpus" check — guards `restore` only. **Measured:** pointed at a scratch
-> directory holding unrelated files, they were deleted. Worked example from the red team: with
-> today's `.env`, `GOVERNED_BI_TRIAL_SCRATCH=C:\Users\zhang\Code\governed-bi` passes the nesting
-> check against `../MS Fabric Facilities/corpus` and deletes the working tree.
->
-> Three fixes, all required: `snapshot` applies `_identify_corpus` to `dest` when `dest` exists, so
-> it will only replace something that is already a corpus; `corpus_under_trial` requires the scratch
-> path to be **absent or an identified corpus** and refuses otherwise; and the scratch path is
-> composed as `<GOVERNED_BI_TRIAL_SCRATCH>/<run id>` where the run id is minted by the process, so
-> no caller-supplied string ever reaches `rmtree`.
-
-### Cost
-
-Estimates, from the cap structure and not from a measurement, and the whole table is sensitive to
-the first line. A delivered context block is capped at 20,000 rendered chars by conformance V16, so
-~5k tokens per agent call.
-
-| | model calls | tokens (est.) |
-|---|---:|---:|
-| one serve turn (the unit) | ~8 | **~45k** |
-| `reproduce_one` × 3 | 3 serve turns | 135k |
-| `diagnose` | ~7 | 27k |
-| `author` | ~5 | 18k |
-| `refute` (incl. 2 replays) | ~6 + 2 serve turns | 110k |
-| **default cluster** | ~18 + 5 serve turns | **~290k** |
-
-**79% of the bill is the five serve turns.** Marginal cost of one more observation in a cluster is
-+45k up to the reproduce cap, then **zero** — which is the batching argument, quantified.
-
-Cheap paths, in the order to ship them:
-
-1. `stop_after="diagnose"`, `reproduce_mode="from_record"`, `refute_enabled=False` — **~30k, one
-   tenth.** Output is a localised finding, no YAML at all. **Ship this first.**
-2. `reproduce_cap=1`, `replay_cap=0`, `refute_enabled=False` — ~80k. The patch records
-   `assurance: unrefuted` and the steward reads that word.
-3. `reproduce_mode="from_record"` with authoring on — ~45k, and the record says `reproduced: null`
-   so nobody thinks the complaint was re-checked.
-
-`reproduce_workers = 1` (serial) by default. LangGraph runs every `Send` of one super-step
-concurrently and offers no per-fan-out limit, so serialisation means fanning out N at a time and
-re-entering the router; at N=1 that is a chain. Project experience: one curator-sized turn is
-~60% of the local TPM quota, and paid work runs on the server.
-
----
-
-## 11. The verification ladder
+## 10. The verification ladder
 
 Every tier is a **delta gate**. The served corpus already produces 361 `build_structure` problems
 (**measured**), so a "zero problems" gate rejects production, gets waived, and a waiver is how a
-real finding goes green.
+real finding goes green. What each tier asks is whether *this patch* made things worse.
 
-| tier | command | cost (**measured** where marked) | pass condition |
+T0 to T2 are one command and spend nothing:
+
+```bash
+uv run --frozen python tools/verify_patch.py --patch pat-…             # through T2
+uv run --frozen python tools/verify_patch.py --patch pat-… --tier T0   # the fastest useful answer
+```
+
+**Nothing is staged on disk.** `corpus/patch.py::apply_edit` returns the new text and writes
+nothing, and the whole-tree checks run over the parsed tree with the one file's mapping substituted.
+So there is no copy of a 7,357-file tree per run, and — more importantly — no destination directory
+for anything to delete: the ladder never touches `corpus/snapshot.py`, whose `rmtree` was measured
+deleting a scratch directory of unrelated files.
+
+| tier | what runs | cost (**measured** where marked) | pass condition |
 |---|---|---|---|
-| **T0** | `tools/check_corpus_conformance.py` over the staged tree | ~1.6 s | the file parses, `from_mapping` accepts it, `problems_with` is empty, the id validates |
-| **T1** | conformance whole-tree + `build_structure` + `build_index` + `tools/govern_bench.py` | 3.4 s (facilities) / 26 s (BIRD) **measured**; index 0.03 s lexical, 0.27 s warm semantic **measured**; govern_bench 1.7 s **measured** | no **new** finding by rule id; `build_index` does not raise; `build_structure` problem count does not rise |
-| **T2** | `tools/check_closed_domains.py` + the metric-expression resolver, against the live catalog | seconds, needs a DB, no model | every bare identifier in a metric `expression` resolves on `base_table` or through a declared join |
-| **T3** | `tools/routing_recall.py --baseline`, paired, agent model off | minutes, **~$0** — the vector cache is 100% warm and one new asset costs **2** embed calls **measured** | **per question, not per rate**: no question loses gold-table coverage. Report the questions that gained. **Not applicable to a `body`-only patch** — see below |
-| **T4** | targeted replay of the cluster's questions | tens of paid calls | the specific mechanism changed — see below |
-| **T5** | a paired arm | ~52 min wall at `workers=10`, ~74M input tokens **measured off `runs/eval/driver_v4.log`** | a **release** gate. Never a patch gate |
+| **T0** | the edited asset, alone | ~1.6 s | the file parses, `from_mapping` accepts it, `problems_with` is empty, the id validates |
+| **T1** | conformance whole-tree + `build_structure` + `build_index` | 3.4 s (facilities) / 26 s (BIRD) **measured**; index 0.03 s lexical, 0.27 s warm semantic **measured** | no **new** finding by rule id; `build_index` does not raise; `build_structure` problem count does not rise |
+| **T2** | the metric-expression resolver over the patched tree | offline, free, no database | every bare identifier in a metric `expression` resolves on `base_table` or through a declared join |
+| **T3** | `tools/reproduce_observation.py --embed`, agent model off | minutes, **~$0** — the vector cache is 100% warm and one new asset costs **2** embed calls **measured** | **per question, not per rate**: no question loses gold-table coverage. Report the questions that gained. **Not applicable to a `body`-only patch** — see below |
 
-**`tools/govern_bench.py` is in T1 but it is not a patch gate.** It runs the fictional world
-declared in `govern/adversarial.toml` (`open-work.md` §3.11 says so, and a prototype confirmed
-byte-identical output before and after a corpus patch). It is there to catch a *code* change
-riding along in the same commit, and the design says so rather than letting somebody believe the
-suite is watching the corpus.
+**T2 needs no live catalog, and that is a correction to the design.** ADR 0015 put the resolver
+behind a database, on the grounds that resolving an identifier needs the warehouse. It does not: the
+corpus declares its own tables, columns and joins, and *those* are what an expression must be
+consistent with — the warehouse is `govern/`'s business at serve time. `check_closed_domains.py` was
+the design's name for this tier and no such file exists.
+
+**T3 must be run with `--embed`.** Without it the check runs lexical-only, and the arms were
+measured with an embedder. Driving one observation both ways: the row recorded **1** missing gold
+table and the lexical re-check reported **2** — a false "still reproduces" that reads exactly like a
+real finding. The channel is named in every run's output and the lexical one warns.
+
+**T3 answers a narrower question than the others,** and its output says which every time: the tables
+the reference answer reads are reachable again. Not that the answer is right. On turns where every
+gold table *was* licensed, measured accuracy is 0.7555.
+
+**There is no tier above T3.** A targeted paid replay of a cluster's questions and a paired arm are
+both things a person launches by deciding to spend money, and neither is built. So a patch touching
+only a `body` has no verifier at all: `body` does not enter the retrieval index, T3 cannot see the
+change, and the record names which of the three reasons applied rather than reporting a pass.
 
 ### The readout, per category
 
-EX is not on this list except at T5. `docs/open-work.md` §3.12 gives the reason: MDE ≈ 2.3pp, and
-§1.5's largest single coverage bucket is 7 questions — 0.52pp.
+EX is not on this list. `docs/open-work.md` §3.12 gives the reason: MDE ≈ 2.3pp, and §1.5's largest
+single coverage bucket is 7 questions — 0.52pp.
 
 | category class | primary readout | tier | resolution |
 |---|---|---|---|
 | `false_refusal` | the turn's `terminal_reason` stops being `r_table_not_licensed`, and coverage becomes true | T3 | one question |
 | `wrong_scope` (coverage) | `all_gold_tables_licensed` per question; `pulled_in.n_connect` | T3 | one question |
-| wrong table inside the licensed set | `licensed` diff + `schema_ranking` gold rank | T3 report, T4 to confirm the answer flipped | exact |
-| `wrong_value` (definition) | the metric resolver passes, then T4's `generated_sql` binds the intended column | T2 + T4 | exact |
-| answer shape (projection, DISTINCT) | `BINDING/r_star_projection` turn-hit count, McNemar on the indicator | T5 | ~1.1pp |
-| `bad_clarification` | `outcome == clarification` and `licensed == ∅` counts | T4 | per question |
-| a benign statement refused | the adversarial suite's benign half | T1 | zero-noise |
+| wrong table inside the licensed set | the `licensed` diff, and which gold tables were missing | T3 | exact |
+| `wrong_value` (definition) | the metric resolver passes | T2 | exact |
 | prose that reaches the prompt | the new content rules | T0/T1 | exact |
 
 Every zero in that table is reported through `measure/stats.py::rule_of_three`, so `0/53` renders
 as "≤ 5.7%" and cannot be quoted as "0% false refusals". That function already exists.
 
-### The readout at T4/T5: a mechanism selects the stratum, EX on the stratum is the verdict
-
-This is the correction that survived the critique round, and the reasoning matters more than the
-recipe because the first two attempts were both wrong.
-
-**Attempt 1 — read EX on the whole arm.** On the v3_fold → v4 pair, same 1,351 questions, EX is
-+1.18pp with 126 discordant against an MDE of 2.33pp. Not decisive, and it reproduces
-`open-work.md` §3.1 exactly, which is what licenses everything below.
-
-**Attempt 2 — retire EX and read a mechanism indicator instead**, on the grounds that
-`BINDING/r_star_projection` moves −1.94pp on 29 discordant pairs against an MDE of 1.12pp, so a
-rarer event resolves better on the same n. **Withdrawn: it is a unit error.** MDE is denominated in
-points of the whole population, and the two readouts' base rates differ by two orders of magnitude.
-That indicator's *maximum possible* effect is 2.15pp, so it has **1.92 resolvable steps** before it
-saturates, against EX's 28.5. `COLUMNS/r_column_not_allowed` is 1.16× — already saturated — and the
-first draft of the table labelled it decisive.
-
-**What holds — attempt 3.** Restricted to the 30 turns where either arm hit that mechanism, **EX
-moves +23.33pp on 9 discordant pairs, exact McNemar p = 0.0391.** Significant. The first draft
-called it "not decisive" because 23.33pp is under that stratum's post-hoc MDE of 28.02pp — and a
-post-hoc MDE is not a significance threshold; `measure/stats.py::mde`'s own docstring says so.
-
-So the procedure is: **count the mechanism to choose the population a patch could have touched,
-then read EX on that population with an exact McNemar test.** Two instruments, two jobs.
-
-Three limits, all load-bearing:
-
-1. **There is no measured null for a mechanism count.** `run1`/`run2` — the designated replicate —
-   carry **zero ledger rows**, so nothing on disk says how much an indicator moves between two
-   identical runs, and the stratum is therefore chosen after seeing the arm. One nightly re-run of
-   `run1`'s configuration under the current harness fixes this and is the cheapest high-value
-   experiment in the design.
-2. **`mechanism_indicator` must return `None` on an empty ledger, not `False`.** The first draft of
-   the table computed `False`-on-empty, and 12 of 1,351 pairs have an empty `attempts` on at least
-   one side. Under the specified convention `mcnemar` correctly reports unmeasured; restricted to
-   the 1,339 two-sided pairs the effect is −1.94pp with the p-value unchanged. **The defect was in
-   where the number came from, not in the number** — which is exactly why the convention belongs in
-   the code, with a declared mutation, and not in a habit.
-3. **One number is barred.** `BINDING/r_star_projection`'s MDE of **1.12pp** may not be quoted: it
-   is post-hoc from the pair's own discordance, it has no null to compare against, and it is only
-   1.9× smaller than the largest effect its indicator can express. It reads like instrument
-   precision and it is a two-graduation ruler.
+**What no tier reads is the answer.** A complaint whose gold tables were all licensed and whose
+answer was still wrong is a semantics defect, and the free ladder cannot see it. The panel says so
+in that case rather than reporting a pass.
 
 ### New conformance rules
 
-Ids continue `tools/check_corpus_conformance.py`'s `RULES` table. Four of the six have a **live
-population measured today**, which is what separates them from rules written on a hunch.
+Ids continue `tools/check_corpus_conformance.py`'s `RULES` table. Three of the five have a
+**non-empty population measured today**, which is what separates them from rules written on a
+hunch.
 
 | rule | predicate | live findings |
 |---|---|---|
-| **V17a** | a metric `expression` parses as SQL at the engine's dialect | **28 of 478** on BIRD: `DIVIDE(…)`, `COUNT(x WHERE y)`, `<condition>` |
-| **V17b** | every bare identifier in a metric `expression` resolves on `base_table`, or on a table reachable through a declared join — and then the join must be declared | **23 metrics / 28 column refs**; 10 reachable only through a join, 18 unreachable anywhere |
-| **V18** | a closed-domain claim ("one of", "always", "only") carries an observation in `audit.evidence` | not measured |
+| **V17a** | a metric `expression` parses as SQL at the engine's dialect | **107 across 85 of 478 metrics** on BIRD: `DIVIDE(…)`, `COUNT(x WHERE y)`, `<condition>` |
+| **V17b** | every bare identifier in a metric `expression` resolves on `base_table`, or on a table reachable through a declared join — and then the join must be declared | **17** |
 | **V19** | no model-visible **`body`** names a `governance.excluded` column or asset. **`body`, not `summary`** — `summary` never enters the prompt (`serve/context.py`), it enters the retrieval index | **zero**, because zero assets are excluded in either corpus. Free to add; cannot regress anything |
 | **V21** | model-visible text passes `govern/guard.py::GUARD_RULES` — reusing them, not restating them | **one**: `public_review_platform/few-shots/fs_public_review_platform_0012.yaml` ships two `U+200B` |
 | **V23** | asset ids are unique across the tree | **zero today**, and the rule exists because a duplicate passes conformance and then raises `ValueError: duplicate index id` in `build_index` (**measured**) |
+
+The design's count for V17a was **28**, from a parse-only prototype: `DIVIDE(a, b)` parses as SQL
+and names a function no dialect has, so the shipped rule also asks
+`govern/functions.py::PERMITTED_FUNCTIONS`. A sixth rule was designed and cut — a closed-domain
+claim carrying an observation in `audit.evidence` — because it had no live population and no
+calibrated false-positive rate, and would have shipped as a rule nobody could size.
 
 **V10 and V12 are not disclosure rules and must not be cited as the existing control.** V10 is "no
 text discloses how an unreliable column was made" — it exists for the BIRD obfuscation decoys —
@@ -1025,7 +857,9 @@ police nothing, so V19 is the *first* control of its kind, not a reinforcement.
 
 **The ratchet.** Pre-existing findings are pinned **by name** in the corpus repository. The set may
 shrink freely and may not grow, and closing one fails the build as loudly as adding one — names
-and not a count, because 28 findings and 28 *different* findings are the same integer.
+and not a count, because 28 findings and 28 *different* findings are the same integer. **Measured
+on `../BIRD-corpus`:** 125 findings, which collapse to **101** pinned identities of the form
+`(rule, file:asset)` — 24 of the findings share an identity with another.
 
 ### Comparability
 
@@ -1038,11 +872,10 @@ Two blockers, both **measured**:
    no asset changed — and the digest moved anyway. **`--arm v4` against the checked-out tip is
    refused today.**
 
-So: one new comparability knob `corpus_release`, naming a **tag** and not a directory. Patches
-land continuously; arms pin releases. Plus `hypothesised_effect` and `readout` on `ArmProfile`,
-which finally gives `eval/power.py::require_power` the caller `open-work.md` §3.10 records it as
-lacking — at which point an arm that cannot detect its own hypothesis fails before it spends
-anything.
+So: a comparability knob `corpus_release`, naming a **tag** and not a directory. Patches land
+continuously; arms pin releases. Plus `hypothesised_effect` and `readout` on `ArmProfile`, which
+gives `eval/power.py::require_power` the caller `open-work.md` §3.10 records it as lacking — at
+which point an arm that cannot detect its own hypothesis fails before it spends anything.
 
 **But do not plan a release around a paired arm.** What bounds the cadence is the stock of
 detectable effect, and it is nearly spent. Everything T3 can see is the coverage debt — 79
@@ -1053,32 +886,32 @@ each one needs *two* new arms, not one, because no pair on disk reaches `knobs_c
 input tokens, ~104 minutes.
 
 Therefore the **release headline is the T3 per-question coverage delta** — resolution one question
-(0.08pp), cost ~$0 — and a paired arm is what you buy when a *code* change needs pricing. The
-tokens a release arm would have spent are better spent on the null the readout above is missing.
+(0.08pp), cost ~$0 — and a paired arm is what you buy when a *code* change needs pricing.
 `ArmProfile.hypothesised_effect` exists partly to make that refusal automatic: a release arm
 declaring a +0.5pp hypothesis fails `require_power` before it spends anything.
 
-**Only two of this design's declarations are actually caught by CI.** `tools/check_declared_is_consumed.py`
+**Only one of these declarations is actually caught by CI.** `tools/check_declared_is_consumed.py`
 has four rules, over knobs, record fields and state channels. `corpus_release` is a knob, so a
-missing reader fails the build by name. `ArmProfile.hypothesised_effect`, `ArmProfile.readout`, the
-mechanism register's entries, the store's SQLite columns and `Attribution`'s fields live in
-namespaces none of the four rules walk — so for those, "declared with no reader" is held by review
-and not by CI. Closing it is one more rule of the same shape; until then this paragraph is the
-control.
+missing reader fails the build by name. `ArmProfile.hypothesised_effect`, `ArmProfile.readout` and
+the store's SQLite columns live in namespaces none of the four rules walk — so for those, "declared
+with no reader" is held by review and not by CI. Closing it is one more rule of the same shape;
+until then this paragraph is the control.
 
 ---
 
-## 12. CI
+## 11. CI
 
 ### Engine repository — `.github/workflows/ci.yml`, `test` job
 
 ```bash
-uv run --frozen python tools/check_imports.py                    # LAYERS names feedback + triage
-uv run --frozen python tools/check_proposal_fields_are_consumed.py
-uv run --frozen pytest tests/feedback tests/triage -rs
+uv run --frozen python tools/check_imports.py    # LAYERS names feedback
+uv run --frozen pytest -q -rs                    # tests/feedback and tests/corpus among them
 ```
 
-The nightly `mutate` job gains the return path's declared mutations (§13).
+Nothing on the return path has a CI step of its own, and it does not need one.
+`check_imports.py::undeclared` fails on a package `LAYERS` omits, which covers the new layer; the
+rest is `pytest` over the whole suite, which is the only caller of several `tools/` checks and so
+fails loudly when one of them breaks.
 
 ### Corpus repository
 
@@ -1093,142 +926,54 @@ uv run --frozen python -c "from governed_bi.retrieve import build_index; ..."   
 
 ### What runs in neither
 
-T4 and T5. They cost money, so they are launched by a person who has decided to spend it, and the
-artifact records what they cost.
+T3, and anything a person would pay for. T3 needs an observation carrying a gold statement — a row
+in an operator's store, not a fixture in this repository — and a warm vector cache. It is free to
+run and it is run by hand.
 
 ---
 
-## 13. Build order
+## 12. The surfaces
 
-Steps 0–4 spend nothing and are independently useful. Step 5 is the first place this design can be
-wrong in a way that costs money. Day estimates are for one engineer familiar with the tree.
+One screen that shipped, two that did not, and one module that owns every string.
 
-| # | what | days | why here |
-|---|---|---:|---|
-| **0** | **`git init` the served corpus**, first commit, and fix `corpus/snapshot.py::snapshot`'s unguarded `rmtree` | 0.5 | the landing half has nothing to land into, and the first `snapshot` caller would weaponise a real defect |
-| 1 | `feedback/{events,validate,lifecycle,cluster}.py` + `store.py` + `attribution.py`; `LAYERS`; the two reader verbs writing to the store; the readers unioning store + channel | 4 | closes "nothing ever closes an open row" with no model anywhere. **Answers the first real question: do complaints cluster at all?** |
-| 2 | the analyst capture UX (§15.2) + `/observations` reads + `/reports` (§15.3) + **the re-ask button** + `review-copy.ts` and its check script | 3.5 | the copy stops being a small lie, and the reader can check for themselves |
-| 3 | `corpus/patch.py` + `tools/export_bundle.py` + `tools/check_landed.py` (incl. `--verify`) + `/review` (§15.4–15.8) + the four admin verbs | 5 | **a complete loop with no agents in it.** A steward can hand an engineer a bundle today |
-| 4 | the ladder T0–T2, the six new rules, the ratchet, `corpus_release`, `ArmProfile.hypothesised_effect` | 4 | free gates and the comparability fix, both independent of the pipeline |
-| 5 | `tools/drain_raised.py`, then delete `serve/raised.py`, `api/raised_write.py`, `ThreadTurnLog.append_raised`/`raised_of` and the reader union | 1.5 | **after** the drain reports zero and holds. The channel deletion is its own step because its risk is entirely migration risk |
-| 6 | the prompt-registry split + `triage/` skeleton + `diagnose` at `stop_after="diagnose"` | 4 | **first tokens spent.** Ship and measure the Diagnoser before building on it |
-| 7 | `reproduce` in `replay` mode; T3 wired as a gate | 3 | |
-| 8 | `stamp.py`, `stage_asset`, `author`, `assemble` | 4 | |
-| 9 | `trial.py` (+ the `snapshot` fix) and T4; `arbitrate`, the bounded revision loop | 3 | the trial corpus is a ladder facility, so this step is useful even if step 6 kills the pipeline |
-
-**Steps 0–3 are the minimum viable loop: ~13 days, and it contains no model call.** Everything
-from step 6 on is conditional on the step-6 measurement. There is no step for `ask_sme` or for an
-Adversary: both are cut (ADR 0015 §5).
-
-### Three things the design cannot know, and the cheapest experiment for each
-
-| unknown | experiment | when |
-|---|---|---|
-| do complaints cluster? | step 1 ships `cluster_key` and `GET /observations` reports the size distribution. Zero cost | after ~30 real observations |
-| can a model localise a defect to an asset? | step 5's diagnosis-only mode over 20 observations. ~600k tokens. Score against a steward's own localisation | before step 7 |
-| will analysts use a picker? | step 2 ships `category` as optional. Measure the share of observations that carry one | after ~30 |
-
-If the Diagnoser scores at reflector quality (OOF AUC 0.597 on the easier task), **stop at step 6**
-and the honest product is a triage queue with no authoring.
-
----
-
-## 14. Test names
-
-Grouped by what breaks. Names are sentences, per the house convention.
-
-**The store and the lifecycle**
-- `tests/feedback/test_every_stored_state_names_its_actor.py` — walks `TRANSITIONS`, fails on a stored state whose actor is empty
-- `tests/feedback/test_a_declined_observation_cannot_be_reopened.py`
-- `tests/feedback/test_a_duplicate_joins_the_patch_set_of_its_original.py` — the prototype found landing counted 1 affected observation instead of 2
-- `tests/feedback/test_a_note_can_be_filed_on_a_paused_thread.py` — the 409 that went away
-- `tests/feedback/test_no_comparability_knob_names_the_feedback_store.py`
-- `tests/feedback/test_the_derived_landing_states_are_not_stored.py`
-- `tests/feedback/test_a_superseded_patch_does_not_read_as_handed_off.py`
-
-**The corpus write**
-- `tests/corpus/test_an_edit_does_not_create_a_second_file_with_the_same_id.py` — M1, as a regression
-- `tests/corpus/test_a_one_word_summary_edit_is_a_one_line_diff.py`
-- `tests/corpus/test_an_edit_refuses_when_the_current_value_is_not_was.py`
-- `tests/corpus/test_patch_refuses_a_governance_field.py`
-- `tests/corpus/test_snapshot_refuses_a_destination_that_is_not_a_corpus.py` — the rmtree finding
-
-**The pipeline**
-- `tests/triage/test_a_full_run_leaves_corpus_content_hash_unmoved.py` — and the asset-id set unchanged
-- `tests/triage/test_the_author_cannot_write_a_governance_block.py`
-- `tests/triage/test_source_human_status_certified_is_restamped_curator_proposed.py`
-- `tests/triage/test_the_reproduction_rate_never_lands_in_confidence.py`
-- `tests/triage/test_the_revision_loop_is_bounded.py` — a scripted model whose patch never passes `validate`
-- `tests/triage/test_a_trial_replay_leaves_the_corpus_root_byte_identical.py`
-- `tests/triage/test_an_in_place_trial_restores_and_asserts_no_drift.py`
-
-**Identity and comparability**
-- `tests/conformance/test_the_two_prompt_registries_are_disjoint.py::test_prompt_set_hash_is_unmoved_by_a_triage_prompt_edit` — asserts `b1f9e4d7d230cb97`
-- `tests/conformance/test_corpus_conformance_rules_fire.py` — extended with all four of M2's breakages
-- `tests/eval/test_a_corpus_release_is_a_declarable_treatment.py`
-- `tests/api/test_the_return_path_respects_the_grant.py::test_the_reader_note_is_a_declared_exemption`
-
-### Declared mutations
-
-Under an `rp-` prefix in `tools/mutation_catalogue_data_2.py`, because §3.9 of `open-work.md` is
-about tests that could not fail:
-
-| id | mutation | must be caught by |
-|---|---|---|
-| `rp-1` | `restamp_model_authored` returns its input unchanged | the restamp test |
-| `rp-2` | `stage_asset` writes into `corpus_root` | `test_a_full_run_leaves_corpus_content_hash_unmoved` |
-| `rp-3` | `derived_state` always returns `handed_off` | `test_a_superseded_patch_does_not_read_as_handed_off` |
-| `rp-4` | `apply_edit` drops the `was` check | `test_an_edit_refuses_when_the_current_value_is_not_was` |
-| `rp-5` | V19's predicate returns no findings | the conformance fixture |
-| `rp-6` | V23's predicate returns no findings | the duplicate-id fixture |
-| `rp-7` | `narrow_feedback_rows` returns its input | the grant test |
-| `rp-8` | the admin router mounts unconditionally | a 404 assertion with the env var unset |
-| `rp-9` | `sweep` deletes non-terminal rows | the sweep test |
-| `rp-10` | `mechanism_indicator` returns `False` instead of `None` on an empty ledger | a test asserting `mcnemar` reports unmeasured on a pair with an empty `attempts` — this is the convention that produced a wrong provenance for a right number, so it is pinned rather than remembered |
-| `rp-11` | `derived_state` upgrades to `retrieval_verified` without re-running the fixture | a test that the upgrade requires a passing T3 re-run |
-| `rp-12` | `check_landed.py` treats an unmatched `source_refs` id as matched | a test with a deliberately mistyped `obs:` ref, asserting it is reported as dangling |
-
----
-
-## 15. The surfaces
-
-Three roles, three screens, and one module that owns every string.
-
-### 15.1 New and changed files
+### 12.1 New and changed files
 
 | path | what |
 |---|---|
-| `ui/app/reports/page.tsx` | new route, analyst-facing |
-| `ui/app/review/page.tsx` | new route, steward-facing |
-| `ui/components/answer/raise-note.tsx` | rewritten (§15.2) |
-| `ui/components/answer/category-picker.tsx` | new |
-| `ui/components/reports/report-list.tsx` | new |
-| `ui/components/reports/report-status.tsx` | new — the status chip **and** its sentence, one component so §5 has one renderer |
-| `ui/components/reports/re-ask-button.tsx` | new (§5) |
-| `ui/components/review/review-surface.tsx` | new — the two-pane shell |
-| `ui/components/review/review-queue.tsx` | new |
-| `ui/components/review/cluster-panel.tsx` | new |
-| `ui/components/review/evidence-bundle.tsx` | new |
-| `ui/components/review/reproducer.tsx` | new |
-| `ui/components/review/asset-diff.tsx` | new |
-| `ui/components/review/decision-bar.tsx` | new |
-| `ui/components/review/handoff-panel.tsx` | new — the bundle download and its manifest, post-export |
-| `ui/components/clarifications/pending-queue.tsx` | one link and two paragraphs of copy (§9) |
-| `ui/lib/category-taxonomy.ts` | new — `category` → label. The only mapping |
-| `ui/lib/review-copy.ts` | new — **every** user-facing string in §3, §5 and §15 |
-| `ui/lib/my-reports.ts` | new — the `localStorage` store |
-| `ui/lib/schemas.ts`, `types.ts`, `api-client.ts`, `hooks/queries.ts` | the zod schemas, `z.infer` types, 9 client methods, 6 hooks |
-| `ui/components/layout/nav.tsx` | two `LINKS` entries |
+| `ui/app/review/page.tsx` | the steward's route |
+| `ui/components/review/review-surface.tsx` | the two-pane shell |
+| `ui/components/review/review-queue.tsx` | the queue (§12.4) |
+| `ui/components/review/cluster-panel.tsx` | the detail pane |
+| `ui/components/review/evidence-bundle.tsx` | the evidence (§12.5) |
+| `ui/components/review/reproduce-panel.tsx` | block 6 (§12.6) |
+| `ui/components/review/asset-diff.tsx`, `ui/lib/asset-diff.ts` | the one-field diff and the word diff behind it (§12.7) |
+| `ui/components/review/decision-bar.tsx` | the four actions (§12.8) |
+| `ui/components/review/handoff-panel.tsx` | the bundle command and its manifest, post-export |
+| `ui/lib/review-copy.ts` | **every** user-facing string in §3, §5 and §12 |
+| `ui/lib/schemas.ts`, `types.ts`, `api-client.ts`, `hooks/queries.ts` | the zod schemas, the `z.infer` types, the client methods and the hooks |
+| `ui/scripts/check-asset-diff.ts` | the diff's minimality, hermetically — `npm run check:asset-diff` |
+| `ui/components/layout/nav.tsx` | one `LINKS` entry, **Review** |
 
-**`ui/lib/review-copy.ts` is the honest-copy rule made mechanical.** Every string lives there,
-keyed by state, and `ui/scripts/check-review-copy.ts` runs beside `npm run lint` like the other
-`check-*.ts` scripts. It asserts two things: every member of the observation / patch / decline
-state unions has a string, and no string matches a banned list — `robust`, `seamless`,
-`comprehensive`, and the two this project cares about most, **`automatically`** and
-**`will be fixed`**, outside a negation. Neither check is possible with strings inline in
-components, which is the whole reason the module exists.
+**Not built.** Every path here is absent from the tree: `ui/app/reports/page.tsx`,
+`ui/components/answer/category-picker.tsx`, `ui/components/reports/report-list.tsx`,
+`report-status.tsx`, `re-ask-button.tsx`, `ui/lib/category-taxonomy.ts`, `ui/lib/my-reports.ts`,
+`ui/scripts/check-review-copy.ts`. `ui/components/answer/raise-note.tsx` exists and was not
+rewritten.
 
-### 15.2 The analyst: capture in two clicks
+**`ui/lib/review-copy.ts` is where the honest-copy rule would be made mechanical, and it is only
+half made.** Every string lives there, keyed by state, which is what makes the rule checkable at
+all — but the check is not written. `ui/scripts/check-review-copy.ts` does not exist, so nothing
+asserts that every member of the observation / patch / decline state unions has a string, and
+nothing bans `robust`, `seamless`, `comprehensive`, or the two this project cares about most,
+**`automatically`** and **`will be fixed`** outside a negation. The module makes the check possible;
+review is what enforces it today.
+
+### 12.2 The analyst: capture in two clicks
+
+**Not built.** `raise-note.tsx` still files a note through a textarea, and none of the three states
+below exist. It is written down because the input this build actually uses — an eval artifact — has
+no analyst in it at all, and the shape of the one it would need is the thing most likely to be got
+wrong later.
 
 Three states, and the analyst may stop after the first.
 
@@ -1259,7 +1004,7 @@ because an analyst could not pick from a dropdown, but because a dropdown of 13,
 two-click action into a search task, and a *wrong* pick is worse than no pick: it sends the steward
 to the wrong asset with a confident-looking pointer on it. `term_mismatch` is as close as this UI
 gets, and it names a *class* of object, never an instance. Locating the asset is the steward's job
-and §15.4 gives them the machinery.
+and §12.4 gives them the machinery.
 
 **The receipt copy, verbatim** — and it removes a lie that is in the product today
 (`"Filed. It is on the pending list."`, on a list nothing ever clears):
@@ -1267,7 +1012,10 @@ and §15.4 gives them the machinery.
 > Filed. A data steward reviews these oldest-first. This engine does not know who you are, so
 > nobody will email you — check **My reports** to see what happened.
 
-### 15.3 `/reports`: what the analyst sees afterwards
+### 12.3 `/reports`: what the analyst sees afterwards
+
+**Not built.** There is no `/reports` route. With one principal there is no second reader for a
+per-reader list to serve.
 
 `GET /observations` filtered by the ids in `localStorage`. **`ui/lib/my-reports.ts` is browser
 memory and the page says so** — there is one principal and no user store, so inventing a per-user
@@ -1280,7 +1028,7 @@ Each row: the question, when it was filed, the category label, and a status chip
 the §5 string for its state. `landed_verified`, `landed_matched` and `retrieval_verified` carry the
 **Re-ask** action (§5).
 
-### 15.4 `/review`: the steward's screen, where the money is
+### 12.4 `/review`: the steward's screen, where the money is
 
 A new route with a nav entry between **Pending** and **Settings**. **Not a third pane on `/audit`**,
 for `pending-queue.tsx`'s own stated reason applied one turn further: `/audit` is newest-first and
@@ -1313,128 +1061,137 @@ Each row: `n` observations · the category label · the schema · the oldest `fi
 table names · a badge with the count of **distinct questions**, which is the number that says
 whether this is one person clicking twice or five people hitting one wall.
 
-**Sorted oldest-first on the cluster's oldest member, not by size.** A five-observation cluster from
-this morning is not more urgent than one that has waited a month, and sorting by size makes the long
+**Sorted oldest-first on the cluster's oldest member, not by size.** A three-row cluster from this
+morning is not more urgent than one row that has waited a month, and sorting by size makes the long
 tail permanently invisible.
 
-The caption under the cluster heading is always present, because the clustering is structural:
+The caption under the cluster heading is always present, because the clustering is structural —
+the key is `(category, schema)` and nothing more, no embedding, no model, no cost:
 
 > Grouped by the kind of problem reported and the tables those turns were allowed to read. Nothing
 > here read the questions and decided they mean the same thing — check the rows before you treat
 > them as one problem.
 
+**And the measured weakness is under it.** On the imported failures, the largest cluster is **3**
+and **49%** of rows are in a cluster at all. The design argued for batching on the strength of
+clusters being large; they are not, so this is a list with an optional grouping and never a batch
+pipeline.
+
 **Empty state:** `"Nothing to review. Every observation filed on this server has been triaged."` —
-a *different* sentence from `/reports`' empty state, because "nobody filed anything" and "everything
-is triaged" are different facts, and reading one as the other is how a queue gets abandoned.
+a *different* sentence from "nobody has filed anything", because that and "everything is triaged"
+are different facts, and reading one as the other is how a queue gets abandoned.
 
 **Deliberately not in the queue:** SQL, ledger, record. All one click away. A queue that shows the
 evidence is a queue nobody scans.
 
-### 15.5 The evidence bundle: seven blocks, all above the decision
+### 12.5 The evidence bundle: six blocks, all above the decision
 
-`ui/components/review/evidence-bundle.tsx`. One fetch per selected cluster.
+`ui/components/review/evidence-bundle.tsx`. One fetch per selected cluster. **The design specified
+seven blocks and six shipped**, because an evaluation artifact does not record what two of them
+would show.
 
-1. **What was asked, and what came back.** The question verbatim; then `outcome`, and for a
-   non-`answered` turn `terminal_reason` and `refused_by` rendered through the existing
-   `lib/answer-delivery.ts::terminalLabel` — **so the steward reads the same sentence the analyst
-   read**; then `answer_text`.
-2. **What the reader said.** Category label, `expected`, `note`. `expected` is styled as a quotation
-   and given the most visual weight in the block, because it is the only falsifiable claim on the
-   page.
-3. **The statement.** `generated_sql` in the existing read-only `<SqlBlock/>`, plus the attempt
-   ledger through `<AgentTimeline/>` / `buildStepsFromLedger(execution)` — the same components the
-   answer card uses. **On the same screen as the decision, not behind a tab.** A steward who has to
-   navigate away to read the SQL decides without it.
-4. **What the turn was allowed to read.** `licensed` (the allowlist Layer 6 enforced against) and
-   `schemas` (the router's pick), beside `schema_ranking`'s top 5 with scores — because *"the gold
-   schema ranked 4th"* and *"it was never a candidate"* are different problems with opposite fixes,
-   and the register field exists to tell them apart.
-5. **Which corpus assets were in context.** The crux, in three columns, each asset linking into
-   `/corpus`:
-   - **Found** — one row per `facet_hits` entry with its `asset_type`, the facet that found it, and
-     its `lexical`/`semantic` scores.
-   - **Reachable** — `pulled_in` (`asset_id → resolve|connect`), merged and marked.
-   - **Rendered** — *derived*: found ∪ pulled_in, minus `budget_dropped`, minus
-     `evicted.dropped_ids`.
+Above everything, when the row carries a held-out question: a warning card, not a caption. The
+question text comes from the held-out split, and a person who writes corpus prose from it
+contaminates the benchmark invisibly. Conformance rule V12 catches a verbatim quote; a paraphrase
+cannot be detected at all, so the last line of defence is a reader who knows what they are reading.
 
-   The caption, which is the honest part and belongs in the panel rather than in a doc:
+1. **What was asked, and what came back.** The question verbatim; `outcome` and `refused_by`; the
+   state's label and its §5 sentence; the decline reason or the blocked note when there is one.
+2. **What the grader said.** The category, the quality flags, the note — and the reference and
+   produced fingerprints side by side. This is the design's "what the reader said" block, replaced
+   by something falsifiable: an imported row has no reader, and a fingerprint mismatch is not an
+   opinion.
+3. **The statement.** `generated_sql` in the existing read-only `<SqlBlock/>`, and the **reference
+   statement beside it** when the row carries one. A reader has no gold answer; a benchmark row
+   does, which makes this the strongest evidence on the page. A turn that ran no statement says so
+   — that is its own defect class, not a missing field.
+4. **What the reference answer needed and did not get.** `missing_tables`, which is the direct
+   statement; `schema_ranking` is absent from the artifact, so the design's *"the gold schema ranked
+   4th"* versus *"it was never a candidate"* cannot be told apart here. `licensed` and the routed
+   schemas sit behind `atLeast(mode, "engineer")`. An empty list is the interesting case and it says
+   so: every table the reference answer reads was reachable and the answer was still wrong, which is
+   a semantics problem the free ladder cannot see.
+5. **Which corpus assets were in context** — the block that cannot exist here, saying so. On the v4
+   arm, `facet_hits`, `pulled_in` and `turn_id` are on **0 of 1,351** rows (**measured**), so the
+   slot carries one sentence instead of a table. A block rendered empty reads as "we did not bother"
+   rather than "there is no data", which is why the slot stays.
+6. **The reproducer** (§12.6).
 
-   > "Rendered" is derived, not recorded. No register field lists the asset ids that were actually
-   > in the block the model read — `context_hash` is a digest, and `evicted` names only what the
-   > budget dropped. This column is *found, minus what the caps and the budget removed*, which is
-   > the same set unless something between retrieval and rendering removed an asset without saying
-   > so.
-
-   **The one-field fix, so that caveat is a decision and not a shrug: add `rendered_asset_ids` to
-   `RECORD_REGISTER` at `Stage.assemble`.** A `Tier.treatment` field whose consumer is this panel,
-   turning a derivation into an observation. It lands **with** this panel and not before —
-   `tools/check_declared_is_consumed.py` and
-   `test_the_declared_but_unconsumed_set_does_not_grow` are the reason, and they are right.
-6. **The reproducer** (§15.6).
-7. **The full record**, collapsed, `atLeast(mode, "engineer")` only — the same
-   `GET /audit/turns/{id}/trace` payload `/audit`'s `TracePanel` already renders, reused rather than
-   re-implemented. If `incomplete_fields > 0` it is **not** collapsed and carries: *"This turn's
-   record is missing N required fields. Do not draft a change off it — something about this turn was
-   not recorded."*
+Engineer-only, at the foot: **provenance** — the arm, the question id, the corpus content hash and
+the filing time. The design's seventh block, the full `GET /audit/turns/{id}/trace` payload, is
+absent for block 5's reason: an imported row has no `turn_id`, so there is no trace to fetch.
 
 **What it deliberately does not show: result rows.** `result_table` is live-only by ADR 0006 §11 and
 is not in the record, so there is nothing to show, and a slot for it would read as "the rows were
 not saved" rather than "the rows are not kept".
 
-**Disclosure, stated because ADR 0012 §8.7 requires it.** This surface reads `turn_log`, which is
-not grant-aware, so it discloses exactly what `GET /audit/turns/{id}/trace` already discloses to the
-same unauthenticated caller. **It widens nothing, and it narrows nothing either.** The corpus-asset
-half of block 5 *is* narrowable and therefore *is* narrowed: those assets are read through
-`visible(get_session())`, so a withheld asset is omitted the way it is omitted from
-`/corpus/assets`. The asymmetry is the only one available — refusing to show SQL that the route next
-door serves would be theatre, and withholding an asset here when `visible()` exists would be a hole.
+**Disclosure.** This surface reads the feedback store and nothing else, so what it can disclose is
+exactly what §7's allowlists let through, and the steward's wider view is the same
+`GOVERNED_BI_FEEDBACK_ADMIN` switch that mounts the steward's verbs. There is no per-grant
+narrowing on this screen. The design had one — corpus assets read through `visible(get_session())`
+in block 5 — and block 5 does not exist, so neither does the narrowing.
 
-### 15.6 The reproducer
+### 12.6 The reproducer
 
-The steward needs one fact the record cannot give them: *does this still happen?* `cannot_reproduce`
-is a decline reason, so it has to be checkable. **It is a button, it costs a model call, and the
-button says so.** It starts a **new** conversation (never the complainant's thread) and its result
-is recorded on the observation, not on the corpus.
+The steward needs one fact the store cannot give them: *does this still happen?* `cannot_reproduce`
+is a decline reason, so it has to be checkable.
 
-### 15.7 The diff: field-by-field, never a text diff
+**It is a command, not a button, and that is the honest shape.** The check re-routes the question
+through the engine with the agent model off, which needs a warehouse connection and a warm vector
+cache — neither of which the browser has and both of which the server would have to be configured
+for. There is deliberately no HTTP verb: a button that 404'd on most deployments is worse than a
+line somebody can copy. `--embed` is in the copied command and is not optional (§10).
+
+**It costs nothing**, which is a correction to the design: for an imported failure, "does this still
+happen" is a coverage re-check with the answering model off, not a model call.
+
+What a green result licenses is on the panel permanently — the tables the reference answer reads are
+reachable again, not that the answer is right — and the three cases where the check cannot answer at
+all are named rather than hidden, because a panel offering a command that cannot answer is how
+somebody concludes the tool is broken.
+
+### 12.7 The diff: one field, word by word, never a text diff
 
 ```tsx
-export type FieldEdit = {
-  path: string;             // "summary" | "body" | "reliability.note" | "columns[betrieb_id].body"
-  before: string | null;    // null on a create
-  after: string | null;     // null on a removal
-  kind: "scalar" | "block" | "list";
-};
-export function AssetDiff({ edit, fieldOrder }: {
-  edit: AssetEdit;
-  /** The engine's declared field order for this type, from `GET /corpus/fields?type=`. */
-  fieldOrder: CorpusField[];
-}): JSX.Element;
+export function AssetDiff({ assetId, fieldPath, was, becomes }: {
+  assetId: string;
+  /** "summary" or "body" — the only two paths a patch can carry (§6). */
+  fieldPath: string;
+  was: string;
+  becomes: string;
+}): React.JSX.Element;
 ```
 
 **Not a text diff of the YAML, and this is not negotiable** — it follows from M1. `to_mapping`
 omits defaults, so `governance` and `reliability` are absent from a file at default and a text diff
 shows a spurious *addition* when one is set; and PyYAML reflows at 80 columns, so a text diff of a
-one-word `summary` change is a whole-paragraph diff. Field order is read from
-`GET /corpus/fields?type=`, so a field added to `corpus/schema.py` appears here with no change to
-this component.
+one-word `summary` change is a whole-paragraph diff. A patch carries one field path and two strings,
+so the diff is over those and nothing else.
 
-- **`scalar`** (`summary`, `reliability.note`) — one line, inline **word-level** diff, additions and
-  removals both visible, plus a live character count against the cap. Finding out about a
-  251-character summary *after* the export is a wasted round trip.
-- **`block`** (`body`) — two panes, **line-level**. Word-level on 8,000 characters is unreadable,
-  and `body` is the field that actually reaches the prompt, so it gets the most room on screen.
-- **`list`** (`synonyms`, `rules`, `source_refs`) — added and removed items as chips, **never a
-  reordered text diff**. YAML sequence order is not semantic for any of these, and rendering a
-  reorder as a change trains a reviewer to skim.
-- **Unchanged fields are collapsed**, not hidden, behind *"Show the 9 fields this does not change"*
-  — a field absent from the diff and a field absent from the asset otherwise look identical.
+**Which field it is is on the row, because the two fields do different things.** `summary` feeds the
+retrieval index and `body` feeds the model's prompt — a change to `summary` changes *what gets
+found*, a change to `body` changes *what the model reads*. A reviewer deciding whether an edit fixes
+a coverage miss has to know which one they are looking at, and a diff showing only the words would
+leave them guessing.
 
-**Two things this component refuses to render**, and both are refusals rather than gaps:
-`governance` in any form (a screen that can propose an exclusion *is* the tool whose absence is the
-control — ADR 0015 §8), and any structural change to a table's inline `columns` (§6).
+**Colour is not the only signal.** Every run carries a `+`/`−` marker as well. A red/green diff is
+unreadable to a colour-blind reviewer, and this is the screen where the decision is made.
 
-### 15.8 The decision bar
+**"+0 −0 words" is two situations and gets two sentences.** The replacement can be the text already
+there, or it can differ only in whitespace. Both count zero words; only the second is a value the
+steward typed and cannot submit, and `classifyEdit` names which.
+
+The property pinned by `ui/scripts/check-asset-diff.ts` is **minimality**, not "it produced spans".
+A greedy walk that marks a whole sentence changed when one word moved still renders, still looks
+like a diff, and quietly costs the reviewer the ability to see the edit. The check is hermetic — it
+imports `lib/asset-diff.ts` and needs no engine, no corpus and no network.
+
+**Two things this component cannot render**, and both are refusals rather than gaps: `governance` in
+any form (a screen that can propose an exclusion *is* the tool whose absence is the control — ADR
+0015 §8), and any structural change to a table's inline `columns` (§6). Neither is an editable field
+path, so neither can reach it.
+
+### 12.8 The decision bar
 
 Sticky at the bottom of the detail pane so it is on screen with the evidence at every scroll
 position. This is the most important layout decision on the page, and it is why the pane scrolls
@@ -1451,7 +1208,7 @@ export function DecisionBar({ cluster, patch, blocked }: {
 
 Four actions, and the fourth is the one most review tools omit:
 
-- **Draft a change** → the editor for the field set §15.7 allows, then `POST /patches`.
+- **Draft a change** → the editor for the field set §12.7 allows, then `POST /patches`.
 - **Decline** → a `Select` over the eight `decline_reason` members, each rendering its §5 sentence
   **as the option's description**, so the steward reads what the analyst will read before choosing.
   No free-text-only decline: a reason nobody can aggregate is a reason nobody reviews.
@@ -1463,25 +1220,29 @@ Four actions, and the fourth is the one most review tools omit:
   An assignee dropdown was rejected: there is no user store to populate it, and a dropdown of one is
   a lie about the workflow.
 
-### 15.9 Display mode
+### 12.9 Display mode
 
-The engineer-only blocks (§15.5 block 7, the `schema_ranking` scores, the ladder detail) sit behind
-the existing `atLeast(mode, "engineer")` from `ui/lib/display-mode.ts`. Nothing new is invented:
-that module already carries the warning about a display mode not being a security boundary, and
-this design does not make it one.
+The engineer-only parts — §12.5's provenance block and its `licensed`/routed line — sit behind the
+existing `atLeast(mode, "engineer")` from `ui/lib/display-mode.ts`. Nothing new is invented: that
+module already carries the warning about a display mode not being a security boundary, and this
+does not make it one.
 
 ---
 
-## 16. What this design does not do
+## 13. What the return path does not do
 
 - **It does not authenticate anybody.** One principal, and reaching the port is still sufficient.
   The admin verbs ship unmounted; that is a deployment switch, not an identity.
 - **It does not know who filed an observation.** No `filed_by`, because `api/auth.py` returns one
-  principal and a per-user field here would be a boundary that is not one. The reports page
-  remembers what *this browser* filed, in `localStorage`, labelled as browser memory.
+  principal and a per-user field here would be a boundary that is not one. Nothing tells a reader
+  what became of their complaint, because there is no reader-facing surface at all (§12.3).
 - **It does not claim a landed patch fixed the question.** See §5.
 - **It does not scan prose for injection as a gate.** V21 reuses `GUARD_RULES` and V19 covers one
   named disclosure. Beyond those, the posture is ADR 0006's: the name can reach the prompt and the
   query naming it is refused. An enterprise fork has to decide whether that is enough.
-- **It does not make this repository the curator.** The pipeline authors candidates; the corpus is
-  human-owned, versioned outside this repository, and not rebuildable from it.
+- **It does not author a candidate change by itself.** A steward drafts the patch and the ladder
+  checks it; nothing in this repository decides what a corpus should say. The agentic pipeline that
+  would have was cut (§2).
+- **It does not make this repository the curator.** The corpus is human-owned, versioned outside
+  this repository, and not rebuildable from it. The one write to corpus content in the whole loop is
+  a person's `git commit` in that repository (§8).

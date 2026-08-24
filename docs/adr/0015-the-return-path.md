@@ -1,8 +1,30 @@
 # 0015: The return path — reader feedback into the corpus
 
-> **Status, 2026-08-23: steps 0-6 accepted and built on `design/return-path`.** **Five** measurements
-> taken while building changed a decision here; the evidence is in `docs/open-work.md` §3.10a-3.10c
-> and is deliberately not repeated, because this file is the decision record and that one is the work
+- **Status:** Accepted and built in part (2026-08-23). **Steps 0-6 are on `design/return-path`**:
+  the `feedback/` package (the store, the closed vocabulary, the lifecycle table, the clusterer),
+  the six CLI tools from `tools/import_eval_failures.py` through `tools/check_ratchet.py`, five new
+  whole-tree conformance rules and the ratchet that pins their pre-existing findings, the
+  `corpus_release` comparability knob, the steward's four verbs behind
+  `GOVERNED_BI_FEEDBACK_ADMIN`, and the `/review` surface. `ServeState.raised`, `serve/raised.py`,
+  `api/raised_write.py` and `api/clarification_routes.py` are **deleted** (`4a0d11a`), so the state
+  carries 47 channels rather than 48. **Designed and not built, and named as design wherever it
+  appears below:** the agentic triage pipeline (Reproducer, Diagnoser, Author, Curator, the
+  `triage/` package), verification tiers T4 and T5, the reader's capture UI, `/reports`, and the
+  re-ask action. Five measurements taken while building changed a decision recorded here; the retro
+  below names each one.
+- **Deciders:** project owner + design session (2026-08-23) — five independent proposals (intake,
+  pipeline, verification, workflow, and a measured prototype), then three adversarial critiques.
+- **Working reference:** [return path](../return-path.md) — the build order, the data shapes, the
+  route table and the test names. This page is the decision and the reasoning; that page is what
+  an engineer implements from.
+- **中文版：** [0015：回流路径](0015-the-return-path.zh.md).
+- **Reading note.** Four figures in the Context section are measurements taken for this decision
+  and are not in any other document. They are marked **measured** with the command that produced
+  them.
+
+> **What the build changed in this record.** **Five** measurements taken while building steps 0-6
+> changed a decision on this page. The evidence is in `docs/open-work.md` §3.10a-3.10c and is
+> deliberately not repeated, because this file is the decision record and that one is the work
 > list.
 >
 > | measurement | the decision it changed |
@@ -19,35 +41,24 @@
 > `/reports` are not built and are not planned in this cut: one principal holds every role here, so
 > the input is the eval artifact rather than a person clicking.
 
-- **Status:** Proposed (2026-08-23). **No code.** Every module path, signature and route in this
-  document is a design, not a description; nothing named here exists unless the text says it
-  already does. Design session: five independent proposals (intake, pipeline, verification,
-  workflow, and a measured prototype), then three adversarial critiques.
-- **Deciders:** project owner + design session (2026-08-23).
-- **Working reference:** [return path](../return-path.md) — the build order, the data shapes, the
-  route table and the test names. This page is the decision and the reasoning; that page is what
-  an engineer implements from.
-- **中文版：** [0015：回流路径](0015-the-return-path.zh.md).
-- **Reading note.** Four figures in the Context section are measurements taken for this decision
-  and are not in any other document. They are marked **measured** with the command that produced
-  them. Nothing else here is a number.
-
 ---
 
 ## Context
 
 ### 1. The engine can be told it is wrong, and the telling goes nowhere
 
-Two surfaces exist. `POST /turns/{turn_id}/raised` (`api/clarification_routes.py:66`) lets a
-reader file a note on a finished turn — `kind ∈ {from_refusal, wrong_answer}`, a free-text `note`
-capped at `RAISED_NOTE_MAX_CHARS = 4000` — and appends a row onto the checkpointed accumulating
-channel `ServeState.raised`. `GET /clarifications/pending` unions those open rows with live
-`ask_user` interrupts and shows them oldest first.
+This is the tree as it stood when the decision was taken; `4a0d11a` deleted every module named in
+this section. Two surfaces existed. `POST /turns/{turn_id}/raised`
+(`api/clarification_routes.py:66`) let a reader file a note on a finished turn — `kind ∈
+{from_refusal, wrong_answer}`, a free-text `note` capped at `RAISED_NOTE_MAX_CHARS = 4000` — and
+appended a row onto the checkpointed accumulating channel `ServeState.raised`.
+`GET /clarifications/pending` unioned those open rows with live `ask_user` interrupts and showed
+them oldest first.
 
-**Nothing closes an open row, and nothing acts on one.** `serve/raised.py::raised_row` writes
-`open: True` with the comment "until a later closer exists"; there is no later closer. The UI
-tells the reader "Filed. It is on the pending list." — which is true, and is the whole of what
-happens. `ui/components/clarifications/pending-queue.tsx` states the gap in its own docstring:
+**Nothing closed an open row, and nothing acted on one.** `serve/raised.py::raised_row` wrote
+`open: True` with the comment "until a later closer exists"; there was no later closer. The UI
+told the reader "Filed. It is on the pending list." — which was true, and was the whole of what
+happened. `ui/components/clarifications/pending-queue.tsx` stated the gap in its own docstring:
 
 > the owner's decision routes an operator's answer into the semantic layer instead, and that path
 > waits on a provenance gate the engine does not have yet.
@@ -90,7 +101,8 @@ content rule polices. M4 is why the ladder can be a gate rather than a report.
 
 ### 5. The precondition the brief assumed and the tree does not meet
 
-**Measured: `../MS Fabric Facilities` — the corpus served today — is not a git repository.** It
+**Measured: `../MS Fabric Facilities` — the corpus served when this was written — is not a git
+repository.** It
 has a `.gitignore` and no `.git`. `../BIRD-corpus` is one. So "the engineer commits and the corpus
 repo's CI runs" is true of the benchmark corpus and false of the one in production.
 
@@ -105,6 +117,13 @@ precondition: the return path's landing half needs a versioned tree. Until that 
 the loop can capture, triage, verify and hand off — and cannot tell `landed` from `superseded`.
 One `git init` and a first commit; step 0 of the build order.
 
+**Step 0 was settled the other way (`222d1bf`).** Rather than `git init` a tree with no history,
+`.env` now serves `../BIRD-corpus`, which is a git repository, and `docs/corpus-format.md` carries
+the swap because `.env` is gitignored. `../MS Fabric Facilities` is still not versioned, so the
+landing half is still unavailable against it — the difference is that the corpus the engine serves
+is now one where `landed` and `superseded` can be told apart, which is what the precondition
+actually asked for.
+
 ### 6. What a patch cannot be verified on
 
 `docs/open-work.md` §3.12: two runs of this engine with the configuration held fixed disagree on
@@ -115,7 +134,8 @@ wall at `workers=10` and ~74M input tokens (`runs/eval/driver_v4.log`).
 
 So pricing a one-asset patch on EX produces a confidence interval containing zero, and the
 correct write-up of it is "we learned nothing" — which is what `eval/power.py::require_power`
-exists to refuse in advance, and which currently has no caller.
+exists to refuse in advance, and which had no caller when this was written — it has one now, and
+§Decision 7 says where.
 
 ---
 
@@ -140,20 +160,39 @@ gate, and no choice ever names a table or a column.** `wrong_answer` survives as
 is wrong and I cannot say what" bucket, because a vocabulary that forces a taxonomy choice before
 the complaint is filed loses the complaint.
 
+Both layers are built: `feedback/events.py` holds the two shapes and the closed vocabulary,
+`feedback/store.py` holds the two tables. There are two ways in and they are not equally exercised.
+`POST /turns/{turn_id}/raised` ships **mounted and enabled** — it is the one write verb in this ADR
+that is not behind the admin switch — and `ui/lib/api-client.ts` can call it, but no component
+does, because the capture UI is not built. So the rows that exist arrived through
+`tools/import_eval_failures.py`, and the route is a live writer with no caller rather than a
+disabled one.
+
 ### 2. `ServeState.raised` is deleted, and observations live in their own store
 
-`runs/feedback.sqlite`, stdlib `sqlite3`, **synchronous**, in a new `feedback/` package. Every new
+`runs/feedback.sqlite`, stdlib `sqlite3`, **synchronous**, in a new `feedback/` package. Every
 observation is written there. `serve/raised.py`, `api/raised_write.py` and
-`ThreadTurnLog.append_raised` / `raised_of` are deleted — **but not on the same commit**, and the
-staging is a decision rather than caution.
+`ThreadTurnLog.append_raised` / `raised_of` are deleted.
 
-A big-bang deletion has an undesigned migration: rows already sitting in checkpoints become
-unreachable, and "there is none, and the rows are unreachable" is a sentence somebody has to sign.
-So: the store lands first and takes every new write; the channel keeps working for what is already
-in it; `tools/drain_raised.py` walks the threads and copies those rows in; the readers union the two
-sources while the drain has anything left to do. **The union is deleted when the drain reports zero
-and stays at zero across one release** — a named end condition, because a compatibility union with
-no exit is how two sources of truth become permanent.
+**The staging was decided, then measured away.** A big-bang deletion has an undesigned migration:
+rows already sitting in checkpoints become unreachable, and "there is none, and the rows are
+unreachable" is a sentence somebody has to sign. So the decision was to spread the deletion over
+more than one commit — the store lands first and takes every new write, the channel keeps working
+for what is already in it, `tools/drain_raised.py` walks the threads and copies those rows in, the
+readers union the two sources while the drain has anything left to do, and the union goes when the
+drain reports zero and holds. A named end condition, because a compatibility union with no exit is
+how two sources of truth become permanent.
+
+Then the channel was counted. **Zero `raised` rows, on three independent checks — the checkpoint
+store, the harness store, and all 23 platform thread rows.** There was nothing to drain, so
+`tools/drain_raised.py` was never written and the reader union was never built; `4a0d11a` deletes
+the channel in one commit. What signs the sentence instead is an assertion: the paused-thread case
+in `tests/api/test_an_observation_is_filed_on_a_turn.py` requires that the turn-log seam no longer
+expose `append_raised` at all, so a second writer cannot reappear unnoticed. The migration risk the
+staging existed to manage was a quantity nobody had counted, and counting it was cheaper than the
+plan for it. What the deletion *did* cost was the wire contract — `docs/openapi.json` pinned
+`RaisedRowResponse` with seven required fields and the spec test held four assertions over that
+operation — which is the opposite of where this ADR expected the cost to fall.
 
 What is explicitly *not* adopted is the cheaper alternative a critic argued for: keep the channel
 as the immutable intake receipt and put dispositions in an append-only JSONL folded
@@ -189,10 +228,11 @@ What is given up, stated: a third SQLite file under `runs/`, and a schema this r
 migrates. What is kept: `sqlite3 runs/feedback.sqlite "select …"` — the greppability 0014 lists
 as the thing it lost.
 
-One consequence is a feature. `api/raised_write.py` refuses to file on a paused thread, because
-`as_node="raise_note"` would consume the live `ask_user` interrupt. Once nothing writes graph
-state there is no interrupt to consume, so **the reader whose turn is paused — the one most
-likely to want to complain — can file.**
+One consequence is a feature, and it shipped. `api/raised_write.py` refused to file on a paused
+thread, because `as_node="raise_note"` would consume the live `ask_user` interrupt. Nothing writes
+graph state now, so there is no interrupt to consume and **the reader whose turn is paused — the
+one most likely to want to complain — can file.** The 409 is gone, and the test that used to be
+about it is now the test that asserts its absence.
 
 ### 3. A state is stored if and only if a named actor moves it
 
@@ -222,10 +262,17 @@ bundle's recorded hashes and the bundle's post-state text:
 | `handed_off` | the loaded corpus still hashes to the patch's base | — |
 | `landed_verified` | the loaded corpus hashes to the patch's expected post-hash | — |
 | `landed_matched` | the hash differs, but every asset the bundle touched is present and its `summary`/`body` match the bundle's post-state | **the common real case**: two bundles land in one week and exact-hash matching fails for a change that did ship |
-| `superseded` | the hash moved off the base and the content is not there | a `git apply` conflict, a CI reformat, or a reviewer editing before committing — all normal, and all silently mislabelled "handed off, forever" by a two-state model, which is today's unclosable `open: true` reintroduced one level up |
+| `retrieval_verified` | landed by either test above, **and** the observation's retrieval fixture passes again | the narrowest claim the free ladder licenses — the tables needed to answer are reachable — and the one `addressed` deliberately stops short of |
+| `superseded` | the hash moved off the base and the content is not there | a `git apply` conflict, a CI reformat, or a reviewer editing before committing — all normal, and all silently mislabelled "handed off, forever" by a two-state model, which is the unclosable `open: true` this design replaces, reintroduced one level up |
+
+**Five derived states shipped, not the four this table was drafted with.** `retrieval_verified` is
+the upgrade named two paragraphs up, and it is a state rather than a flag because a reader asking
+"did this land" and a reader asking "can the engine reach it now" are asking two things.
+`feedback/lifecycle.py::derived_state` grants it only on a fixture that actually passed: an unrun
+fixture is not a pass, which is the same rule `tools/verify_patch.py` applies to an unrun tier.
 
 **`closed` is not a state.** Nothing branches on it. `open` is computed as `state not in
-TERMINAL`, never stored, so today's unclosable row stops being expressible.
+TERMINAL`, never stored, so the unclosable row this design replaces stops being expressible.
 
 ### 4. Nothing in this repository writes to the corpus, and the patch is applied by hand
 
@@ -240,6 +287,17 @@ in the analyst's prompt with no review, which is the v1 forgery defect verbatim.
 through a new `corpus/patch.py` that locates the field by PyYAML composer node marks and replaces
 the text surgically, so a one-word `summary` change is a one-line diff and comments survive.
 `store.write` is a create primitive and this ADR names it as one.
+
+Built, and narrower than drafted. `patch.py` exports `locate`, `read_field` and `apply_edit`, and
+**no create function** — a create is still `store.write`, so this module never has to reason about
+a file that does not exist. `apply_edit` returns the new file text and does not write it: the
+caller is a bundle exporter that wants a diff, and a function that both computes and commits a
+change cannot be used to preview one. Two rails came out of the build rather than the design. It
+refuses any field outside `EDITABLE = {summary, body}`, and it refuses `governance`, `provenance`,
+`audit` and `columns` outright, which puts §Decision 8's prohibition in the module instead of in a
+prompt. And it re-parses the text it just produced and requires the field to read back as asked —
+without that, a renderer bug lands a patch whose value is not the value it was given, which is a
+defect this class produces in every form and which nothing else was looking for.
 
 The handoff is a **bundle**: a directory carrying `MANIFEST.yaml`, `COMMIT_MSG.txt`,
 `changes.patch`, `after/`, and `evidence/`, produced by a local CLI. Applying it is `git apply`
@@ -258,6 +316,12 @@ their table and their ids are derived (`corpus/identity.py::derive_column_id`) �
 asset ids becomes a conformance rule that runs in the corpus repository's CI, before the merge.
 
 ### 5. The pipeline is a local process, not a served graph, and each role's boundary is its tool list
+
+**None of this section is built.** There is no `triage/` package, no Reproducer, Diagnoser, Author
+or Curator, and `tools/check_imports.py::LAYERS` names `feedback` and does not name `triage`. Steps
+0-6 ship the store, the ladder and the steward's surface; a human does the diagnosing and the
+authoring, and the reasoning below is what a build of the pipeline would have to answer to. Read
+this section as design.
 
 `triage` is a `StateGraph` invoked by `python -m governed_bi.triage`. It is **not** an entry in
 `langgraph.json` and it is **not** a subgraph of `serve` — `ServeInput` is the A2/A3 trust
@@ -343,10 +407,18 @@ only tiers that spend. Full definitions and pass conditions are in the working r
 |---|---|---|---|
 | T0 | the patch file alone: parse, identity, validators the loader itself uses | ~1.6 s | a file the engine cannot load |
 | T1 | the whole tree: conformance, `build_structure`, `build_index`, the adversarial suite | ~4–30 s | duplicate ids (M2), prose rules, a corpus that cannot start |
-| T2 | the tree binds against the live catalog | seconds, needs a DB | a metric naming a column that does not exist (M2) |
+| T2 | the tree binds against what the corpus itself declares | ~seconds, offline, $0 | a metric naming a column that does not exist (M2) |
 | T3 | **paired retrieval, one process, agent model off** | ~minutes, ~$0 (M4) | coverage: did the gold table become licensed, per question |
 | T4 | targeted paid replay of the affected questions | tens of calls | did the answer flip |
 | T5 | a paired arm | ~52 min, ~74M input tokens | a release, never a patch |
+
+**Four of the six are built.** T0–T2 are `tools/verify_patch.py` and T3 is
+`tools/reproduce_observation.py`. **T4 and T5 are not built**, so the two tiers that spend money are
+also the two that do not exist, and the ladder a patch actually carries stops at T3. An unrun tier
+is **absent** from that ladder rather than recorded as skipped-therefore-fine, because a tier that
+could not run must never read as one that passed. T2 came out cheaper than this table first said:
+the corpus declares its own tables, columns and joins, so the resolver is offline and free and
+needs no database.
 
 **T3 is the centrepiece**, and the gate is **per-question, not per-rate**: any question that lost
 gold-table coverage fails. That resolves a single question at ~$0 and with zero variance, where
@@ -387,9 +459,9 @@ through on a green T3.
 problems, so a "zero problems" gate rejects production. A gate that fires on the pre-existing
 population is a gate that gets waived, and a waiver is how a real finding goes green.
 
-### 7. A corpus release is a declared treatment, and the knob for it does not exist
+### 7. A corpus release is a declared treatment, and the knob for it did not exist
 
-**Measured: `comparability_keys()` is 50 names and not one contains "corpus".** So an arm whose
+**Measured: `comparability_keys()` was 50 names and not one contained "corpus".** So an arm whose
 treatment *is* the corpus cannot declare it, and `register/arm_profiles.py` makes every such arm
 `cannot_evaluate`. Separately, `corpus_content_hash('../BIRD-corpus')` at HEAD is
 `6e5c7b4be83d5682…` while `arms.toml` declares `86ed1dbf…` on all four arms — the two commits
@@ -401,6 +473,16 @@ patches land continuously in the corpus repo and arms pin releases, so the contr
 under a measurement. `require_power` gets its missing caller by way of a `hypothesised_effect` and
 a `readout` on `ArmProfile`, at which point an arm that cannot detect its own hypothesis fails
 before it spends anything.
+
+Built, all three: `register/knobs.py` declares `corpus_release` as a comparability knob, so
+`comparability_keys()` is 51 names and one of them contains "corpus";
+`register/arm_profiles.py::recorded_corpus_release` reads it back off a row and refuses a profile
+that claims a different one; and `ArmProfile.hypothesised_effect` / `.readout` exist with
+`eval/provenance.py` as `require_power`'s caller, which is the caller `open-work.md` §3.10 recorded
+as missing. `readout` is required alongside `hypothesised_effect` for the reason §Decision 6 gives:
+MDE is denominated in points of the whole population, and a declaration that omits which quantity
+it is denominated in is the unit error this ADR withdrew. There is no `CorpusRelease` type — the
+knob names a tag, and a tag in a table is not a class.
 
 **What bounds the release cadence is not money — it is the stock of detectable effect, and the
 stock is nearly empty.** Everything T3 can see is the coverage debt: 79 questions whose gold tables
@@ -427,6 +509,14 @@ Enforced by the absence of a tool, and by code that overwrites rather than by a 
 | `confidence` | never written from a reproduction rate | `corpus/validate.py:132` already warns in prose: "a curation-time belief and never an outcome score — the first thing a feedback loop will want is to write a hit rate here." The rate goes on the triage run |
 | `reliability.status` | **allowed** | ADR 0005 declares it AI-authorable: "`suspect` argues against a column and the analyst still sees it" |
 
+**What shipped is narrower than this table, and only one row of it is live.**
+`corpus/patch.py::EDITABLE` is `{summary, body}` and nothing else, and `governance`, `provenance`,
+`audit` and `columns` are refused as field paths outright — so the first two rows are enforced in
+the module rather than by a prompt, and the last two have no route to exercise: `confidence` and
+`reliability.status` are not editable by the shipped ladder at all, which makes
+`reliability.status` allowed in the design and unreachable in the build. The table is what a
+pipeline able to author a whole asset must obey.
+
 ### 9. `body` and `summary` are different channels and need different rules
 
 From M3. `body` reaches the model's prompt; `summary` reaches the retrieval index. A rule that
@@ -448,13 +538,20 @@ an existing control — it is the first one.
 
 ### 10. The analyst gets to re-ask, and this is what makes it a loop
 
+**Not built, and not planned in this cut.** There is no `/reports` page and no re-ask action. The
+reason is the one that also cut the capture UI: one principal holds every role on this deployment,
+so a per-reader report list and a notification have nobody to serve, and the input to the loop is
+the eval artifact through `tools/import_eval_failures.py` rather than a person clicking. That makes
+what shipped a queue and not a loop, by this section's own definition, and the day there is a
+second audience this is the half that has to be built. The design follows.
+
 Every part of this design promises it in prose — the `landed_verified` copy literally says "ask
 your question again" — and the design session shipped no way to do it. So: the reports page carries
 a **re-ask** action on any observation whose derived state is `landed_verified` or
 `landed_matched`. It opens the chat surface on a **new** thread, prefilled with the question text
 the store already copied off the turn record.
 
-A new thread and not the original, for the reason `api/raised_write.py` already documents about
+A new thread and not the original, for the reason `api/raised_write.py` documented about
 writing into someone else's thread, and because a second turn on the old thread inherits 25 turns
 of context that the comparison should not include.
 
@@ -483,6 +580,9 @@ bundle's post-state — and `source_refs` is what makes the join cheap, not what
 Not `Audit.extra`: that is the unknown-key hatch, deliberately the one place an unknown key is
 kept rather than rejected, and putting a join key there makes it unfindable. Not a new
 `ProvenanceSource` member: `source` says who authored the asset, not what prompted it.
+
+Built as `tools/check_landed.py`, and it is a reporter: matched, unmatched, dangling, and no state
+written anywhere.
 
 ---
 
@@ -540,79 +640,124 @@ authorises nothing. The UI copy must say so.
 1. **Two new packages and a `LAYERS` decision.** `tools/check_imports.py::LAYERS` must name every
    package under `src/governed_bi`, so adding one forces a placement. `feedback` sits immediately
    after `corpus` — it validates a patch with the same validator the loader uses, and must not
-   import `serve`, `govern`, `api` or `eval`. `triage` sits after `eval` and before `api`.
+   import `serve`, `govern`, `api` or `eval`. **One package, not two:** `feedback` is placed there
+   and `triage` is not in the list at all, because the pipeline is not built. `LAYERS` naming every
+   package is what will force that decision on the day it is.
 2. **`api/visibility.py::visible()` does not cover the new surface, and cannot.** It narrows a
    *corpus projection*; an observation's free text is a human sentence and there is nothing in it
    to narrow. So the new routes need a second narrowing function beside `visible()`, and the
    free-text exemption must be declared and asserted rather than discovered — the same trade
-   `/audit/corpus`'s `problems` takes under ADR 0012 §8.5.
+   `/audit/corpus`'s `problems` takes under ADR 0012 §8.5. Built as
+   `api/feedback_routes.py::_narrowed`, and it is an **allowlist** rather than a denylist: a field
+   the route does not name does not reach a client, so adding a column to the store cannot disclose
+   it by default. The fields it holds back are the benchmark's — `gold_sql`, `gold_fingerprint`,
+   `pred_fingerprint` — which is a disclosure this ADR did not anticipate having to make.
 3. **The engineer-facing verbs are new authority, and they ship unmounted.** Behind
    `GOVERNED_BI_FEEDBACK_ADMIN`, returning 404 rather than 403 — a 403 confirms the route exists.
    The cheapest control a fork can turn on is a token on those verbs only, and unlike 2026-08-13's
-   reversal it costs nothing: LangGraph Studio never calls them.
+   reversal it costs nothing: LangGraph Studio never calls them. Shipped as written, and with one
+   principal the environment switch is the whole of the control — which is worth saying plainly
+   rather than dressing a switch up as a gate that distinguishes somebody.
 4. **On the one verb that ships enabled, this design narrows by arithmetic.** One row once,
-   quota'd, sweepable — against today's row re-serialised into every later checkpoint of a thread
-   in a store nothing sweeps.
+   quota'd, sweepable — against the row it replaced, which was re-serialised into every later
+   checkpoint of a thread in a store nothing sweeps. The filing route returns **201** rather than
+   200 for the same reason: it creates a row in a store, and a client should not have to read the
+   body to learn which.
 5. **One new register field, `rendered_asset_ids` at `Stage.assemble`.** The set of assets that
    were actually in the block the model read is not recoverable from a turn record —
    `context_hash` digests it and is not invertible, and `evicted` names only what the budget
    dropped. Without it the steward's evidence panel has to *derive* that column and say so in the
    caption. It lands **with** its consumer and not before, because a field with no reader is the
    defect `tests/conformance/test_the_declared_but_unconsumed_set_does_not_grow.py` fails the build
-   over.
+   over. **Not built**, and the rule is the reason: the consumer is the pipeline's reproducer, the
+   pipeline is not built, so declaring the field now would be exactly the unconsumed declaration
+   that gate exists to refuse. The evidence panel derives the column and its caption says so.
 6. **`corpus/snapshot.py` gets its first caller** — the trial corpus T4 replays against. With the
    Adversary cut, that caller is a deterministic driver replaying a fixed question set rather than a
    model choosing what to replay, which is strictly better: it is auditable. §Open questions 2
    carries the safety defect in `snapshot` that has to be fixed before the caller exists.
-7. **A reader's free text reaches two model calls before any human sees it**, and the design
-   session's claim that "the staging tree is outside `corpus_root`" is the structural control is
-   **not complete**. The text is read by the Diagnoser and echoed to the Author through the
-   diagnosis; and — this is the part that contradicts the claim — staged prose derived from it is
-   rendered into a *real* prompt by T4's trial replay. What actually bounds this is weaker and must
+   **This did not happen, and the reason is a better answer than the one designed.** T4 is not
+   built, and the free ladder applies the edit **in memory** rather than against a copied tree, so
+   it never calls `snapshot` at all — no scratch directory, no `rmtree`, nothing to point at the
+   wrong path. `snapshot` still has no caller outside its own tests. The defect in it was fixed
+   anyway (`222d1bf`), because a data-loss bug is not made safe by having no callers yet.
+7. **A reader's free text would reach two model calls before any human sees it** — a consequence of
+   the pipeline, and therefore not yet a live one. In what shipped the free text reaches **no** model
+   call: `tools/reproduce_observation.py` re-runs the observation's *question* and never its note,
+   and the first reader of the note is the steward in `/review`. The paragraph below is the residual
+   risk a build of the pipeline inherits, and it is unchanged. The design session's claim that
+   "the staging tree is outside `corpus_root`" is the structural control is **not complete**. The
+   text is read by the Diagnoser and echoed to the Author through the diagnosis; and — this is the
+   part that contradicts the claim — staged prose derived from it is rendered into a *real* prompt
+   by T4's trial replay. What actually bounds this is weaker and must
    be stated as such: the free text is delimited and framed as data in every prompt that carries it;
    the trial corpus is a copy no serve request can reach and is off unless a scratch directory is
    configured; staged output is checked against `govern/guard.py::GUARD_RULES`; and the loop cannot
    write `governance` or `provenance`. There is no content-scanning gate on prose meaning, and the
    residual risk is a poisoned asset a human approves. (Cutting the Adversary removed two of the
    four read points, which is a security argument for the cut that was not the reason for it.)
-8. **The `raised` channel's rows are migrated, not orphaned.** §Decision 2 buys that with
-   `tools/drain_raised.py` and a reader union with a named end condition, at the cost of one extra
-   build step. The alternative — delete and declare the rows unreachable — is a sentence somebody
-   would have had to sign.
+8. **The `raised` channel's rows were to be migrated rather than orphaned, and there were none.**
+   The decision was §Decision 2's: `tools/drain_raised.py` plus a reader union with a named end
+   condition, bought at the cost of one extra build step, because the alternative — delete and
+   declare the rows unreachable — is a sentence somebody would have had to sign. Then the channel
+   was counted before it was deleted: **zero rows across the checkpoint store, the harness store and
+   all 23 platform thread rows.** So nobody had to sign anything and nothing was written. The drain
+   tool does not exist, the union does not exist, and `4a0d11a` removed the channel in one commit
+   with an assertion that the writer seam is gone in place of a migration. The consequence this
+   entry describes is therefore **retired, not delivered** — recorded rather than deleted because
+   the reasoning is what a reader needs next time a channel has to go, and the lesson is that the
+   count is cheaper than the plan for what the count might have been.
 
 ---
 
 ## Acceptance criteria
 
-Falsifiable, and each names the mutation it must survive.
+Falsifiable, and each names the mutation it must survive. Four of the nine are asserted by tests on
+this branch; four wait on the pipeline; one is retired. Each says which.
 
 1. **The serve treatment identity does not move.** After the prompt registry is split,
    `prompt_set_hash()` on the default variants is byte-identical to `b1f9e4d7d230cb97` — measured on
    this tree, 2026-08-23. Mutation: edit any triage prompt's text; `prompt_set_hash()` unchanged,
-   `triage_prompt_set_hash()` moved.
+   `triage_prompt_set_hash()` moved. **Waiting on the pipeline, and half-satisfied for a duller
+   reason:** steps 0-6 added no prompt at all, so there was nothing to partition and
+   `prompt_set_hash()` re-measures at `b1f9e4d7d230cb97` today. There is no
+   `triage_prompt_set_hash()`, so the mutation half is unasserted.
 2. **A full triage run leaves the corpus untouched.** `corpus_content_hash(corpus_root)` before
    equals after, **and** the set of asset ids `store.load` returns is unchanged. Mutation: point
-   the staging directory inside `corpus_root`; the test fails.
+   the staging directory inside `corpus_root`; the test fails. **Waiting on the pipeline.** The
+   weaker claim that shipped is the free ladder's: it applies the edit in memory and writes no file
+   anywhere, asserted in `tests/conformance/test_the_ladder_checks_the_edit_and_not_the_file.py`.
 3. **The Author cannot forge governance or provenance.** A scripted model emitting
    `governance: {excluded: true, by: "human"}` and `provenance: {source: human, status:
    certified}` produces staged YAML with no `governance` key, `provenance.status == proposed`, and
-   one exclusion request on the record.
+   one exclusion request on the record. **Waiting on the pipeline**, and there is no Author to test.
+   What ships in its place is structural: `corpus/patch.py` refuses `governance`, `provenance`,
+   `audit` and `columns` as field paths, so the forgery has no route even from a caller that asks
+   for it.
 4. **Every stored state names its actor.** A walk of the transition table fails on a stored state
-   whose `moved_by` is empty. This is the rule of §Decision 3 made mechanical.
+   whose `moved_by` is empty. This is the rule of §Decision 3 made mechanical. **Met**, in
+   `tests/feedback/test_every_stored_state_names_its_actor.py`.
 5. **Conformance catches all four of M2's breakages.** The three it misses today plus the one it
    catches, each as a synthetic fixture in
-   `tests/conformance/test_corpus_conformance_rules_fire.py`.
+   `tests/conformance/test_corpus_conformance_rules_fire.py`. **Met**, across that file and
+   `tests/conformance/test_the_whole_tree_rules_fire.py` — the whole-tree half went into its own
+   file because a rule that needs a second asset to fire cannot be expressed as one fixture.
 6. **The new rules do not go green by waiver.** Pre-existing findings are pinned **by name** in
    the corpus repository, the set may shrink freely and may not grow, and closing one fails the
    build as loudly as adding one — because a shrinking list nobody updates is how a stale count
-   survives.
+   survives. **Met**, as `tools/check_ratchet.py` and
+   `tests/conformance/test_the_ratchet_only_turns_one_way.py`. The identity is the rule plus the
+   file and asset, not the message, so rewording a finding does not silently re-pin it.
 7. **A closed observation leaves the queue, and a superseded patch does not read as handed off.**
+   **Met**, in `tests/feedback/test_the_landing_states_are_derived_and_not_stored.py`.
 8. **The revision loop is bounded.** A scripted model whose staged asset never passes `validate`
    ends at `max_revisions` with the patch withdrawn, having called the Author exactly that many
-   times.
-9. **The drain has an end condition and the union has an exit.** `tools/drain_raised.py` on a tree
-   with N channel rows reports N, then 0; the reader union is removed in a commit that also removes
-   the drain's last non-zero report from the record.
+   times. **Waiting on the pipeline.** There is no revision loop and no `max_revisions`.
+9. **The drain has an end condition and the union has an exit.** **Retired**, and §Consequences 8
+   records why: the channel held zero rows, so `tools/drain_raised.py` and the reader union were
+   never built and there is no end condition to assert. The criterion is kept rather than deleted
+   because it names the risk the staged deletion was bought to cover, and the reason it stopped
+   being a risk was a measurement and not an argument.
 
 ---
 
@@ -632,6 +777,10 @@ Falsifiable, and each names the mutation it must survive.
    scratch directory holding unrelated files, `shutil.rmtree` removed them. So a snapshot path
    must never be derived from a caller-influenced id, and the guard belongs in `snapshot` too.
    This is a defect in existing code that this ADR's first caller would weaponise.
+   **Closed (`222d1bf`).** Both functions apply the same identification now, and `snapshot` accepts
+   one further case `restore` has no reason to — an **empty** directory, which holds nothing to
+   lose. The caller that would have weaponised it was never built (§Consequences 6), which is why
+   the fix mattered: a data-loss bug in code with no callers is a bug waiting for its first one.
 3. **Should the excluded-column-in-`body` rule block or report?** Blocking needs a calibrated
    false-positive rate and nobody has one; a report puts the finding in front of the human already
    reading the diff. But M3 says the current posture rests entirely on execution-time refusal —
@@ -672,6 +821,11 @@ Falsifiable, and each names the mutation it must survive.
 7. **Do complaints cluster at all?** Zero exist on this tree. The clustering key is a guess, and
    the first month's distribution is the experiment. If complaints are mostly singletons on
    distinct tables, the batch pipeline is a per-event pipeline wearing a batch pipeline's name.
+   **Answered, negatively, on the real 73.** The largest cluster is **3** and **49%** of rows are in
+   a cluster at all. The batching argument does not survive that, so `/review` shipped as a list
+   with an optional grouping rather than the cluster-first screen the design specified, and a build
+   of the pipeline would be a per-event pipeline. This is the one open question in this ADR that a
+   measurement rather than a build closed, and it closed against the design.
 
 ---
 
@@ -681,7 +835,10 @@ Falsifiable, and each names the mutation it must survive.
   narrowing seam and one unmounted-by-default admin surface, and it says plainly that reaching the
   port is still sufficient.
 - **Who owns the corpus repository's CI.** The design specifies what that CI must run. It does not
-  say who writes it, and the corpus served today is not a git repository at all (§Context 5).
+  say who writes it, and nobody has. The served corpus is a git repository since `222d1bf`
+  (§Context 5) and it has no CI at all. The pins live in it — `.conformance-pins.txt` — and
+  `tools/check_ratchet.py` reads them from this repository, which is the wrong side of the merge
+  and is named as such rather than counted as the control §Decision 4 asked for.
 - **Row-level security, tenancy, or a user store.** `docs/enterprise-fork.md` is unchanged by this
   ADR. In particular the store records no identity for who filed an observation, because
   `api/auth.py` returns one principal and inventing a per-user notion here would be a boundary
