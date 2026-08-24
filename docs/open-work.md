@@ -543,6 +543,41 @@ crashed, 0 unparsed — so that partition is the **first** number in this block 
 of the hand-run block (the 292-statement diagnosis, the projection recovery counts) still does not,
 and the marks there stand.
 
+### 3.10d The return path was walked once, end to end, and the queue is 72% stale
+
+One real observation, 2026-08-24: `open` → triaged → drafted → T0/T1/T2 green → exported →
+`git apply` → committed → **`landed_verified`** → T3 → withdrawn. The first `landed_verified` this
+project has produced: the exporter predicted `41bbb2e567ea32eb` before the write and the corpus
+hashed to exactly that after, which is the strong claim (*this* tree, not *a* tree with the right
+text in it) and it only became reachable when `export_bundle` started recording the predicted hash.
+
+**The payoff was zero, and that is the finding.** The case was the cleanest available: the question
+asks what was *bought*, the gold needs `student_club.expense`, and that table's `summary` — which is
+the retrieval index — did not say the table records what was bought, though `expense_description`
+holds it. Adding it left both gold tables unlicensed, **exactly as before the edit**. Verified
+against the pre-edit tree rather than inferred, after a first reading that wrongly blamed the edit
+for a displacement that predated it. The free tier refused to certify the patch, which is what it is
+for, and the patch was withdrawn.
+
+**The funnel, measured.** 73 imported → 71 real → **20 still reproduce** → 13 whose missing table
+sits in a schema the router did reach → **11 the only repair this loop offers could plausibly fix**.
+15%.
+
+| finding | status |
+|---|---|
+| **52 of 71 open rows no longer reproduce.** 71 carry `corpus_content_hash 86ed1dbf…` and the corpus is `6e5c7b4b…` — the artifact was measured against a different tree and nothing said so | fixed: `--state` asks the queue in one pass (72s; per-row through the CLI was 32 minutes), `--decline` closes them, and the importer names both hashes. Rows are **not** dropped on import — an observation is a record of something that did happen |
+| **7 of the 20 are schema-routing failures.** The router never reached the schema, so no `summary` or `body` edit can help — and nothing in the queue, the reproducer or `/review` says which layer failed | **open.** The loop offers one repair and does not say when it is the wrong one |
+| A config error exited **1**, which three of these tools use for a verdict; and `return 1` sat inside `if args.record:`, so a run that found 19 live failures exited **0** | fixed: `corpus_target.Misconfigured` → 2, chosen in `main`, for all four |
+| Four tools each carried their own copy of "which corpus", and the copies disagreed about whether `.env` counts | fixed: `tools/corpus_target.py`. `credentials` has been this repo's dotenv reader since 2026-08-03 |
+| The exporter's printed `git apply` / `git commit -F` pair **does not work** — the change lands unstaged and the commit exits 1 | fixed: `--index`, and a test parses the commands out of stdout and runs them |
+| Withdrawing a patch left its observations reading `addressed` | fixed: `move_patch` returns them to `triaged` and reports what it could not move |
+| `airline.Air Carriers` reports missing while `airline.Air_Carriers_66c534` is licensed — one table, compared as physical name against asset id. 2 of 73 rows are false | **open.** Narrow, but it is in the coverage comparison the whole population is built from |
+| 2 of 73 rows carry no `corpus_content_hash` at all | counted apart from a mismatch; why they have none is unexplained |
+
+**What this says about the feature.** Every defect above was found by *using* it. Three days of
+reading and mutation testing beforehand found none of them — they are all in the joins, which is
+what you would expect of a loop that had never been driven.
+
 ### 3.11 Selective prediction is closed at 0.80, and the reflector closed it
 
 The reflector ran, once, as the last untested source of information: everything that does not

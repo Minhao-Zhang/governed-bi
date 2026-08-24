@@ -28,7 +28,7 @@ SQLite is the offline test/CI substrate.
    |---|---|
    | `tools/import_eval_failures.py` | an eval artifact's failures become observations. **Not the only row source, and not the only one with a caller:** `POST /turns/{id}/raised` ships mounted and unauthenticated, and `ui/components/answer/raise-note.tsx` — which predates this branch — renders on the answer card and calls it. What the design called the capture UI is the *richer* surface that is absent: a category picker, an `expected` field, `/reports` |
    | `tools/verify_patch.py` | the free ladder, T0–T2. Delta gates over the patched tree, in memory |
-   | `tools/reproduce_observation.py` | T3: does this question still miss a gold table? Free, and **run it with `--embed`** |
+   | `tools/reproduce_observation.py` | T3: does this question still miss a gold table? Free, and **run it with `--embed`**. `--state open` asks the whole queue in one pass — measured 2026-08-24: **52 of 71 open rows no longer reproduced**, in 72 seconds, because the artifact was measured against a corpus that has since changed. `--decline` moves those to `declined`/`cannot_reproduce`. Exit **2** means it could not run; **1** means something still reproduces |
    | `tools/export_bundle.py` | a bundle an engineer applies with `git apply`. Two content checks are fatal here and nowhere else |
    | `tools/check_landed.py` | did it land? Read off the corpus, stored nowhere |
    | `tools/check_ratchet.py` | the corpus's conformance debt may shrink and may not grow |

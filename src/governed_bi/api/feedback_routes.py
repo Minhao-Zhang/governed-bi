@@ -682,6 +682,14 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
         common case, and leaving it `exported` forever is the unclosable row this design exists to
         remove. What the corpus does with a bundle already applied is not this store's business --
         ``tools/check_landed.py`` reads that from the corpus.
+
+        **The response carries what the withdrawal did to the observations the patch answered**, the
+        same way ``POST /patches`` carries what drafting did. Withdrawing the last live patch returns
+        a row from ``addressed`` to ``triaged``: it is the mirror of drafting, and the store does the
+        move so nothing that reaches it can withdraw a patch and leave the queue claiming the row was
+        answered. Both lists go out, so a client learns the half that did not move -- a row with a
+        second draft still open, a row already declined -- from the answer rather than by re-fetching
+        each one.
         """
         reason = str((body or {}).get("reason") or "").strip()
         if not reason:
@@ -693,7 +701,7 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
                 ),
             )
         try:
-            store.move_patch(
+            moved = store.move_patch(
                 patch_id, to=PatchState.withdrawn, withdrawn_reason=reason, detail=reason
             )
         except KeyError as exc:
@@ -704,7 +712,16 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
             raise HTTPException(status_code=422, detail=list(exc.faults)) from exc
         return {
             "ok": True,
-            "patch": _wire_patch(store, store.get_patch(patch_id), for_steward=True),
+            "patch": _wire_patch(store, moved.patch, for_steward=True),
+            "reopened": list(moved.reopened),
+            "not_reopened": [
+                {
+                    "observation_id": unmoved.observation_id,
+                    "state": unmoved.state.value,
+                    "why": unmoved.why,
+                }
+                for unmoved in moved.not_reopened
+            ],
         }
 
     @router.get("/patches")

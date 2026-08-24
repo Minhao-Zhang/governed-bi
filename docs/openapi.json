@@ -4921,18 +4921,66 @@
       "PatchEnvelope": {
         "type": "object",
         "title": "PatchEnvelope",
-        "description": "`{ok: true, patch: {...}}`, the same envelope shape the filing route returns.",
+        "description": "`{ok: true, patch: {...}}` for `POST /patches/{patch_id}/withdraw`, plus what the withdrawal did to the observations the patch answered. **Not shared with the filing route** -- its description said so until 2026-08-24 and that was already false: `POST /patches` has its own `DraftEnvelope`, because a field one of two callers cannot produce is indistinguishable from a field nobody serves. The two shapes are mirror images: drafting reports `addressed` / `not_addressed`, withdrawing reports `reopened` / `not_reopened`.",
         "properties": {
           "ok": {
             "type": "boolean"
           },
           "patch": {
             "$ref": "#/components/schemas/PatchResponse"
+          },
+          "reopened": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Observation ids this withdrawal returned to `triaged`. Drafting is the only producer of `addressed`; withdrawing the last live patch is what undoes it. A row that stays `addressed` because a second draft is still open is in `not_reopened`, not here."
+          },
+          "not_reopened": {
+            "type": "array",
+            "properties": {
+              "observation_id": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "observation_id",
+              "state",
+              "why"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "observation_id": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "why": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "observation_id",
+                "state",
+                "why"
+              ]
+            },
+            "description": "Observations the withdrawn patch was attached to and that were **not** returned, each with the state it is in and why. Only an `addressed` row is a candidate: `open -> triaged` is also a declared edge, so returning every attached row would triage one nobody has looked at. A terminal row (`declined`, `duplicate`) lands here too."
           }
         },
         "required": [
+          "not_reopened",
           "ok",
-          "patch"
+          "patch",
+          "reopened"
         ]
       },
       "ObservationEnvelope": {
@@ -4975,7 +5023,7 @@
       "DraftEnvelope": {
         "type": "object",
         "title": "DraftEnvelope",
-        "description": "`POST /patches` only. `PatchEnvelope` plus what drafting did to the observations the patch answers. Its own schema rather than two optional fields on `PatchEnvelope`, which is also the withdraw response and never sends them: a field declared on a shape that one of its two callers cannot produce is indistinguishable from a field nobody serves.",
+        "description": "`POST /patches` only. `PatchEnvelope` plus what drafting did to the observations the patch answers. Its own schema rather than two optional fields on `PatchEnvelope`, which is the withdraw response and reports the mirror-image pair under different names: a field declared on a shape that one of its two callers cannot produce is indistinguishable from a field nobody serves.",
         "properties": {
           "ok": {
             "type": "boolean"

@@ -46,7 +46,7 @@ import {
   observationEnvelopeSchema,
   observationsSchema,
   draftEnvelopeSchema,
-  patchEnvelopeSchema,
+  withdrawEnvelopeSchema,
   patchesSchema,
   pendingQueueSchema,
   corpusFieldsSchema,
@@ -64,7 +64,7 @@ import type {
   ObservationEnvelope,
   Observations,
   DraftEnvelope,
-  PatchEnvelope,
+  WithdrawEnvelope,
   Patches,
   AssetRow,
   AuditCorpus,
@@ -430,17 +430,19 @@ export const api = {
   },
 
   /** Abandon a patch. The reason is required by the server, not just by the form. */
-  withdrawPatch: (patchId: string, reason: string): Promise<PatchEnvelope> => {
+  withdrawPatch: (patchId: string, reason: string): Promise<WithdrawEnvelope> => {
     if (USE_MOCKS) {
       return Promise.resolve({
         ok: true,
         patch: { ...MOCK_PATCH, state: "withdrawn", withdrawn_reason: reason },
+        reopened: [],
+        not_reopened: [],
       });
     }
     return post(
       `/patches/${encodeURIComponent(patchId)}/withdraw`,
       { reason },
-      patchEnvelopeSchema,
+      withdrawEnvelopeSchema,
     );
   },
 

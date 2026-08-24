@@ -11,6 +11,14 @@ which that page carries under a "hand-run, no producer in the tree" warning.
 Importing twice is safe. Every row carries an ``external_key`` over the arm, the question and both
 treatment hashes, so re-reading one artifact files nothing new — while running a *new* arm and
 importing that is new information about a different treatment, and files fresh rows.
+
+**It also says which corpus the rows are about, and that is not a formality.** Every row carries the
+``corpus_content_hash`` it was measured on; so does the corpus the engine loads. On 2026-08-23, 71
+of the 73 rows in the live store carried ``86ed1dbfef8b325e...`` and ``../BIRD-corpus`` hashed to
+``6e5c7b4be83d5682...`` — and 52 of the 72 open rows no longer reproduced. The importer had both
+numbers and printed neither. A mismatch is **not fatal, even on ``--commit``**: see
+``eval/feedback_import.py::import_failures`` for the argument. It is printed, counted, and pointed
+at ``tools/reproduce_observation.py --state open --embed``, which is the thing that can settle it.
 """
 
 from __future__ import annotations
@@ -19,6 +27,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from governed_bi import credentials
 from governed_bi.eval.feedback_import import import_failures
 from governed_bi.feedback.cluster import clusters
 from governed_bi.feedback.store import FeedbackStore
@@ -29,6 +38,10 @@ DEFAULT_ARTIFACT = "runs/eval/proxy_v4_corpus30872d3.jsonl"
 #: The split those numbers were measured on. An artifact carries no question text on any row.
 DEFAULT_DATASET = "../BIRD-Data-Obfuscation/eval_dataset/test_final.jsonl"
 DEFAULT_DB = "runs/feedback.sqlite"
+#: Where the loaded corpus comes from when ``--corpus-dir`` is not passed. Read through
+#: ``credentials.secret``, so the environment and then ``.env`` -- ``.env`` is where this repo
+#: actually sets it, and ``os.environ.get`` alone reports it unset.
+CORPUS_DIR_VAR = "GOVERNED_BI_CORPUS_DIR"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,6 +49,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--artifact", default=DEFAULT_ARTIFACT)
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--db", default=DEFAULT_DB)
+    parser.add_argument(
+        "--corpus-dir",
+        default=None,
+        help=f"the corpus to compare each row's corpus_content_hash against. Defaults to "
+        f"{CORPUS_DIR_VAR}. Without one the report says 'not compared' rather than implying "
+        "the hashes agree",
+    )
     writing = parser.add_mutually_exclusive_group()
     writing.add_argument(
         "--commit",
@@ -66,10 +86,13 @@ def main(argv: list[str] | None = None) -> int:
         help="print the N largest clusters after importing, to answer 'do these group at all'",
     )
     args = parser.parse_args(argv)
+    credentials.load_into_environ()
 
     artifact = _resolve(args.artifact)
     dataset = _resolve(args.dataset)
     store = FeedbackStore(_resolve(args.db))
+    raw_corpus = args.corpus_dir or credentials.secret(CORPUS_DIR_VAR)
+    corpus_dir = _resolve(raw_corpus) if raw_corpus else None
 
     report = import_failures(
         artifact,
@@ -77,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         store=store,
         dry_run=not args.commit,
         include_flags=frozenset(f for f in args.include_flags.split(",") if f),
+        corpus_dir=corpus_dir,
     )
     print(report.render())
     if not args.commit:

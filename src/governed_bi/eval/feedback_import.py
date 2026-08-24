@@ -47,10 +47,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
+from governed_bi.corpus.hash import corpus_content_hash
 from governed_bi.eval.datalake import gold_tables, load_questions
 from governed_bi.feedback.events import Category, Kind, Observation, ObservationState, Source
 from governed_bi.feedback.store import FeedbackStore, mint_observation_id, utc_now
@@ -93,6 +95,20 @@ class ImportReport:
     by_category: Mapping[str, int] = field(default_factory=dict)
     refused: tuple[str, ...] = ()
 
+    #: ``corpus_content_hash`` of the corpus **loaded now**, or ``None`` when no corpus was given
+    #: to compare against. ``None`` is "nobody told me", which is not "they agree".
+    loaded_corpus_hash: str | None = None
+    #: Distinct ``corpus_content_hash`` values the imported rows carry, most common first.
+    artifact_corpus_hashes: tuple[str, ...] = ()
+    #: How many imported rows were measured against a corpus that is **not** the one loaded now.
+    #: ``None`` when there was nothing to compare against.
+    rows_on_another_corpus: int | None = None
+    #: How many imported rows carry no ``corpus_content_hash`` at all. Counted apart from the line
+    #: above rather than folded into it: "measured somewhere else" and "nobody recorded where" are
+    #: different facts, and adding them would be the sentinel ``corpus/hash.py`` refuses to return
+    #: -- a missing value comparing unequal and reading as a finding.
+    rows_with_no_corpus_hash: int = 0
+
     def render(self) -> str:
         """One block a person reads, with the excluded populations named rather than dropped."""
         lines = [
@@ -110,6 +126,36 @@ class ImportReport:
             f"  full coverage   {self.skipped_full_coverage}  (every gold table was licensed; needs T4/T5, not T3)",
             f"  gold unparsed   {self.gold_unparsed}  (no table set to compare against)",
         ]
+        lines += ["", "the corpus these rows were measured against:"]
+        if self.loaded_corpus_hash is None:
+            lines += [
+                "  not compared    no corpus was given, so nothing here says whether these rows",
+                "                  are about the corpus the engine loads. Pass --corpus-dir.",
+            ]
+        else:
+            lines.append(f"  loaded now      {self.loaded_corpus_hash[:16]}")
+            lines.append(
+                "  rows measured   "
+                + (", ".join(h[:16] for h in self.artifact_corpus_hashes[:3]) or "(none carried)")
+            )
+            lines.append(
+                f"  ELSEWHERE       {self.rows_on_another_corpus} of {self.inserted} row(s) were "
+                "measured against a corpus that is not the one loaded now."
+            )
+            if self.rows_on_another_corpus:
+                lines += [
+                    "                  They are kept: an observation is a record of something that",
+                    "                  did happen, and dropping it would erase a true fact about a",
+                    "                  real run. But 'still open' is not 'still true'. Measured on",
+                    "                  2026-08-24: 52 of the 71 open rows no longer reproduced.",
+                    "                  Settle it, do not read past it --",
+                    "                  tools/reproduce_observation.py --state open --embed",
+                ]
+            if self.rows_with_no_corpus_hash:
+                lines.append(
+                    f"  no hash         {self.rows_with_no_corpus_hash} row(s) record no corpus at "
+                    "all, so they are neither. Not counted above: unknown is not elsewhere."
+                )
         if self.by_category:
             lines += ["", "filed by category:"]
             lines += [
@@ -171,6 +217,7 @@ def import_failures(
     store: FeedbackStore,
     dry_run: bool = True,
     include_flags: frozenset[str] = frozenset(),
+    corpus_dir: Path | str | None = None,
 ) -> ImportReport:
     """File one observation per coverage-miss failure. Idempotent, and a no-op under ``dry_run``.
 
@@ -180,9 +227,22 @@ def import_failures(
     genuine semantics, invisible below a paired arm, and importing them would fill the queue with
     rows nothing in this cut can act on.
 
-    Raises ``FileNotFoundError`` for either path, and ``KeyError`` when the dataset cannot supply
-    a question's text — a missing join is a broken dataset pairing, and filing a blank question
-    would make a row that cannot be reviewed.
+    **``corpus_dir`` is the comparability half, and it changes nothing about what gets filed.**
+    Every row carries the ``corpus_content_hash`` of the corpus it was measured on, and the loaded
+    corpus has one too, and this compared them nowhere: on 2026-08-23, 71 of the 73 rows in the live
+    store carried ``86ed1dbfef8b325e...`` (the other two carried none) while ``../BIRD-corpus`` hashed
+    to ``6e5c7b4be83d5682...`` — a whole queue about a corpus the engine does not load, and no way to
+    find that out. Re-checked on 2026-08-24: 52 of the 71 no longer reproduced.
+
+    A mismatch is **reported and never acted on**. Not fatal on a commit and not a reason to drop a
+    row: an observation is a record of something that *did happen*, so refusing to file it would
+    erase a true fact about a real run without making the queue any more current — and it would keep
+    the rows away from ``tools/reproduce_observation.py``, which is the only thing that can say which
+    of them are still true. The number is the pointer to that check, not a gate in front of it.
+
+    Raises ``FileNotFoundError`` for the artifact, the dataset, or a ``corpus_dir`` that is not
+    there, and ``KeyError`` when the dataset cannot supply a question's text — a missing join is a
+    broken dataset pairing, and filing a blank question would make a row that cannot be reviewed.
     """
     artifact_path, dataset_path = Path(artifact), Path(dataset)
     rows = list(_read_jsonl(artifact_path))
@@ -233,6 +293,9 @@ def import_failures(
             "filing a blank question would make a row nobody can review."
         )
 
+    loaded_hash = None if corpus_dir is None else corpus_content_hash(corpus_dir)
+    carried = Counter(str(r.get("corpus_content_hash") or "") for r in importable)
+
     return ImportReport(
         artifact=str(artifact_path),
         arm=arm,
@@ -246,6 +309,14 @@ def import_failures(
         gold_unparsed=len(buckets["gold_unparsed"]),
         by_category=by_category,
         refused=tuple(refused),
+        loaded_corpus_hash=loaded_hash,
+        artifact_corpus_hashes=tuple(h for h, _ in carried.most_common() if h),
+        rows_on_another_corpus=(
+            None
+            if loaded_hash is None
+            else sum(count for h, count in carried.items() if h and h != loaded_hash)
+        ),
+        rows_with_no_corpus_hash=carried.get("", 0),
     )
 
 

@@ -205,6 +205,11 @@ def test_reopening_needs_every_patch_withdrawn(tmp_path: Path) -> None:
     used to draft the patch and then move the row itself, which is how the state came to have no
     producer outside a test: `store.draft` is the mover now, so an explicit move after it would be
     `addressed -> addressed`, an edge the table does not declare.
+
+    **There is no `move(to=triaged)` after the withdrawal either, for the mirror reason.** It used
+    to end on one, and that line was the defect written down as a test: it passed because
+    `move_patch` left the row `addressed`, so the reopen had to come from a caller by hand. The
+    withdrawal takes the edge now, and the explicit move would be `triaged -> triaged`.
     """
     store = FeedbackStore(tmp_path / "f.sqlite")
     obs = _filed(store)
@@ -215,8 +220,11 @@ def test_reopening_needs_every_patch_withdrawn(tmp_path: Path) -> None:
     with pytest.raises(Rejected, match="withdrawn"):
         store.move(obs.observation_id, to=ObservationState.triaged)
 
-    store.move_patch(patch.patch_id, to=PatchState.withdrawn, withdrawn_reason="wrong asset")
-    store.move(obs.observation_id, to=ObservationState.triaged), "and now it reopens"
+    moved = store.move_patch(
+        patch.patch_id, to=PatchState.withdrawn, withdrawn_reason="wrong asset"
+    )
+    assert moved.reopened == (obs.observation_id,), "the withdrawal is the reopener"
+    assert store.get(obs.observation_id).state is ObservationState.triaged  # type: ignore[union-attr]
 
 
 def test_exporting_needs_the_hash_the_edge_names(tmp_path: Path) -> None:

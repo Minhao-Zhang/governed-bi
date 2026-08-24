@@ -76,7 +76,7 @@ and gets a directory: the surgical `changes.patch` (a one-line diff, because
 each reader said verbatim inside a fence. He applies it in the corpus repository:
 
 ```bash
-cd ../BIRD-corpus && git checkout -b return/pat-… && git apply -p1 …/changes.patch
+cd ../BIRD-corpus && git checkout -b return/pat-… && git apply --index -p1 …/changes.patch
 git commit -F …/COMMIT_MSG.txt
 ```
 
@@ -178,6 +178,8 @@ src/governed_bi/api/feedback_routes.py
 tools/import_eval_failures.py      # an eval artifact's failures -> observations
 tools/verify_patch.py              # the free ladder, T0-T2 (§10)
 tools/reproduce_observation.py     # T3: does this failure still happen? (§10)
+                                   #     --state open asks the whole queue; --decline closes
+                                   #     the stale ones. Exit 2 = could not run, not a finding
 tools/export_bundle.py             # patch -> bundle
 tools/check_landed.py              # corpus source_refs -> derived landing states; --verify re-checks
 ```
@@ -462,12 +464,21 @@ at read time.** A stored state with no actor is what today's unclosable `open: t
 | `triaged` → `addressed` | `steward` | ≥ 1 patch in `draft` or `exported` |
 | `triaged` → `blocked_on_a_person` | `steward` | a one-line `blocked_note` is set. **Not a routing action** — there is nobody to escalate to, so this is a state with a name rather than an assignee. Its copy says nobody is chasing it |
 | `blocked_on_a_person` → `triaged` \| `declined` \| `addressed` | `steward` | the block cleared |
+| `addressed` → `triaged` | `steward` | **every patch for it was withdrawn.** Not a terminal state, and this table implied it was by ending at `addressed`. `store.move_patch` performs this move when the last live patch is withdrawn, and reports the rows it could not move — a row held by a second open draft stays `addressed` |
+| `addressed` → `declined` | `steward` | `decline_reason` is set. Reached when the patch is abandoned *and* the complaint is judged not worth another |
 | `declined` → anything | **refused.** Re-opening is a *new* observation, because the evidence bundle of the original is attached to the turn that produced it | |
 
 ### Stored — patch
 
 `draft → exported → ` (terminal from the store's point of view) and `draft|exported → withdrawn`.
 The actor for `exported` is `engineer` and for `withdrawn` is `steward`.
+
+**A withdrawal reaches back into the observation table.** `move_patch(to=withdrawn)` returns
+every `addressed` observation the patch answered to `triaged`, because otherwise the row goes
+on claiming somebody answered it while the only patch that ever did is abandoned. Drafting is
+the only producer of `addressed` and this is the only thing that undoes it; the two are mirror
+images and each reports what it could not move (`addressed`/`not_addressed` on the draft,
+`reopened`/`not_reopened` on the withdrawal). `draft → exported` moves nothing.
 
 ### Derived — recomputed on every read, never stored
 
@@ -702,7 +713,7 @@ step and is not built.
 bnd-pat-…/
   MANIFEST.yaml        the patch, its observations and question ids, the ladder results, the base hash
   COMMIT_MSG.txt       generated. First line <= 72 chars. Names the observation ids, not the prose
-  changes.patch        `git apply -p1`-able, produced against base_corpus_content_hash
+  changes.patch        `git apply --index -p1`-able, produced against base_corpus_content_hash
   after/               the post-state file, full text, so a reviewer can read the result not the diff
   evidence/
     observations.md    what each reader said, verbatim, in a fenced block
@@ -722,10 +733,17 @@ nobody has written yet, and a hash-shaped string nobody can compare is worse tha
 from the typed fields; the reader's sentence lives in `evidence/observations.md`, inside a fence,
 where it cannot become a line of a commit log that some other tool later renders unescaped.
 
-**Applying it is manual, and the doc says the whole command:**
+**Applying it is manual, and the doc says the whole command:** `--index` and not a bare
+`git apply`. Without it the change lands in the working tree unstaged and the `git commit -F`
+on the next line exits 1 with "no changes added to commit" -- which is what these two lines
+did until 2026-08-24, measured by following them. `--index` over `commit -a` because this
+commit is the provenance record for one reviewed change, and `-a` would carry whatever else
+the engineer had in flight. `export_bundle.py` prints the same block, and a test now parses
+the commands out of its stdout and runs them, so the printed and the working version cannot
+drift apart again.
 
 ```bash
-cd ../BIRD-corpus && git checkout -b return/pat-… && git apply -p1 ../governed-bi/bundles/bnd-pat-…/changes.patch
+cd ../BIRD-corpus && git checkout -b return/pat-… && git apply --index -p1 ../governed-bi/bundles/bnd-pat-…/changes.patch
 git commit -F ../governed-bi/bundles/bnd-pat-…/COMMIT_MSG.txt
 ```
 

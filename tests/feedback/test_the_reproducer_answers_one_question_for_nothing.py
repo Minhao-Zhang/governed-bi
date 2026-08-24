@@ -310,3 +310,84 @@ def test_the_verdict_reads_only_the_observations_it_could_check(
 
     outcomes = [ro.Outcome(f"obs-{i}", value, "") for i, value in enumerate(reproduced)]
     assert ro.tier_verdict(outcomes) is expected
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A configuration error is not a finding.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_missing_corpus_is_an_argument_error_and_not_a_reproduction(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`raise SystemExit("no corpus: ...")` exits **1**, and 1 in this tool's declared contract means
+    the failure still reproduces. So a caller reading the exit code recorded the observation as still
+    failing when the tool never ran. Confirmed by running it.
+
+    2 is the right code: the tool's own codes are 0 = passed or not applicable, 1 = still reproduces,
+    2 = arguments, and "you did not tell me where the corpus is" is the third.
+    """
+    import reproduce_observation as ro
+
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    store.file(_observation())
+    monkeypatch.delenv("GOVERNED_BI_CORPUS_DIR", raising=False)
+    monkeypatch.setattr(ro.credentials, "DOTENV", tmp_path / "absent.env")
+
+    code = ro.main(["--db", str(store.path), "--state", "open"])
+    assert code == 2, f"a configuration error must not report itself as a reproduction, got {code}"
+    assert "no corpus" in capsys.readouterr().err
+
+
+def test_a_missing_database_is_an_argument_error_and_not_a_reproduction(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same shape one function over. Routing resolves against a live catalog, so no DSN means no
+    run -- and it exited 1, which reads as a finding about the corpus."""
+    import reproduce_observation as ro
+
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    store.file(_observation())
+    monkeypatch.setattr(ro.credentials, "secret", lambda *names: "")
+
+    code = ro.main(["--db", str(store.path), "--corpus-dir", str(tmp_path), "--state", "open"])
+    assert code == 2, f"no DSN is a configuration error, not a reproduction, got {code}"
+    assert "no database" in capsys.readouterr().err
+
+
+def test_the_corpus_directory_is_read_from_dotenv_like_the_dsn_beside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`.env:92` sets `GOVERNED_BI_CORPUS_DIR=../BIRD-corpus` and the tool reported it unset, while
+    the DSN two functions away came out of the same file -- `_connector` asked
+    `credentials.secret`, `_corpus_root` asked `os.environ`. One entry point, two answers about
+    where configuration lives. No new dependency: `credentials.load_into_environ` has been the
+    repo's own dotenv bridge since 2026-08-03.
+    """
+    import reproduce_observation as ro
+
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(f"GOVERNED_BI_CORPUS_DIR={tmp_path.as_posix()}\n", encoding="utf-8")
+    monkeypatch.setattr(ro.credentials, "DOTENV", dotenv)
+    monkeypatch.delenv("GOVERNED_BI_CORPUS_DIR", raising=False)
+
+    assert ro._corpus_root(None) == tmp_path
+
+
+def test_the_exit_code_for_a_missing_corpus_is_2_on_the_one_observation_path_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same defect on the flag that already existed, so it is witnessed without depending on
+    ``--state``. Measured before the fix: ``--observation <id>`` with no corpus configured printed
+    "no corpus: pass --corpus-dir or set GOVERNED_BI_CORPUS_DIR" and exited **1** -- and 1 is the
+    code a caller records as "the failure still reproduces"."""
+    import reproduce_observation as ro
+
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    observation = _observation()
+    store.file(observation)
+    monkeypatch.delenv("GOVERNED_BI_CORPUS_DIR", raising=False)
+    monkeypatch.setattr(ro.credentials, "DOTENV", tmp_path / "absent.env")
+
+    code = ro.main(["--db", str(store.path), "--observation", observation.observation_id])
+    assert code == 2, f"a configuration error reported itself as a reproduction: exit {code}"

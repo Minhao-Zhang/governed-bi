@@ -834,9 +834,30 @@ export const patchEnvelopeSchema = z.object({
  * rather than refusing the draft, and this schema is why the report survives the client: parsed
  * through `patchEnvelopeSchema` the two fields were stripped, so the case arrived as silence.
  *
- * Its own schema and not two optional fields on the shared one: `patchEnvelopeSchema` is also the
- * withdraw response, which cannot produce them.
+ * Its own schema and not two optional fields on `patchEnvelopeSchema`: that one is the withdraw
+ * response, and it reports the mirror-image pair under different names. A field one of two callers
+ * cannot produce is indistinguishable from a field nobody serves.
  */
+/**
+ * `POST /patches/{id}/withdraw`. The mirror of `draftEnvelopeSchema`.
+ *
+ * Drafting is the only producer of `addressed`; withdrawing the last live patch is what undoes it.
+ * A row that stays `addressed` because a second draft is still open is reported in `not_reopened`
+ * with the reason, and so is a terminal row -- only an `addressed` row is a candidate, because
+ * `open -> triaged` is also a declared edge and returning every attached row would triage one
+ * nobody has looked at.
+ *
+ * Parsed here for the same reason the draft envelope is: zod strips unknown keys, so through
+ * `patchEnvelopeSchema` these two arrived and were dropped, and the steward whose row did not move
+ * got silence.
+ */
+export const withdrawEnvelopeSchema = patchEnvelopeSchema.extend({
+  reopened: z.array(z.string()),
+  not_reopened: z.array(
+    z.object({ observation_id: z.string(), state: z.string(), why: z.string() }),
+  ),
+});
+
 export const draftEnvelopeSchema = patchEnvelopeSchema.extend({
   addressed: z.array(z.string()),
   not_addressed: z.array(

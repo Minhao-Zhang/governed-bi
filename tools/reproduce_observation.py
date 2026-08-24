@@ -4,6 +4,23 @@
     uv run --frozen python tools/reproduce_observation.py --observation obs-...
     uv run --frozen python tools/reproduce_observation.py --patch pat-...        # every one it answers
     uv run --frozen python tools/reproduce_observation.py --patch pat-... --record
+    uv run --frozen python tools/reproduce_observation.py --state open --embed   # the whole queue
+    uv run --frozen python tools/reproduce_observation.py --state open --embed --decline
+
+**Exit codes, and they are a contract**: 0 = nothing reproduces, or nothing here was checkable.
+1 = at least one failure still reproduces. 2 = the tool could not run — bad arguments, no corpus, no
+database. A configuration error must never come back as 1: ``raise SystemExit("message")`` exits 1,
+so "you did not tell me where the corpus is" was arriving at the caller as "the failure still
+reproduces", and the observation got recorded as still failing on a run that never happened.
+Everything that cannot run raises :class:`_Misconfigured` and ``main`` is the only place a code is
+chosen.
+
+**``--state`` is how a steward with an untriaged queue and no patch gets in.** Measured against the
+live store on 2026-08-24: 71 of its 73 observations were ``open``, **52 of them no longer
+reproduced**, and 71 carried a ``corpus_content_hash`` the loaded corpus does not have. All 71 in
+one process with ``--embed`` took **72 seconds**, because ``_recheck`` batches them into one
+compiled graph; the same rows one at a time through ``--observation`` was measured at 32 minutes,
+which is the difference between a check that gets run and one that does not.
 
 **T3 of the ladder, and the only tier that answers a question about the complaint rather than
 about the corpus.** T0–T2 ask whether an edit broke something. This asks whether the thing somebody
@@ -42,17 +59,34 @@ measured with.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import corpus_target  # noqa: E402 - sibling script
+
+from governed_bi import credentials
 from governed_bi.eval.datalake import gold_tables, routing_recall
-from governed_bi.feedback.events import Observation
-from governed_bi.feedback.store import FeedbackStore
+from governed_bi.feedback.events import DeclineReason, Observation, ObservationState
+from governed_bi.feedback.lifecycle import TRANSITIONS, TransitionRefused, transition_for
+from governed_bi.feedback.store import FeedbackStore, Rejected
 from governed_bi.paths import REPO_ROOT
 
 DEFAULT_DB = "runs/feedback.sqlite"
+
+#: The environment variable the corpus root comes from. Read through
+#: :func:`governed_bi.credentials.secret`, which looks at the environment and then at ``.env`` --
+#: the same reader ``_connector`` already used for the DSN. It did not, and the asymmetry showed:
+#: ``.env`` sets ``GOVERNED_BI_CORPUS_DIR=../BIRD-corpus`` and this tool reported it unset while
+#: finding the DSN in the file two functions away.
+CORPUS_DIR_VAR = "GOVERNED_BI_CORPUS_DIR"
+
+
+#: The shared type, aliased rather than redeclared. This file had its own ``_Misconfigured``
+#: and ``corpus_target.resolve_corpus_dir`` raises the shared one -- two types for one concept,
+#: so the ``except`` here stopped catching what the resolver threw and this tool went back to
+#: exiting 1. One name, one type.
+_Misconfigured = corpus_target.Misconfigured
 
 #: The claim, in one place, because a CLI and a screen disagreeing about what a green T3 means is
 #: the two-answers defect the derived states exist to avoid.
@@ -86,8 +120,23 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--observation", default=None)
     parser.add_argument("--patch", default=None, help="every observation this patch answers")
+    parser.add_argument(
+        "--state",
+        default=None,
+        metavar="STATE[,STATE]",
+        help="every observation in these stored states, e.g. 'open'. 'all' means every declared "
+        "state. This is the bulk way in: one compiled graph for the whole batch, measured at 72 "
+        "seconds for the 71-row open queue against 32 minutes one --observation at a time",
+    )
+    parser.add_argument(
+        "--decline",
+        action="store_true",
+        help="WRITES. Close every observation that no longer reproduces as "
+        "declined/cannot_reproduce. Off by default because `declined` is terminal and a batch that "
+        "silently closed 52 rows is a batch nobody can undo",
+    )
     parser.add_argument("--db", default=DEFAULT_DB)
-    parser.add_argument("--corpus-dir", default=None, help="defaults to GOVERNED_BI_CORPUS_DIR")
+    parser.add_argument("--corpus-dir", default=None, help=f"defaults to {CORPUS_DIR_VAR}")
     parser.add_argument(
         "--embed",
         action="store_true",
@@ -110,15 +159,37 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if not args.observation and not args.patch:
-        print("pass --observation or --patch", file=sys.stderr)
+    # `.env` bridged into `os.environ`, the way every other entry point in this repo does it.
+    # Bridged rather than only read through `credentials.secret`, because the embedder's client
+    # reads `os.environ` itself -- `model/provider.py` calls `os.environ.get` for the key -- so a
+    # `--embed` run needs the file's values *in the environment*, not just visible to this module.
+    credentials.load_into_environ()
+
+    selectors = [bool(args.observation), bool(args.patch), bool(args.state)]
+    if sum(selectors) != 1:
+        print("pass exactly one of --observation, --patch, --state", file=sys.stderr)
         return 2
     if args.record and not args.patch:
         print("--record needs --patch: a T3 result is recorded on the patch", file=sys.stderr)
         return 2
 
+    try:
+        return _run(args)
+    except _Misconfigured as exc:
+        # 2 and not 1. This is the whole reason `_Misconfigured` exists: `SystemExit("message")`
+        # exits 1, and 1 means "the failure still reproduces".
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def _run(args: argparse.Namespace) -> int:
     store = FeedbackStore(_resolve(args.db))
-    observations = _population(store, observation_id=args.observation, patch_id=args.patch)
+    observations = _population(
+        store,
+        observation_id=args.observation,
+        patch_id=args.patch,
+        states=_states(args.state) if args.state else None,
+    )
     if observations is None:
         return 2
     if not observations:
@@ -163,6 +234,17 @@ def main(argv: list[str] | None = None) -> int:
             "false 'still reproduces' that reads exactly like a real finding. Pass --embed."
         )
 
+    if args.decline:
+        moved, refused = _decline_stale(store, outcomes, channel=channel)
+        print(f"\ndeclined {len(moved)} as cannot_reproduce; could not move {len(refused)}.")
+        for observation_id, why in refused:
+            print(f"  not moved  {observation_id}  {why}")
+    elif gone:
+        print(
+            f"  {len(gone)} of these no longer reproduce and are still in the queue. "
+            "Re-run with --decline to close them as cannot_reproduce."
+        )
+
     if args.record:
         passed = tier_verdict(outcomes)
         if passed is None:
@@ -171,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"{len(outcomes)} observation(s). An unrun tier is absent from the ladder, not a "
                 "failure -- a `body`-only edit is answerable at T4 and nowhere cheaper."
             )
-            return 0
+            return _code(still)
         store.record_ladder(
             str(args.patch),
             "T3",
@@ -187,9 +269,19 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         print(f"recorded T3 on {args.patch} (passed={passed})")
-        if not passed:
-            return 1
-    return 0
+    return _code(still)
+
+
+def _code(still: list[Outcome]) -> int:
+    """1 if anything still reproduces, else 0. **Not conditional on ``--record``.**
+
+    It was. ``return 1`` sat inside ``if args.record`` and every other path fell through to
+    ``return 0``, so a run that printed "20 still reproduce" handed the caller 0 unless it also
+    happened to be recording a ladder row. Together with the ``SystemExit`` above, the exit code
+    said "still reproduces" when the tool had not run and "clean" when it had found twenty --
+    exactly inverted, and both halves silent.
+    """
+    return 1 if still else 0
 
 
 # ── the check ─────────────────────────────────────────────────────────────────
@@ -289,9 +381,143 @@ def _recheck(observations: list[Observation], session: object) -> list[Outcome]:
 # ── plumbing ──────────────────────────────────────────────────────────────────
 
 
+def _states(raw: str) -> tuple[ObservationState, ...]:
+    """``"open,triaged"`` or ``"all"`` as declared states. A typo is exit 2, not a finding.
+
+    One flag rather than ``--open`` and ``--all`` beside it. Those would be two more spellings of a
+    population ``--state`` already names, kept in sync by hand, and the day a seventh state is
+    declared ``--state`` needs no change while an ``--open`` alias needs a sibling. ``all`` is a
+    sentinel because six enum names is not a command anybody types -- and it means *every* declared
+    state, terminal ones included: a ``declined`` row somebody wants to re-check is a steward
+    doubting their own decline, which is a thing to support rather than to refuse.
+    """
+    if raw.strip() == "all":
+        return tuple(ObservationState)
+    out: list[ObservationState] = []
+    for name in (part.strip() for part in raw.split(",")):
+        if not name:
+            continue
+        try:
+            out.append(ObservationState(name))
+        except ValueError as err:
+            raise _Misconfigured(
+                f"--state {name!r} is not an observation state. Declared: "
+                f"{', '.join(s.value for s in ObservationState)}, or 'all'."
+            ) from err
+    if not out:
+        raise _Misconfigured("--state was empty. Name at least one state, or 'all'.")
+    return tuple(out)
+
+
+def _by_state(store: FeedbackStore, states: tuple[ObservationState, ...]) -> list[Observation]:
+    """Every row in those states, paged to the end.
+
+    ``store.queue`` defaults to 50 and reports ``truncated`` for exactly this reason. The live queue
+    is 72, so a selector that took the first page would have re-checked 50 of them and reported a
+    total as if it were the total -- the same silent-partial defect the ``--state`` flag exists to
+    fix.
+    """
+    rows: list[Observation] = []
+    offset = 0
+    while True:
+        page = store.queue(states=list(states), limit=200, offset=offset)
+        rows.extend(page.rows)
+        if not page.truncated or not page.rows:
+            return rows
+        offset += len(page.rows)
+
+
+def _route_to_declined(state: ObservationState) -> tuple[ObservationState, ...]:
+    """The declared hops from ``state`` to ``declined``, or ``()`` if there are none.
+
+    ``TRANSITIONS`` declares no ``open -> declined`` edge, so an open row goes through ``triaged``
+    first. That is not a workaround for the table -- the re-check **is** the look ``triaged``
+    records, and a steward who reads a batch report has looked at every row in it.
+
+    Read off ``TRANSITIONS`` rather than through ``lifecycle.allowed_next``, whose docstring states
+    it is "read by ``tests/feedback/`` and by nothing else"; that sentence is a claim about the table
+    not reaching the client, and calling it from here would falsify the words without changing the
+    fact. Two hops is the search depth because the table's longest route to ``declined`` is two.
+    """
+    if _declared(state, ObservationState.declined):
+        return (ObservationState.declined,)
+    for middle in sorted(to for (frm, to) in TRANSITIONS if frm == state):
+        if _declared(middle, ObservationState.declined):
+            return (middle, ObservationState.declined)
+    return ()
+
+
+def _declared(frm: ObservationState, to: ObservationState) -> bool:
+    try:
+        transition_for(frm, to)
+    except TransitionRefused:
+        return False
+    return True
+
+
+def _decline_stale(
+    store: FeedbackStore, outcomes: list[Outcome], *, channel: str
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Close every ``gone`` row as ``cannot_reproduce``. Returns what moved and what did not.
+
+    **First producer of ``DeclineReason.cannot_reproduce``.** It has been declared since the
+    vocabulary was written, with one copy string on the review client and nothing anywhere that
+    could set it — a decline reason no decline could carry.
+
+    ``reproduced is False`` only. A ``None`` outcome is "coverage cannot answer this", and closing
+    one as ``cannot_reproduce`` would report a check that never ran as a check that passed.
+
+    One refused move must not lose the other 51, so a refusal is collected and named. Both halves
+    are returned rather than printed here: a function that decides *and* reports is a function whose
+    caller cannot tell 52 attempted from 52 landed, which is the number the operator acts on.
+    """
+    detail = f"re-checked on {channel}: every gold table is licensed again"
+    moved: list[str] = []
+    refused: list[tuple[str, str]] = []
+    for outcome in outcomes:
+        if outcome.reproduced is not False:
+            continue
+        observation = store.get(outcome.observation_id)
+        if observation is None:  # pragma: no cover - selected from this store moments ago
+            refused.append((outcome.observation_id, "no longer in the store"))
+            continue
+        route = _route_to_declined(observation.state)
+        if not route:
+            refused.append(
+                (
+                    outcome.observation_id,
+                    f"TRANSITIONS declares no route from {observation.state.value} to declined",
+                )
+            )
+            continue
+        try:
+            for hop in route:
+                store.move(
+                    outcome.observation_id,
+                    to=hop,
+                    decline_reason=(
+                        DeclineReason.cannot_reproduce
+                        if hop is ObservationState.declined
+                        else None
+                    ),
+                    detail=detail,
+                )
+        except (Rejected, TransitionRefused, KeyError) as exc:
+            refused.append((outcome.observation_id, str(exc)))
+            continue
+        moved.append(outcome.observation_id)
+    return moved, refused
+
+
 def _population(
-    store: FeedbackStore, *, observation_id: str | None, patch_id: str | None
+    store: FeedbackStore,
+    *,
+    observation_id: str | None,
+    patch_id: str | None,
+    states: tuple[ObservationState, ...] | None = None,
 ) -> list[Observation] | None:
+    if states is not None:
+        return _by_state(store, states)
     if observation_id:
         observation = store.get(observation_id)
         if observation is None:
@@ -365,18 +591,22 @@ def _connector() -> object:
 
     dsn = credentials.secret(*credentials.PG_DSN_NAMES)
     if not dsn:
-        raise SystemExit(
-            f"no database: set one of {' / '.join(credentials.PG_DSN_NAMES)}. Routing resolves "
-            "against a live catalog, and a stub would measure a different engine."
+        raise _Misconfigured(
+            f"no database: set one of {' / '.join(credentials.PG_DSN_NAMES)} in the environment "
+            f"or {credentials.DOTENV.name}. Routing resolves against a live catalog, and a stub "
+            "would measure a different engine."
         )
     return PostgresConnector(dsn)
 
 
 def _corpus_root(explicit: str | None) -> Path:
-    raw = explicit or os.environ.get("GOVERNED_BI_CORPUS_DIR")
-    if not raw:
-        raise SystemExit("no corpus: pass --corpus-dir or set GOVERNED_BI_CORPUS_DIR")
-    return _resolve(raw)
+    """``--corpus-dir``, then the environment, then ``.env``. In that order and no other.
+
+    Delegated to :mod:`corpus_target`, which is where the reasoning now lives: three other tools
+    asked the same question with their own copies, and the copies disagreed about whether ``.env``
+    counts. This one already got it right, which is exactly why it is the version that moved.
+    """
+    return corpus_target.resolve_corpus_dir(explicit)
 
 
 def _resolve(value: str) -> Path:

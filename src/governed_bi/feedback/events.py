@@ -4,8 +4,9 @@ Text, enums and frozen dataclasses. No I/O, no settings, nothing outside stdlib 
 :mod:`governed_bi.register.assets` for :class:`AssetType`. The store owns persistence and
 :mod:`.lifecycle` owns the transitions; this module owns the words.
 
-Two *event* shapes, and two result shapes at the end (:class:`Drafted`, :class:`Unmoved`) that say
-what one write did. They are shapes with no I/O, which is what this module is for.
+Two *event* shapes, and three result shapes at the end (:class:`Drafted`, :class:`PatchMoved`,
+:class:`Unmoved`) that say what one write did. They are shapes with no I/O, which is what this
+module is for.
 
 **Two layers, and the split is the design's load-bearing decision.** An :class:`Observation` is
 what somebody or something *saw* — one failure, attributed to one turn, in the language of whoever
@@ -55,6 +56,7 @@ __all__ = [
     "Observation",
     "Patch",
     "Drafted",
+    "PatchMoved",
     "Unmoved",
     "PATCHABLE_ASSET_TYPES",
 ]
@@ -482,7 +484,14 @@ class Patch:
 
 @dataclass(frozen=True, slots=True)
 class Unmoved:
-    """An observation a draft attached a patch to and could **not** move to ``addressed``.
+    """An observation a patch write attached to or answered and could **not** move.
+
+    It said "a draft ... to ``addressed``", which was true while drafting was the only write that
+    moved an observation. Withdrawing is the other one: it returns a row to ``triaged`` and reports
+    what it could not return in this same shape. One shape, because both halves answer the same
+    question -- *which rows did this write leave where they were, and why* -- and a second class
+    with three identical fields is how the two reports come to disagree about what a refusal looks
+    like.
 
     ``why`` is the store's own refusal sentence, carried rather than reworded: a second phrasing of
     which states the move is declared from is how the two come to disagree.
@@ -507,6 +516,32 @@ class Drafted:
     addressed: tuple[str, ...] = ()
     #: Attached to the patch and left where they were, with the reason.
     not_addressed: tuple[Unmoved, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PatchMoved:
+    """What :meth:`FeedbackStore.move_patch` did: the patch, and what it did to the queue.
+
+    ``move_patch`` returned a bare :class:`Patch`, which was the whole answer only while withdrawing
+    a patch left its observations alone. It did, and that was the defect: a withdrawn patch's rows
+    kept reading ``addressed`` -- *somebody answered this* -- with nothing answering them.
+
+    **Both tuples are empty on every edge except ``-> withdrawn``, and that is a statement rather
+    than an unfilled field.** ``draft -> exported`` is a patch making progress, so there is nothing
+    to return to the queue; ``draft -> withdrawn`` and ``exported -> withdrawn`` are abandonment,
+    and abandonment is what the ``addressed -> triaged`` edge exists for. Splitting the return type
+    per target state was rejected: every caller reads ``patch.state`` and would have to branch on
+    the type to get at it.
+
+    ``patch`` is the row after the write, so a caller does not re-read what this call just returned.
+    """
+
+    patch: Patch
+    #: Moved from ``addressed`` back to ``triaged``, because this withdrawal left no live patch.
+    reopened: tuple[str, ...] = ()
+    #: Attached to the patch and left where they were, with the reason. A row with a second live
+    #: patch, and a row in a state with no ``-> triaged`` edge a withdrawal may take.
+    not_reopened: tuple[Unmoved, ...] = ()
 
 
 # ── import-time closure ───────────────────────────────────────────────────────

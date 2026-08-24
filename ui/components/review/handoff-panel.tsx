@@ -77,7 +77,15 @@ export function HandoffPanel({
   const [rationale, setRationale] = useState("");
   const [hash, setHash] = useState("");
   // Kept after the form closes: it is the one thing the steward has to act on next.
-  const [unmoved, setUnmoved] = useState<DraftEnvelope["not_addressed"]>([]);
+  //
+  // One piece of state for both verbs. Drafting and withdrawing report the same shape --
+  // `{observation_id, state, why}` -- because they are mirror images: drafting moves rows
+  // to `addressed` and names the ones it could not, withdrawing returns them and names the
+  // ones it could not. Two copies of this would be two places for one of them to go silent.
+  const [didNotMove, setDidNotMove] = useState<{
+    verb: string;
+    rows: DraftEnvelope["not_addressed"];
+  } | null>(null);
 
   const patches = (observation.patches ?? []) as PatchRow[];
   const live = patches.filter((p) => str(p.state) !== "withdrawn");
@@ -112,21 +120,22 @@ export function HandoffPanel({
     });
     setWas("");
     setBecomes("");
-    setUnmoved(result.not_addressed);
+    setDidNotMove({ verb: "Drafted", rows: result.not_addressed });
     if (result.not_addressed.length === 0) onClose();
   }
 
   return (
     <div className="space-y-4">
-      {unmoved.length > 0 && (
+      {didNotMove !== null && didNotMove.rows.length > 0 && (
         <Card className="space-y-1 p-4">
-          <h3 className="text-sm font-medium">Drafted, and these rows did not move</h3>
+          <h3 className="text-sm font-medium">
+            {didNotMove.verb}, and these rows did not move
+          </h3>
           <p className="text-xs text-muted-foreground">
-            The patch is attached to each of them. <code>addressed</code> is declared only from{" "}
-            <code>triaged</code> and <code>blocked_on_a_person</code>, so a row you had not triaged
-            stays where it is.
+            The state machine declares which moves exist, and these rows were not in a state one
+            of them starts from. Each says which.
           </p>
-          {unmoved.map((row) => (
+          {didNotMove.rows.map((row) => (
             <p key={row.observation_id} className="text-xs">
               <code>{row.observation_id}</code> is <Badge variant="outline">{row.state}</Badge>{" "}
               <span className="text-muted-foreground">{row.why}</span>
@@ -179,12 +188,20 @@ export function HandoffPanel({
                   size="sm"
                   variant="ghost"
                   disabled={withdraw.isPending}
-                  onClick={() =>
-                    withdraw.mutate({
-                      patchId: str(patch.patch_id),
-                      reason: "withdrawn from the review surface",
-                    })
-                  }
+                  onClick={() => {
+                    // The canned reason is a known gap, not a decision:
+                    // `withdrawn_reason` is the field a later reader uses to learn why a
+                    // patch died, and every withdrawal from this surface writes the same
+                    // sentence. Asking for one needs a prompt this panel does not have.
+                    void withdraw
+                      .mutateAsync({
+                        patchId: str(patch.patch_id),
+                        reason: "withdrawn from the review surface",
+                      })
+                      .then((result) =>
+                        setDidNotMove({ verb: "Withdrawn", rows: result.not_reopened }),
+                      );
+                  }}
                 >
                   Withdraw
                 </Button>

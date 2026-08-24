@@ -37,6 +37,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import corpus_target  # noqa: E402
+
 from governed_bi.corpus.hash import corpus_content_hash
 from governed_bi.corpus.patch import (
     FieldNotLocatable,
@@ -65,7 +67,7 @@ _SENTENCE = {
 }
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=DEFAULT_DB)
     parser.add_argument("--corpus-dir", default=None, help="defaults to GOVERNED_BI_CORPUS_DIR")
@@ -259,17 +261,33 @@ def _patch_id_of(bundle: Path) -> str | None:
 
 
 def _corpus_root(explicit: str | None) -> Path:
-    import os
+    """``--corpus-dir``, the environment, then ``.env`` -- through the one shared answer.
 
-    raw = explicit or os.environ.get("GOVERNED_BI_CORPUS_DIR")
-    if not raw:
-        raise SystemExit("no corpus: pass --corpus-dir or set GOVERNED_BI_CORPUS_DIR")
-    return _resolve(raw)
+    This asked ``os.environ.get`` and raised ``SystemExit`` with a message, which exits **1**,
+    and in this tool 1 is "a patch did not land as claimed". So forgetting the flag reported a verdict the tool never
+    formed. It also could not see ``.env``, which is where this repository keeps
+    ``GOVERNED_BI_CORPUS_DIR``.
+    """
+    return corpus_target.resolve_corpus_dir(explicit)
 
 
 def _resolve(value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else (REPO_ROOT / path)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """The entry point, and the only place a code is chosen.
+
+    In this tool 1 is a verdict about the patch, and forgetting ``--corpus-dir`` is not a
+    verdict. ``corpus_target.Misconfigured`` is a ``RuntimeError``, so without this it escapes as
+    a traceback and still exits 1 -- the same defect wearing a worse face.
+    """
+    try:
+        return _main(argv)
+    except corpus_target.Misconfigured as err:
+        print(str(err), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

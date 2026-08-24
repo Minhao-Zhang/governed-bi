@@ -245,7 +245,7 @@ found by building the state machine rather than by arguing about it: a throwaway
 not write seven transitions without inventing an answer, and four of the seven were the same
 mistake — a stored state nobody moves.
 
-**Stored** (the steward moves them): `open → triaged → {declined, duplicate, addressed}`.
+**Stored** (the steward moves them): `open → triaged → {declined, duplicate, addressed}, and `addressed → triaged` back when every patch for it is withdrawn`.
 `decline_reason` is stored beside the state because **the reason is the notification** — there is
 no "declined" badge without a sentence.
 

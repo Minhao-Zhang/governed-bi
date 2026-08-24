@@ -62,6 +62,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import check_corpus_conformance as cc  # noqa: E402 - after the path insert, by design
+import corpus_target  # noqa: E402 - sibling script
 
 # The one asset-shaping helper this needs, imported rather than restated: it turns a parsed
 # document into the `(kind, mapping, path)` triples the rules take, unpacking a table's inline
@@ -95,7 +96,7 @@ class Refusal:
         return f"{self.rule}: {self.detail}"
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--patch", required=True, help="patch id, as `pat-...`")
     parser.add_argument("--db", default=DEFAULT_DB)
@@ -555,11 +556,26 @@ def _observations_markdown(observations: tuple) -> str:
 
 
 def _apply_instructions(bundle: Path, corpus_root: Path) -> str:
+    """The four commands that land the bundle, executed by a test rather than only read.
+
+    **``git apply --index`` and not ``git apply``.** Plain ``git apply`` writes the change to the
+    working tree and stages nothing, so the ``git commit -F`` that followed it committed nothing and
+    exited 1 -- *no changes added to commit* -- for every bundle this tool has ever printed. The
+    engineer's next move was to guess, and the block exists so that nobody guesses.
+
+    ``--index`` over ``commit -a``: it stages exactly the paths the patch touches. ``commit -a``
+    would also commit whatever the engineer had in flight elsewhere in the corpus repository, and
+    this commit is the provenance record for one reviewed change.
+
+    Nothing executed these until ``test_the_printed_instructions_run_and_produce_one_commit`` parsed
+    them back out of this function's own stdout and ran them, which is how the printed form and a
+    working form were free to differ.
+    """
     return (
         f"\nApply it, in the corpus repository:\n\n"
         f"  cd {corpus_root}\n"
         f"  git checkout -b return/{bundle.name}\n"
-        f"  git apply -p1 {bundle / 'changes.patch'}\n"
+        f"  git apply --index -p1 {bundle / 'changes.patch'}\n"
         f"  git commit -F {bundle / 'COMMIT_MSG.txt'}\n"
     )
 
@@ -641,20 +657,32 @@ def _file_declaring(corpus_root: Path, patch: Patch) -> Path | None:
 
 
 def _corpus_root(explicit: str | None) -> Path:
-    import os
+    """``--corpus-dir``, the environment, then ``.env`` -- through the one shared answer.
 
-    raw = explicit or os.environ.get("GOVERNED_BI_CORPUS_DIR")
-    if not raw:
-        raise SystemExit(
-            "no corpus: pass --corpus-dir or set GOVERNED_BI_CORPUS_DIR. This tool reads the tree "
-            "it is producing a diff against, so it cannot guess one."
-        )
-    return _resolve(raw)
+    This tool reads the tree it is producing a diff against, so it cannot guess one. It used
+    to say that by raising ``SystemExit`` with a message, which exits **1** -- and 1 here is
+    "the bundle was refused", a sentence about the patch rather than about the invocation.
+    """
+    return corpus_target.resolve_corpus_dir(explicit)
 
 
 def _resolve(value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else (REPO_ROOT / path)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """The entry point, and the only place a code is chosen.
+
+    In this tool 1 is a verdict about the patch, and forgetting ``--corpus-dir`` is not a
+    verdict. ``corpus_target.Misconfigured`` is a ``RuntimeError``, so without this it escapes as
+    a traceback and still exits 1 -- the same defect wearing a worse face.
+    """
+    try:
+        return _main(argv)
+    except corpus_target.Misconfigured as err:
+        print(str(err), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

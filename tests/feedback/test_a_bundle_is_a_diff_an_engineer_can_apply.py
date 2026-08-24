@@ -670,3 +670,105 @@ def test_a_bundle_that_lands_beside_another_change_reads_landed_matched(tmp_path
         )
         is DerivedState.landed_matched
     )
+
+
+def _instruction_block(printed: str) -> list[str]:
+    """The commands the tool printed, parsed out of its own stdout.
+
+    Parsed and never restated. The defect this catches is exactly a printed block drifting from a
+    working one, and a test that types the commands in itself drifts with it. The block is found
+    structurally: the indented run of lines following the header, ending at the first line that is
+    not indented.
+    """
+    lines = printed.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("Apply it,"))
+    out: list[str] = []
+    for line in lines[start + 1 :]:
+        if not line.strip():
+            continue
+        if not line.startswith("  "):
+            break
+        out.append(line.strip())
+    return out
+
+
+def _tokens(command: str) -> list[str]:
+    import shlex
+
+    # `posix=False` because these are Windows paths: POSIX splitting eats the backslashes in
+    # `C:\Users\...` and hands git a path that does not exist. Quotes are stripped after.
+    return [token.strip('"') for token in shlex.split(command, posix=False)]
+
+
+@pytest.mark.skipif(
+    subprocess.run(["git", "--version"], capture_output=True).returncode != 0,
+    reason="git is not on PATH",
+)
+def test_the_printed_instructions_run_and_produce_one_commit(tmp_path: Path, capsys) -> None:
+    """The printed block is executed, because nothing had ever executed it.
+
+    It said `git apply -p1` and then `git commit -F <msg>`. `git apply` leaves the change unstaged,
+    and `git commit -F` with no `-a` and no preceding `git add` commits nothing and exits 1 --
+    "no changes added to commit". The engineer's next move was to guess, and the block exists so
+    that they do not have to. `test_git_apply_accepts_the_diff` was the near miss: it proved the
+    diff applies and never proved the instructions land it.
+
+    The fix is `git apply --index`, which stages exactly the paths the patch touches. `commit -a`
+    was rejected because it also commits whatever the engineer had in flight -- the `README.md`
+    edit below, asserted still dirty afterwards.
+    """
+    root = _corpus(tmp_path)
+    (root / "README.md").write_text("the corpus\n", encoding="utf-8", newline="\n")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    # Configured in this throwaway repo only. A commit that fails for a missing identity is a
+    # fixture defect and would have masked the one under test.
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "seed"], cwd=root, check=True)
+
+    # An unrelated edit the engineer had in flight. This is the whole argument for `--index` over
+    # `commit -a`, so it is in the tree while the printed commands run.
+    (root / "README.md").write_text("the corpus, mid-thought\n", encoding="utf-8", newline="\n")
+
+    becomes = WAS + " Grain is one order."
+    store, patch_id = _seeded(tmp_path, becomes=becomes)
+    assert _export(tmp_path, store, patch_id) == 0
+    printed = capsys.readouterr().out
+
+    commands = _instruction_block(printed)
+    assert commands, printed
+    cwd = root
+    for command in commands:
+        tokens = _tokens(command)
+        if tokens[0] == "cd":
+            # The one line that cannot be a subprocess: it changes the shell's own directory. Its
+            # argument is checked and then used as the cwd of everything after it.
+            assert Path(tokens[1]) == root, f"the block cds somewhere else: {command}"
+            cwd = Path(tokens[1])
+            continue
+        done = subprocess.run(tokens, cwd=cwd, capture_output=True, text=True)
+        assert done.returncode == 0, f"`{command}` exited {done.returncode}: {done.stdout}{done.stderr}"
+
+    bundle = tmp_path / "bundles" / f"bnd-{patch_id}"
+    relative = "sales/tables/tbl_sales_orders.yaml"
+
+    subject = (bundle / "COMMIT_MSG.txt").read_text(encoding="utf-8").splitlines()[0]
+    assert _git(root, "log", "-1", "--format=%s") == subject
+    assert _git(root, "rev-list", "--count", "HEAD") == "2", "one commit on top of the seed"
+
+    touched = _git(root, "show", "--name-only", "--format=", "HEAD").splitlines()
+    assert touched == [relative], f"the commit touches {touched}, not just the patched file"
+
+    committed = _git(root, "show", f"HEAD:{relative}")
+    assert committed == (bundle / "after" / relative).read_text(encoding="utf-8").rstrip("\n")
+
+    assert _git(root, "diff", "--cached", "--name-only") == "", "something is still staged"
+    assert _git(root, "status", "--porcelain") == " M README.md", (
+        "the in-flight edit was either swept into the commit or lost"
+    )
+
+
+def _git(cwd: Path, *args: str) -> str:
+    done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
+    return done.stdout.strip("\n")

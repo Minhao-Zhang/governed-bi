@@ -183,6 +183,14 @@ def test_the_reverse_edge_is_reachable_now_that_something_produces_addressed(
 
     It exists because a patch can be withdrawn and then nothing is addressing the row. With the
     draft as the producer, the whole loop is walkable: draft, withdraw, reopen.
+
+    **The last step used to be a hand-written ``move(to=triaged)``, and that line was the defect
+    written as a test.** It passed while ``move_patch`` touched no observation, which is exactly the
+    state the queue was left in -- a row reading ``addressed`` with its only patch ``withdrawn``,
+    reopenable only by a steward doing it by hand. The withdrawal takes the edge itself now, so the
+    explicit move would be ``triaged -> triaged``. What this test pins is unchanged: the edge fires.
+    Which rows it fires on, and which it reports instead, is
+    ``test_withdrawing_returns_the_row_to_the_queue.py``.
     """
     store = _store(tmp_path)
     obs = _filed(store)
@@ -193,7 +201,6 @@ def test_the_reverse_edge_is_reachable_now_that_something_produces_addressed(
     store.move_patch(
         patch.patch_id, to=PatchState.withdrawn, withdrawn_reason="the gap is the router"
     )
-    store.move(obs.observation_id, to=ObservationState.triaged)
 
     assert store.get(obs.observation_id).state is ObservationState.triaged  # type: ignore[union-attr]
 

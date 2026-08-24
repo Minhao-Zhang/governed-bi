@@ -43,6 +43,7 @@ from governed_bi.feedback.events import (
     Observation,
     ObservationState,
     Patch,
+    PatchMoved,
     PatchState,
     Unmoved,
 )
@@ -450,8 +451,23 @@ class FeedbackStore:
         detail: str = "",
         withdrawn_reason: str = "",
         expected_corpus_content_hash: str | None = None,
-    ) -> Patch:
+    ) -> PatchMoved:
         """Move a patch, through the same table that moves an observation.
+
+        **A withdrawal also returns this patch's observations to the queue, and that is the mirror
+        of :meth:`draft`.** It did not, and the row was then permanently mislabelled: withdrawing
+        left every attached observation reading ``addressed`` -- *somebody answered this* -- while
+        the only patch that ever answered it was ``withdrawn``. The ``addressed -> triaged`` edge is
+        declared for exactly this and its ``requires`` reads "every patch for it was withdrawn", a
+        clause that became true here and that nothing evaluated. The queue could not tell *answered*
+        from *abandoned*.
+
+        **The branch is on ``to``, not on the method**, which is what keeps ``draft -> exported``
+        out of it: a bundle going out is the patch making progress, and returning its observations
+        to the queue would empty ``addressed`` on every export. Gating on the target state rather
+        than on a separate ``withdraw`` method is deliberate -- a caller reaching ``move_patch``
+        directly (``tools/``, a test, a future route) must not be able to withdraw a patch and leave
+        the queue stale, which is the hole this fix closes one layer down.
 
         ``exported`` is set by ``tools/export_bundle.py`` after the bundle is on disk and not
         before: a patch that says a bundle exists when the write failed is a patch the steward
@@ -519,7 +535,67 @@ class FeedbackStore:
             )
         moved = self.get_patch(patch_id)
         assert moved is not None  # noqa: S101 - just written in this transaction
-        return moved
+        if to is not PatchState.withdrawn:
+            return PatchMoved(patch=moved)
+        reopened, not_reopened = self._return_to_the_queue(patch_id)
+        return PatchMoved(
+            patch=moved, reopened=tuple(reopened), not_reopened=tuple(not_reopened)
+        )
+
+    def _return_to_the_queue(self, patch_id: str) -> tuple[list[str], list[Unmoved]]:
+        """Move this withdrawn patch's ``addressed`` observations back to ``triaged``.
+
+        Runs **after** the patch's own transaction commits, so ``_edge_faults`` sees this patch as
+        ``withdrawn`` when it evaluates "every patch for it was withdrawn". Before the commit every
+        row would refuse, naming the patch this call just withdrew.
+
+        **The "no live patch remains" clause is not re-implemented here.** ``_edge_faults`` already
+        enforces it on the way in, so a row with a second draft still open refuses its own move and
+        the refusal is reported -- one copy of the rule, and the sentence the steward reads is the
+        store's rather than a second phrasing of it.
+
+        **Only ``addressed`` rows are candidates, and the rest are named.** ``open -> triaged`` *is*
+        a declared edge, so calling :meth:`move` on every attached row would triage a row nobody has
+        looked at -- drafting against an ``open`` row attaches the patch and deliberately leaves it
+        alone. Terminal rows (``declined``, ``duplicate``) fall here too: a ``duplicate`` joins the
+        original's patch set without ever taking an ``addressed`` edge, and neither state has a move
+        out of it. They are reported and not moved, because a skipped row is indistinguishable from
+        a moved one.
+        """
+        reopened: list[str] = []
+        not_reopened: list[Unmoved] = []
+        for observation in self.observations_of(patch_id):
+            if observation.state is not ObservationState.addressed:
+                not_reopened.append(
+                    Unmoved(
+                        observation_id=observation.observation_id,
+                        state=observation.state,
+                        why=(
+                            f"is {observation.state.value} and not addressed, so this withdrawal "
+                            "has nothing to return to the queue. `addressed -> triaged` is the only "
+                            "edge a withdrawal takes; `open -> triaged` is declared and taking it "
+                            "here would triage a row nobody has looked at."
+                        ),
+                    )
+                )
+                continue
+            try:
+                self.move(
+                    observation.observation_id,
+                    to=ObservationState.triaged,
+                    detail=f"{patch_id} was withdrawn",
+                )
+            except (TransitionRefused, Rejected) as refusal:
+                not_reopened.append(
+                    Unmoved(
+                        observation_id=observation.observation_id,
+                        state=observation.state,
+                        why=str(refusal),
+                    )
+                )
+            else:
+                reopened.append(observation.observation_id)
+        return reopened, not_reopened
 
     def record_ladder(self, patch_id: str, tier: str, result: Mapping[str, Any]) -> None:
         """Merge one tier's result into a patch's ladder. Later runs of a tier replace earlier ones.
