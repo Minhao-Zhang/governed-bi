@@ -267,8 +267,12 @@ class DerivedState(str, Enum):
     """**Never stored.** Recomputed on every read from the loaded corpus (ADR 0015 §3).
 
     A stored copy would be a second answer to "did this land", able to disagree with the first.
-    The four-way split exists because a two-state model silently mislabels the common case:
-    two bundles landing in one week make exact-hash matching fail for a change that did ship.
+    The split exists because a two-state model silently mislabels the common case: two bundles
+    landing in one week make exact-hash matching fail for a change that did ship.
+
+    **Five members, not the four the design named.** ``retrieval_verified`` was added when the free
+    reproducer made it computable -- it is the one state here that reads the *engine* rather than the
+    corpus text, and a state nothing can compute is a state that reads as its neighbour forever.
     """
 
     #: The loaded corpus still hashes to the patch's base. Nobody has committed it.

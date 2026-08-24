@@ -521,7 +521,7 @@ def check_loadable(paths: Iterable[Path]) -> list[Finding]:
     for path in paths:
         _, problems = load_file(path)
         for problem in problems:
-            bad.append(Finding(f"{path.name}: {getattr(problem, 'reason', problem)}"))
+            bad.append(Finding(f"{_where_file(path)}: {getattr(problem, 'reason', problem)}"))
     return bad
 
 
@@ -558,7 +558,7 @@ def check_delivery_closure(paths: Iterable[Path]) -> list[Finding]:
             if total > CLOSURE_CAP:
                 bad.append(
                     Finding(
-                        f"{path.name}: renders {total:,} chars "
+                        f"{_where_file(path)}: renders {total:,} chars "
                         f"({cost:,} table + {roster:,} roster over {len(columns)} columns), "
                         f"cap {CLOSURE_CAP:,}"
                     )
@@ -622,6 +622,18 @@ RULES: dict[str, str] = {
 WHOLE_TREE_ONLY = ("V9", "V11", "V12", "V15", "V17b", "V23")
 
 
+def _where_file(path: Path) -> str:
+    """The identity of a **file-level** finding, in the same two-part shape as an asset's.
+
+    V14 (the loader rejected it) and V16 (the rendered closure is over cap) are properties of a
+    file and not of one asset in it, so they have no asset half. They used to emit ``file.yaml: ...``
+    with a single colon, which ``_where_of`` could not key and the reporter silently dropped -- both
+    report zero on the corpus we measure, so nobody noticed that the ratchet could not see them. The
+    literal ``<file>`` cannot collide with an asset id, which may not contain angle brackets.
+    """
+    return f"{path.name}:<file>"
+
+
 def _where_of(line: str) -> str:
     """The ``file:asset`` a finding is about, or ``""`` if the line is not in that shape.
 
@@ -631,6 +643,27 @@ def _where_of(line: str) -> str:
     """
     parts = str(line).split(":", 2)
     return f"{parts[0]}:{parts[1]}" if len(parts) >= 3 else ""
+
+
+def _keyed(lines: Iterable[tuple[str, str]]) -> list[dict[str, str]]:
+    """``(rule, line)`` pairs as JSON rows, raising on any line that yields no identity.
+
+    This used to filter instead of raise, on the stated grounds that "an identity the ratchet cannot
+    key on is worse than a missing finding". That is backwards. A missing finding is a **blind
+    gate**: V23's lines were unkeyable on POSIX, so a duplicate asset id -- the one defect that
+    raises in ``build_index`` after the commit -- never reached the ratchet at all, and nobody
+    noticed because the rule reports zero on the corpus we measure. A rule that cannot be keyed is a
+    bug in the rule, and the tool that consumes it has to say so out loud.
+    """
+    rows = [{"rule": rule, "where": _where_of(line), "message": str(line)} for rule, line in lines]
+    unkeyable = [row for row in rows if not row["where"]]
+    if unkeyable:
+        raise ValueError(
+            f"{len(unkeyable)} finding(s) cannot be keyed as `file:asset`, so the ratchet could "
+            "not pin them. Fix the rule to emit `_where(...)` as its prefix. First: "
+            f"[{unkeyable[0]['rule']}] {unkeyable[0]['message']!r}"
+        )
+    return rows
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -705,12 +738,11 @@ def main(argv: list[str] | None = None) -> int:
                     "corpus": str(args.corpus_dir if whole else args.file),
                     "whole_tree": whole,
                     "not_evaluated": skipped,
-                    "findings": [
-                        {"rule": rule, "where": _where_of(line), "message": str(line)}
+                    "findings": _keyed(
+                        (rule, line)
                         for rule in RULES
                         for line in sorted(findings.get(rule, ()))
-                        if _where_of(line)
-                    ],
+                    ),
                 },
                 indent=2,
                 sort_keys=True,

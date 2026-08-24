@@ -12,7 +12,7 @@ that does not exist.
 
 | rule | what it asks | live findings on ../BIRD-corpus, measured 2026-08-23 |
 |---|---|---|
-| V17a | a metric expression parses **and** calls only permitted functions | 107 across 94 of 478 metrics |
+| V17a | a metric expression parses **and** calls only permitted functions | 107 across 85 of 478 metrics |
 | V17b | its identifiers resolve on ``base_table`` or through a declared join | 17 |
 | V19  | no model-visible ``body`` names a governance-excluded column | 0 -- nothing is excluded yet |
 | V21  | model-visible text passes ``guard``'s own encoding rule | 1 |
@@ -21,6 +21,13 @@ that does not exist.
 Three of the five have a live population, which is what separates them from rules written on a
 hunch. The two at zero are there because their failure mode is *late*: V19's is a disclosure nobody
 sees, and V23's is a ``ValueError`` in ``build_index`` after the commit.
+
+**A zero was doing double duty, and that is worth naming.** V23 reported zero *and* could not be
+keyed by the reporter, so a duplicate id would have reported zero as well. Two more rules were in
+the same state -- V14 and V16, both file-level, both emitting a one-colon line the reporter dropped.
+All three read zero on this corpus, so the zero was indistinguishable from blindness. Findings now
+carry a two-part identity by construction and the reporter raises on any that does not, which is why
+the blindness surfaced at all.
 """
 
 from __future__ import annotations
@@ -42,11 +49,26 @@ def _text(value: Any) -> str:
 
 
 def _where(kind: str, asset: dict[str, Any], path: Path) -> str:
-    """``file:asset`` for a finding. Inline columns carry no ``id`` in YAML -- the loader
-    derives it -- so without ``physical_name`` here every column in a table reports as
-    ``:column`` and the writer cannot tell which one failed."""
-    label = asset.get("id") or (_text(asset.get("physical_name")) if kind == "column" else "") or kind
+    """``file:asset`` for a finding, and it must name an *asset* and never a kind.
+
+    Inline columns carry no ``id`` in YAML -- the loader derives it -- so the label falls back to
+    ``physical_name`` and then to ``name``. Both fallbacks are there because the alternative was
+    measured: on a two-column table with neither field set, five findings collapsed to three
+    identities, both columns reporting as ``t.yaml:column``.
+
+    That costs more than a vague report. ``check_ratchet.py`` pins ``(rule, where)``, so two columns
+    sharing one identity means fixing one while breaking the other moves no line in the pin file and
+    the ratchet reports a hold on a tree that changed. A column has a stable name; there is no
+    reason to key on its kind.
+    """
+    label = asset.get("id") or _column_label(kind, asset) or kind
     return f"{path.name}:{label}"
+
+
+def _column_label(kind: str, asset: dict[str, Any]) -> str:
+    if kind != "column":
+        return ""
+    return _text(asset.get("physical_name")) or _text(asset.get("name"))
 
 
 
@@ -297,6 +319,14 @@ def check_unique_ids(assets: list[tuple[str, dict[str, Any], Path]]) -> list[Fin
     ``ValueError: duplicate index id`` in ``build_index`` -- **after** the commit. Measured, and it
     is exactly what ``corpus/store.py::write`` produces on an existing id, which is why
     ``corpus/patch.py`` exists and why a bundle is a diff rather than a file copy.
+
+    **One finding per file, keyed like every other rule.** This used to emit one line per *id*,
+    beginning with the id rather than the file, and the reporter could not key it: ``_where_of``
+    wants ``file:asset`` and a POSIX path in the message yields no third field, so the finding was
+    dropped from the JSON and the ratchet was blind to the one failure mode that lands *after* the
+    commit. On Windows the drive letter supplied the missing colon, so the identity became
+    ``"an_id: declared in 2 files -- C"`` -- present, and carrying the file *count*, so a third
+    duplicate read as one closure plus one new finding. Per file, both go away.
     """
     seen: dict[str, list[Path]] = defaultdict(list)
     for _, a, path in assets:
@@ -305,9 +335,11 @@ def check_unique_ids(assets: list[tuple[str, dict[str, Any], Path]]) -> list[Fin
             seen[asset_id].append(path)
     return [
         Finding(
-            f"{asset_id}: declared in {len(paths)} files -- "
-            f"{', '.join(str(p) for p in sorted(paths)[:3])}. build_index raises on this."
+            f"{path.name}:{asset_id}: this id is also declared in "
+            f"{', '.join(other.name for other in sorted(set(paths) - {path}))}. "
+            "build_index raises on this."
         )
         for asset_id, paths in sorted(seen.items())
         if len(paths) > 1
+        for path in sorted(set(paths))
     ]

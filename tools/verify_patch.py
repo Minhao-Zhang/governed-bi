@@ -9,10 +9,12 @@ with the edit in it, T2 is the metric-expression resolver. Each result is writte
 ``ladder`` so the review surface can render what ran, and ``tools/export_bundle.py`` copies them
 into the bundle's ``evidence/ladder.json`` for the engineer who applies it.
 
-**Every tier is a delta gate, not an absolute one.** ``../BIRD-corpus`` carries 101 conformance
-findings today (measured 2026-08-23), so a tier demanding zero rejects production, gets waived, and
-a waiver is how a real finding goes green. What each tier asks is whether *this patch* made things
-worse.
+**Every tier is a delta gate, not an absolute one.** ``../BIRD-corpus`` carries **125** conformance
+findings today, on **101** pinned identities (measured 2026-08-23), so a tier demanding zero rejects
+production, gets waived, and a waiver is how a real finding goes green. What each tier asks is
+whether *this patch* made things worse. The two numbers are different nouns and this paragraph used
+to print the pin count under the word "findings": ``check_ratchet.py`` keys on ``(rule, asset)``, so
+125 findings collapse onto 101 identities and each pin records how many it stands for.
 
 **Nothing is staged on disk.** The edit is applied in memory — ``corpus/patch.py::apply_edit``
 returns the new text and writes nothing — and the whole-tree checks run over the parsed tree with
