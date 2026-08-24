@@ -98,7 +98,7 @@ the one she asked for on Monday.
 
 **What the loop refused to claim, at every step.** The state is `addressed`, never `resolved` — on
 turns where every gold table was licensed **and the gold names at least one table** the engine's
-measured accuracy is 0.7555 (n=1,145), so about one in
+measured accuracy is 0.7548 (n=1,150), so about one in
 four complaints closed on a landed commit would still be wrong. The one free upgrade is
 `retrieval_verified`, and it says only that the tables are reachable.
 
@@ -246,13 +246,26 @@ Operator-only, distinguished by `source` rather than by `kind`:
 
 | `category` | `source` | note |
 |---|---|---|
-| `column_suspect` | `operator` or `agent` | `Reliability.status` is AI-authorable, so an agent may file it |
+| `column_suspect` | `operator` | ADR 0005 makes `Reliability.status` AI-authorable where `Governance.excluded` is human-only, so this is the one of the three a model-driven filer would be allowed to raise. **The code does not grant that, since 2026-08-24:** `Source` has no `agent` member and nothing files as one, so the permission arrives in the commit that builds the filer (§below) |
 | `column_excluded` | `operator` only | `Governance.excluded` is human-only. The store refuses this `category` from any other `source` |
 | `reusable_fact` | `operator` | an operator's answer to a clarification, promoted (§9) |
 
-**`source` is a separate column from `category`** because the same observation arrives from three
-populations (`reader`, `operator`, `agent`) and the queue sorts them differently. Folding it in
-would give thirteen values for ten questions.
+**`source` is a separate column from `category`** because the same observation arrives from
+different populations and the queue sorts them differently. Folding it in would give thirteen values
+for ten questions.
+
+**The populations that exist are `reader`, `operator` and `eval`. `agent` was a fourth and is
+deleted (2026-08-24).** Nothing ever wrote it: the four construction sites in `src/` and `tools/`
+write `reader`, `operator`, `operator` and `eval`, and the only occurrence of `Source.agent`
+anywhere was the dead branch of `validate.py::_may_file_operator_only` — a declared policy exception
+that could not evaluate true, whose one exerciser was the test covering it. The design keeps the
+population: ADR 0015 §5's Author and Curator are the roles that would file as `agent`, and the
+member comes back in the commit that builds them, which is where the widened permission on
+`column_suspect` gets decided again rather than inherited. The rule this follows is the ADR's own,
+stated when it refused to declare `rendered_asset_ids` against the same unbuilt pipeline: *it lands
+with its consumer and not before.*
+`tests/feedback/test_every_source_has_a_producer.py` is what holds it —
+`tools/check_declared_is_consumed.py`'s K1 read that dead branch as evidence of a producer.
 
 ### Which cases are a new asset, an edit, or neither
 
@@ -290,7 +303,7 @@ CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS observation (
   observation_id      TEXT PRIMARY KEY,
   filed_at            TEXT NOT NULL,          -- ISO-8601 UTC, seconds
-  source              TEXT NOT NULL,          -- reader | operator | agent
+  source              TEXT NOT NULL,          -- reader | operator | eval
   kind                TEXT NOT NULL,          -- from_refusal | wrong_answer
   category            TEXT,                   -- §3, nullable: the first tap may be all there is
   note                TEXT NOT NULL DEFAULT '',   -- <= 4000 chars, stripped
@@ -331,7 +344,7 @@ CREATE INDEX IF NOT EXISTS ix_obs_cluster  ON observation(db_id, category);
 CREATE TABLE IF NOT EXISTS patch (
   patch_id                     TEXT PRIMARY KEY,
   created_at                   TEXT NOT NULL,
-  author                       TEXT NOT NULL,   -- operator | agent
+  author                       TEXT NOT NULL,   -- operator (`agent` when the pipeline exists)
   intent                       TEXT NOT NULL,   -- new_asset | edit_asset | exclusion_request
                                                 -- | engine_defect
   state                        TEXT NOT NULL,   -- draft | exported | withdrawn
@@ -457,7 +470,7 @@ at read time.** A stored state with no actor is what today's unclosable `open: t
 
 | from → to | actor | precondition |
 |---|---|---|
-| — → `open` | `reader` \| `operator` \| `agent` | the turn exists and is finished |
+| — → `open` | `reader` \| `operator` \| `eval` | the turn exists and is finished. `agent` is the unbuilt pipeline's and is not a `Source` member — §3 |
 | `open` → `triaged` | `steward` | — |
 | `triaged` → `declined` | `steward` | `decline_reason` is set |
 | `triaged` → `duplicate` | `steward` | `duplicate_of` names an open or addressed observation, **and the same observation joins that one's patch set** — otherwise landing counts one affected observation instead of two |
@@ -511,8 +524,8 @@ establishes that the corpus changed and nothing more; 12.7% of questions flip be
 identical runs, so even a passing re-run would not establish it. "Ask again" is an invitation.
 
 And the stored state is `addressed`, never `resolved`. On turns where every gold table *was*
-licensed **and the gold names at least one table** the engine's measured accuracy is **0.7555**
-(n=1,145; **0.7131** over all 1,272 covered turns, the unwinnable 127 included), so about
+licensed **and the gold names at least one table** the engine's measured accuracy is **0.7548**
+(n=1,150; **0.7126** over all 1,277 covered turns, the unwinnable 127 included), so about
 **one in four** complaints closed
 on the strength of a landed commit would still be wrong. `retrieval_verified` is the one upgrade
 the free ladder licenses, and it says only that the tables are reachable.
@@ -832,8 +845,8 @@ real finding. The channel is named in every run's output and the lexical one war
 
 **T3 answers a narrower question than the others,** and its output says which every time: the tables
 the reference answer reads are reachable again. Not that the answer is right. On turns where every
-gold table *was* licensed and the gold names at least one table, measured accuracy is 0.7555
-(n=1,145).
+gold table *was* licensed and the gold names at least one table, measured accuracy is 0.7548
+(n=1,150).
 
 **There is no tier above T3.** A targeted paid replay of a cluster's questions and a paired arm are
 both things a person launches by deciding to spend money, and neither is built. So a patch touching

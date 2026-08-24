@@ -366,16 +366,24 @@ def test_clusters_are_ordered_oldest_first_and_not_by_size() -> None:
     reason="runs/ is gitignored and the dataset is a sibling checkout; both are local-only",
 )
 def test_the_partition_reproduces_the_published_coverage_total() -> None:
-    """``docs/open-work.md`` §1: "73 failures had incomplete table coverage".
+    """``docs/failure-modes.md`` §1: "71 failures had incomplete table coverage".
 
     That figure and the whole §1 table are hand-run in the published documents — the page says so.
     This is the producer, and it agrees to the question.
+
+    **It said 73 until 2026-08-24, and the two rows are a metric fix, not a run.** The artifact has
+    not moved. ``_missing_tables`` compared the gold's identifier against ``licensed``, which holds
+    asset **ids**; ``airline."Air Carriers"`` is ``airline.Air_Carriers_66c534`` and so read as
+    never licensed on the five rows whose gold names it. Two of those five are failures, and they
+    were filed as ``coverage_miss`` — "the turn was not allowed to read this table" — about a table
+    the turn was licensed for. They are ``full_coverage`` now, which is the bucket that needs T4/T5
+    rather than corpus curation. The total (438) is unchanged, because no row left the population.
     """
     rows = [json.loads(line) for line in _REAL_ARTIFACT.read_text(encoding="utf-8").splitlines() if line.strip()]
     buckets = partition_failures(rows)
 
     assert len(rows) == 1351
     assert sum(len(v) for v in buckets.values()) == 438, "the published failure count"
-    assert len(buckets["coverage_miss"]) == 73, "the published cross-cutting coverage total"
+    assert len(buckets["coverage_miss"]) == 71, "the published cross-cutting coverage total"
     assert len(buckets["crashed"]) == 0
     assert len(buckets["gold_unparsed"]) == 0

@@ -58,6 +58,7 @@ __all__ = [
     "InProcessServerRequired",
     "SUMMARY_FIELDS",
     "PENDING_FIELDS",
+    "PENDING_SOURCE_INTERRUPT",
     "summarise_turn",
 ]
 
@@ -551,6 +552,26 @@ PENDING_FIELDS: tuple[str, ...] = (
     "observation_id",
 )
 
+#: The `source` value on a pending row that came from a live ``ask_user`` interrupt rather than from
+#: ``runs/feedback.sqlite``. The client switches on it to decide which card to draw
+#: (``ui/components/clarifications/pending-queue.tsx``).
+#:
+#: **Here because this is the module that writes it**, and it was not. The constant lived in
+#: ``api/feedback_routes.py`` -- kept from the deleted ``serve/raised.py`` (``4a0d11a``) -- claiming
+#: in its own note to be the shared spelling, while ``_open_questions_of`` below wrote the string by
+#: hand and nothing imported the constant at all. ``feedback_routes.py`` was the wrong home in any
+#: case: it never emits this value. Its ``_as_pending_row`` fills the same column from
+#: ``obs.kind.value``, which is the *other* half of the axis, so the two halves of one column were
+#: spelled in two files and one of the spellings was unreachable.
+#:
+#: The other two values of the axis are :class:`governed_bi.feedback.events.Kind`'s members, and this
+#: module does not name them: importing ``feedback/`` to restate an axis it does not produce would be
+#: a second declaration of the same three values. What holds all three together instead is
+#: ``docs/openapi.json``'s ``enum`` on this property and
+#: ``tests/api/test_the_pending_source_axis_has_one_spelling.py``, which compares Python, the spec
+#: and ``ui/lib/schemas.ts`` against each other.
+PENDING_SOURCE_INTERRUPT = "interrupt"
+
 #: Prefix ``serve/tools.py`` builds a clarification id with: ``f"clar-{turn_id}-{digest}"``.
 _CLARIFICATION_PREFIX = "clar-"
 
@@ -805,7 +826,7 @@ def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
                     "clarification_id": clarification_id or None,
                     "turn_id": turn_of_clarification(clarification_id),
                     "thread_id": thread_id,
-                    "source": "interrupt",
+                    "source": PENDING_SOURCE_INTERRUPT,
                     "basis": value.get("basis"),
                     # Null because an interrupt is not an observation, not because it went
                     # missing -- see :data:`PENDING_FIELDS` on why a declared column is never

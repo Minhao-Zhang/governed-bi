@@ -143,7 +143,8 @@ exists to refuse in advance, and which had no caller when this was written — i
 ### 1. Two layers, and the reader never authors a change
 
 An **Observation** is what a reader saw, in business language, attributed to exactly one turn. A
-**Patch** is a typed corpus change an engineer or an agent authors. One observation has zero or
+**Patch** is a typed corpus change an engineer or an agent authors — in the built tree only an
+engineer, because `Source` carries no `agent` member (see Decision 5). One observation has zero or
 more patches, and **zero is a common, honest outcome** — an observation can be triaged to "the
 engine was right", to "the warehouse is wrong", or to "this is an engine defect, not a corpus
 gap", none of which is a corpus edit.
@@ -253,7 +254,7 @@ no "declined" badge without a sentence.
 establishes that the corpus changed. It does not establish that the reader's question now answers
 correctly: an asset edit does not mean retrieval finds it, and even on turns where every gold table
 *was* licensed **and the gold names at least one table** the engine's measured accuracy is
-0.7555 (n=1,145) — over all 1,272 covered turns it is 0.7131, because 127 of them have a gold
+0.7548 (n=1,150) — over all 1,277 covered turns it is 0.7126, because 127 of them have a gold
 that reads no table and cannot be won. So roughly **one in four** complaints
 marked resolved on the strength of a landed commit would still be wrong. There is one cheap upgrade
 and exactly one: re-running the affected question's T3 coverage fixture costs ~$0 and licenses the
@@ -328,6 +329,24 @@ or Curator, and `tools/check_imports.py::LAYERS` names `feedback` and does not n
 0-6 ship the store, the ladder and the steward's surface; a human does the diagnosing and the
 authoring, and the reasoning below is what a build of the pipeline would have to answer to. Read
 this section as design.
+
+> **Amended 2026-08-24: `Source.agent` is deleted, and this section is the reason.** The vocabulary
+> shipped with a fourth population, `agent`, for the roles below to file and author as. Nothing ever
+> wrote it — the four construction sites in `src/` and `tools/` write `reader`, `operator`,
+> `operator` and `eval` — and its only occurrence anywhere was
+> `feedback/validate.py::_may_file_operator_only`, which read `obs.source is Source.agent and
+> obs.category is Category.column_suspect` and whose docstring called it "the one agent-writable
+> exception ADR 0005 declares". A policy exception that cannot evaluate true is not a narrower gate;
+> it is a paragraph a reader believes. That is the failure ADR 0005's own retro on
+> `restamp_model_authored` names in one sentence — *an uncalled control is not one either* — and the
+> rule this record already applied to itself in Consequences 5, refusing to declare
+> `rendered_asset_ids` against this same unbuilt pipeline: **it lands with its consumer and not
+> before.** The design is unchanged and stays here: the Author and the Curator are the producers, and
+> the member comes back in the commit that builds them, which is also where the widened
+> `column_suspect` permission gets decided again rather than inherited from a gate widened for
+> nobody. `tests/feedback/test_every_source_has_a_producer.py` holds it, because
+> `tools/check_declared_is_consumed.py`'s K1 counts any occurrence of a name as evidence and
+> therefore read that dead branch as a producer.
 
 `triage` is a `StateGraph` invoked by `python -m governed_bi.triage`. It is **not** an entry in
 `langgraph.json` and it is **not** a subgraph of `serve` — `ServeInput` is the A2/A3 trust

@@ -96,14 +96,14 @@ exactly one:
 
 | Bucket | n | Nature |
 |---|---:|---|
-| **answered wrong, full coverage** | **257** | genuine semantics |
+| **answered wrong, full coverage** | **259** | genuine semantics |
 | answered, frozen-literal gold | 75 | dataset defect, unwinnable |
 | capped | 49 | five attempts spent with no passing statement |
-| answered, incomplete table coverage | 33 | retrieval |
+| answered, incomplete table coverage | 31 | retrieval |
 | refused | 20 | none with full coverage |
 | clarification | 4 | all zero-licensed |
 
-Cut the same 438 by coverage instead, across outcomes: **73 failures had incomplete table
+Cut the same 438 by coverage instead, across outcomes: **71 failures had incomplete table
 coverage** and **85 had a frozen-literal gold**. Those two totals overlap the capped, refused and
 clarification rows above — of the 20 refusals, 19 had incomplete coverage and one had a gold that
 reads no table; of the 49 capped turns, 26 were incompletely covered or had a tableless gold.
@@ -111,16 +111,26 @@ reads no table; of the 49 capped turns, 26 were incompletely covered or had a ta
 **Refusals and clarifications are still 100% retrieval failures.** Not one of them is a case of
 "the data was visible and the engine refused anyway."
 
-**Table coverage on real golds is 0.936** — 1,145 of the 1,224 questions with a real gold
+**Table coverage on real golds is 0.940** — 1,150 of the 1,224 questions with a real gold
 statement had every gold table licensed. Retrieval is mostly working, and that decides how to read
-every bucket below: only 79 questions were incompletely covered, and the engine answered just 6 of
+every bucket below: only 74 questions were incompletely covered, and the engine answered just 3 of
 them correctly.
+
+**Recomputed 2026-08-24 on the same artifact, after a metric fix, and the five rows are named so
+nobody re-runs an arm looking for them.** `table_coverage` compared the gold statement's identifier
+against `licensed`, which holds asset **ids** — so `airline."Air Carriers"`, whose asset is
+`airline.Air_Carriers_66c534`, read as unlicensed on the five questions whose gold names it
+(`train_5835`, `_5837`, `_5894`, `_5902`, `_5909`), all five of which had licensed it. It is the one
+table of 656 whose id is not its own name, so the bias was one-directional: coverage was
+under-reported, never over. The figures this replaces were 0.936 (1,145 of 1,224), 79 incompletely
+covered with 6 answered correctly, 73 failures with incomplete coverage, and 257/33 in the bucket
+table above. Three of the five were correct answers, which is why 6 becomes 3 rather than 6.
 
 Outcome against coverage, v4, all 1,351 rows including the correct ones:
 
 | Outcome | Full | Partial | None | Tableless |
 |---|---:|---:|---:|---:|
-| answered | 1122 | 31 | 8 | 117 |
+| answered | 1127 | 26 | 8 | 117 |
 | capped | 23 | 12 | 7 | 7 |
 | **clarification** | **0** | **0** | **2** | 2 |
 | **refused** | **0** | **15** | **4** | 1 |
@@ -719,7 +729,7 @@ time.
 - [Pervasive Annotation Errors Break Text-to-SQL Benchmarks and Leaderboards](https://arxiv.org/abs/2601.08778)
   — a 52.8% annotation error rate on BIRD.
 - [The Death of Schema Linking?](https://arxiv.org/html/2408.07702) — aggressive pruning loses
-  22.6% of required elements. This arm's 0.936 coverage says the current configuration is not in
+  22.6% of required elements. This arm's 0.940 coverage says the current configuration is not in
   that trap.
 - [CHASE-SQL](https://arxiv.org/html/2410.01943v1) /
   [DPC](https://aclanthology.org/2026.acl-long.313/) — candidate generation plus selection, BIRD

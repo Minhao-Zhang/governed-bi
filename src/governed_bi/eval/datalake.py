@@ -36,6 +36,7 @@ __all__ = [
     "observed_tokens",
     "summarise_routing",
     "gold_tables",
+    "gold_table_ids",
     "table_coverage",
     "retrieval_funnel",
 ]
@@ -436,6 +437,69 @@ def gold_tables(sql: str) -> set[str] | None:
     return out
 
 
+def gold_table_ids(qualified: str) -> set[str]:
+    """The lowercased asset ids under which a gold statement's table could have been licensed.
+
+    ``gold_tables`` returns the identifier the *dataset* wrote — ``airline.Air Carriers``, the
+    engine's spelling. ``licensed`` carries **asset ids**, and an id is a key rather than a name
+    (ADR 0008 D1): that table is ``airline.Air_Carriers_66c534`` in the corpus, with
+    ``physical_name: Air Carriers``. Comparing the two strings compares two different nouns, and
+    the answer only came out right because ``slug`` returns a bare identifier unchanged — 655 of
+    the 656 tables of the shipped BIRD corpus. The one that differs was scored as an unlicensed
+    table on every turn that had in fact licensed it (5 of 1 351 rows on the v4 arm, and in each
+    the only miss), so the ceiling read low, never high.
+
+    Recovered by **re-deriving the id**: ``corpus.identity.slug`` is the one rule that turns a
+    physical name into an id component, so applying it to the gold's spelling reproduces the id
+    exactly rather than approximately. ``slug`` and not ``table_id``, which would re-derive the
+    schema half too — that half comes off the statement's qualification and is already a bare
+    identifier. Both keys are returned, not one: a gold written against an id still matches, so no
+    row that was counted covered stops being counted covered.
+
+    Rejected, and why:
+
+    normalising ``Air Carriers`` → ``Air_Carriers``
+        cannot work in either direction. The ``_66c534`` tail is a digest of the exact name, which
+        is what makes ``slug`` injective — ``a b`` and ``a_b`` must not collide — so normalisation
+        does not reach the id, and if it were allowed to match without the digest it would start
+        equating a rename decoy with the table it decoys.
+    having the row producer write the physical names beside the ids
+        the mapping would be right and arrive too late: every artifact already in ``runs/eval/``
+        would stay unfixable without re-running a paid arm, and the figures quoted from them are
+        the ones under discussion. It also puts two spellings of one fact on every row.
+    passing a corpus resolver in
+        makes a pure function over a finished artifact depend on the corpus, which moves. The
+        resolver would answer with today's ids for yesterday's rows, and for an id the corpus no
+        longer carries it would have to either guess or refuse — a metric that fails when a
+        curator deletes an asset. Re-derivation needs no corpus at all: the rule is in the id.
+
+    **Give it the gold's verbatim spelling.** The keys come back lowercased for comparison, but
+    the digest is taken over the exact name, so a caller that case-folds first derives an id for a
+    table that does not exist. A gold whose quoted identifier differs in case from the corpus's
+    ``physical_name`` therefore reads as uncovered — correctly: it would not execute either.
+
+    Ambiguous, and stated rather than handled: ``qualified`` joins schema and name with a dot, so
+    a physical name that itself contains one cannot be split back apart. The BIRD corpus has no
+    such table, and the raw spelling is still returned for it.
+    """
+    # Function-level, matching ``gold_tables`` above: ``corpus.identity`` imports ``sqlglot`` at
+    # module scope and this module is imported by drivers that only read artifacts.
+    from governed_bi.corpus.identity import UnsafeName, slug
+
+    keys = {qualified.lower()}
+    schema, _, name = qualified.rpartition(".")
+    if not name:
+        return keys
+    try:
+        derived = slug(name)
+    except UnsafeName:
+        # A name ``slug`` refuses is a name no asset id was minted from, so there is no second
+        # key to compare against. The raw spelling stands and the table reads as uncovered.
+        return keys
+    keys.add((f"{schema}.{derived}" if schema else derived).lower())
+    return keys
+
+
 def table_coverage(
     rows: Sequence[Mapping[str, Any]], gold_sql_by_qid: Mapping[str, str]
 ) -> dict[str, Any]:
@@ -448,10 +512,11 @@ def table_coverage(
     questions had all their gold tables against 62.5% schema reachability — **not** retired
     with the EX figures, because these measure what was *licensed* and no grader touches them.
 
-    Compared case-insensitively. Licensed ids carry the slug (ADR 0008 D1) and gold statements
-    carry the engine's spelling; those agree for every identifier whose slug is its own name,
-    655 of 656 tables here. The exception (``Air Carriers``) is reported uncovered rather than
-    guessed at, because guessing is the fail-open shape ``structure.py`` refuses.
+    Compared case-insensitively, and against the gold table's id rather than its spelling —
+    licensed ids carry the slug (ADR 0008 D1) and gold statements carry the engine's identifier.
+    :func:`gold_table_ids` re-derives the one from the other and says why that and not a resolver.
+    Until it did, ``Air Carriers`` — the one table of 656 whose id is not its own name — read as
+    unlicensed on every turn that had licensed it.
     """
     full = partial = none = unparsed = tableless = 0
     for row in rows:
@@ -482,7 +547,7 @@ def table_coverage(
                 "of 0.000 for a run that licensed tables on every turn."
             )
         licensed = {str(t).lower() for t in (row.get("licensed") or ())}
-        hits = sum(1 for table in needed if table.lower() in licensed)
+        hits = sum(1 for table in needed if gold_table_ids(table) & licensed)
         if needed and hits == len(needed):
             full += 1
         elif hits:
@@ -610,7 +675,10 @@ def retrieval_funnel(
         counts["tables_in_routed_schemas"] += 1
 
         licensed = {str(t).lower() for t in (row.get("licensed") or ())}
-        if not all(str(t).lower() in licensed for t in needed):
+        # Through ``gold_table_ids`` and not ``str(t).lower() in licensed``: the same stage in
+        # ``table_coverage`` reads the same two nouns, and two rules for "was this gold table
+        # licensed" is one number disagreeing with another over the same rows.
+        if not all(gold_table_ids(str(t)) & licensed for t in needed):
             continue
         counts["all_gold_tables_licensed"] += 1
 

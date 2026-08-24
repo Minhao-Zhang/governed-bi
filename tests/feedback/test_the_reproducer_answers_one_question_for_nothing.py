@@ -6,7 +6,7 @@ mistakes are: which observations the check *applies* to, and the fact that ``ret
 was a declared state nothing could reach.
 
 **The claim a green T3 licenses is narrow and it is asserted as a string.** On turns where every
-gold table was licensed, measured accuracy is 0.7555 — so about one in four complaints "fixed" here
+gold table was licensed, measured accuracy is 0.7548 — so about one in four complaints "fixed" here
 would still come back with a wrong number. Two tests below exist to keep the word "resolved" out of
 the vocabulary and the number in the sentence.
 """
@@ -194,24 +194,30 @@ def test_the_claim_names_the_number_and_the_population_it_was_measured_on() -> N
     """The one sentence that stops a green T3 being read as "fixed", and it has to name **which**
     turns it was measured over.
 
-    0.7555 is the accuracy on turns where every gold table was licensed *and the gold names at least
-    one table* — n=1,145. Read literally, "every gold table was licensed" also admits the 127 turns
+    0.7548 is the accuracy on turns where every gold table was licensed *and the gold names at least
+    one table* — n=1,150. Read literally, "every gold table was licensed" also admits the 127 turns
     whose gold reads no table at all: a frozen literal satisfies the condition vacuously, and no
-    engine can win one. Include them and the same figure is **0.7131** over n=1,272.
+    engine can win one. Include them and the same figure is **0.7126** over n=1,277.
 
-    The sentence carried 0.7555 with the literal wording for the life of this branch, in six places.
-    The number was defended once against a challenge — with a script that skipped the tableless rows
-    and therefore reproduced 1,145 and agreed with itself. So this asserts the population, not just
-    the digits: a number is not a measurement until it says what it was measured over.
+    The sentence carried the figure with the literal wording for the life of this branch, in six
+    places. It was defended once against a challenge — with a script that skipped the tableless
+    rows and therefore reproduced its own n and agreed with itself. So this asserts the population,
+    not just the digits: a number is not a measurement until it says what it was measured over.
+
+    **The pair moved on 2026-08-24 and the engine did not.** It was 0.7555 (n=1,145) / 0.7131
+    (n=1,272) until ``gold_table_ids`` stopped comparing a gold's physical name against an asset
+    id, which admitted five ``airline.Air Carriers`` turns counted as uncovered. Same arm, same
+    rows, a fixed instrument — which is the third reason to assert the population: a figure whose
+    denominator is written down can be seen to move, and for a reason.
     """
     from reproduce_observation import CLAIM
 
-    assert "0.7555" in CLAIM
+    assert "0.7548" in CLAIM
     assert "at least one table" in CLAIM, (
         "the claim states an accuracy without the exclusion that produced it, which is the reading "
-        f"that made 0.7131 look like a rival number instead of the same one: {CLAIM}"
+        f"that made 0.7126 look like a rival number instead of the same one: {CLAIM}"
     )
-    assert "0.7131" in CLAIM, "and the figure for the literal reading, so neither can hide"
+    assert "0.7126" in CLAIM, "and the figure for the literal reading, so neither can hide"
     assert "NOT that the answer is right" in CLAIM
 
 

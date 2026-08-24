@@ -77,17 +77,29 @@ The gold schema was routed in 20 of the 22. This is disambiguation **inside** th
 set, not routing recall — the agent is handed tables from several schemas and picks the
 wrong one.
 
-### 1.5 Seventy-nine questions never had their gold tables licensed
+### 1.5 Seventy-four questions never had their gold tables licensed
 
-Table coverage on the v4 arm is **0.936** — 1 145 of 1 224 questions with a real gold
-statement had every gold table licensed. The engine answered 6 of the uncovered 79 correctly
-and missed the other 73, which is the cross-cutting coverage total under §1.
+Table coverage on the v4 arm is **0.940** — 1 150 of 1 224 questions with a real gold
+statement had every gold table licensed. The engine answered 3 of the uncovered 74 correctly
+and missed the other 71, which is the cross-cutting coverage total under §1.
+
+Recomputed 2026-08-24 on the same artifact after a metric fix — `table_coverage` was comparing the
+gold statement's identifier against `licensed`, which holds asset **ids**, so the one table of 656
+whose id is not its own name (`airline."Air Carriers"` → `airline.Air_Carriers_66c534`) read as
+unlicensed on all five questions that had licensed it. It replaces 0.936, 1 145, 6 and 73.
+`docs/failure-modes.md` §1 carries the full before/after. The **accuracy pair moved with it
+and the engine did not**: 0.7555 (n=1,145) / 0.7131 (n=1,272) — the figure six documents,
+`tools/reproduce_observation.py::CLAIM` and one test carry — is now **0.7548 (n=1,150) /
+0.7126 (n=1,277)**, same arm, same rows, fixed instrument. All ten sites are updated and the
+test docstring records why, because a figure that moves without a stated reason reads as a
+second measurement.
 
 This is a **licensing figure, not a delivered one**; see §3.3 for what the char budget drops on
-top of it. Concentrated in `works_cycles` (7), then `airline`, `law_episode` and `superstore`
-(5 each).
+top of it. Concentrated in `works_cycles` (7), then `law_episode` and `superstore` (5 each).
+`airline` was in that list with 5 until the fix above, and all five were the same mis-compared
+table — the schema has no uncovered question left, which is worth knowing before anyone curates it.
 
-This is still the largest *winnable* bucket after the 257 semantic errors, and unlike those it
+This is still the largest *winnable* bucket after the 259 semantic errors, and unlike those it
 is corpus and retrieval work rather than generic text-to-SQL.
 
 ### 1.6 Twelve capped turns had every gold table and still built no join
@@ -471,6 +483,51 @@ would have noticed either one being reopened.
   in F8 below from the ladder path entirely. The module keeps its guard fix and its tests; the first
   path that genuinely writes a corpus during a run will still want it.
 
+**Two more of the same shape, both in the return path, both closed 2026-08-24 — and rule K1 credited
+one of them as consumed.** Neither is a knob, a record field or a state channel, so
+`check_declared_is_consumed.py` sees neither, and the second is the sharper lesson: K1's evidence is
+"the name occurs outside `register/`", which cannot tell a **consumer** from a **producer**.
+
+- **`Source.agent` had no producer.** `feedback/events.py` declared a fourth filing population and
+  the four construction sites in `src/` and `tools/` write `reader`, `operator`, `operator` and
+  `eval`. Its only occurrence anywhere was `feedback/validate.py::_may_file_operator_only`, reading
+  `obs.source is Source.agent and obs.category is Category.column_suspect` — a branch that could not
+  evaluate true, under a docstring calling it "the one agent-writable exception ADR 0005 declares".
+  So a declared *policy exception* was dead code, and the only thing that ever filed as `agent` was
+  the test asserting the store accepted it. Deleted, in the member and in the branch, for the rule
+  [ADR 0015](adr/0015-the-return-path.md) had already applied to itself when it refused to declare
+  `rendered_asset_ids` against the same unbuilt pipeline: *it lands with its consumer and not
+  before.* The design keeps the population — §5's Author and Curator are its producers — and the
+  member returns in the commit that builds them, which is where the widened `column_suspect`
+  permission gets decided again instead of inherited. `docs/openapi.json` declared the value on
+  `ObservationResponse.source` too, so a client was told to handle a value the server could not send;
+  `PatchResponse.author` published the whole `Source` vocabulary for a field with one producer. Both
+  narrowed. Held by `tests/feedback/test_every_source_has_a_producer.py`, which counts a member
+  produced only where it appears inside a `source=`/`author=` value — comparisons are reads and are
+  not evidence. **Scoped to `Source` and not widened to the other seven enums in that vocabulary on
+  purpose:** `Kind`, `Category` and `DeclineReason` are parsed off a request body, so the same rule
+  reports 13 of 13 `Category` members and 2 of 2 `Kind` members unproduced, and a gate that has to
+  be waived for correct code teaches people to waive it.
+- **`PENDING_SOURCE_INTERRUPT` was the only spelling nothing used.** `api/feedback_routes.py`
+  declared and exported it — "the client switches on it to decide which card to draw" — while the
+  producer (`api/thread_turns.py::_open_questions_of`) wrote the literal `"interrupt"` and the
+  consumer (`ui/lib/schemas.ts`) is a `z.enum` of literals. The wire was never dead; the constant
+  was, and it survived `4a0d11a`'s deletion of `serve/raised.py` because nothing on either end
+  referred to it. Its home was wrong twice over: `feedback_routes.py` never emits this value —
+  `_as_pending_row` fills the same column from `obs.kind.value`, the other half of the axis. Moved
+  beside `PENDING_FIELDS` in the module that writes it. The spec declared the three values in a
+  `description` only, and `tests/api/test_the_spec_matches_the_server.py` says descriptions are the
+  one thing it does not check, so that claim was unfalsifiable; it is an `enum` now.
+  `tests/api/test_the_pending_source_axis_has_one_spelling.py` compares Python, `docs/openapi.json`
+  and `ui/lib/schemas.ts` against each other, and refuses a literal `source` write under `api/`.
+
+**A fifth rule for the gate — an enum member with no producer — was considered and not written.** It
+would be green on this tree after the two fixes above, but only for `Source`: the rule needs to know
+which enums code chooses and which are parsed at the edge, and that list is neither derivable from
+the AST nor stable. A gate carrying a hand-maintained allowlist of seven exemptions is a gate whose
+allowlist is the actual claim. The two tests above hold the same ground with the reasoning attached
+to the enum it applies to.
+
 The distinction that keeps these off the list above: a knob with no reader **changes the config
 hash** while changing no behaviour, so setting it produces a row that lies. A function with no caller
 produces nothing at all. The failure mode is a reader believing the capability is in force, which is
@@ -571,7 +628,7 @@ sits in a schema the router did reach → **11 the only repair this loop offers 
 | Four tools each carried their own copy of "which corpus", and the copies disagreed about whether `.env` counts | fixed: `tools/corpus_target.py`. `credentials` has been this repo's dotenv reader since 2026-08-03 |
 | The exporter's printed `git apply` / `git commit -F` pair **does not work** — the change lands unstaged and the commit exits 1 | fixed: `--index`, and a test parses the commands out of stdout and runs them |
 | Withdrawing a patch left its observations reading `addressed` | fixed: `move_patch` returns them to `triaged` and reports what it could not move |
-| `airline.Air Carriers` reports missing while `airline.Air_Carriers_66c534` is licensed — one table, compared as physical name against asset id. 2 of 73 rows are false | **open.** Narrow, but it is in the coverage comparison the whole population is built from |
+| `airline.Air Carriers` reports missing while `airline.Air_Carriers_66c534` is licensed — one table, compared as physical name against asset id. 2 of 73 rows are false | fixed: `gold_table_ids` offers both spellings a gold could be licensed under, re-deriving the id with the same `slug` that minted it. It was **three** comparisons, not one — `table_coverage`, `retrieval_funnel` and `feedback_import._missing_tables`, the last of which files operator-facing rows. `coverage_miss` 73 → 71 |
 | 2 of 73 rows carry no `corpus_content_hash` at all | counted apart from a mismatch; why they have none is unexplained |
 
 **What this says about the feature.** Every defect above was found by *using* it. Three days of
@@ -743,7 +800,7 @@ allowlist that `check()` Layer 6 enforces. A retrieval miss therefore becomes a 
 rather than a degraded answer — 19 of the arm's 20 refusals end on `r_table_not_licensed`, and
 all 20 hit it at some point in the turn.
 
-At 0.936 coverage this is not currently expensive, which is why it is a question and not an
+At 0.940 coverage this is not currently expensive, which is why it is a question and not an
 item in §1. Decoupling them (govern over the whole routed schema, retrieve the top 8) would
 change what "governed" means and needs an ADR, not a patch — and per §4.1 it is also the
 contrast arm that would attribute the abstention property to the allowlist rather than to

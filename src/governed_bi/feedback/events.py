@@ -10,7 +10,9 @@ module is for.
 
 **Two layers, and the split is the design's load-bearing decision.** An :class:`Observation` is
 what somebody or something *saw* — one failure, attributed to one turn, in the language of whoever
-saw it. A :class:`Patch` is a typed corpus change an operator or an agent *authors*. One
+saw it. A :class:`Patch` is a typed corpus change an operator *authors* — ADR 0015 §1 says "an
+engineer or an agent", and the agent is the unbuilt pipeline, so :class:`Source` does not name one
+(see its own note). One
 observation has zero or more patches, and **zero is a common and honest outcome**: an observation
 can be triaged to "the engine was right", to "the warehouse is wrong", or to "this is an engine
 defect, not a corpus gap", none of which is a corpus edit.
@@ -71,6 +73,22 @@ class Source(str, Enum):
     The same category arrives from more than one population and the queue treats them
     differently, so folding this into the category would give a dozen values for nine questions.
     It also gates behaviour: :data:`OPERATOR_ONLY_CATEGORIES` is refused from any other source.
+
+    **Three members, and ``agent`` was a fourth until 2026-08-24.** Nothing ever produced it. The
+    four sites in ``src/`` and ``tools/`` that construct an observation or a patch write ``reader``,
+    ``operator``, ``operator`` and ``eval``; the only occurrence of ``Source.agent`` in the whole
+    package was ``validate.py::_may_file_operator_only``, which read
+    ``obs.source is Source.agent and obs.category is Category.column_suspect`` and called itself
+    "the one agent-writable exception ADR 0005 declares". A policy exception that cannot evaluate
+    true is the shape ADR 0005's own retro on ``restamp_model_authored`` names: *an uncalled control
+    is not one either.* It is deleted rather than kept-with-a-note for the reason ADR 0015 already
+    gave when it refused to declare ``rendered_asset_ids`` against the same unbuilt pipeline --
+    "it lands **with** its consumer and not before". The documents keep the design: ADR 0015 §5's
+    Author and Curator are the roles that would file as ``agent``, and whoever builds them adds the
+    member back in that commit, which is also where the widened permission gets decided again
+    instead of inherited. ``tests/feedback/test_every_source_has_a_producer.py`` is what holds this,
+    because ``tools/check_declared_is_consumed.py``'s K1 counted the dead branch above as evidence
+    of a producer.
     """
 
     #: A person who asked a question and read the answer. **What an unauthenticated caller of
@@ -84,12 +102,11 @@ class Source(str, Enum):
     #: rather than a second control invented here. Also the author of every patch, since the only
     #: route that drafts one is on that router.
     operator = "operator"
-    #: A model-driven process. Present so a future pipeline has a name; nothing writes it yet.
-    agent = "agent"
-    #: An evaluation artifact, imported from ``runs/eval/*.jsonl``. Distinct from ``agent`` because
-    #: nothing judged anything: a grader compared a fingerprint, so the evidence is a gold
-    #: statement rather than an opinion. It also makes the fields that mean "a human clicked" --
-    #: ``filed_at``, and any per-turn rate limit -- stop pretending to.
+    #: An evaluation artifact, imported from ``runs/eval/*.jsonl``. **Not a model-driven process,
+    #: and the distinction is why this is its own member rather than one shared with the pipeline
+    #: that does not exist:** nothing judged anything here, a grader compared a fingerprint, so the
+    #: evidence is a gold statement rather than an opinion. It also makes the fields that mean "a
+    #: human clicked" -- ``filed_at``, and any per-turn rate limit -- stop pretending to.
     eval = "eval"
 
 
@@ -144,8 +161,13 @@ class Category(str, Enum):
     attempt_capped = "attempt_capped"
 
     # ── operator-only ──
-    #: A column's values argue against trusting it. ``Reliability.status`` is AI-authorable, so
-    #: an agent may file this one too.
+    #: A column's values argue against trusting it. ADR 0005 makes ``Reliability.status``
+    #: AI-authorable where ``Governance.excluded`` is human-only, so this is the one of the three
+    #: that a model-driven filer would be allowed to raise -- **and the code does not grant that**,
+    #: because :class:`Source` has no ``agent`` member to grant it to and nothing files as one. The
+    #: permission is a design decision (ADR 0015 §5's Author) and belongs in the commit that builds
+    #: the filer, not before it: a gate widened for a population that does not exist is widened for
+    #: whoever arrives first.
     column_suspect = "column_suspect"
     #: A column should be hidden from everything the analyst sees. Filing it is *not* setting it:
     #: ``Governance.excluded`` is human-only, "enforced by the absence of a tool".

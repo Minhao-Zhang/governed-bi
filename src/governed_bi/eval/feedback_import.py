@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
 from governed_bi.corpus.hash import corpus_content_hash
-from governed_bi.eval.datalake import gold_tables, load_questions
+from governed_bi.eval.datalake import gold_table_ids, gold_tables, load_questions
 from governed_bi.feedback.events import Category, Kind, Observation, ObservationState, Source
 from governed_bi.feedback.store import FeedbackStore, mint_observation_id, utc_now
 
@@ -406,12 +406,24 @@ def _missing_tables(row: Mapping[str, Any]) -> set[str] | None:
 
     Compared case-insensitively, because ``licensed`` carries the corpus's spelling and a gold
     statement carries the dataset's, and a case difference is not a coverage miss.
+
+    Through ``gold_table_ids`` for the same reason one level up: ``licensed`` holds asset **ids**
+    and the gold holds the engine's identifier, which differ wherever a name needed a slug. The
+    string returned is still the gold's spelling — it is what the reviewer will look for in the
+    statement on the row — but whether it is *missing* is decided against the id. Getting that
+    backwards files ``coverage_miss`` against a table the turn was allowed to read, and sends
+    somebody to curate an asset that already exists.
+
+    The id is derived from the gold's **verbatim** spelling and lowercased afterwards, never the
+    other way round: the slug's digest is taken over the exact name, so folding the case first
+    derives a real-looking id for a table that does not exist and every slugged name reads as
+    missing again.
     """
     gold = gold_tables(str(row.get("gold_sql") or ""))
     if gold is None:
         return None
     licensed = {str(t).lower() for t in (row.get("licensed") or ())}
-    return {t for t in (str(g).lower() for g in gold) if t not in licensed}
+    return {str(g).lower() for g in gold if not gold_table_ids(str(g)) & licensed}
 
 
 def _read_jsonl(path: Path) -> Iterator[dict[str, Any]]:

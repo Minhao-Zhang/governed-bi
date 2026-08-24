@@ -187,12 +187,22 @@ def _state_problems(obs: Observation) -> list[str]:
 
 
 def _may_file_operator_only(obs: Observation) -> bool:
-    """Operator, or the one agent-writable exception ADR 0005 declares."""
-    from governed_bi.feedback.events import Category
+    """The operator, and nobody else. One line, and it used to be three.
 
-    if obs.source is Source.operator:
-        return True
-    return obs.source is Source.agent and obs.category is Category.column_suspect
+    It read ``if operator: return True`` followed by
+    ``return obs.source is Source.agent and obs.category is Category.column_suspect``, and called
+    that second line "the one agent-writable exception ADR 0005 declares". The exception was real in
+    the design and **unreachable in the code**: nothing in ``src/`` or ``tools/`` ever constructed an
+    observation with ``Source.agent``, so the branch could not evaluate true for any row this tree
+    can produce, and its only exerciser was a test that filed one itself. ``Source.agent`` is gone
+    (see :class:`~governed_bi.feedback.events.Source`), so this says what the code already meant.
+
+    Kept as a named function rather than inlined at the one call site, because the *name* is the
+    claim being made about ``OPERATOR_ONLY_CATEGORIES`` -- and the next widening should have to
+    change a function whose docstring records what the last one actually bought, which was a
+    sentence a reader believed and no row could reach.
+    """
+    return obs.source is Source.operator
 
 
 def _patch_problems(patch: Patch) -> list[str]:

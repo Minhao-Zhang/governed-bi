@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from governed_bi.feedback.events import (
+    OPERATOR_ONLY_CATEGORIES,
     Category,
     DeclineReason,
     Kind,
@@ -83,20 +84,32 @@ def test_a_category_is_refused_on_a_card_it_cannot_apply_to(tmp_path: Path) -> N
         _store(tmp_path).file(_filed(category=Category.false_refusal))
 
 
-def test_a_reader_may_not_name_a_column(tmp_path: Path) -> None:
+def test_all_three_operator_only_categories_are_refused_from_a_reader(tmp_path: Path) -> None:
     """The operator-only categories name an asset. A filer who cannot read the corpus cannot name
-    one, and a wrong pick sends a reviewer to the wrong asset with a confident-looking pointer."""
-    with pytest.raises(Rejected, match="operator-only"):
-        _store(tmp_path).file(_filed(category=Category.column_excluded))
+    one, and a wrong pick sends a reviewer to the wrong asset with a confident-looking pointer. The
+    gate is the ``Source`` axis and nothing else, checked here on every member of the set.
 
+    **This test asserted the opposite until 2026-08-24.** It was
+    ``test_an_agent_may_file_column_suspect_and_not_column_excluded``, filing with
+    ``source=Source.agent`` on the strength of ADR 0005's split -- ``Reliability.status`` is
+    AI-authorable, ``Governance.excluded`` is "human-only, enforced by the absence of a tool". The
+    split is real; the *producer* was not. Nothing in ``src/`` or ``tools/`` ever wrote
+    ``Source.agent``, so this test was the only construction site in the repository and it was
+    covering a branch of ``validate.py`` that no shipped code path could reach -- a dead permission
+    with a passing coverage number on it, which is what
+    ``tests/feedback/test_every_read_on_the_store_has_a_caller.py`` says about a method whose only
+    caller is its own test.
 
-def test_an_agent_may_file_column_suspect_and_not_column_excluded(tmp_path: Path) -> None:
-    """ADR 0005's split, exactly: ``Reliability.status`` is AI-authorable and
-    ``Governance.excluded`` is "human-only, enforced by the absence of a tool"."""
+    What is asserted instead is the rule that is actually in force, over the whole set rather than
+    over one member: an operator may name a column and nobody else may. ``column_suspect`` is in
+    here deliberately -- it is the member the deleted exception carved out, so a reintroduced
+    widening fails here rather than passing silently.
+    """
     store = _store(tmp_path)
-    store.file(_filed(source=Source.agent, category=Category.column_suspect))
-    with pytest.raises(Rejected, match="operator-only"):
-        store.file(_filed(source=Source.agent, category=Category.column_excluded))
+    for category in sorted(OPERATOR_ONLY_CATEGORIES, key=lambda c: c.value):
+        with pytest.raises(Rejected, match="operator-only"):
+            store.file(_filed(source=Source.reader, category=category))
+        store.file(_filed(source=Source.operator, category=category))
 
 
 def test_a_note_over_the_cap_names_the_cap(tmp_path: Path) -> None:

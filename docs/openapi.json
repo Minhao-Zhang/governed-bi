@@ -2231,8 +2231,13 @@
           },
           "source": {
             "type": "string",
+            "enum": [
+              "interrupt",
+              "from_refusal",
+              "wrong_answer"
+            ],
             "title": "Source",
-            "description": "`interrupt` | `from_refusal` | `wrong_answer`."
+            "description": "Which population this row came from, and the one column never null. `interrupt` is a live `ask_user` pause read out of thread state (`api/thread_turns.py::PENDING_SOURCE_INTERRUPT`); the other two are an open observation's `kind`, read out of `runs/feedback.sqlite` (`api/feedback_routes.py::_as_pending_row`). **Declared as an `enum` since 2026-08-24, where the three values were named in this description only** -- and descriptions are the one thing `tests/api/test_the_spec_matches_the_server.py` does not check, so the spec's only statement about this column was unfalsifiable prose."
           },
           "basis": {
             "anyOf": [
@@ -4271,10 +4276,9 @@
             "enum": [
               "reader",
               "operator",
-              "agent",
               "eval"
             ],
-            "description": "Which population filed it. `eval` means an eval artifact rather than a person, and it is the only value on which `question_is_held_out` is true."
+            "description": "Which population filed it. `eval` means an eval artifact rather than a person, and it is the only value on which `question_is_held_out` is true. **`agent` was declared here until 2026-08-24 and no row could ever carry it** -- the server has no code path that writes it, so a client written from this list was told to handle a value it can never receive. It comes back with ADR 0015 Decision 5's triage pipeline."
           },
           "kind": {
             "type": "string",
@@ -4600,12 +4604,9 @@
           "author": {
             "type": "string",
             "enum": [
-              "reader",
-              "operator",
-              "agent",
-              "eval"
+              "operator"
             ],
-            "description": "Who drafted it. `operator` on everything this route creates."
+            "description": "Who drafted it. `operator` on everything this route creates -- and on everything anything creates: the drafting route is the only producer of a patch and it is on the steward's router. Narrowed from the whole `Source` vocabulary on 2026-08-24, which declared `reader`, `agent` and `eval` as possible patch authors when no code path writes any of the three."
           },
           "intent": {
             "type": "string",

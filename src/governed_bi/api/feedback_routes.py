@@ -68,11 +68,7 @@ from governed_bi.feedback.store import (
 from governed_bi.feedback.validate import NOTE_MAX_CHARS
 from governed_bi.register.assets import AssetType
 
-__all__ = ["make_admin_router", "make_feedback_router", "PENDING_SOURCE_INTERRUPT"]
-
-#: ``source`` on a pending row that came from a live ``ask_user`` interrupt rather than from the
-#: store. Kept from the deleted module: the client switches on it to decide which card to draw.
-PENDING_SOURCE_INTERRUPT = "interrupt"
+__all__ = ["make_admin_router", "make_feedback_router"]
 
 #: Cap on the optional after-the-fact ``expected`` line. Short on purpose — it is one claim
 #: ("about 400, not 4102"), and a field that invites a paragraph gets a paragraph nobody reads.
@@ -489,6 +485,12 @@ def _as_pending_row(obs: Observation) -> dict[str, Any]:
 
     Every declared column is present and null where it does not apply, never absent: a client
     forced to tell "no value" from "no such key" ends up guessing which kind of row it holds.
+
+    ``source`` is ``obs.kind.value`` -- ``from_refusal`` or ``wrong_answer`` -- which is this half of
+    the one column that says which population a row came from. The third value is
+    ``thread_turns.PENDING_SOURCE_INTERRUPT``, written where it is produced. This module used to
+    *declare* that constant and never emit it, so the axis had two spellings in two files and the
+    one a reader would have found first was the unreachable one.
     """
     return {
         "asked_at": obs.filed_at,
