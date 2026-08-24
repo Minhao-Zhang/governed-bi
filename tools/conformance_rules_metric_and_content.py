@@ -149,6 +149,35 @@ def _identifiers_in(expression: str) -> set[str]:
     return out
 
 
+def _elsewhere_hint(
+    reference: str,
+    base: str,
+    columns_of: dict[str, set[str]],
+    joins: dict[str, set[str]],
+) -> str:
+    """Where else this column name lives, **preferring a table a declared join can reach**.
+
+    This used to name ``sorted(...)[0]`` -- the first table alphabetically. A name like ``id`` or
+    ``total`` lives on dozens of tables across schemas, so the hint sent the writer to whichever one
+    sorts first, which is almost never the one they can join to. A hint that names the wrong fix
+    costs more than no hint, because the writer acts on it.
+    """
+    carriers = sorted(t for t, names in columns_of.items() if reference.lower() in names)
+    if not carriers:
+        return "; it exists on no table in this corpus"
+    reachable = [t for t in carriers if t in joins.get(base, set())]
+    if reachable:
+        return (
+            f"; it exists on {reachable[0]}, which base_table already joins to -- qualify the "
+            "reference"
+        )
+    others = f" (and {len(carriers) - 1} other table(s))" if len(carriers) > 1 else ""
+    return (
+        f"; it exists on {carriers[0]}{others}, none of them reachable from {base} -- this needs a "
+        "declared join and a qualified reference"
+    )
+
+
 def check_metric_bindings(assets: list[tuple[str, dict[str, Any], Path]]) -> list[Finding]:
     """V17b: every identifier resolves on ``base_table``, or on a table a declared join reaches.
 
@@ -173,7 +202,14 @@ def check_metric_bindings(assets: list[tuple[str, dict[str, Any], Path]]) -> lis
                     if name:
                         columns_of[table_id].add(name.lower())
         elif kind == AssetType.column.value:
-            table_id = _text(a.get("table"))
+            # ``parent_table``, which ``register/assets.py`` declares and ``corpus/analyst.py``
+            # writes -- and which holds the table's *asset id*, the key ``columns_of`` uses. This
+            # read ``table``, a field no asset carries, so the branch contributed nothing and a
+            # metric referencing a standalone column asset was reported as unresolvable. A gate's
+            # false positive refuses correct work, and ``../BIRD-corpus`` carries zero standalone
+            # column assets, so its measured population could not have caught it. ``table`` stays
+            # as a fallback because reading one extra key costs nothing.
+            table_id = _text(a.get("parent_table")) or _text(a.get("table"))
             name = _text(a.get("name")) or _text(a.get("physical_name"))
             if table_id and name:
                 columns_of[table_id].add(name.lower())
@@ -212,26 +248,55 @@ def check_metric_bindings(assets: list[tuple[str, dict[str, Any], Path]]) -> lis
                         Finding(f"{where}: {reference} does not resolve -- {known}")
                     )
             elif reference.lower() not in columns_of.get(base, set()):
-                elsewhere = sorted(
-                    table for table, names in columns_of.items() if reference.lower() in names
+                out.append(
+                    Finding(
+                        f"{where}: {reference} is not a column of {base}"
+                        + _elsewhere_hint(reference, base, columns_of, joins)
+                    )
                 )
-                hint = (
-                    f"; it exists on {elsewhere[0]}, which needs a declared join and a qualified "
-                    "reference"
-                    if elsewhere
-                    else "; it exists on no table in this corpus"
-                )
-                out.append(Finding(f"{where}: {reference} is not a column of {base}{hint}"))
     return out
 
 
-def check_excluded_not_named(assets: list[tuple[str, dict[str, Any], Path]]) -> list[Finding]:
-    """V19: no model-visible ``body`` names a ``governance.excluded`` column or asset.
+def model_visible_text(kind: str, asset: dict[str, Any]) -> str:
+    """Every string in ``asset`` that reaches a prompt, concatenated. **One definition, two rules.**
 
-    **`body`, not `summary`.** ``summary`` never reaches the prompt -- ``serve/context.py`` reads
-    ``body`` -- it reaches the retrieval index. So a name in a ``summary`` is a routing signal and a
-    name in a ``body`` is a disclosure, and conflating them would make the rule fire on the wrong
-    field.
+    V19 asks whether prompt text names an excluded column; V21 asks whether prompt text passes the
+    rules that screen a reader's question. Both need the same answer to "what does the model see",
+    and two copies of that answer would be two answers able to disagree -- which is the argument
+    V21's own docstring makes and then did not follow.
+
+    ``body`` for every asset type. **Plus ``summary`` and ``sql`` for a few-shot with no body**,
+    because ``serve/context.py`` falls back to exactly that pair and renders them concatenated. Both
+    rules used to claim, in prose, that ``summary`` never reaches the prompt. For one asset type it
+    does, and a rule that states a false reason is a rule the next reader will not re-check.
+
+    Measured on ``../BIRD-corpus``: 4,857 few-shots and none without a body, so the fallback is
+    latent. It is covered anyway -- the cost is one ``or`` and the failure mode is a disclosure that
+    no test would have caught.
+    """
+    body = _text(asset.get("body"))
+    if body:
+        return body
+    if kind != "few_shot":
+        return ""
+    summary, sql = _text(asset.get("summary")), _text(asset.get("sql"))
+    return NEWLINE.join(part for part in (summary, sql) if part)
+
+
+NEWLINE = chr(10)
+
+
+def check_excluded_not_named(assets: list[tuple[str, dict[str, Any], Path]]) -> list[Finding]:
+    """V19: no model-visible text names a ``governance.excluded`` column or asset.
+
+    **Prompt text, and this rule used to define that wrong.** It read ``body`` alone and said in
+    prose that "``summary`` never reaches the prompt". For one asset type it does:
+    ``serve/context.py`` renders a few-shot with no ``body`` from ``summary`` and ``sql``
+    concatenated. So the field is not the distinction -- reaching the prompt is -- and
+    :func:`model_visible_text` is now the one place that answers it, shared with V21.
+
+    A term's summary still does not fire, and that part was always right: it reaches the retrieval
+    index, so a name in it is a routing signal rather than a disclosure.
 
     ADR 0003 found exactly this: an asset naming an excluded column in text that was then injected
     verbatim into the SQL prompt, and concluded a content-scanning validator was the structural
@@ -265,7 +330,7 @@ def check_excluded_not_named(assets: list[tuple[str, dict[str, Any], Path]]) -> 
 
     out: list[Finding] = []
     for kind, a, path in assets:
-        body = _text(a.get("body"))
+        body = model_visible_text(kind, a)
         if not body:
             continue
         where = _where(kind, a, path)
@@ -280,6 +345,13 @@ def check_excluded_not_named(assets: list[tuple[str, dict[str, Any], Path]]) -> 
     return out
 
 
+#: Guard rules V21 does **not** run on corpus text, with the reason, because a rule silently
+#: absent from a loop is indistinguishable from a rule that passed. ``g_length`` bounds a reader's
+#: question; V13 bounds a body, and it reports the length as the writer's problem rather than as a
+#: security refusal.
+SKIPPED_GUARD_RULES: frozenset[str] = frozenset({"g_length"})
+
+
 def check_guard_rules(kind: str, a: dict[str, Any], where: str) -> list[Finding]:
     """V21: model-visible text passes ``govern/guard.py``'s own rules.
 
@@ -290,26 +362,40 @@ def check_guard_rules(kind: str, a: dict[str, Any], where: str) -> list[Finding]
     retrieves it.
 
     Measured: one finding, ``public_review_platform/few-shots/fs_public_review_platform_0012.yaml``,
-    which ships two U+200B zero-width spaces.
+    which ships two U+200B zero-width spaces -- that one is ``g_encoding``.
 
-    ``g_length`` is skipped: it is a cap on a reader's question and V13 already caps a body, so
-    running it here would refuse a long asset for the wrong reason.
+    **It used to run one rule of five and say it ran them all.** The docstring made the argument for
+    reuse and then imported ``has_control_characters`` and restated the encoding rule by hand, so
+    ``g_instruction_override``, ``g_role_injection`` and ``g_tool_forgery`` never ran on corpus text.
+    Those three are the whole reason the corpus is the more dangerous channel: an injected question
+    is refused once, and an injected body is retrieved again on every turn that matches it.
+
+    ``g_length`` is skipped, and that one is declared in :data:`SKIPPED_GUARD_RULES` rather than
+    left out: it is a cap on a reader's question and V13 already caps a body, so running it here
+    would refuse a long asset for the wrong reason, and a writer acts on the reason.
     """
-    body = _text(a.get("body"))
-    if not body:
+    text = model_visible_text(kind, a)
+    if not text:
         return []
     try:
-        from governed_bi.govern.guard import has_control_characters
+        from governed_bi.govern.guard import GUARD_RULES
+        from governed_bi.govern.policy import GovernancePolicy
     except ImportError:  # pragma: no cover
         return []
-    if has_control_characters(body):
-        return [
-            Finding(
-                f"{where}: body carries a control or zero-width character that guard's g_encoding "
-                "rule refuses on a reader's question"
+    policy = GovernancePolicy()
+    out: list[Finding] = []
+    for rule_id, predicate in GUARD_RULES.items():
+        if rule_id in SKIPPED_GUARD_RULES:
+            continue
+        detail = predicate(text, policy)
+        if detail:
+            out.append(
+                Finding(
+                    f"{where}: model-visible text trips guard's {rule_id} rule, which refuses this "
+                    f"on a reader's question -- {detail!r}"
+                )
             )
-        ]
-    return []
+    return out
 
 
 def check_unique_ids(assets: list[tuple[str, dict[str, Any], Path]]) -> list[Finding]:
