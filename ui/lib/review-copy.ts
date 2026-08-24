@@ -176,6 +176,11 @@ export const REVIEW_COPY = {
   diffEmpty:
     "No words changed. This patch would produce an empty diff, which means the field already holds the replacement.",
 
+  /** The case the empty-diff caption used to swallow. It is a different fact and it gets a
+   *  different sentence: the text is not the same text, and it is still not a change. */
+  diffWhitespaceOnly:
+    "Only whitespace differs — a newline, a blank line, or a doubled space. No word changes, so nothing retrieval searches and nothing the model reads is different. The corpus writer refuses part of this outright, because a value that does not read back as typed is not written at all. Change a word or leave the field alone.",
+
   /** Both the decline form and the withdraw form require one, and the requirement is the server's. */
   reasonRequired:
     "A reason is required. A closed row whose why lives only in somebody's memory gets re-opened from scratch six weeks later.",

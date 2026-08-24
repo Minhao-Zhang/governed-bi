@@ -17,7 +17,7 @@
  * `diffEmpty` is a real state the surface has a sentence for.
  */
 
-import { diffSize, diffWords, type DiffSpan } from "../lib/asset-diff.ts";
+import { classifyEdit, diffSize, diffWords, type DiffSpan } from "../lib/asset-diff.ts";
 
 let failed = false;
 
@@ -79,6 +79,60 @@ check(
   diffSize(rewrapped).added === 0 && diffSize(rewrapped).removed === 0,
   `re-wrapping is not a change -- a YAML folded scalar re-wraps on write: ${render(rewrapped)}`,
 );
+
+/* ── the three cases the surface must not collapse ──────────── */
+
+/* A whitespace-only replacement is +0 -0 words, which is true and is not the whole answer. The
+ * surface used to show it the `diffEmpty` sentence -- "the field already holds the replacement" --
+ * and leave the submit button enabled, so the steward was told nothing changed and then allowed to
+ * submit it as a change. `classifyEdit` is the one rule that separates the three, and both the
+ * caption and the gate read it. */
+
+const WAS = "one row per order";
+const TRAILING_NEWLINE = `${WAS}\n`;
+const DOUBLED_SPACE = "one row per  order";
+const LEADING_BLANK_LINE = `\n${WAS}`;
+
+check(
+  classifyEdit(WAS, WAS) === "identical",
+  `identical text classifies as identical (got ${classifyEdit(WAS, WAS)})`,
+);
+check(
+  classifyEdit(WAS, TRAILING_NEWLINE) === "whitespace_only",
+  `a trailing newline is whitespace_only, not identical (got ${classifyEdit(WAS, TRAILING_NEWLINE)})`,
+);
+check(
+  classifyEdit(WAS, DOUBLED_SPACE) === "whitespace_only",
+  `a doubled space is whitespace_only (got ${classifyEdit(WAS, DOUBLED_SPACE)})`,
+);
+check(
+  classifyEdit(WAS, LEADING_BLANK_LINE) === "whitespace_only",
+  `a leading blank line is whitespace_only (got ${classifyEdit(WAS, LEADING_BLANK_LINE)})`,
+);
+check(
+  classifyEdit(WAS, "one row per shipment") === "words_changed",
+  `a substituted word is words_changed (got ${classifyEdit(WAS, "one row per shipment")})`,
+);
+check(
+  classifyEdit("", "a new summary") === "words_changed",
+  "filling an empty field is words_changed",
+);
+
+/* The gate the draft form applies, stated once here so a regression in it is red rather than a
+ * button somebody clicks. Only `words_changed` is submittable. */
+const submittable = (was: string, becomes: string): boolean =>
+  classifyEdit(was, becomes) === "words_changed";
+
+check(
+  !submittable(WAS, TRAILING_NEWLINE),
+  "a whitespace-only replacement is not submittable -- the diff reports no words changed, so a form that accepted it drafts a patch with no content",
+);
+check(!submittable(WAS, WAS), "an identical replacement is not submittable");
+check(
+  submittable(WAS, "one row per placed order"),
+  "an added word is submittable, which is the case the guard must not catch",
+);
+
 
 /* ── the empty cases, because a patch form starts empty ────────────────────── */
 

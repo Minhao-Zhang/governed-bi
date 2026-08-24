@@ -12,10 +12,14 @@
  * **Colour is not the only signal.** Each run carries a `+`/`−` marker as well, because a
  * red/green diff is unreadable to a colour-blind reviewer and this is the screen where the
  * decision is made.
+ *
+ * **"+0 −0 words" is two different situations and they get two different sentences.** The replacement can
+ * be the text already there, or it can differ only in whitespace. Both count zero words; only the
+ * second is a value the steward typed and cannot submit. `classifyEdit` names which.
  */
 
 import { Badge } from "@/components/ui/badge";
-import { diffSize, diffWords } from "@/lib/asset-diff";
+import { classifyEdit, diffSize, diffWords } from "@/lib/asset-diff";
 import { FIELD_COPY, REVIEW_COPY } from "@/lib/review-copy";
 
 export function AssetDiff({
@@ -31,6 +35,7 @@ export function AssetDiff({
 }): React.JSX.Element {
   const spans = diffWords(was, becomes);
   const { added, removed } = diffSize(spans);
+  const kind = classifyEdit(was, becomes);
   const field = FIELD_COPY[fieldPath];
 
   return (
@@ -65,8 +70,14 @@ export function AssetDiff({
         })}
       </p>
 
-      {added + removed === 0 && (
+      {kind === "identical" && (
         <p className="text-xs text-muted-foreground">{REVIEW_COPY.diffEmpty}</p>
+      )}
+
+      {kind === "whitespace_only" && (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          {REVIEW_COPY.diffWhitespaceOnly}
+        </p>
       )}
     </div>
   );

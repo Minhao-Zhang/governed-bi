@@ -188,6 +188,9 @@ jobs:
       - name: Asset-diff minimality
         run: npm run check:asset-diff
 
+      - name: Patch fields — the client refuses what the engine refuses
+        run: npm run check:patch-fields
+
       # `npm run check:api` and `npm run check:stream-messages` are deliberately NOT here.
       # `check:api` needs a live engine and a loaded corpus (ADR 0009 says so in the section that
       # introduces it); `check:stream-messages` is pure and could run, but it is a red/green

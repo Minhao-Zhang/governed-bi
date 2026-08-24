@@ -113,3 +113,29 @@ export function diffSize(spans: DiffSpan[]): { added: number; removed: number } 
   }
   return { added, removed };
 }
+
+/** Which of the three things a replacement is. Only the third is a change. */
+export type EditKind = "identical" | "whitespace_only" | "words_changed";
+
+/**
+ * Whether `becomes` changes anything, and if not, which way it fails to.
+ *
+ * **This lives beside the diff rather than in the draft form, because the caption and the submit
+ * gate have to agree.** A form that decided submittability itself would hold a second definition of
+ * "a word", and the two would drift: the diff says "+0 −0 words" while the button says the edit is
+ * real, which is exactly the defect this replaces. One `tokenize`, one rule, both callers read it.
+ *
+ * A whitespace-only replacement is not submittable. Nothing a reader sees changes, nothing
+ * retrieval indexes changes, and `corpus/patch.py::apply_edit` refuses part of the family outright
+ * — it re-parses the text it wrote and raises `UnwritableValue` when the value does not read back
+ * as given, which is what an added trailing newline or a doubled space inside a folded block does.
+ * The rest of the family lands a commit no reader can tell from its parent. Neither is worth a
+ * patch, and the difference between them is not worth a second sentence on the screen.
+ */
+export function classifyEdit(was: string, becomes: string): EditKind {
+  if (was === becomes) return "identical";
+  const a = tokenize(was);
+  const b = tokenize(becomes);
+  const sameWords = a.length === b.length && a.every((token, index) => token === b[index]);
+  return sameWords ? "whitespace_only" : "words_changed";
+}

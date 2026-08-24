@@ -13,6 +13,11 @@
  * check compares against, so a patch nobody had touched would report `superseded`. The field says
  * so, because the value a person has to hand is exactly the wrong one.
  *
+ * **A replacement that changes no words cannot be submitted.** `classifyEdit` decides that, and
+ * it is the same call the diff below the form renders its caption from — a second comparison here
+ * would be a second definition of "a word", and the two drifting is how the form came to enable a
+ * submit under a diff reading "+0 −0 words".
+ *
  * **What this panel cannot do, and says so:** export a bundle. That is `tools/export_bundle.py`,
  * run by a person, and it is where two content checks are fatal — an excluded column named in the
  * new text, and five consecutive words quoted from a held-out question. A button here that skipped
@@ -29,10 +34,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useDraftPatch, useWithdrawPatch } from "@/hooks/queries";
 import { ApiError } from "@/lib/api-client";
+import { classifyEdit } from "@/lib/asset-diff";
+import { HASH_CHARS, patchHashProblem } from "@/lib/patch-fields";
 import { REVIEW_COPY } from "@/lib/review-copy";
 import type { Observation } from "@/lib/types";
 
-const HASH_CHARS = 64;
 
 /** A patch as it arrives on an observation's detail: opaque on the wire, so the fields this panel
  *  reads are narrowed here rather than trusted from a type. */
@@ -74,12 +80,14 @@ export function HandoffPanel({
   const patches = (observation.patches ?? []) as PatchRow[];
   const live = patches.filter((p) => str(p.state) !== "withdrawn");
 
-  const hashLooksWrong = hash.length > 0 && hash.length !== HASH_CHARS;
+  const hashProblem = patchHashProblem(hash);
   const canSubmit =
     assetId.trim() !== "" &&
     was.trim() !== "" &&
     becomes.trim() !== "" &&
-    hash.length === HASH_CHARS &&
+    classifyEdit(was, becomes) === "words_changed" &&
+    hash !== "" &&
+    hashProblem === null &&
     !draft.isPending;
 
   async function submit(): Promise<void> {
@@ -212,13 +220,10 @@ export function HandoffPanel({
             <Input
               value={hash}
               onChange={(e) => setHash(e.target.value.trim())}
-              aria-invalid={hashLooksWrong}
+              aria-invalid={hashProblem !== null}
             />
-            {hashLooksWrong && (
-              <span className="text-destructive">
-                {hash.length} characters. A truncated hash never equals the digest the landing check
-                compares against, so the patch would report `superseded` while nothing had changed.
-              </span>
+            {hashProblem !== null && (
+              <span className="text-destructive">{hashProblem}</span>
             )}
           </label>
 
