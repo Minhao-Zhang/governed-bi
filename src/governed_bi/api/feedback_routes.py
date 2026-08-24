@@ -619,7 +619,10 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
         except _BadRequest as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        observations = [str(o) for o in ((body or {}).get("observations") or [])]
+        try:
+            observations = _string_list((body or {}).get("observations"), "observations")
+        except _BadRequest as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         for observation_id in observations:
             if store.get(observation_id) is None:
                 raise HTTPException(
@@ -705,6 +708,27 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
 
 class _BadRequest(ValueError):
     """A body this surface can reject without asking the store."""
+
+
+def _string_list(value: Any, field: str) -> list[str]:
+    """``value`` as a list of ids, or :class:`_BadRequest` naming what arrived instead.
+
+    This was ``[str(o) for o in (value or [])]``, which fails two ways and neither of them says what
+    the caller did. A number is not iterable, so the comprehension raised ``TypeError`` out of the
+    route and the caller got a **500** -- a claim about the engine, which sends the operator to the
+    wrong half. A *string* is iterable, so ``"obs-nope"`` became ``o``, ``b``, ``s``, ... and the
+    route answered ``404 no observation 'o'``: a true status code carrying a message with no
+    relationship to the request, which costs more than the crash because nothing about it looks
+    wrong.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise _BadRequest(
+            f"{field} must be a list of observation ids, and this request sent "
+            f"{type(value).__name__}. A single id goes in a list of one."
+        )
+    return [str(item) for item in value]
 
 
 def _patch_from_body(body: dict[str, Any]) -> Patch:

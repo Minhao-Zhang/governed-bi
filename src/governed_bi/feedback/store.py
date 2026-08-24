@@ -346,7 +346,22 @@ class FeedbackStore:
                 blocked_note=blocked_note or current.blocked_note,
                 triaged_at=current.triaged_at or utc_now(),
             )
-            faults = faults_with(proposed)
+            faults = list(faults_with(proposed))
+            # `validate.py` catches the two `duplicate_of` cases it can see without a store -- no id
+            # on a `duplicate`, and an id naming the row itself -- and cannot catch the third,
+            # because knowing whether a row exists means asking. Left to the constraint, the answer
+            # was `sqlite3.IntegrityError` raising out of the route as a **500**, which tells the
+            # operator the engine broke. Asked here, it is one more fault in the same list the
+            # caller already maps to 422.
+            if (
+                proposed.duplicate_of
+                and proposed.duplicate_of != current.duplicate_of
+                and _observation_or_none(conn, proposed.duplicate_of) is None
+            ):
+                faults.append(
+                    f"duplicate_of names {proposed.duplicate_of!r}, which is not an observation in "
+                    "this store"
+                )
             if faults:
                 raise Rejected(f"observation {observation_id} -> {to.value}", faults)
 

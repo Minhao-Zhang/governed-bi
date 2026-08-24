@@ -204,3 +204,76 @@ def test_the_list_is_newest_first_and_filters_by_state(
     unknown = client.get("/patches?state=landed")
     assert unknown.status_code == 422
     assert "withdrawn" in str(unknown.json()["detail"]), "the 422 names the declared set"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bad input from the caller is 422. A 500 tells the operator the engine broke.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("observations", [5, 3.5, True, {"observation_id": "obs-1"}])
+def test_a_non_list_observations_field_is_422_and_not_a_crash(
+    client_and_store: tuple[Any, FeedbackStore], observations: object
+) -> None:
+    """`observations` is read as `[str(o) for o in (...)]` with nothing checking the shape.
+
+    A number is not iterable, so the comprehension raises `TypeError` straight out of the route and
+    the caller gets a 500. A 500 is a claim about the *engine*: the operator reads it as "the store
+    is broken" and files against the wrong half. The request was wrong, which is what 422 says.
+    """
+    client, store = client_and_store
+    done = _draft(client, observations=observations)
+    assert done.status_code == 422, f"{done.status_code}: {done.text[:300]}"
+    assert store.patches(limit=10).total == 0, "and nothing was written"
+
+
+def test_a_string_observations_field_does_not_iterate_into_characters(
+    client_and_store: tuple[Any, FeedbackStore]
+) -> None:
+    """A string *is* iterable, so this one does not crash -- it does something worse.
+
+    `"obs-nope"` iterates into `o`, `b`, `s`, ... and the route reports
+    `{"detail": "no observation 'o'"}`. That is a 404 naming a single character as a missing row: a
+    true status code carrying a message with no relationship to what the caller sent, which costs
+    more than the crash because the operator has no reason to disbelieve it.
+    """
+    client, _ = client_and_store
+    done = _draft(client, observations="obs-nope")
+    assert done.status_code == 422, f"{done.status_code}: {done.text[:300]}"
+    assert "'o'" not in done.text, f"the error names one character: {done.text[:200]}"
+
+
+def test_a_duplicate_of_naming_no_row_is_422_and_not_a_500(
+    client_and_store: tuple[Any, FeedbackStore]
+) -> None:
+    """`duplicate_of` is passed through to a column with a foreign key and no prior check.
+
+    `validate.py` catches the two cases it can see without the store -- `duplicate` with no
+    `duplicate_of`, and `duplicate_of` naming the row itself -- and cannot catch the third, because
+    knowing whether a row exists means asking the store. So the constraint answers, as an
+    `IntegrityError` the route does not catch.
+    """
+    client, store = client_and_store
+    from governed_bi.feedback.events import Kind, Observation, ObservationState, Source
+    from governed_bi.feedback.store import mint_observation_id, utc_now
+
+    obs = Observation(
+        observation_id=mint_observation_id(),
+        filed_at=utc_now(),
+        source=Source.reader,
+        kind=Kind.wrong_answer,
+        state=ObservationState.open,
+        note="the total is about 400, not 4102",
+        question="how much revenue last month?",
+        turn_id=TURN,
+        thread_id="t-1",
+    )
+    store.file(obs)
+    store.move(obs.observation_id, to=ObservationState.triaged, detail="")
+
+    done = client.post(
+        f"/observations/{obs.observation_id}/triage",
+        json={"to": "duplicate", "duplicate_of": "obs-does-not-exist"},
+    )
+    assert done.status_code == 422, f"{done.status_code}: {done.text[:300]}"
+    assert "duplicate_of" in done.text

@@ -161,7 +161,14 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.record:
-        passed = bool(gone) and not still
+        passed = tier_verdict(outcomes)
+        if passed is None:
+            print(
+                f"recorded nothing on {args.patch}: T3 does not apply to any of these "
+                f"{len(outcomes)} observation(s). An unrun tier is absent from the ladder, not a "
+                "failure -- a `body`-only edit is answerable at T4 and nowhere cheaper."
+            )
+            return 0
         store.record_ladder(
             str(args.patch),
             "T3",
@@ -203,6 +210,28 @@ def _why_not(observation: Observation) -> str | None:
             "failure and coverage cannot answer it"
         )
     return None
+
+
+def tier_verdict(outcomes: list[Outcome]) -> bool | None:
+    """Did T3 pass, fail, or **not apply** -- ``None`` for the third.
+
+    ``Outcome.reproduced`` is already tri-state and this used to collapse it to a boolean with
+    ``bool(gone) and not still``, which reads an all-not-applicable run as a **failure**: both lists
+    are empty, so the tier records ``passed: False`` and the tool exits 1. A ``body``-only patch is
+    exactly that run -- ``body`` does not enter the retrieval index, so retrieval cannot see the edit
+    and the honest tier is T4 -- and it was being handed a red T3 instead.
+
+    ``verify_patch.py`` states the rule: a tier that cannot run is *absent* from the ladder rather
+    than recorded as skipped-therefore-fine. Absent and not failed, because a failed tier blocks a
+    handoff that nothing here has evidence against.
+
+    A mixed run reads only the observations it could check. A not-applicable one is reported in
+    ``outcomes`` for the reviewer and is not folded into the verdict.
+    """
+    checked = [o.reproduced for o in outcomes if o.reproduced is not None]
+    if not checked:
+        return None
+    return not any(checked)
 
 
 def _recheck(observations: list[Observation], session: object) -> list[Outcome]:

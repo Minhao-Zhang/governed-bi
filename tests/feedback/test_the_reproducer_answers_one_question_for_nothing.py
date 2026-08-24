@@ -244,3 +244,53 @@ def test_only_a_summary_edit_is_answerable_by_retrieval(field: str) -> None:
         assert result is None, "a body-only patch must be refused, not checked"
     else:
         assert result is not None and len(result) == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# "Nothing here applies" is not "this tier failed".
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_tier_that_could_not_run_records_nothing_rather_than_a_failure() -> None:
+    """The docstring says the tool says which of the three -- "never `passed`". It said *failed*.
+
+    ``passed = bool(gone) and not still``, so when every observation is not-applicable both lists
+    are empty and the tier records ``passed: False`` and the tool exits 1. A ``body``-only patch is
+    exactly this case, and the module names it: ``body`` does not enter the retrieval index, so
+    retrieval cannot see the change and the honest tier is T4.
+
+    ``verify_patch.py`` already states the rule this violates -- "a tier that cannot run must not be
+    reported as passing, so an unrun tier is simply absent from the ladder rather than recorded as
+    skipped-therefore-fine". Absent, and *not* failed: a failed T3 blocks a handoff that nothing
+    here has any evidence against.
+    """
+    import reproduce_observation as ro
+
+    verdict = ro.tier_verdict([ro.Outcome("obs-1", None, "no gold statement")])
+    assert verdict is None, f"an all-not-applicable run must record nothing, got {verdict}"
+
+
+@pytest.mark.parametrize(
+    ("reproduced", "expected"),
+    [
+        ((False,), True),
+        ((False, False), True),
+        ((True,), False),
+        ((True, False), False),
+        ((None, False), True),
+        ((None, True), False),
+    ],
+)
+def test_the_verdict_reads_only_the_observations_it_could_check(
+    reproduced: tuple[bool | None, ...], expected: bool
+) -> None:
+    """A not-applicable observation neither passes nor fails the tier -- it is not evidence.
+
+    Mixed runs are the common case: a cluster's observations do not all carry a parseable gold
+    statement. The tier's verdict is about the ones it could check, and the ones it could not are
+    reported in ``outcomes`` for the reviewer rather than folded into a boolean.
+    """
+    import reproduce_observation as ro
+
+    outcomes = [ro.Outcome(f"obs-{i}", value, "") for i, value in enumerate(reproduced)]
+    assert ro.tier_verdict(outcomes) is expected
