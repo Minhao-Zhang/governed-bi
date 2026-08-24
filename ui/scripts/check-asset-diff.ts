@@ -17,7 +17,13 @@
  * `diffEmpty` is a real state the surface has a sentence for.
  */
 
-import { classifyEdit, diffSize, diffWords, type DiffSpan } from "../lib/asset-diff.ts";
+import {
+  classifyEdit,
+  diffSize,
+  diffWords,
+  type DiffSpan,
+  type EditKind,
+} from "../lib/asset-diff.ts";
 
 let failed = false;
 
@@ -166,6 +172,40 @@ check(
   middle[0] === "removed" && middle[1] === "added",
   `a removal is emitted before the addition that replaces it: ${render(ordered)}`,
 );
+
+
+// ── punctuation is part of a word ─────────────────────────────────────────────
+//
+// `tokenize` splits on whitespace and nothing else. Stripping punctuation as well survived every
+// check here, and with `classifyEdit` in place the consequence got worse than a wrong word count:
+// deleting a trailing period would classify as `whitespace_only`, so the submit control would refuse
+// a legitimate edit and the caption would say nothing changed.
+//
+// It is not obviously wrong to strip it -- a reviewer might argue re-punctuating is not a change.
+// These cases exist so that argument has to be made out loud rather than arriving as a one-line
+// tidy-up in the tokenizer.
+{
+  const cases: Array<[string, string, string, EditKind]> = [
+    ["a deleted period is a change", "Grain is one order.", "Grain is one order", "words_changed"],
+    ["an added period is a change", "Grain is one order", "Grain is one order.", "words_changed"],
+    [
+      "a comma becoming a semicolon is a change",
+      "orders, one per row",
+      "orders; one per row",
+      "words_changed",
+    ],
+    [
+      "a question mark added to a clause is a change",
+      "how many orders",
+      "how many orders?",
+      "words_changed",
+    ],
+  ];
+  for (const [label, was, becomes, want] of cases) {
+    const got = classifyEdit(was, becomes);
+    check(got === want, `${label} (wanted ${want}, got ${got})`);
+  }
+}
 
 if (failed) {
   console.error("\nasset-diff check FAILED");
