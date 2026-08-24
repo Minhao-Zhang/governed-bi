@@ -450,3 +450,76 @@ def test_v17b_does_not_point_at_an_alphabetically_first_stranger() -> None:
     message = str(findings[0])
     assert "aaa.unrelated" not in message, f"the hint names an alphabetical stranger: {message}"
     assert "shop.payments" in message, f"the hint must name the reachable table: {message}"
+
+
+def test_v23_sees_an_inline_column(tmp_path: Path) -> None:
+    """45% of the tree carried no `id` key, so V23 skipped it.
+
+    Measured on ``../BIRD-corpus``: 5,947 of 13,304 assets are inline columns, and an inline column
+    carries no ``id`` in YAML -- ``corpus/identity.py::derive_column_id`` computes it from the
+    table's id and the column's physical name. ``check_unique_ids`` reads ``a.get("id")`` and skips
+    anything falsy, so it never examined a single column.
+
+    That is the whole rule missing its largest population. V23 exists to catch the
+    ``ValueError: duplicate index id`` that ``build_index`` raises *after* the commit, and a derived
+    column id collides in exactly the same way.
+
+    ``load_assets`` already copies ``schema`` into the inline column for the same reason, with a
+    comment recording that V11 "silently matched nothing and reported a clean corpus" without it.
+    Same defect, same fix, one load earlier.
+    """
+    path = tmp_path / "t.yaml"
+    path.write_text(
+        """asset_type: table
+id: shop.orders
+schema: shop
+physical_name: orders
+summary: orders holds one row per placed order in the shop schema.
+body: >-
+  Grain is one order.
+columns:
+  - name: order_id
+    physical_name: order_id
+    summary: The identifier of this order row.
+""",
+        encoding="utf-8",
+    )
+    loaded = cc.load_assets(path)
+    columns = [a for kind, a, _ in loaded if kind == "column"]
+    assert columns, "the fixture has a column"
+    assert columns[0].get("id") == "shop.orders.order_id", (
+        f"an inline column reaches the rules with id {columns[0].get('id')!r}, and every rule that "
+        "reads `id` skips it"
+    )
+
+
+def test_v23_fires_on_two_columns_deriving_one_id(tmp_path: Path) -> None:
+    """The failure V23 is for, in the population it could not see.
+
+    Two tables in different files whose ids and physical column names derive the same column id.
+    ``build_index`` raises on this after the commit, which is the entire reason the rule exists.
+    """
+    for name in ("a.yaml", "b.yaml"):
+        (tmp_path / name).write_text(
+            f"""asset_type: table
+id: shop.orders
+schema: shop
+physical_name: orders
+summary: orders holds one row per placed order, declared in {name}.
+body: >-
+  Grain is one order.
+columns:
+  - name: order_id
+    physical_name: order_id
+    summary: The identifier of this order row.
+""",
+            encoding="utf-8",
+        )
+    assets: list[Any] = []
+    for name in ("a.yaml", "b.yaml"):
+        assets.extend(cc.load_assets(tmp_path / name))
+
+    findings = cc.check_unique_ids(assets)
+    assert any("shop.orders.order_id" in str(f) for f in findings), (
+        f"no finding names the duplicated column id: {[str(f) for f in findings]}"
+    )

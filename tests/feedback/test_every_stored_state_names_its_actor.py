@@ -11,13 +11,20 @@ on a state nothing reaches, because both are that defect arriving by a different
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from governed_bi.feedback.events import (
     TERMINAL_OBSERVATION_STATES,
     DerivedState,
+    Kind,
+    Observation,
     ObservationState,
+    Patch,
+    PatchIntent,
     PatchState,
+    Source,
 )
 from governed_bi.feedback.lifecycle import (
     PATCH_TRANSITIONS,
@@ -28,6 +35,50 @@ from governed_bi.feedback.lifecycle import (
     is_open,
     transition_for,
 )
+from governed_bi.feedback.store import (
+    FeedbackStore,
+    Rejected,
+    mint_observation_id,
+    mint_patch_id,
+    utc_now,
+)
+from governed_bi.register.assets import AssetType
+
+
+def _filed(store: FeedbackStore) -> Observation:
+    obs = Observation(
+        observation_id=mint_observation_id(),
+        filed_at=utc_now(),
+        source=Source.reader,
+        kind=Kind.wrong_answer,
+        state=ObservationState.open,
+        note="the total is about 400, not 4102",
+        question="how much revenue last month?",
+        turn_id="turn-1",
+        thread_id="t-1",
+    )
+    store.file(obs)
+    return obs
+
+
+def _drafted(store: FeedbackStore, obs: Observation) -> Patch:
+    patch = Patch(
+        patch_id=mint_patch_id(),
+        created_at=utc_now(),
+        author=Source.operator,
+        intent=PatchIntent.edit_asset,
+        state=PatchState.draft,
+        namespace="sales",
+        asset_type=AssetType.table,
+        asset_id="sales.orders",
+        field_path="summary",
+        was="orders is the transaction table.",
+        becomes="orders is the transaction table, one row per placed order.",
+        base_corpus_content_hash="c" * 64,
+        rationale="the reference answer reads this table and retrieval did not license it",
+    )
+    store.draft(patch, observations=[obs.observation_id])
+    return patch
 
 
 def test_every_declared_edge_carries_an_actor() -> None:
@@ -123,3 +174,86 @@ def test_no_derived_state_is_an_observation_state() -> None:
     stored = {s.value for s in ObservationState} | {s.value for s in PatchState}
     derived = {s.value for s in DerivedState}
     assert stored.isdisjoint(derived), f"overlap: {sorted(stored & derived)}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `requires` says the store checks it. For four edges the store did not.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_addressed_needs_a_patch_behind_it(tmp_path: Path) -> None:
+    """`triaged -> addressed` requires "at least one patch is draft or exported".
+
+    `addressed` is the terminal "this was answered" state and it was reachable with nothing behind
+    it, so the queue could report work done that has no artifact -- and `derived_state` then answers
+    "did this land" about a patch that does not exist.
+    """
+    store = FeedbackStore(tmp_path / "f.sqlite")
+    obs = _filed(store)
+    store.move(obs.observation_id, to=ObservationState.triaged)
+    with pytest.raises(Rejected, match="patch"):
+        store.move(obs.observation_id, to=ObservationState.addressed)
+
+
+def test_reopening_needs_every_patch_withdrawn(tmp_path: Path) -> None:
+    """`addressed -> triaged` requires "every patch for it was withdrawn".
+
+    Reopening while a patch is live leaves a row in the queue whose patch still derives a landing
+    state, so the same observation reads as both open work and answered work.
+    """
+    store = FeedbackStore(tmp_path / "f.sqlite")
+    obs = _filed(store)
+    store.move(obs.observation_id, to=ObservationState.triaged)
+    patch = _drafted(store, obs)
+    store.move(obs.observation_id, to=ObservationState.addressed)
+
+    with pytest.raises(Rejected, match="withdrawn"):
+        store.move(obs.observation_id, to=ObservationState.triaged)
+
+    store.move_patch(patch.patch_id, to=PatchState.withdrawn, withdrawn_reason="wrong asset")
+    store.move(obs.observation_id, to=ObservationState.triaged), "and now it reopens"
+
+
+def test_exporting_needs_the_hash_the_edge_names(tmp_path: Path) -> None:
+    """`draft -> exported` requires "a bundle was written, so expected_corpus_content_hash is set".
+
+    Until the exporter recorded that hash there was nothing to enforce -- the field was always
+    `None`. Now that it is set on every real export, an `exported` patch without it means something
+    moved the state without writing a bundle, and `derived_state` would answer `landed_matched` at
+    best for a handoff that never happened.
+    """
+    store = FeedbackStore(tmp_path / "f.sqlite")
+    obs = _filed(store)
+    store.move(obs.observation_id, to=ObservationState.triaged)
+    patch = _drafted(store, obs)
+
+    with pytest.raises(Rejected, match="expected_corpus_content_hash"):
+        store.move_patch(patch.patch_id, to=PatchState.exported, detail="no bundle")
+
+    store.move_patch(
+        patch.patch_id,
+        to=PatchState.exported,
+        detail="bundle at bnd-x",
+        expected_corpus_content_hash="d" * 64,
+    )
+
+
+def test_a_duplicate_joins_the_patch_set_of_the_row_it_duplicates(tmp_path: Path) -> None:
+    """The second half of `triaged -> duplicate`'s requirement, which names its own consequence.
+
+    "`duplicate_of` names another observation, **and this one joins that one's patch set** --
+    otherwise a landing counts one affected observation instead of two." The naming half was
+    enforced; the joining half was not, so every deduplicated complaint silently stopped counting.
+    """
+    store = FeedbackStore(tmp_path / "f.sqlite")
+    original, dupe = _filed(store), _filed(store)
+    for row in (original, dupe):
+        store.move(row.observation_id, to=ObservationState.triaged)
+    patch = _drafted(store, original)
+
+    store.move(dupe.observation_id, to=ObservationState.duplicate, duplicate_of=original.observation_id)
+
+    attached = {o.observation_id for o in store.observations_of(patch.patch_id)}
+    assert attached == {original.observation_id, dupe.observation_id}, (
+        f"the patch answers {len(attached)} observation(s) and the duplicate is not among them"
+    )

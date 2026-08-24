@@ -362,6 +362,7 @@ class FeedbackStore:
                     f"duplicate_of names {proposed.duplicate_of!r}, which is not an observation in "
                     "this store"
                 )
+            faults.extend(_edge_faults(conn, observation_id, to))
             if faults:
                 raise Rejected(f"observation {observation_id} -> {to.value}", faults)
 
@@ -383,6 +384,23 @@ class FeedbackStore:
                     f"observation {observation_id} was {current.state.value} when this move was "
                     f"checked and is not any more, so {current.state.value} -> {to.value} is not "
                     "the move that would land. Read it again and decide against what it says now."
+                )
+            if to is ObservationState.duplicate and proposed.duplicate_of:
+                # The second half of this edge's `requires`, and it names its own consequence:
+                # "otherwise a landing counts one affected observation instead of two". The row
+                # naming half was a refusal; this half is an action, so refusing would be the wrong
+                # shape -- the steward has said these are the same complaint and the patch set is
+                # what makes the landing count both.
+                conn.executemany(
+                    "INSERT OR IGNORE INTO observation_patch (patch_id, observation_id) "
+                    "VALUES (?, ?)",
+                    [
+                        (row["patch_id"], observation_id)
+                        for row in conn.execute(
+                            "SELECT patch_id FROM observation_patch WHERE observation_id = ?",
+                            (proposed.duplicate_of,),
+                        ).fetchall()
+                    ],
                 )
             _record_transition(
                 conn,
@@ -502,7 +520,14 @@ class FeedbackStore:
                     else current.expected_corpus_content_hash
                 ),
             )
-            faults = faults_with(proposed)
+            faults = list(faults_with(proposed))
+            if to is PatchState.exported and not proposed.expected_corpus_content_hash:
+                faults.append(
+                    "expected_corpus_content_hash is unset, and this edge requires it -- a bundle "
+                    "was written or the state did not move. Without it `derived_state` can never "
+                    "answer better than `landed_matched`, which is also true of a corpus where "
+                    "three other bundles landed."
+                )
             if faults:
                 raise Rejected(f"patch {patch_id} -> {to.value}", faults)
 
@@ -851,6 +876,49 @@ def _patch_from(row: sqlite3.Row) -> Patch:
 
 
 _Row = TypeVar("_Row", Observation, Patch)
+
+
+def _edge_faults(
+    conn: sqlite3.Connection, observation_id: str, to: ObservationState
+) -> list[str]:
+    """The ``requires`` clauses on the observation table that read the *patch* set.
+
+    ``Transition.requires`` says it "is checked by the store rather than here". Measured, four of
+    the twelve clauses were checked nowhere, and these two are the pair that needs a query:
+
+    * ``triaged -> addressed`` requires at least one live patch. ``addressed`` is the terminal
+      "this was answered" state and it was reachable with nothing behind it, so the queue could
+      report work done that has no artifact and ``derived_state`` would answer "did this land"
+      about a patch that does not exist.
+    * ``addressed -> triaged`` requires every patch withdrawn. Reopening while one is live leaves
+      the same row reading as open work and answered work at once.
+
+    ``(None, open)``'s "the turn exists and has finished" stays prose: this store has no turn log
+    and injecting one to satisfy a docstring would put the audit surface inside the writer.
+    """
+    live = {PatchState.draft.value, PatchState.exported.value}
+    states = {
+        str(row["state"])
+        for row in conn.execute(
+            "SELECT p.state AS state FROM patch p "
+            "JOIN observation_patch po ON po.patch_id = p.patch_id "
+            "WHERE po.observation_id = ?",
+            (observation_id,),
+        ).fetchall()
+    }
+    if to is ObservationState.addressed and not (states & live):
+        return [
+            "addressed requires at least one patch in draft or exported, and this observation has "
+            f"{len(states) or 'no'} patch(es), none of them live. `addressed` is the state that "
+            "says somebody answered this; with no artifact it says nobody can check."
+        ]
+    if to is ObservationState.triaged and (states & live):
+        return [
+            "reopening requires every patch withdrawn, and "
+            f"{len(states & live)} is still draft or exported. Withdraw it first, so the row is "
+            "not answered work and open work at the same time."
+        ]
+    return []
 
 
 def _observation_or_none(conn: sqlite3.Connection, observation_id: str) -> Observation | None:

@@ -72,8 +72,20 @@ class Actor(str, Enum):
 class Transition:
     """One declared edge. ``requires`` is prose for the reviewer, not a predicate.
 
-    ``requires`` is checked by the store rather than here, because the checks read fields
-    (``decline_reason``, ``duplicate_of``) and this module is deliberately a table.
+    ``requires`` is enforced by the store rather than here, because the checks read fields
+    (``decline_reason``, ``duplicate_of``) or query the patch set, and this module is deliberately a
+    table with no I/O.
+
+    **It said "is checked by the store" while four of the twelve clauses were checked nowhere.**
+    Measured by driving each edge: ``triaged -> addressed`` with no patch at all,
+    ``addressed -> triaged`` with a live one, ``draft -> exported`` with no
+    ``expected_corpus_content_hash``, and the second half of ``triaged -> duplicate`` -- the
+    duplicate joining the original's patch set, whose own clause names the consequence, "otherwise a
+    landing counts one affected observation instead of two". All four are enforced now.
+
+    ``(None, open)``'s "the turn exists and has finished" is the one clause that stays prose, and it
+    says so: this store has no turn log, and injecting one to satisfy a docstring would put the
+    audit surface inside the writer.
     """
 
     moved_by: Actor

@@ -225,6 +225,30 @@ def is_prose(summary: str) -> bool:
     return not any(t.match(summary) for t in TEMPLATES) and function_ratio(summary) >= MIN_FUNCTION_RATIO
 
 
+def _derived_column_id(table: dict[str, Any], column: dict[str, Any]) -> dict[str, str]:
+    """``{"id": ...}`` for an inline column, or ``{}`` when there is nothing to derive from.
+
+    An inline column carries no ``id`` in YAML -- ``corpus/identity.py::derive_column_id`` computes
+    it -- so every rule reading ``a.get("id")`` skipped every column. **Measured on
+    ``../BIRD-corpus``: 5,947 of 13,304 assets, 45%.** V23's whole job is catching the
+    ``ValueError: duplicate index id`` that ``build_index`` raises after the commit, and a derived
+    column id collides identically; it had never examined one.
+
+    Placed *before* ``**col`` in the merge, so an explicit ``id`` in the file still wins. Empty when
+    the column has no ``physical_name``, which is V14's finding and not something to paper over with
+    a guessed id.
+    """
+    table_id = _text_or_empty(table.get("id"))
+    physical = _text_or_empty(column.get("physical_name"))
+    if not table_id or not physical:
+        return {}
+    return {"id": derive_column_id(table_id, physical)}
+
+
+def _text_or_empty(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
 def load_assets(path: Path) -> list[tuple[str, dict[str, Any], Path]]:
     """``(asset_type, mapping, file)`` for one YAML file, columns unpacked from their table."""
     try:
@@ -241,7 +265,13 @@ def load_assets(path: Path) -> list[tuple[str, dict[str, Any], Path]]:
                 # from the table (``corpus/store.py``). Copying it here is what lets V11 key
                 # on ``(db, physical_name)``; without it that rule silently matched nothing
                 # and reported a clean corpus that names the column each decoy resembles.
-                out.append(("column", {"schema": doc.get("schema"), **col}, path))
+                out.append(
+                    (
+                        "column",
+                        {"schema": doc.get("schema"), **_derived_column_id(doc, col), **col},
+                        path,
+                    )
+                )
     return out
 
 
