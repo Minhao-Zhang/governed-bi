@@ -11,7 +11,8 @@ filed is still true.
 
 **The claim it makes is narrow and stated in the output every time**: the tables the reference
 answer reads are reachable again. That is not the same as the answer being right. On turns where
-every gold table *was* licensed, measured accuracy is 0.7555 — so about one in four complaints
+every gold table *was* licensed **and the gold names at least one table**, measured accuracy is
+0.7555 (n=1,145) — so about one in four complaints
 "fixed" by this check would still come back with a wrong number. `retrieval_verified` is the
 narrowest upgrade this licenses and the vocabulary has no `resolved`.
 
@@ -57,7 +58,9 @@ DEFAULT_DB = "runs/feedback.sqlite"
 #: the two-answers defect the derived states exist to avoid.
 CLAIM = (
     "the tables the reference answer reads are reachable again. NOT that the answer is right: on "
-    "turns where every gold table was licensed, measured accuracy is 0.7555."
+    "turns where every gold table was licensed and the gold names at least one table, measured "
+    "accuracy is 0.7555 (n=1,145; 0.7131 over all 1,272 covered turns, the 127 whose gold "
+    "reads no table included)."
 )
 
 

@@ -190,12 +190,28 @@ def test_check_landed_reads_the_verdict_off_the_ladder(tmp_path: Path) -> None:
 # ── the claim ─────────────────────────────────────────────────────────────────
 
 
-def test_the_claim_names_the_number_that_bounds_it() -> None:
-    """The one sentence that stops a green T3 being read as "fixed". Asserted on the string,
-    because it is the only thing between the check and that reading."""
+def test_the_claim_names_the_number_and_the_population_it_was_measured_on() -> None:
+    """The one sentence that stops a green T3 being read as "fixed", and it has to name **which**
+    turns it was measured over.
+
+    0.7555 is the accuracy on turns where every gold table was licensed *and the gold names at least
+    one table* — n=1,145. Read literally, "every gold table was licensed" also admits the 127 turns
+    whose gold reads no table at all: a frozen literal satisfies the condition vacuously, and no
+    engine can win one. Include them and the same figure is **0.7131** over n=1,272.
+
+    The sentence carried 0.7555 with the literal wording for the life of this branch, in six places.
+    The number was defended once against a challenge — with a script that skipped the tableless rows
+    and therefore reproduced 1,145 and agreed with itself. So this asserts the population, not just
+    the digits: a number is not a measurement until it says what it was measured over.
+    """
     from reproduce_observation import CLAIM
 
     assert "0.7555" in CLAIM
+    assert "at least one table" in CLAIM, (
+        "the claim states an accuracy without the exclusion that produced it, which is the reading "
+        f"that made 0.7131 look like a rival number instead of the same one: {CLAIM}"
+    )
+    assert "0.7131" in CLAIM, "and the figure for the literal reading, so neither can hide"
     assert "NOT that the answer is right" in CLAIM
 
 

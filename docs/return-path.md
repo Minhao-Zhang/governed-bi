@@ -97,7 +97,8 @@ one re-ask is not evidence. It is the reader looking — which is the only judge
 the one she asked for on Monday.
 
 **What the loop refused to claim, at every step.** The state is `addressed`, never `resolved` — on
-turns where every gold table was licensed the engine's measured accuracy is 0.7555, so about one in
+turns where every gold table was licensed **and the gold names at least one table** the engine's
+measured accuracy is 0.7555 (n=1,145), so about one in
 four complaints closed on a landed commit would still be wrong. The one free upgrade is
 `retrieval_verified`, and it says only that the tables are reachable.
 
@@ -496,7 +497,9 @@ establishes that the corpus changed and nothing more; 12.7% of questions flip be
 identical runs, so even a passing re-run would not establish it. "Ask again" is an invitation.
 
 And the stored state is `addressed`, never `resolved`. On turns where every gold table *was*
-licensed the engine's measured accuracy is **0.7555**, so about **one in four** complaints closed
+licensed **and the gold names at least one table** the engine's measured accuracy is **0.7555**
+(n=1,145; **0.7131** over all 1,272 covered turns, the unwinnable 127 included), so about
+**one in four** complaints closed
 on the strength of a landed commit would still be wrong. `retrieval_verified` is the one upgrade
 the free ladder licenses, and it says only that the tables are reachable.
 
@@ -802,7 +805,8 @@ real finding. The channel is named in every run's output and the lexical one war
 
 **T3 answers a narrower question than the others,** and its output says which every time: the tables
 the reference answer reads are reachable again. Not that the answer is right. On turns where every
-gold table *was* licensed, measured accuracy is 0.7555.
+gold table *was* licensed and the gold names at least one table, measured accuracy is 0.7555
+(n=1,145).
 
 **There is no tier above T3.** A targeted paid replay of a cluster's questions and a paired arm are
 both things a person launches by deciding to spend money, and neither is built. So a patch touching

@@ -9,7 +9,7 @@
   `api/raised_write.py` and `api/clarification_routes.py` are **deleted** (`4a0d11a`), so the state
   carries 47 channels rather than 48. **Designed and not built, and named as design wherever it
   appears below:** the agentic triage pipeline (Reproducer, Diagnoser, Author, Curator, the
-  `triage/` package), verification tiers T4 and T5, the reader's capture UI, `/reports`, and the
+  `triage/` package), verification tiers T4 and T5, the reader's **categorised** capture surface (a minimal `raise-note.tsx` ships and writes; the category picker and `expected` field do not), `/reports`, and the
   re-ask action. Five measurements taken while building changed a decision recorded here; the retro
   below names each one.
 - **Deciders:** project owner + design session (2026-08-23) — five independent proposals (intake,
@@ -162,10 +162,15 @@ the complaint is filed loses the complaint.
 Both layers are built: `feedback/events.py` holds the two shapes and the closed vocabulary,
 `feedback/store.py` holds the two tables. There are two ways in and they are not equally exercised.
 `POST /turns/{turn_id}/raised` ships **mounted and enabled** — it is the one write verb in this ADR
-that is not behind the admin switch — and `ui/lib/api-client.ts` can call it, but no component
-does, because the capture UI is not built. So the rows that exist arrived through
-`tools/import_eval_failures.py`, and the route is a live writer with no caller rather than a
-disabled one.
+that is not behind the admin switch — and it has a caller: `ui/components/answer/raise-note.tsx`,
+which predates this branch, renders on the answer card and files a note through a textarea. This
+paragraph used to say no component called it and that the route was "a live writer with no caller";
+that was wrong, and it understated the exposure named in Decisions 10 and §4.3 — there is a reachable
+UI path that writes to an unauthenticated verb. What is absent is the *categorised* capture the
+design specified (the picker, the `expected` field, the three states in the working reference's
+§12.2), so a filed row carries no category. Every row that exists today arrived through
+`tools/import_eval_failures.py`, which is a statement about what has been run, not about what can
+reach the store.
 
 ### 2. `ServeState.raised` is deleted, and observations live in their own store
 
@@ -247,7 +252,9 @@ no "declined" badge without a sentence.
 **`addressed` and not `resolved`, and the word was chosen against a measurement.** A landed patch
 establishes that the corpus changed. It does not establish that the reader's question now answers
 correctly: an asset edit does not mean retrieval finds it, and even on turns where every gold table
-*was* licensed the engine's measured accuracy is 0.7555 — so roughly **one in four** complaints
+*was* licensed **and the gold names at least one table** the engine's measured accuracy is
+0.7555 (n=1,145) — over all 1,272 covered turns it is 0.7131, because 127 of them have a gold
+that reads no table and cannot be won. So roughly **one in four** complaints
 marked resolved on the strength of a landed commit would still be wrong. There is one cheap upgrade
 and exactly one: re-running the affected question's T3 coverage fixture costs ~$0 and licenses the
 narrower claim `retrieval_verified` — *the tables needed to answer this are now reachable*. Nothing

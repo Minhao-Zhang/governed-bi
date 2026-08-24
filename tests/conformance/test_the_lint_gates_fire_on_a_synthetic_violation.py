@@ -88,8 +88,11 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
         "check_corpus_delta.py": (
             "the corpus repository's gate, not this one's: it needs that tree, its git history "
             "for a base revision, and BIRD-Data-Obfuscation -- all siblings, all absent here. It "
-            "runs in `.github/workflows/conformance.yml` **in BIRD-corpus**, on every push there, "
-            "against `governed-bi` at main. "
+            "runs in `.github/workflows/conformance.yml` **in BIRD-corpus**, on every push there. "
+            "That workflow pins `ref: design/return-path` for now, because this file is not on "
+            "`main` yet and a job pointed at the default branch fails with `can't open file` -- "
+            "which reports a missing tool as a conformance result. The `ref:` line goes when the "
+            "branch merges. "
             "There is deliberately no mirror-image step in this repository. The obvious one would "
             "report, on an engine commit, whether a rule change adds findings to the corpus -- and "
             "under a git baseline it cannot: a stricter rule fires at the base revision too, so it "
