@@ -325,3 +325,22 @@ def _load_conformance():
     return module
 
 
+
+
+def test_write_creates_the_directory_it_was_given(tmp_path: Path) -> None:
+    """`--write` must not require somebody to have made `.conformance/` first.
+
+    The default pin path moved into a directory the tool excludes from
+    ``corpus_content_hash`` -- a lint's state may sit beside a corpus without entering its
+    treatment identity. But `write_text` does not create parents, so the first `--write` against a
+    fresh clone raised `FileNotFoundError` from inside a tool whose whole job is to be run on a
+    tree nobody has set up yet.
+    """
+    corpus = _corpus(tmp_path / "corpus", with_finding=True)
+    pins = tmp_path / "corpus" / ".conformance" / "pins.txt"
+    assert not pins.parent.exists()
+
+    done = _run(corpus, pins, "--write")
+    assert done.returncode == 0, f"{done.stdout}\n{done.stderr}"
+    assert pins.is_file(), "the pin file was not written"
+    assert _run(corpus, pins).returncode == 0, "and the ratchet holds against what it just wrote"

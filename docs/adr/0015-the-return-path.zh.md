@@ -696,7 +696,7 @@ UI 文案必须这么说。
   界面，并且明说：碰到端口仍然就够了。
 - **谁拥有语料仓库的 CI。** 本设计规定了那个 CI 必须跑什么。它没说谁来写，而且没人写。自 `222d1bf`
   起服务的语料是一个 git 仓库（Context 5），而它根本没有 CI。那些 pin 存在它里面 ——
-  `.conformance-pins.txt` —— 而 `tools/check_ratchet.py` 是从本仓库读它们的，也就是在合并的错误一侧；
+  `.conformance/pins.txt`（放在 `corpus_content_hash` 排除的目录里，这样一个 lint 的记账不会进入 treatment identity）—— 而 `tools/check_ratchet.py` 是从本仓库读它们的，也就是在合并的错误一侧；
   这一点被点明，而不是被算作 Decision 4 要的那道控制。
 - **行级安全、多租户、或用户存储。** `docs/enterprise-fork.md` 不因本 ADR 而改变。特别地，存储不记录
   「谁提交了一条 observation」的身份，因为 `api/auth.py` 返回单一 principal，而在这里发明一个按用户的

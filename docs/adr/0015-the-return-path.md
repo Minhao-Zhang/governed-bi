@@ -836,7 +836,7 @@ this branch; four wait on the pipeline; one is retired. Each says which.
   port is still sufficient.
 - **Who owns the corpus repository's CI.** The design specifies what that CI must run. It does not
   say who writes it, and nobody has. The served corpus is a git repository since `222d1bf`
-  (§Context 5) and it has no CI at all. The pins live in it — `.conformance-pins.txt` — and
+  (§Context 5) and it has no CI at all. The pins live in it — `.conformance/pins.txt`, in a directory `corpus_content_hash` excludes so a lint's state does not enter the treatment identity — and
   `tools/check_ratchet.py` reads them from this repository, which is the wrong side of the merge
   and is named as such rather than counted as the control §Decision 4 asked for.
 - **Row-level security, tenancy, or a user store.** `docs/enterprise-fork.md` is unchanged by this

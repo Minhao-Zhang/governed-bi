@@ -85,6 +85,19 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
             "needs a corpus tree (untracked), the held-out question file (a separate "
             "repository) and a third corpus certified train-only"
         ),
+        "check_corpus_delta.py": (
+            "the corpus repository's gate, not this one's: it needs that tree, its git history "
+            "for a base revision, and BIRD-Data-Obfuscation -- all siblings, all absent here. It "
+            "runs in `.github/workflows/conformance.yml` **in BIRD-corpus**, on every push there, "
+            "against `governed-bi` at main. "
+            "There is deliberately no mirror-image step in this repository. The obvious one would "
+            "report, on an engine commit, whether a rule change adds findings to the corpus -- and "
+            "under a git baseline it cannot: a stricter rule fires at the base revision too, so it "
+            "produces no delta and cannot redden the corpus build. That is the property the git "
+            "baseline was chosen for, and it is also what makes the report pointless. Its "
+            "behaviour is pinned in tests/conformance/test_a_commit_does_not_add_a_finding.py, "
+            "which does run in CI"
+        ),
         "check_corpus_conformance.py": (
             "needs the corpus repository and BIRD-Data-Obfuscation, both siblings of this "
             "tree; its own rules are exercised in "

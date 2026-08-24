@@ -844,7 +844,7 @@ uv run --frozen pytest -q -rs                    # 其中包含 tests/feedback �
 
 ```bash
 uv run --frozen python ../governed-bi/tools/check_corpus_conformance.py --corpus-dir .
-uv run --frozen python ../governed-bi/tools/check_ratchet.py --pins .conformance-pins.txt
+uv run --frozen python ../governed-bi/tools/check_ratchet.py --pins .conformance/pins.txt
 uv run --frozen python -c "from governed_bi.retrieve import build_index; ..."   # T1：它必须能起来
 ```
 

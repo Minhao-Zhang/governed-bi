@@ -1,9 +1,11 @@
 """Does a corpus tree obey ADR 0005's field spec? Exit 1 if not.
 
 Three modes. ``--file`` checks one asset file and is what the rebuild loop calls after each
-write; the default walks a whole tree and prints a per-rule report. Rules that need the whole
-corpus or an external file are reported as **not evaluated** in ``--file`` mode rather than
-passed, because a rule that silently skips is worse than one that fails.
+write; the default walks a whole tree and prints a per-rule report. Rules that need a **second
+asset** are reported as *not evaluated* in ``--file`` mode rather than passed, because a rule
+that silently skips is worse than one that fails. Needing an external manifest is not that: V11
+and V12 answer from one asset, so they run in ``--file`` mode too and report the missing manifest
+when one is missing. See :data:`WHOLE_TREE_ONLY`.
 
 Why this exists: the corpus this kit replaced (measured 2026-08-08) passed both rules the
 Pydantic model enforces (``1 <= len(summary) <= 250``, identifier present) and violated most of
@@ -36,7 +38,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import yaml
 
@@ -76,8 +78,16 @@ SENTINEL = "TODO"
 #: the thing it validates. Raising it is a knob change and a treatment change, not a cap here.
 SUMMARY_CAP: dict[AssetType, int] = {t: int(knob_default("summary_max_chars")) for t in AssetType}
 
-#: Every type's §1.2 entry names a ``body``, and ``summary`` never reaches the model
-#: (``serve/context.py``), so an empty one delivers nothing but the structural line.
+#: Every type's §1.2 entry names a ``body``, and a missing one delivers nothing but the structural
+#: line.
+#:
+#: This used to say ``summary`` never reaches the model. It does, for exactly one asset:
+#: ``serve/context.py`` renders a few-shot from its ``body``, and **with no body it renders
+#: ``summary`` and ``sql`` concatenated**. So for a bodyless few-shot the summary is prompt text --
+#: which is a second reason to require a body rather than an argument against it, since a summary
+#: is written for the retrieval index and reaches the model only by that accident.
+#: :func:`conformance_rules_metric_and_content.model_visible_text` is the one place that answers
+#: "what does the model see", and V19 and V21 both read it.
 BODY_REQUIRED: frozenset[AssetType] = frozenset(AssetType)
 
 #: Function words. The ratio separates a sentence from an identifier roster; the corpus's own
@@ -646,10 +656,39 @@ RULES: dict[str, str] = {
     "V23": "asset ids are unique across the tree",
 }
 
-#: Rules that need more than one asset, and are reported **not evaluated** rather than passed in
-#: ``--file`` mode. V17b is here because "reachable through a declared join" is a question about
-#: the join assets, and V23 because a duplicate needs a second file to duplicate.
-WHOLE_TREE_ONLY = ("V9", "V11", "V12", "V15", "V17b", "V23")
+#: Rules that need **a second asset**, and are therefore reported *not evaluated* rather than
+#: passed in ``--file`` mode. Every entry states its reason, because this list carried six while
+#: its comment justified two, and the four unexamined ones are how V11 and V12 got on it.
+#:
+#: * V9 -- a reference resolves against the set of ids in the tree, which one file does not hold.
+#: * V15 -- *exactly* the manifest's columns are marked. The "no more" half answers from one file;
+#:   the "no fewer" half is a mark missing on some other table, so it needs every table.
+#: * V17b -- "reachable through a declared join" is a question about the join assets.
+#: * V23 -- a duplicate needs a second file to duplicate.
+#:
+#: **Needing an external manifest is a different thing, and it does not defer a rule.** V11 and
+#: V12 read one asset's own ``summary`` and ``body`` against a file on disk; neither looks at a
+#: second asset. Both sat here, so the rebuild loop -- the moment a writer is authoring prose --
+#: ran without the leakage gate and printed "needs the whole tree", which is not true and reads as
+#: a limitation rather than a hole. They run in both modes now, and a missing manifest is reported
+#: as *that*, which is a reason a writer can act on by passing a path.
+#: The rule id -> the function that answers it, for every rule that needs a second asset and
+#: takes the whole asset list. **This mapping is the dispatch**, so a rule cannot be run
+#: whole-tree-only without appearing in the list a reader checks. Three rules got onto the wrong
+#: side of that when the list and the ``if whole:`` block were two places saying one thing: V11 and
+#: V12 were declared deferred while answerable from one asset, and V19 ran only under ``whole``
+#: while absent from the list -- so ``--file`` printed ``V19  0``, a disclosure gate reporting
+#: clean when it was never asked.
+WHOLE_TREE_CHECKS: dict[str, Callable[[list[tuple[str, dict[str, Any], Path]]], list[Finding]]] = {
+    "V9": check_references,
+    "V17b": check_metric_bindings,
+    "V19": check_excluded_not_named,
+    "V23": check_unique_ids,
+}
+
+#: V15 is the one entry outside the mapping: it takes three manifests rather than ``assets``
+#: alone. Named here so the exception stays a single declared one rather than a second habit.
+WHOLE_TREE_ONLY = (*WHOLE_TREE_CHECKS, "V15")
 
 
 def _where_file(path: Path) -> str:
@@ -736,18 +775,8 @@ def main(argv: list[str] | None = None) -> int:
 
     skipped: dict[str, str] = {}
     if whole:
-        findings["V9"].extend(check_references(assets))
-        findings["V17b"].extend(check_metric_bindings(assets))
-        findings["V19"].extend(check_excluded_not_named(assets))
-        findings["V23"].extend(check_unique_ids(assets))
-        if args.trap_manifest.exists():
-            findings["V11"].extend(check_suspect_summaries(assets, args.trap_manifest))
-        else:
-            skipped["V11"] = f"no trap manifest at {args.trap_manifest}"
-        if args.test_split.exists():
-            findings["V12"].extend(check_split_leak(assets, args.test_split))
-        else:
-            skipped["V12"] = f"no test split at {args.test_split}"
+        for rule, answer in WHOLE_TREE_CHECKS.items():
+            findings[rule].extend(answer(assets))
         if args.trap_manifest.exists() and args.table_manifest.exists() and args.rename_map.exists():
             findings["V15"].extend(
                 check_suspect_set(assets, args.trap_manifest, args.table_manifest, args.rename_map)
@@ -757,6 +786,22 @@ def main(argv: list[str] | None = None) -> int:
     else:
         for rule in WHOLE_TREE_ONLY:
             skipped[rule] = "needs the whole tree"
+
+    # V11 and V12 run in **both** modes: each reads one asset's own text against a file on disk, so
+    # a single asset is a complete population for them. Outside the branch above rather than
+    # duplicated inside it, so ``--file`` and the whole-tree walk cannot answer differently.
+    #
+    # The reason recorded when the input is missing is the manifest, never the tree. Those are two
+    # different facts -- one says the rule cannot be answered here, the other that it can and the
+    # input is absent -- and the second is the one a writer fixes.
+    if args.trap_manifest.exists():
+        findings["V11"].extend(check_suspect_summaries(assets, args.trap_manifest))
+    else:
+        skipped["V11"] = f"no trap manifest at {args.trap_manifest}"
+    if args.test_split.exists():
+        findings["V12"].extend(check_split_leak(assets, args.test_split))
+    else:
+        skipped["V12"] = f"no test split at {args.test_split}"
 
     if args.json:
         # A finding's **identity** is (rule, asset), and that is all this emits alongside the

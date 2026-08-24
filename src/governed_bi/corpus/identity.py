@@ -47,7 +47,9 @@ class UnsafeName(ValueError):
 SHARED_NAMESPACE = "_shared"
 
 #: Directory names that are a tool's bookkeeping, never corpus content — see :func:`_is_tooling`.
-_NON_CORPUS_DIRS = frozenset({".git", ".hg", ".svn", "__pycache__", ".ipynb_checkpoints"})
+_NON_CORPUS_DIRS = frozenset(
+    {".git", ".hg", ".svn", "__pycache__", ".ipynb_checkpoints", ".github", ".conformance"}
+)
 
 #: A directory component: a bare identifier. It names a corpus subtree **and** a
 #: live SQL namespace, so separators, dots and ``..`` are all rejected.
@@ -226,9 +228,22 @@ def _is_tooling(root: Path, path: Path) -> bool:
     manifest, so without this ``corpus_content_hash`` digests ``.git/`` and the treatment
     identity changes on every commit, fetch and ``git gc``.
 
-    Deliberately narrow — only VCS and interpreter bookkeeping. A ``README.md`` at the corpus
-    root is *not* excluded: ``corpus_content_hash`` counts everything in the selected
-    subtrees, and a caller wanting assets alone passes ``schemas``.
+    The rule: a **directory a tool owns** is excluded, everything else is content. VCS
+    (``.git``, ``.hg``, ``.svn``), the interpreter (``__pycache__``, ``.ipynb_checkpoints``), CI
+    configuration (``.github``) and a lint's state (``.conformance``). Nothing is excluded by
+    filename — a ``README.md`` at the corpus root is *not* dropped: ``corpus_content_hash`` counts
+    everything in the selected subtrees, and a caller wanting assets alone passes ``schemas``.
+
+    ``.github`` is not optional. Without it a corpus repository cannot be given CI at all: adding
+    ``.github/workflows/*.yml`` moves the treatment identity, so would editing a workflow, and an
+    identity that moves when the build script does is not one.
+
+    ``.conformance`` is the general form of the same defect, measured. An untracked
+    ``.conformance-pins.txt`` sitting at the root of ``../BIRD-corpus`` on 2026-08-23 hashed the
+    tree to ``8bb37531cff9155a…`` where the same content without it hashed ``6e5c7b4be83d5682…`` —
+    a lint's bookkeeping had already moved the value ADR 0015 pins. A directory rather than a
+    filename because this function checks path *parts*, so the next tool gets a subdirectory
+    instead of another entry here.
 
     **The last component is checked too, because ``.git`` is not always a directory.** In a
     ``git worktree`` it is a *file* holding a pointer, and that pointer embeds an absolute

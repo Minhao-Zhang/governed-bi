@@ -920,7 +920,7 @@ is where the checker lives. It must **not** need a model credential or a databas
 
 ```bash
 uv run --frozen python ../governed-bi/tools/check_corpus_conformance.py --corpus-dir .
-uv run --frozen python ../governed-bi/tools/check_ratchet.py --pins .conformance-pins.txt
+uv run --frozen python ../governed-bi/tools/check_ratchet.py --pins .conformance/pins.txt
 uv run --frozen python -c "from governed_bi.retrieve import build_index; ..."   # T1: it must start
 ```
 

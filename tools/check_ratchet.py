@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Conformance findings may shrink and may not grow, and closing one must be declared.
 
-    uv run --frozen python tools/check_ratchet.py --pins ../BIRD-corpus/.conformance-pins.txt
+    uv run --frozen python tools/check_ratchet.py --pins ../BIRD-corpus/.conformance/pins.txt
     uv run --frozen python tools/check_ratchet.py --pins ... --write    # after fixing something
 
 **Why a ratchet at all.** The corpus carries findings today — 125 on ``../BIRD-corpus``, measured
@@ -45,15 +45,15 @@ reviewed without a corpus in the reviewer's checkout, and two corpora could neve
 from __future__ import annotations
 
 import argparse
-import json
-import subprocess
 import sys
-from collections import Counter
 from pathlib import Path
+
+# Sibling script, path-added like `check_corpus_conformance.py` imports its rules.
+from conformance_findings import CannotRun, compare, read  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS = ROOT.parent / "BIRD-corpus"
-DEFAULT_PINS = DEFAULT_CORPUS / ".conformance-pins.txt"
+DEFAULT_PINS = DEFAULT_CORPUS / ".conformance" / "pins.txt"
 
 HEADER = """# Conformance findings pinned for `tools/check_ratchet.py`.
 #
@@ -81,11 +81,32 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no corpus at {args.corpus_dir}", file=sys.stderr)
         return 2
 
-    found = _findings(args.corpus_dir)
-    if found is None:
+    try:
+        report = read(args.corpus_dir)
+    except CannotRun as err:
+        print(str(err), file=sys.stderr)
         return 2
+    found = report.counts
+    if report.not_evaluated:
+        # Reported and not fatal here. A rule that could not run has zero findings, which
+        # would read as "closed" against a pin -- so the operator has to see it, and
+        # `closed` says which. `check_corpus_delta.py` makes the same condition fatal under
+        # `--every-rule-must-run`, because in CI there is no reason for a manifest to be
+        # missing and nobody is reading the note.
+        print(
+            "note: "
+            + "; ".join(
+                f"{rule} not evaluated ({why})"
+                for rule, why in report.not_evaluated.items()
+            )
+        )
 
     if args.write:
+        # The default pin path lives in a directory the corpus digest excludes, and a
+        # fresh clone does not have it. `write_text` does not create parents, so the
+        # first `--write` on a tree nobody has set up -- which is the only tree this
+        # flag is for -- raised `FileNotFoundError` from inside the tool.
+        args.pins.parent.mkdir(parents=True, exist_ok=True)
         args.pins.write_text(
             HEADER
             + "".join(
@@ -109,16 +130,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     pinned = _pins(args.pins)
-    new = sorted(set(found) - set(pinned))
-    closed = sorted(set(pinned) - set(found))
-    grew = sorted(
-        key for key, count in pinned.items()
-        if count is not None and key in found and found[key] > count
-    )
-    shrank = sorted(
-        key for key, count in pinned.items()
-        if count is not None and key in found and found[key] < count
-    )
+    # The arithmetic is `conformance_findings.compare`; the **policy** is this tool's.
+    # A closure fails here and passes in `check_corpus_delta.py`, and that is a real
+    # disagreement rather than a bug: this baseline is a file somebody has to keep in
+    # step, and a fix that does not update it leaves the ratchet loose by that many
+    # findings. Git needs no updating, so there the same event is simply progress.
+    change = compare(pinned, found)
+    new, closed, grew, shrank = change.added, change.closed, change.grew, change.shrank
     uncounted = sum(1 for count in pinned.values() if count is None)
 
     print(f"corpus {args.corpus_dir}")
@@ -172,47 +190,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print("  the ratchet holds: the finding set is exactly what is pinned")
     return 0
-
-
-def _findings(corpus: Path) -> Counter[tuple[str, str]] | None:
-    """Every (rule, asset) the conformance tool reports, and how many findings each covers.
-
-    A subprocess rather than an import, because the tool is a script with a ``main`` that parses
-    ``sys.argv`` and owns its own exit codes -- and because running it the way CI runs it is the
-    only way this gate is checking what CI checks.
-    """
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "tools" / "check_corpus_conformance.py"),
-            "--corpus-dir",
-            str(corpus),
-            "--json",
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    if result.returncode != 0:
-        print(
-            f"conformance --json exited {result.returncode}:\n{result.stderr[:2000]}",
-            file=sys.stderr,
-        )
-        return None
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as err:
-        print(f"conformance --json did not emit JSON: {err}", file=sys.stderr)
-        return None
-
-    if payload.get("not_evaluated"):
-        # Reported and not fatal. A rule that could not run has zero findings, which would read as
-        # "closed" against a pin -- so the operator has to see it, and `closed` says which.
-        print(
-            "note: "
-            + "; ".join(f"{rule} not evaluated ({why})" for rule, why in payload["not_evaluated"].items())
-        )
-    return Counter((f["rule"], f["where"]) for f in payload["findings"])
 
 
 def _pins(path: Path) -> dict[tuple[str, str], int | None]:

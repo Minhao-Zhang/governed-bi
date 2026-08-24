@@ -11,6 +11,8 @@ just raises the pin count and nothing looks wrong.
 
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 
 import check_corpus_conformance as cc
+
+ROOT = Path(__file__).resolve().parents[2]
+CONFORMANCE = ROOT / "tools" / "check_corpus_conformance.py"
 
 Asset = tuple[str, dict[str, Any], Path]
 
@@ -523,3 +528,285 @@ columns:
     assert any("shop.orders.order_id" in str(f) for f in findings), (
         f"no finding names the duplicated column id: {[str(f) for f in findings]}"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Which rules ``--file`` mode may defer, and why each one earns it.
+#
+# ``WHOLE_TREE_ONLY`` is the deferral list for the rebuild loop, and a rule on it is reported
+# ``not evaluated`` rather than run. Two entries were on it that answer from one asset: V11 and
+# V12 both loop over the assets they are handed and read only that asset's own text. What they
+# need is an external *manifest*, which the tool already reports separately. So the rebuild loop
+# -- the moment a writer is actually authoring prose -- ran without the leakage gate, and printed
+# "needs the whole tree", which reads as a limitation and was a hole.
+#
+# These tests hold the two reasons apart. A rule may be deferred for needing a second asset, or
+# reported unevaluated for a missing manifest, and the JSON has to keep the two distinguishable.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _run_json(capsys: pytest.CaptureFixture[str], *argv: str) -> dict[str, Any]:
+    """``--json`` output of one run. Exits 0 by contract -- it is an inventory, not a gate."""
+    assert cc.main(["--json", *argv]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def _split(tmp_path: Path, *questions: str) -> Path:
+    """A held-out split, written here rather than read from ``../BIRD-Data-Obfuscation``.
+
+    A test pointed at the sibling dataset passes or fails on whether a checkout exists beside the
+    repo, which is not the question it is asking.
+    """
+    path = tmp_path / "test_final.jsonl"
+    path.write_text(
+        "\n".join(json.dumps({"question": q}) for q in questions) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def _traps(tmp_path: Path, *rows: dict[str, Any]) -> Path:
+    path = tmp_path / "trap_manifest.json"
+    path.write_text(json.dumps(list(rows)), encoding="utf-8")
+    return path
+
+
+LEAKED = "Which customers placed more than one order in the last quarter of the year?"
+
+
+def _leaking_asset(tmp_path: Path) -> Path:
+    path = tmp_path / "term_repeat.yaml"
+    path.write_text(
+        f"""asset_type: term
+id: t.repeat_customer
+name: repeat customer
+summary: >-
+  {LEAKED} A repeat customer is one of those.
+body: >-
+  A customer with two or more orders in the period under review.
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _suspect_column_asset(tmp_path: Path) -> Path:
+    """A table whose one column is marked suspect and whose summary names what it resembles.
+
+    Written as a table with an inline column because that is the only shape the corpus uses:
+    ``load_assets`` unpacks the column and copies the table's ``schema`` onto it, which is what
+    lets V11 key on ``(db, physical_name)``.
+    """
+    path = tmp_path / "tbl_lignes.yaml"
+    path.write_text(
+        """asset_type: table
+id: shop.lignes
+schema: shop
+physical_name: lignes
+summary: lignes holds one row per line on an order in the shop schema.
+body: >-
+  Grain is one order line.
+columns:
+  - name: prix_unite
+    physical_name: prix_unite
+    summary: >-
+      The prix_unite of a line, which resembles the unit_price recorded upstream.
+    reliability:
+      status: suspect
+      note: Do not use this column for reporting.
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+SUSPECT_TRAP = {
+    "db": "shop",
+    "table": "lignes",
+    "source_column": "unit_price",
+    "names": {"rename": "prix_unite"},
+}
+
+
+def test_v12_fires_in_file_mode_on_a_summary_quoting_a_held_out_question(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The leakage gate, at the moment prose is written.
+
+    ``docs/adr/0015-the-return-path.md`` makes V12 fatal in ``tools/export_bundle.py`` because the
+    return path carries **held-out** question text back to a person who then writes corpus prose
+    from it. ``--file`` is the loop that person is in, and V12 was deferred there.
+    """
+    out = _run_json(
+        capsys,
+        "--file", str(_leaking_asset(tmp_path)),
+        "--test-split", str(_split(tmp_path, LEAKED, "An unrelated question about other things.")),
+        "--trap-manifest", str(_traps(tmp_path)),
+    )
+    assert "V12" not in out["not_evaluated"], (
+        f"V12 was not run in --file mode: {out['not_evaluated'].get('V12')!r}"
+    )
+    assert [f for f in out["findings"] if f["rule"] == "V12"], (
+        f"a summary quoting a held-out question did not fire V12: {out['findings']}"
+    )
+
+
+def test_v12_does_not_fire_on_prose_that_merely_shares_the_subject(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The negative control. V12 forbids *quoting* the split, not writing about the same tables."""
+    path = tmp_path / "term_repeat.yaml"
+    path.write_text(
+        """asset_type: term
+id: t.repeat_customer
+name: repeat customer
+summary: >-
+  A repeat customer is one who has placed two or more orders in the period.
+body: >-
+  Counted over the orders table, which holds one row per placed order.
+""",
+        encoding="utf-8",
+    )
+    out = _run_json(
+        capsys,
+        "--file", str(path),
+        "--test-split", str(_split(tmp_path, LEAKED)),
+        "--trap-manifest", str(_traps(tmp_path)),
+    )
+    assert [f for f in out["findings"] if f["rule"] == "V12"] == []
+
+
+def test_v11_fires_in_file_mode_on_a_suspect_summary_naming_what_it_resembles(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """V11 reads one asset's own summary against a manifest. Nothing in it needs a second asset."""
+    out = _run_json(
+        capsys,
+        "--file", str(_suspect_column_asset(tmp_path)),
+        "--trap-manifest", str(_traps(tmp_path, SUSPECT_TRAP)),
+        "--test-split", str(_split(tmp_path, LEAKED)),
+    )
+    assert "V11" not in out["not_evaluated"], (
+        f"V11 was not run in --file mode: {out['not_evaluated'].get('V11')!r}"
+    )
+    v11 = [f for f in out["findings"] if f["rule"] == "V11"]
+    assert v11, f"a suspect summary naming its source column did not fire V11: {out['findings']}"
+    assert "unit_price" in v11[0]["message"]
+
+
+def test_v11_does_not_fire_when_the_manifest_does_not_plant_that_column(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The negative control. A column the manifest never planted has no source column to name."""
+    out = _run_json(
+        capsys,
+        "--file", str(_suspect_column_asset(tmp_path)),
+        "--trap-manifest", str(_traps(tmp_path)),
+        "--test-split", str(_split(tmp_path, LEAKED)),
+    )
+    assert [f for f in out["findings"] if f["rule"] == "V11"] == []
+
+
+def test_a_missing_manifest_reports_the_manifest_and_not_the_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The two reasons are different facts, and the JSON has to keep them apart.
+
+    "needs the whole tree" says the rule cannot be answered here. "no test split at X" says it can,
+    and the input is missing -- which a writer fixes by passing a path. Reporting the first when the
+    second was true is what hid V12 from the rebuild loop.
+    """
+    out = _run_json(
+        capsys,
+        "--file", str(_leaking_asset(tmp_path)),
+        "--test-split", str(tmp_path / "absent.jsonl"),
+        "--trap-manifest", str(tmp_path / "absent.json"),
+    )
+    assert "absent.jsonl" in out["not_evaluated"]["V12"], out["not_evaluated"]["V12"]
+    assert "absent.json" in out["not_evaluated"]["V11"], out["not_evaluated"]["V11"]
+    assert "whole tree" not in out["not_evaluated"]["V12"]
+    assert "whole tree" not in out["not_evaluated"]["V11"]
+
+
+def test_file_mode_still_defers_the_four_rules_that_need_a_second_asset(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """V9, V15, V17b and V23 cannot be answered from one file, and must not read as passing.
+
+    V15 is the one worth stating: it asks that *exactly* the manifest's columns are marked, and the
+    "no more" half is answerable from one file while the "no fewer" half needs every other table.
+    """
+    out = _run_json(
+        capsys,
+        "--file", str(_leaking_asset(tmp_path)),
+        "--test-split", str(_split(tmp_path, LEAKED)),
+        "--trap-manifest", str(_traps(tmp_path, SUSPECT_TRAP)),
+        "--table-manifest", str(tmp_path / "absent.json"),
+        "--rename-map", str(tmp_path / "absent.json"),
+    )
+    for rule in ("V9", "V15", "V17b", "V23"):
+        assert out["not_evaluated"].get(rule) == "needs the whole tree", (
+            f"{rule} is not deferred in --file mode: {out['not_evaluated'].get(rule)!r}"
+        )
+
+
+def test_whole_tree_only_is_exactly_the_rules_with_a_stated_reason() -> None:
+    """A fifth entry must arrive with a reason, and this is where it is made to.
+
+    The list carried six for as long as its comment justified two, and V19 was missing from it
+    while running only under the whole-tree branch. Pinning the set means the next
+    addition fails here and the author has to say which of the two reasons applies: needing a second
+    asset, which defers the rule, or needing an external file, which the tool already reports
+    separately and which does not.
+    """
+    assert set(cc.WHOLE_TREE_ONLY) == {"V9", "V15", "V17b", "V19", "V23"}, (
+        "V11 and V12 answer from one asset against an external manifest; a manifest is not a tree, "
+        "and the tool reports a missing one separately"
+    )
+
+
+def test_v19_is_deferred_in_file_mode_and_not_reported_clean(tmp_path: Path) -> None:
+    """The third rule in this file to be asked nothing and answer zero, and the worst of the three.
+
+    ``check_excluded_not_named`` sat inside ``if whole:`` while V19 was absent from
+    ``WHOLE_TREE_ONLY``, so ``--file`` printed ``V19  0``. V11 and V12 at least said "needs the
+    whole tree", which was wrong but visible. A bare ``0`` is a rule reporting **clean** when it was
+    never asked, and V19 is the disclosure gate -- an excluded column named in prose the model sees.
+
+    It genuinely does need the tree: the excluded set is assembled from every asset's
+    ``governance.excluded``, so one file cannot know what is excluded. Same shape as V9's.
+    """
+    path = tmp_path / "t.yaml"
+    path.write_text(
+        """asset_type: term
+id: t.pay
+summary: pay: what a person earns in a year.
+body: >-
+  Read this from the salary column.
+""",
+        encoding="utf-8",
+    )
+    done = subprocess.run(
+        [sys.executable, str(CONFORMANCE), "--file", str(path), "--json"],
+        capture_output=True, text=True, encoding="utf-8", cwd=str(ROOT),
+    )
+    payload = json.loads(done.stdout)
+    assert "V19" in payload["not_evaluated"], (
+        "V19 answered in --file mode without being asked. Its zero reads as clean: "
+        f"not_evaluated is {sorted(payload['not_evaluated'])}"
+    )
+
+
+def test_the_whole_tree_dispatch_is_the_declaration() -> None:
+    """The list and the ``if whole:`` block were two places to say one thing, and they disagreed.
+
+    Three rules got onto the wrong side of that disagreement -- V11 and V12 declared as deferred
+    while answerable, V19 answerable-looking while deferred. So the dispatch now *is* the
+    declaration: :data:`WHOLE_TREE_CHECKS` maps a rule to the function that answers it, and
+    ``WHOLE_TREE_ONLY`` is derived from it. A rule cannot run whole-tree-only without appearing in
+    the list a reader checks.
+
+    V15 is the one entry outside the mapping, because it takes three manifests rather than
+    ``assets`` alone, and it is asserted here so that exception stays a single named one.
+    """
+    assert set(cc.WHOLE_TREE_ONLY) == set(cc.WHOLE_TREE_CHECKS) | {"V15"}
+    assert set(cc.WHOLE_TREE_ONLY) == {"V9", "V15", "V17b", "V19", "V23"}
