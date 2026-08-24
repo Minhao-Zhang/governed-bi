@@ -20,8 +20,7 @@ SQLite is the offline test/CI substrate.
    ([ADR 0015](adr/0015-the-return-path.md), **steps 0–6 built** on `design/return-path`; the
    agentic pipeline, T4/T5, the capture UI and `/reports` are not). Both pages open with a note on
    where the design and what shipped differ, and the evidence is in
-   [open work](open-work.md) §3.10a–3.10c. Chinese pair:
-   [return-path.zh.md](return-path.zh.md), [ADR 0015 zh](adr/0015-the-return-path.zh.md).
+   [open work](open-work.md) §3.10a–3.10c.
 
    The tools, in the order a change moves through them:
 

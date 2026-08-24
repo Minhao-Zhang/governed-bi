@@ -4,7 +4,6 @@ How reader and engineer feedback becomes a corpus change. The binding decision i
 [ADR 0015](adr/0015-the-return-path.md); this page describes the code on `design/return-path`.
 Where the design and the measurement disagreed, what is written here is what the code does, and
 the design that was cut has been deleted from this page rather than marked.
-中文版：[回流路径 —— 工作参考](return-path.zh.md)。
 
 Three surfaces are described below and are **not built**, and each says so where it appears: the
 analyst capture UI (§12.2), `/reports` (§12.3), and the re-ask button (§5). One principal holds

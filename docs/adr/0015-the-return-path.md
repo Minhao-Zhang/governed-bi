@@ -17,7 +17,6 @@
 - **Working reference:** [return path](../return-path.md) — the build order, the data shapes, the
   route table and the test names. This page is the decision and the reasoning; that page is what
   an engineer implements from.
-- **中文版：** [0015：回流路径](0015-the-return-path.zh.md).
 - **Reading note.** Four figures in the Context section are measurements taken for this decision
   and are not in any other document. They are marked **measured** with the command that produced
   them.
