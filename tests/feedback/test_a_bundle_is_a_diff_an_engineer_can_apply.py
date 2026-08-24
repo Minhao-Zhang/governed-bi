@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 import pytest
 
 from governed_bi.feedback.events import (
+    DerivedState,
     Kind,
     Observation,
     ObservationState,
@@ -211,9 +212,15 @@ def test_the_commit_message_carries_no_reader_prose(tmp_path: Path) -> None:
 
 
 def test_the_manifest_omits_a_hash_nobody_can_compute_yet(tmp_path: Path) -> None:
-    """`expected_corpus_content_hash` is the digest of a tree nobody has written. A hash-shaped
-    string nobody can compare is worse than an absence, so `check_landed.py` computes it after the
-    commit — which is why a landing usually reads `landed_matched` rather than `landed_verified`."""
+    """The *manifest* omits it, and the reason is the reader, not the computability.
+
+    An engineer reading `MANIFEST.yaml` before applying has nothing to compare a post-state hash
+    against, so a hash-shaped string there is noise. It is recorded on the **patch**, where
+    `derived_state` reads it -- see
+    `test_a_bundle_that_lands_alone_reads_landed_verified`. This docstring used to say
+    `check_landed.py` computed it after the commit and that a landing therefore "usually reads
+    `landed_matched`"; that file has never contained the symbol, and the state was unreachable.
+    """
     import yaml
 
     _corpus(tmp_path)
@@ -421,3 +428,75 @@ def test_a_truncated_corpus_hash_is_refused_at_the_store(tmp_path: Path) -> None
     )
     with pytest.raises(Rejected, match="16 characters"):
         store.draft(patch, observations=[])
+
+
+def test_a_bundle_that_lands_alone_reads_landed_verified(tmp_path: Path) -> None:
+    """The state exists, and until the exporter recorded the hash nothing could reach it.
+
+    `DerivedState.landed_verified` is the strong claim -- "the corpus is *exactly* the tree this
+    bundle predicted" -- and it is what separates a clean landing from `landed_matched`, which is
+    also true when three other bundles arrived in the same week. `derived_state` reads
+    `patch.expected_corpus_content_hash` to tell them apart, and no caller set it: the exporter
+    omitted it and named `check_landed.py`, which never had the symbol.
+
+    Driven end to end rather than by constructing a `Patch` with the field filled in, because a
+    hand-built value is what let the state look covered while having no producer.
+    """
+    from governed_bi.corpus.hash import corpus_content_hash
+    from governed_bi.corpus.patch import apply_edit
+    from governed_bi.feedback.lifecycle import derived_state
+
+    root = _corpus(tmp_path)
+    becomes = WAS + " Grain is one order."
+    store, patch_id = _seeded(tmp_path, becomes=becomes)
+    assert _export(tmp_path, store, patch_id) == 0
+
+    patch = store.get_patch(patch_id)
+    assert patch is not None
+    assert patch.expected_corpus_content_hash, "the exporter must record the tree it predicts"
+
+    # Apply the edit the way `git apply` would: the bytes, LF, nothing else touched.
+    target = root / "sales" / "tables" / "tbl_sales_orders.yaml"
+    target.write_bytes(
+        apply_edit(
+            target,
+            asset_id=ASSET,
+            field_path="summary",
+            was=WAS,
+            becomes=becomes,
+        ).encode("utf-8")
+    )
+
+    landed = corpus_content_hash(root)
+    assert landed == patch.expected_corpus_content_hash, "predicted before, measured after"
+    assert (
+        derived_state(patch, loaded_corpus_hash=landed, asset_text_now={}, retrieval_ok=None)
+        is DerivedState.landed_verified
+    )
+
+
+def test_a_bundle_that_lands_beside_another_change_reads_landed_matched(tmp_path: Path) -> None:
+    """The weaker state, and it must stay reachable: this is the common real case.
+
+    Something else landing in the same week is normal, and a two-state model calls it
+    `superseded` -- "handed off, forever" -- for a change that did ship. The expected hash makes
+    `landed_verified` the narrow claim rather than replacing this one.
+    """
+    from governed_bi.feedback.lifecycle import derived_state
+
+    _corpus(tmp_path)
+    becomes = WAS + " Grain is one order."
+    store, patch_id = _seeded(tmp_path, becomes=becomes)
+    assert _export(tmp_path, store, patch_id) == 0
+    patch = store.get_patch(patch_id)
+    assert patch is not None
+
+    assert (
+        derived_state(
+            patch,
+            loaded_corpus_hash="f" * 64,
+            asset_text_now={ASSET: (becomes, "Grain is one order.")},
+            retrieval_ok=None,
+        )
+        is DerivedState.landed_matched
+    )

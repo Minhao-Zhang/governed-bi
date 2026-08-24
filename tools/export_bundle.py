@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from governed_bi.corpus.analyst import for_analyst
+from governed_bi.corpus.hash import corpus_content_hash
 from governed_bi.corpus.patch import StaleValue, UnwritableValue, apply_edit, locate
 from governed_bi.corpus.store import load
 from governed_bi.feedback.events import Patch, PatchIntent, PatchState, Source
@@ -179,12 +180,28 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nwrote {bundle}")
 
     if patch.state is PatchState.draft:
+        # The digest the corpus will carry once this bundle is applied and nothing else is.
+        # `DerivedState.landed_verified` is the state that reads it, and until now **nothing set the
+        # field**: this call site omitted it as "the digest of a tree nobody has written yet" and
+        # named `tools/check_landed.py` as where it would be computed, and that file has never
+        # contained the symbol. So the branch never fired and every real landing reported
+        # `landed_matched` at best -- which is the weaker claim, true of a corpus where three other
+        # bundles also landed.
+        #
+        # It is computable here: the digest is a walk of relative path plus content, so substituting
+        # the one edited file's bytes gives the post-state exactly. UTF-8 bytes and not the string,
+        # because `git apply` writes LF and a text-mode write on Windows would not.
+        expected = corpus_content_hash(
+            corpus_root, overrides={target: after.encode("utf-8")}
+        )
         store.move_patch(
             patch.patch_id,
             to=PatchState.exported,
             detail=f"bundle at {bundle.name}",
+            expected_corpus_content_hash=expected,
         )
         print("patch state: draft -> exported")
+        print(f"expected corpus hash after this lands alone: {expected[:16]}…")
     print(_apply_instructions(bundle, corpus_root))
     return 0
 
@@ -342,9 +359,10 @@ def _write_bundle(
                 "observations": [o.observation_id for o in observations],
                 "question_ids": [o.question_id for o in observations if o.question_id],
                 "ladder": dict(patch.ladder),
-                # Deliberately absent: `expected_corpus_content_hash`. It is the digest of a tree
-                # nobody has written yet, and a hash-shaped string nobody can compare is worse
-                # than an absence. `tools/check_landed.py` computes it after the commit.
+                # Deliberately absent from the *manifest*, and recorded on the patch instead.
+                # An engineer reading `MANIFEST.yaml` has nothing to compare it against before
+                # applying, and a hash-shaped string nobody can check is worse than an absence.
+                # `derived_state` is the reader that needs it, and it reads the store.
             },
             sort_keys=False,
             allow_unicode=True,
