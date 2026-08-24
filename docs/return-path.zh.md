@@ -581,7 +581,11 @@ def apply_create(root: Path, *, asset_yaml: str, namespace: str) -> Path:
 路径和 `kind` 的取值都不变，所以今天的 UI 继续可用。**暂停 thread 上的那个 409 消失了**，而这是好事：
 再也没有东西写 graph state，所以没有活跃 interrupt 可被消耗，于是 turn 正在暂停中的读者可以提交。
 
-限流，按进程，两个动词共用：`GOVERNED_BI_FEEDBACK_RATE`，每个 turn 每小时若干条 observation，默认 5。
+**没有限流，而本页原先说有。** 它描述了 `GOVERNED_BI_FEEDBACK_RATE`、「每个 turn 每小时 5 条」，
+并得出「一个 turn 无法被用来无界增长 store」的结论。那个变量在整棵树里不存在，那条不变量也不成立：写入动词
+是未认证的，所以能连上端口的调用方可以把 `runs/feedback.sqlite` 涨到磁盘满。约束单行的是 `NOTE_MAX_CHARS`
+（4,000）和 `QUESTION_MAX_CHARS`（8,000）；约束条数的没有。这是一个未完成项，记在
+[open work](open-work.md) 里，而不是在这里当成已完成来描述。
 一个 turn 不能被用来无界地把存储撑大。
 
 ### 默认启用 —— 读
@@ -606,26 +610,29 @@ def apply_create(root: Path, *, asset_yaml: str, namespace: str) -> Path:
 **产出 bundle 是一个 CLI，不是一个路由**（§8）。一个写出目录、随后由工程师应用的路由，就是一个让任何
 碰到端口的人都能暂存一次语料变更的路由。
 
-### 收窄接缝
+### 实际收窄这些载荷的是什么
 
-`api/visibility.py::visible()` 按 ADR 0012 的 grant 收窄一个**语料投影**。它在结构上收窄不了这些
-载荷：一个 observation 的 `note` 是一句人写的话，里面没有可收窄的东西。所以：
+**`narrow_feedback_rows` 不存在，而本节原先当它存在来描述** —— 连签名、docstring 和测试文件名都写了，
+而这三样在树里一个都没有。返回路径上**没有**基于 grant 的收窄。实际交付的更粗，值得精确说明，因为
+「按 grant 收窄」和「按开关收窄」差别很大。
 
-```python
-# api/visibility.py，与 `visible` 并列
-def narrow_feedback_rows(rows: Sequence[Mapping[str, Any]],
-                         withheld: frozenset[str]) -> list[dict[str, Any]]:
-    """丢掉其 patch 点名了被withheld asset 的行；把 `licensed`/`rendered` 里点名了这类 asset 的
-    条目清空。已声明的豁免，被断言而不是被撞见：
-      * `note` 和 `expected` 原样承载 —— 人写的 prose，没有可收窄的东西
-      * `generated_sql` 原样承载 —— `/audit/turns` 已经把它披露给同一个调用方，所以在这里扣住
-        不会收窄任何东西，只会弄坏 steward 的屏幕
-    """
-```
+`api/feedback_routes.py` 从三份**白名单**投影 —— `PUBLIC_OBSERVATION_FIELDS`、`PUBLIC_PATCH_FIELDS`、
+`PUBLIC_TRANSITION_FIELDS` —— 只在 `GOVERNED_BI_FEEDBACK_ADMIN` 置位时放宽到全部字段，而那是与挂载
+steward 动词同一次读取。对未认证调用方扣留的：
 
-一个点名了被 withheld asset 的 patch：**详情 403，列表中不出现**，因为起草它时会把活体语料读进 `was`。
-由 `tests/api/test_the_return_path_respects_the_grant.py` 断言，其中包括
-`::test_the_reader_note_is_a_declared_exemption`。
+| 扣留 | 原因 |
+|---|---|
+| `gold_sql`、`gold_fingerprint`、`pred_fingerprint` | **留出集**基准的参考答案。V12 阻止留出问题进入 corpus；通过 HTTP 发出答案是同一条污染通道、只是绕过了闸门 |
+| patch 的 `was`、`becomes`、`rationale`、`base_corpus_content_hash` | steward 的工作草稿。`GET /patches` 在同一个开关下 404，而在修好之前详情路由照样发这些内容 |
+| transition 的 `detail` | steward 打的任何字。append-only 轨迹的**形状**是公开的，句子不是 |
+
+用**白名单而不是黑名单**，因为黑名单正是缺陷的来源：投影原本枚举 dataclass，所以往 `Observation` 上加一个
+字段，下一次部署它就到了未认证路由上。`gold_sql` 就是这么来的。由
+`tests/api/test_the_queue_does_not_serve_the_benchmark.py` 断言 —— 任何不在名单上的字段上线都会红。
+
+**仍然披露、且确实没变的**：`question`、`generated_sql`、`licensed`、`missing_tables`。这些是让一行可
+评审的东西，而 `/audit/turns/{id}/trace` 本来就对同一个调用方披露一个 turn 的 SQL —— 这是先于本界面就
+被接受的立场。按 grant 的接缝是诚实的下一步，尚未建成。
 
 ---
 

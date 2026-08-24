@@ -4255,7 +4255,7 @@
       "ObservationResponse": {
         "type": "object",
         "title": "ObservationResponse",
-        "description": "One row of `runs/feedback.sqlite`'s `observation` table (ADR 0015). Replaces `RaisedRowResponse`, which described a row on the deleted `ServeState.raised` checkpoint channel. Two differences matter to a client: the id field is `observation_id` and not `report_id`, and `open` is **computed** from `state` rather than stored -- a row cannot be open and terminal, because there is no column that could disagree with the state.",
+        "description": "One row of `runs/feedback.sqlite`'s `observation` table (ADR 0015). Replaces `RaisedRowResponse`, which described a row on the deleted `ServeState.raised` checkpoint channel. Two differences matter to a client: the id field is `observation_id` and not `report_id`, and `open` is **computed** from `state` rather than stored -- a row cannot be open and terminal, because there is no column that could disagree with the state. **The projection is narrowed for an unauthenticated caller.** `gold_sql`, `gold_fingerprint` and `pred_fingerprint` are the held-out benchmark's reference answer and its comparison fingerprints; conformance rule V12 exists to keep a held-out question out of the corpus, and serving the answer over HTTP would be the same contamination with the gate bypassed. They are omitted unless `GOVERNED_BI_FEEDBACK_ADMIN` is set. What stays public -- `question`, `generated_sql`, `licensed`, `missing_tables` -- is what makes a row reviewable, and `/audit/turns/{turn_id}/trace` already discloses a turn's SQL to the same caller.",
         "properties": {
           "observation_id": {
             "type": "string",
@@ -4423,7 +4423,7 @@
                 "type": "null"
               }
             ],
-            "description": "Present only on an imported observation. The falsifiable claim on such a row, and stronger than a sentence: it is compared by fingerprint."
+            "description": "Present only on an imported observation. The falsifiable claim on such a row, and stronger than a sentence: it is compared by fingerprint. **Present only for the steward.** The reader routes mount unauthenticated, so this field is omitted unless the engine was started with `GOVERNED_BI_FEEDBACK_ADMIN` set -- the same switch that mounts the steward's verbs, read once. A client must treat it as absent, not null."
           },
           "gold_fingerprint": {
             "anyOf": [
@@ -4433,7 +4433,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": " **Present only for the steward.** The reader routes mount unauthenticated, so this field is omitted unless the engine was started with `GOVERNED_BI_FEEDBACK_ADMIN` set -- the same switch that mounts the steward's verbs, read once. A client must treat it as absent, not null."
           },
           "pred_fingerprint": {
             "anyOf": [
@@ -4443,7 +4444,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": " **Present only for the steward.** The reader routes mount unauthenticated, so this field is omitted unless the engine was started with `GOVERNED_BI_FEEDBACK_ADMIN` set -- the same switch that mounts the steward's verbs, read once. A client must treat it as absent, not null."
           },
           "quality_flags": {
             "type": "array",
@@ -4584,7 +4586,7 @@
       "PatchResponse": {
         "type": "object",
         "title": "PatchResponse",
-        "description": "One row of the `patch` table (ADR 0015 §4). A patch records what a change to the corpus *would* be; it is never the change. The write is a human's `git commit` in the corpus repository, which this process cannot reach -- that gap is the provenance gate the design exists for, so no field here says a patch was applied. **Landing is derived** by reading the corpus (`tools/check_landed.py`) and appears on this shape only as `derived_state`, which is null on every route that has no corpus loaded.",
+        "description": "One row of the `patch` table (ADR 0015 §4). A patch records what a change to the corpus *would* be; it is never the change. The write is a human's `git commit` in the corpus repository, which this process cannot reach -- that gap is the provenance gate the design exists for, so no field here says a patch was applied. **Landing is derived** by reading the corpus (`tools/check_landed.py`) and appears on this shape only as `derived_state`, which is null on every route that has no corpus loaded. **The projection is narrowed for an unauthenticated caller.** `was`, `becomes`, `rationale` and `base_corpus_content_hash` are the steward's working draft and are omitted unless `GOVERNED_BI_FEEDBACK_ADMIN` is set. The *existence* of a patch is not withheld -- its text is. `GET /patches` 404s under the same switch, and until 2026-08-23 this shape served the same content through `GET /observations/{observation_id}` regardless, which is a 404 on one door and an open window on the other.",
         "properties": {
           "patch_id": {
             "type": "string",
@@ -4630,7 +4632,7 @@
           },
           "rationale": {
             "type": "string",
-            "description": "Why, in the drafter's words."
+            "description": "Why, in the drafter's words. **Present only for the steward.** The reader routes mount unauthenticated, so this field is omitted unless the engine was started with `GOVERNED_BI_FEEDBACK_ADMIN` set -- the same switch that mounts the steward's verbs, read once. A client must treat it as absent, not null."
           },
           "asset_type": {
             "anyOf": [
@@ -4674,7 +4676,7 @@
                 "type": "null"
               }
             ],
-            "description": "The field's text when the patch was drafted. **Enforced at apply time** -- if the corpus no longer holds this, the edit is refused rather than merged."
+            "description": "The field's text when the patch was drafted. **Enforced at apply time** -- if the corpus no longer holds this, the edit is refused rather than merged. **Present only for the steward.** The reader routes mount unauthenticated, so this field is omitted unless the engine was started with `GOVERNED_BI_FEEDBACK_ADMIN` set -- the same switch that mounts the steward's verbs, read once. A client must treat it as absent, not null."
           },
           "becomes": {
             "anyOf": [
@@ -4685,11 +4687,11 @@
                 "type": "null"
               }
             ],
-            "description": "The replacement text."
+            "description": "The replacement text. **Present only for the steward.** The reader routes mount unauthenticated, so this field is omitted unless the engine was started with `GOVERNED_BI_FEEDBACK_ADMIN` set -- the same switch that mounts the steward's verbs, read once. A client must treat it as absent, not null."
           },
           "base_corpus_content_hash": {
             "type": "string",
-            "description": "The full 64-character digest of the corpus the patch was authored against. A truncated prefix -- which is what every display shows -- is refused with 422, because it never equals the digest the landing check compares it against and the patch would report `superseded` while nothing had changed."
+            "description": "The full 64-character digest of the corpus the patch was authored against. A truncated prefix -- which is what every display shows -- is refused with 422, because it never equals the digest the landing check compares it against and the patch would report `superseded` while nothing had changed. **Present only for the steward.** The reader routes mount unauthenticated, so this field is omitted unless the engine was started with `GOVERNED_BI_FEEDBACK_ADMIN` set -- the same switch that mounts the steward's verbs, read once. A client must treat it as absent, not null."
           },
           "expected_corpus_content_hash": {
             "anyOf": [
@@ -4737,8 +4739,6 @@
           "intent",
           "state",
           "namespace",
-          "rationale",
-          "base_corpus_content_hash",
           "ladder",
           "withdrawn_reason",
           "observations"
@@ -4896,7 +4896,8 @@
                   "description": "The role the transition table declares, not an identity. On this deployment one person holds all three."
                 },
                 "detail": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Free text the steward typed when moving the row. **Present only for the steward.** The reader routes mount unauthenticated, so this field is omitted unless the engine was started with `GOVERNED_BI_FEEDBACK_ADMIN` set -- the same switch that mounts the steward's verbs, read once. A client must treat it as absent, not null."
                 }
               },
               "required": [
@@ -4905,8 +4906,7 @@
                 "entity_id",
                 "from_state",
                 "to_state",
-                "moved_by",
-                "detail"
+                "moved_by"
               ]
             },
             "description": "Append-only. Who moved it, in order."

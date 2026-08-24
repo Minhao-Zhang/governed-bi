@@ -716,6 +716,95 @@ def test_the_pending_queue_carries_both_populations_so_neither_shape_goes_unchec
         )
 
 
+def _lines(problems: list[str]) -> str:
+    """Violations as one message. A helper only so the assertion fits on one line."""
+    return "\n".join(problems)
+
+
+def test_the_spec_also_describes_the_narrowed_projection(tmp_path: Path) -> None:
+    """**The fixture above mounts the admin router, so every other test here validates one of two
+    shapes.** The reader routes narrow their projection when `GOVERNED_BI_FEEDBACK_ADMIN` is unset,
+    and that half went unchecked: `PatchResponse` *required* `rationale` and
+    `base_corpus_content_hash`, which the public shape does not serve.
+
+    A second app with the switch off, checked against the same components. The spec's `required`
+    lists must hold for both projections, and no narrowed field may be declared required.
+    """
+    import os
+
+    from fastapi.testclient import TestClient
+
+    from contracts import scratch_feedback_store
+    from governed_bi.api.routes import make_app
+    from governed_bi.feedback.events import Kind, Observation, ObservationState, Source
+    from governed_bi.feedback.store import mint_observation_id, utc_now
+
+    had = os.environ.pop(ADMIN_SWITCH, None)
+    try:
+        store = scratch_feedback_store()
+        client = TestClient(make_app(object(), _NoTurns(), _NoPending(), store))
+    finally:
+        if had is not None:
+            os.environ[ADMIN_SWITCH] = had
+
+    observation = Observation(
+        observation_id=mint_observation_id(),
+        filed_at=utc_now(),
+        source=Source.eval,
+        kind=Kind.wrong_answer,
+        state=ObservationState.open,
+        question="which brewery made the best-selling root beer?",
+        external_key="k-1",
+        arm="v4",
+        question_id="q-1",
+        gold_sql="SELECT 1",
+    )
+    store.file(observation)
+
+    spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+    body = client.get("/observations").json()
+    problems = _violations(
+        body, _declared(spec, "GET", "/observations", "200"), spec, "GET /observations (public) $"
+    )
+    assert not problems, _lines(problems)
+
+    detail = client.get(f"/observations/{observation.observation_id}").json()
+    problems = _violations(
+        detail,
+        _declared(spec, "GET", "/observations/{observation_id}", "200"),
+        spec,
+        "GET /observations/{id} (public) $",
+    )
+    assert not problems, _lines(problems)
+
+    assert "gold_sql" not in body["rows"][0], (
+        "the narrowed projection served the gold statement, so the spec's note about it is wrong"
+    )
+
+
+class _NoTurns:
+    TURN_LOG_DIR = "/nowhere"
+    SUMMARY_FIELDS: tuple[str, ...] = ("turn_id",)
+
+    def list_turns(self, limit: int = 50, thread_id: str | None = None) -> list[Any]:
+        return []
+
+    def get_turn(self, turn_id: str) -> dict[str, Any] | None:
+        return None
+
+    def clarifications_of(self, thread_id: str, turn_id: str) -> list[Any]:
+        return []
+
+
+class _NoPending:
+    PENDING_FIELDS = ("asked_at", "observation_id")
+
+    def pending(self, *, limit: int = 50, offset: int = 0) -> Any:
+        from governed_bi.api.thread_turns import PendingPage
+
+        return PendingPage(rows=[], truncated=False, threads_scanned=0)
+
+
 def test_every_operation_in_the_spec_is_exercised_here() -> None:
     """The gate's own coverage, so a route added to the spec is not silently ungated.
 

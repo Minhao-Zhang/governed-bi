@@ -224,13 +224,37 @@ def _build_app(
     app.include_router(make_router(_DeferredSession(get_session)))
     # No `_Deferred` wrapper: the pending reader builds its client on first read already, so it
     # costs nothing at import and holds no session.
-    app.include_router(make_feedback_router(pending, turn_log, store))
+    # ONE read of the switch, and it decides two things: whether the steward's verbs mount, and
+    # how wide the reader routes project. Two independent reads is how they come to disagree -- and
+    # a disagreement here is exactly what shipped: `GET /patches` answered 404 while
+    # `GET /observations/{id}` served every patch's `was`, `becomes` and `rationale` regardless.
+    #
+    # `_truthy` rather than a bare `os.environ.get`, because the bare version armed the router on
+    # `GOVERNED_BI_FEEDBACK_ADMIN=false`. An operator writing `=false` in `.env` to disable it was
+    # granting unauthenticated triage, draft and withdraw.
+    for_steward = _truthy(os.environ.get("GOVERNED_BI_FEEDBACK_ADMIN"))
+    app.include_router(
+        make_feedback_router(pending, turn_log, store, for_steward=for_steward)
+    )
     # The steward's verbs, and the `if` is the control. They are new authority -- moving a row's
     # state, drafting a patch -- on a surface where reaching the port is sufficient, so they ship
     # unmounted and a deployment opts in. Unmounted means 404: a 403 confirms the route is there.
-    if os.environ.get("GOVERNED_BI_FEEDBACK_ADMIN"):
+    if for_steward:
         app.include_router(make_admin_router(store))
     return app
+
+
+#: Environment values that mean "off". A bare truthiness test on the string armed the admin router
+#: on `=false`, `=0`, `=off` and `=no` -- verified -- so an operator writing `=false` in `.env` to
+#: disable it was granting unauthenticated triage, draft and withdraw. There is no `_truthy` helper
+#: anywhere else in `src/` to reuse, so this is the pattern's first instance and it lives beside the
+#: one switch that needs it.
+_FALSY = frozenset({"", "0", "false", "no", "off"})
+
+
+def _truthy(raw: str | None) -> bool:
+    """Whether an environment value means "on". Absent, blank and the four spellings of no are off."""
+    return (raw or "").strip().lower() not in _FALSY
 
 
 def feedback_store() -> Any:

@@ -625,8 +625,13 @@ The path and the `kind` values are unchanged, so today's UI keeps working. **The
 thread is gone**, and that is a feature: nothing writes graph state any more, so there is no live
 interrupt to consume, and the reader whose turn is paused can file.
 
-Rate limit, per process, both verbs: `GOVERNED_BI_FEEDBACK_RATE` observations per hour per turn,
-default 5. One turn cannot be used to grow the store without bound.
+**There is no rate limit, and this page used to say there was.** It described
+`GOVERNED_BI_FEEDBACK_RATE`, "5 observations per hour per turn", and concluded "one turn cannot be
+used to grow the store without bound". That variable exists nowhere in the tree and the invariant
+does not hold: the write verbs are unauthenticated, so a caller reaching the port can grow
+`runs/feedback.sqlite` until the disk fills. What bounds a single row is `NOTE_MAX_CHARS` (4,000) and
+`QUESTION_MAX_CHARS` (8,000); nothing bounds the count. Open, and named as open in
+[open work](open-work.md) rather than described here as done.
 
 ### Ships enabled — reads
 
@@ -650,28 +655,34 @@ default 5. One turn cannot be used to grow the store without bound.
 **Producing a bundle is a CLI, not a route** (§8). A route that writes a directory an engineer
 then applies is a route that lets anyone reaching the port stage a corpus change.
 
-### The narrowing seam
+### What actually narrows these payloads
 
-`api/visibility.py::visible()` narrows a **corpus projection** by the ADR 0012 grant. It
-structurally cannot narrow these payloads: an observation's `note` is a human sentence and there
-is nothing in it to narrow. So:
+**`narrow_feedback_rows` does not exist, and this section used to describe it as though it did** —
+with a signature, a docstring and a test file name, none of which are in the tree. There is no
+grant-based narrowing on the return path. What shipped is coarser and worth stating exactly, because
+the difference is the difference between "narrowed per grant" and "narrowed per switch".
 
-```python
-# api/visibility.py, beside `visible`
-def narrow_feedback_rows(rows: Sequence[Mapping[str, Any]],
-                         withheld: frozenset[str]) -> list[dict[str, Any]]:
-    """Drop rows whose patch names a withheld asset; blank `licensed`/`rendered` entries that
-    name one. Declared exemptions, asserted rather than discovered:
-      * `note` and `expected` are carried verbatim — human prose, nothing to narrow
-      * `generated_sql` is carried verbatim — `/audit/turns` already discloses it to the same
-        caller, so withholding here would narrow nothing while breaking the steward's screen
-    """
-```
+`api/feedback_routes.py` projects from three **allowlists** —
+`PUBLIC_OBSERVATION_FIELDS`, `PUBLIC_PATCH_FIELDS`, `PUBLIC_TRANSITION_FIELDS` — and widens to every
+field only when `GOVERNED_BI_FEEDBACK_ADMIN` is set, which is the same read that mounts the steward's
+verbs. Withheld from an unauthenticated caller:
 
-A patch naming a withheld asset is **403 on detail and absent from the list**, because drafting it
-reads the live corpus into `was`. Asserted by
-`tests/api/test_the_return_path_respects_the_grant.py`, including
-`::test_the_reader_note_is_a_declared_exemption`.
+| withheld | why |
+|---|---|
+| `gold_sql`, `gold_fingerprint`, `pred_fingerprint` | the **held-out** benchmark's reference answer. V12 keeps a held-out question out of the corpus; serving the answer over HTTP is the same contamination with the gate bypassed |
+| a patch's `was`, `becomes`, `rationale`, `base_corpus_content_hash` | the steward's working draft. `GET /patches` 404s under the same switch, and until this was fixed the detail route served the content regardless |
+| a transition's `detail` | whatever the steward typed. The *shape* of the append-only trail is public; the sentences are not |
+
+An **allowlist and not a denylist**, because the denylist is what produced the defect: the projection
+enumerated the dataclass, so a field added to `Observation` reached an unauthenticated route by the
+next deploy. `gold_sql` arrived exactly that way. Asserted by
+`tests/api/test_the_queue_does_not_serve_the_benchmark.py`, which fails on any field reaching the
+wire that is not on a list.
+
+**Still disclosed, and unchanged:** `question`, `generated_sql`, `licensed`, `missing_tables`. Those
+are what make a row reviewable, and `/audit/turns/{id}/trace` already discloses a turn's SQL to the
+same caller — the accepted position that predates this surface. A per-grant seam is the honest next
+step and is not built.
 
 ---
 

@@ -15,14 +15,28 @@ listing, because all three were consequences of the substrate rather than of the
   would consume the live ``ask_user`` interrupt. Nothing writes graph state any more, so **the
   reader whose turn is paused — the one most likely to want to complain — can file.**
 
-**What it does not remove: the disclosure, and it is unchanged rather than improved.** Nothing on
-this surface authenticates; reaching the port is sufficient (``docs/enterprise-fork.md``). So the
-GET hands any caller every open question, and those questions can name assets, and the POST lets
-any caller file against any turn. That was accepted before on the grounds that ``/audit/turns``
-already discloses every thread's SQL to the same caller, and the grounds have not changed. Two
-things are *arithmetically* better: a note is one row once instead of a row re-serialised into every
-later checkpoint of its thread, and the store is sweepable where the channel was not. Neither is a
-control. Under a real ``AccessPolicy`` both verbs still owe the withholding the tools apply.
+**The disclosure, and this docstring used to get it wrong.** It said "unchanged rather than
+improved". It was not unchanged: ``main``'s ``raised`` row carried **seven** fields
+(``kind``, ``turn_id``, ``thread_id``, ``note``, ``report_id``, ``reported_at``, ``open``) and this
+one carried **thirty-one**, including ``gold_sql`` -- the held-out benchmark's reference answer, on a
+route that authenticates nothing. Conformance rule V12 exists to keep a held-out question out of the
+corpus; serving the answer over HTTP was the same contamination channel with the gate bypassed, and
+it arrived on the branch that added V12's enforcement.
+
+What ships now is a **narrowed projection built from an allowlist**
+(:data:`PUBLIC_OBSERVATION_FIELDS`, :data:`PUBLIC_PATCH_FIELDS`,
+:data:`PUBLIC_TRANSITION_FIELDS`). An allowlist because the alternative is what produced the defect:
+the projection enumerated the dataclass, so a field added to ``Observation`` reached the wire by the
+next deploy. Withheld from an unauthenticated caller: the gold statement and its two fingerprints, a
+patch's ``was``/``becomes``/``rationale``/``base_corpus_content_hash``, and a transition's
+``detail``.
+
+**What is still disclosed, and this part genuinely is unchanged.** Nothing here authenticates;
+reaching the port is sufficient (``docs/enterprise-fork.md``). So the GET hands any caller every open
+question with the SQL the engine generated, and the POST lets any caller file against any turn. That
+was accepted on the grounds that ``/audit/turns`` already discloses every thread's SQL to the same
+caller, and those grounds have not changed. Under a real ``AccessPolicy`` both verbs still owe the
+withholding the tools apply.
 """
 
 from __future__ import annotations
@@ -65,12 +79,103 @@ PENDING_SOURCE_INTERRUPT = "interrupt"
 EXPECTED_MAX_CHARS = 200
 
 
-def make_feedback_router(pending: Any, turn_log: Any, store: FeedbackStore) -> APIRouter:
+#: Observation fields an **unauthenticated** caller may read, and nothing else.
+#:
+#: An allowlist because the alternative produced the defect: this projection enumerated the
+#: dataclass, so a field added to :class:`Observation` reached an unauthenticated route by the next
+#: deploy. ``gold_sql`` arrived that way. Adding a name here is a disclosure decision somebody has
+#: to make on purpose; leaving one out is the safe default.
+#:
+#: ``question``, ``generated_sql``, ``licensed`` and ``missing_tables`` are here deliberately: they
+#: are what makes a queue row reviewable at all, and ``/audit/turns/{id}/trace`` already discloses a
+#: turn's SQL to the same caller. That position predates this surface and is unchanged.
+PUBLIC_OBSERVATION_FIELDS: frozenset[str] = frozenset(
+    {
+        "observation_id",
+        "filed_at",
+        "source",
+        "kind",
+        "category",
+        "state",
+        "open",
+        "note",
+        "decline_reason",
+        "duplicate_of",
+        "blocked_note",
+        "turn_id",
+        "thread_id",
+        "question",
+        "outcome",
+        "refused_by",
+        "generated_sql",
+        "licensed",
+        "schemas",
+        "missing_tables",
+        "quality_flags",
+        "arm",
+        "question_id",
+        "db_id",
+        "corpus_content_hash",
+        "question_is_held_out",
+    }
+)
+
+#: Patch fields an unauthenticated caller may read. **The fact that a patch exists is not the
+#: secret; its content is.** `was`, `becomes` and `rationale` are the steward's working draft, and
+#: `base_corpus_content_hash` is one of the two values the landing check compares -- publishing it
+#: tells a caller which tree the change was authored against, which is provenance about work in
+#: progress rather than about a turn that happened.
+PUBLIC_PATCH_FIELDS: frozenset[str] = frozenset(
+    {
+        "patch_id",
+        "created_at",
+        "author",
+        "intent",
+        "state",
+        "namespace",
+        "asset_type",
+        "asset_id",
+        "field_path",
+        "ladder",
+        "withdrawn_reason",
+        "observations",
+        "derived_state",
+    }
+)
+
+#: Transition fields an unauthenticated caller may read. ``detail`` is whatever the steward typed --
+#: a decline reason in prose, a withdraw note -- so the *shape* of the append-only trail is public
+#: and the sentences are not.
+PUBLIC_TRANSITION_FIELDS: frozenset[str] = frozenset(
+    {"at", "entity", "entity_id", "from_state", "to_state", "moved_by"}
+)
+
+
+def _narrowed(row: dict[str, Any], allowed: frozenset[str], *, for_steward: bool) -> dict[str, Any]:
+    """``row`` with only ``allowed`` keys, unless the caller is the steward.
+
+    One function for all three shapes, because "publish only what is on the list" is one rule and a
+    second copy of it is how one shape comes to leak while the others do not.
+    """
+    if for_steward:
+        return row
+    return {name: value for name, value in row.items() if name in allowed}
+
+
+def make_feedback_router(
+    pending: Any, turn_log: Any, store: FeedbackStore, *, for_steward: bool = False
+) -> APIRouter:
     """Routes over the interrupt reader, the turn log, and the feedback store.
 
     ``pending`` exposes ``pending(limit=, offset=)`` and ``PENDING_FIELDS``; ``turn_log`` exposes
     ``get_turn``. The store is passed rather than constructed here so a test drives a ``tmp_path``
     one and the composition root owns the path — the same reason ``accept_node`` takes its session.
+
+    ``for_steward`` widens the projection to every field, and it is **the same decision that mounts
+    the admin router** — read once in ``api/routes.py``, which is the module allowed to read the
+    environment, and threaded in. Two independent reads of one switch is how they come to disagree,
+    and a disagreement here means `GET /patches` 404s while `GET /observations/{id}` serves the same
+    patch content, which is what shipped.
     """
     router = APIRouter()
 
@@ -150,7 +255,12 @@ def make_feedback_router(pending: Any, turn_log: Any, store: FeedbackStore) -> A
             observation_id = store.file(observation)
         except Rejected as exc:
             raise HTTPException(status_code=422, detail=list(exc.faults)) from exc
-        return {"ok": True, "observation": _wire_observation_detail(store, observation_id)}
+        return {
+            "ok": True,
+            "observation": _wire_observation_detail(
+                store, observation_id, for_steward=for_steward
+            ),
+        }
 
     @router.patch("/observations/{observation_id}")
     def amend(observation_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -181,7 +291,12 @@ def make_feedback_router(pending: Any, turn_log: Any, store: FeedbackStore) -> A
                 detail=f"note must be at most {NOTE_MAX_CHARS} characters, not {len(note)}",
             )
         store.amend_note(observation_id, note)
-        return {"ok": True, "observation": _wire_observation_detail(store, observation_id)}
+        return {
+            "ok": True,
+            "observation": _wire_observation_detail(
+                store, observation_id, for_steward=for_steward
+            ),
+        }
 
     # ── reads ─────────────────────────────────────────────────────────────────
 
@@ -248,21 +363,24 @@ def make_feedback_router(pending: Any, turn_log: Any, store: FeedbackStore) -> A
                         "n_distinct_questions": c.n_distinct_questions,
                         "shared_missing_tables": list(c.missing_tables),
                         "oldest_filed_at": c.oldest_filed_at,
-                        "observations": [_wire_observation(o) for o in c.observations],
+                        "observations": [
+                            _wire_observation(o, for_steward=for_steward)
+                            for o in c.observations
+                        ],
                     }
                     for c in grouped
                 ],
                 "meta": _queue_meta(page, limit, offset, grouped=len(grouped)),
             }
         return {
-            "rows": [_wire_observation(o) for o in page.rows],
+            "rows": [_wire_observation(o, for_steward=for_steward) for o in page.rows],
             "meta": _queue_meta(page, limit, offset),
         }
 
     @router.get("/observations/{observation_id}")
     def get_observation(observation_id: str) -> dict[str, Any]:
         """One observation, its patches, and each patch's **derived** landing state."""
-        row = _wire_observation_detail(store, observation_id)
+        row = _wire_observation_detail(store, observation_id, for_steward=for_steward)
         if row is None:
             raise HTTPException(status_code=404, detail="observation not found")
         return row
@@ -273,9 +391,16 @@ def make_feedback_router(pending: Any, turn_log: Any, store: FeedbackStore) -> A
 # ── projections ───────────────────────────────────────────────────────────────
 
 
-def _wire_observation(obs: Observation) -> dict[str, Any]:
-    """One observation on the wire. ``open`` is **computed**, never read from a column."""
-    return {
+def _wire_observation(obs: Observation, *, for_steward: bool = False) -> dict[str, Any]:
+    """One observation on the wire. ``open`` is **computed**, never read from a column.
+
+    Narrowed to :data:`PUBLIC_OBSERVATION_FIELDS` unless the caller is the steward. The three
+    fields that narrowing removes -- ``gold_sql``, ``gold_fingerprint``, ``pred_fingerprint`` --
+    are the held-out reference answer, which conformance rule V12 exists to keep out of the corpus
+    and which this route served in full to anybody who could reach the port.
+    """
+    return _narrowed(
+        {
         "observation_id": obs.observation_id,
         "filed_at": obs.filed_at,
         "source": obs.source.value,
@@ -307,25 +432,33 @@ def _wire_observation(obs: Observation) -> dict[str, Any]:
         # Named on the wire because the review surface must label it: an imported question comes
         # from the held-out split, and a person who writes corpus prose from it contaminates the
         # benchmark. Conformance rule V12 is the gate; this field is what tells the reader.
-        "question_is_held_out": obs.source is Source.eval,
-    }
+            "question_is_held_out": obs.source is Source.eval,
+        },
+        PUBLIC_OBSERVATION_FIELDS,
+        for_steward=for_steward,
+    )
 
 
-def _wire_observation_detail(store: FeedbackStore, observation_id: str) -> dict[str, Any] | None:
+def _wire_observation_detail(
+    store: FeedbackStore, observation_id: str, *, for_steward: bool = False
+) -> dict[str, Any] | None:
     obs = store.get(observation_id)
     if obs is None:
         return None
     return {
-        **_wire_observation(obs),
+        **_wire_observation(obs, for_steward=for_steward),
         # `derived_state` is null on every row here. It is derived and stored nowhere, and this
         # route has no session, so it cannot read the corpus; answering "did this land" from an
         # empty corpus view would say `superseded` about everything. The review surface composes
         # the corpus half, and `tools/check_landed.py` is the one that reads it.
         "patches": [
-            {**_wire_patch(store, patch), "derived_state": None}
+            {**_wire_patch(store, patch, for_steward=for_steward), "derived_state": None}
             for patch in store.patches_of(observation_id)
         ],
-        "history": list(store.history(observation_id)),
+        "history": [
+            _narrowed(dict(row), PUBLIC_TRANSITION_FIELDS, for_steward=for_steward)
+            for row in store.history(observation_id)
+        ],
     }
 
 
@@ -464,7 +597,13 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Rejected as exc:
             raise HTTPException(status_code=422, detail=list(exc.faults)) from exc
-        return {"ok": True, "observation": _wire_observation_detail(store, observation_id)}
+        # `for_steward=True` unconditionally: this router only exists when the switch is on, so
+        # there is no narrower caller to serve. Reading the switch again here would be the second
+        # read the one-decision rule exists to prevent.
+        return {
+            "ok": True,
+            "observation": _wire_observation_detail(store, observation_id, for_steward=True),
+        }
 
     @router.post("/patches", status_code=201)
     def draft_patch(body: dict[str, Any]) -> dict[str, Any]:
@@ -490,7 +629,10 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
             patch_id = store.draft(patch, observations=observations)
         except Rejected as exc:
             raise HTTPException(status_code=422, detail=list(exc.faults)) from exc
-        return {"ok": True, "patch": _wire_patch(store, store.get_patch(patch_id))}
+        return {
+            "ok": True,
+            "patch": _wire_patch(store, store.get_patch(patch_id), for_steward=True),
+        }
 
     @router.post("/patches/{patch_id}/withdraw")
     def withdraw(patch_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -520,7 +662,10 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Rejected as exc:
             raise HTTPException(status_code=422, detail=list(exc.faults)) from exc
-        return {"ok": True, "patch": _wire_patch(store, store.get_patch(patch_id))}
+        return {
+            "ok": True,
+            "patch": _wire_patch(store, store.get_patch(patch_id), for_steward=True),
+        }
 
     @router.get("/patches")
     def list_patches(
@@ -551,7 +696,7 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
                     ) from exc
         page = store.patches(states=states or None, limit=limit, offset=offset)
         return {
-            "patches": [_wire_patch(store, p) for p in page.rows],
+            "patches": [_wire_patch(store, p, for_steward=True) for p in page.rows],
             "meta": _queue_meta(page, limit, offset),
         }
 
@@ -615,12 +760,20 @@ def _optional(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
-def _wire_patch(store: FeedbackStore, patch: Patch | None) -> dict[str, Any]:
+def _wire_patch(
+    store: FeedbackStore, patch: Patch | None, *, for_steward: bool = False
+) -> dict[str, Any]:
     """A patch on the wire. ``ladder`` goes out as the store holds it, because the review surface
-    renders whatever tiers ran rather than a fixed three."""
+    renders whatever tiers ran rather than a fixed three.
+
+    Narrowed to :data:`PUBLIC_PATCH_FIELDS` unless the caller is the steward: the fact that a patch
+    exists is not the secret, its text is. `GET /patches` 404s with the switch off and this
+    projection served `was`/`becomes`/`rationale` through the observation route regardless.
+    """
     if patch is None:  # pragma: no cover - callers pass a row they just wrote
         return {}
-    return {
+    return _narrowed(
+        {
         "patch_id": patch.patch_id,
         "created_at": patch.created_at,
         "author": patch.author.value,
@@ -637,5 +790,8 @@ def _wire_patch(store: FeedbackStore, patch: Patch | None) -> dict[str, Any]:
         "expected_corpus_content_hash": patch.expected_corpus_content_hash,
         "ladder": dict(patch.ladder),
         "withdrawn_reason": patch.withdrawn_reason,
-        "observations": [o.observation_id for o in store.observations_of(patch.patch_id)],
-    }
+            "observations": [o.observation_id for o in store.observations_of(patch.patch_id)],
+        },
+        PUBLIC_PATCH_FIELDS,
+        for_steward=for_steward,
+    )
