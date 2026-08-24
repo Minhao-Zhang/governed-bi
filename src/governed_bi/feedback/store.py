@@ -32,22 +32,18 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from dataclasses import fields as dataclass_fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence, TypeVar
+from typing import Any, Iterator, Mapping, Sequence
 
 from governed_bi.feedback.events import (
     Category,
     DeclineReason,
     Drafted,
-    Kind,
     Observation,
     ObservationState,
     Patch,
-    PatchIntent,
     PatchState,
-    Source,
     Unmoved,
 )
 from governed_bi.feedback.lifecycle import (
@@ -56,9 +52,17 @@ from governed_bi.feedback.lifecycle import (
     patch_transition_for,
     transition_for,
 )
+from governed_bi.feedback.rows import (
+    SCHEMA,
+    SCHEMA_VERSION,
+    observation_from,
+    observation_row,
+    patch_from,
+    patch_row,
+    replace_row,
+)
 from governed_bi.feedback.validate import NOTE_MAX_CHARS, faults_with
 from governed_bi.paths import assert_not_a_warehouse
-from governed_bi.register.assets import AssetType
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -73,7 +77,6 @@ __all__ = [
 #: Bumped when a migration is added. There is one version and no migration yet; the column exists
 #: so the first one has somewhere to read from, which is cheaper than adding it later to a file
 #: that already has rows.
-SCHEMA_VERSION = 1
 
 
 class Rejected(ValueError):
@@ -118,96 +121,7 @@ def mint_patch_id() -> str:
     return f"pat-{stamp}-{secrets.token_hex(3)}"
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 
-CREATE TABLE IF NOT EXISTS observation (
-  observation_id      TEXT PRIMARY KEY,
-  filed_at            TEXT NOT NULL,
-  source              TEXT NOT NULL,
-  kind                TEXT NOT NULL,
-  category            TEXT,
-  note                TEXT NOT NULL DEFAULT '',
-  state               TEXT NOT NULL,
-  decline_reason      TEXT,
-  duplicate_of        TEXT REFERENCES observation(observation_id),
-  blocked_note        TEXT NOT NULL DEFAULT '',
-  triaged_at          TEXT,
-  turn_id             TEXT,
-  thread_id           TEXT,
-  question            TEXT NOT NULL DEFAULT '',
-  outcome             TEXT,
-  refused_by          TEXT,
-  generated_sql       TEXT,
-  licensed_json       TEXT NOT NULL DEFAULT '[]',
-  schemas_json        TEXT NOT NULL DEFAULT '[]',
-  missing_tables_json TEXT NOT NULL DEFAULT '[]',
-  gold_sql            TEXT,
-  gold_fingerprint    TEXT,
-  pred_fingerprint    TEXT,
-  quality_flags_json  TEXT NOT NULL DEFAULT '[]',
-  corpus_content_hash TEXT,
-  prompt_set_hash     TEXT,
-  git_sha             TEXT,
-  arm                 TEXT,
-  question_id         TEXT,
-  db_id               TEXT,
-  external_key        TEXT UNIQUE
-);
-CREATE INDEX IF NOT EXISTS ix_obs_state    ON observation(state, filed_at);
-CREATE INDEX IF NOT EXISTS ix_obs_turn     ON observation(turn_id);
-CREATE INDEX IF NOT EXISTS ix_obs_category ON observation(category, state);
-CREATE INDEX IF NOT EXISTS ix_obs_cluster  ON observation(db_id, category);
-
-CREATE TABLE IF NOT EXISTS patch (
-  patch_id                     TEXT PRIMARY KEY,
-  created_at                   TEXT NOT NULL,
-  author                       TEXT NOT NULL,
-  intent                       TEXT NOT NULL,
-  state                        TEXT NOT NULL,
-  namespace                    TEXT NOT NULL,
-  rationale                    TEXT NOT NULL DEFAULT '',
-  asset_type                   TEXT,
-  asset_id                     TEXT,
-  field_path                   TEXT,
-  was                          TEXT,
-  becomes                      TEXT,
-  asset_yaml                   TEXT,
-  base_corpus_content_hash     TEXT NOT NULL DEFAULT '',
-  expected_corpus_content_hash TEXT,
-  ladder_json                  TEXT NOT NULL DEFAULT '{}',
-  withdrawn_reason             TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS ix_patch_state ON patch(state, created_at);
-
-CREATE TABLE IF NOT EXISTS observation_patch (
-  observation_id TEXT NOT NULL REFERENCES observation(observation_id),
-  patch_id       TEXT NOT NULL REFERENCES patch(patch_id),
-  PRIMARY KEY (observation_id, patch_id)
-);
-
-CREATE TABLE IF NOT EXISTS transition (
-  rowid_     INTEGER PRIMARY KEY AUTOINCREMENT,
-  at         TEXT NOT NULL,
-  entity     TEXT NOT NULL,
-  entity_id  TEXT NOT NULL,
-  from_state TEXT,
-  to_state   TEXT NOT NULL,
-  moved_by   TEXT NOT NULL,
-  detail     TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS ix_transition_entity ON transition(entity, entity_id, rowid_);
-"""
-
-#: Observation fields kept as JSON text rather than as columns, and the SQL column each lands in.
-#: Tuples of strings, all of them: SQLite has no array type and a junction table for "the tables
-#: this turn was allowed to read" would be a join nobody queries across.
-_JSON_TUPLES: Mapping[str, str] = {
-    "licensed": "licensed_json",
-    "schemas": "schemas_json",
-    "missing_tables": "missing_tables_json",
-    "quality_flags": "quality_flags_json",
-}
 
 
 class FeedbackStore:
@@ -251,7 +165,7 @@ class FeedbackStore:
         with self._conn() as conn:
             # WAL outside the transaction: it is a database-level property, not a change.
             conn.execute("PRAGMA journal_mode = WAL")
-            conn.executescript(_SCHEMA)
+            conn.executescript(SCHEMA)
             row = conn.execute("SELECT version FROM schema_version").fetchone()
             if row is None:
                 conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
@@ -281,7 +195,7 @@ class FeedbackStore:
                 [f"filed in state {obs.state.value}; the only opening edge is to open"],
             )
 
-        row = _observation_row(obs)
+        row = observation_row(obs)
         with self._tx() as conn:
             if obs.external_key:
                 seen = conn.execute(
@@ -340,7 +254,7 @@ class FeedbackStore:
                 raise KeyError(f"no observation {observation_id!r}")
             edge = transition_for(current.state, to)
 
-            proposed = _replace(
+            proposed = replace_row(
                 current,
                 state=to,
                 decline_reason=decline_reason if to is ObservationState.declined else None,
@@ -445,7 +359,7 @@ class FeedbackStore:
         # Deduplicated, order kept: the same id twice is one attachment, and moving it twice would
         # report the second copy as a refused move against a row this call just moved.
         wanted = list(dict.fromkeys(str(o) for o in observations))
-        row = _patch_row(patch)
+        row = patch_row(patch)
         with self._tx() as conn:
             cols = ", ".join(row)
             marks = ", ".join("?" for _ in row)
@@ -556,7 +470,7 @@ class FeedbackStore:
                 raise KeyError(f"no patch {patch_id!r}")
             edge = patch_transition_for(current.state, to)
 
-            proposed = _replace(
+            proposed = replace_row(
                 current,
                 state=to,
                 withdrawn_reason=withdrawn_reason or current.withdrawn_reason,
@@ -639,12 +553,12 @@ class FeedbackStore:
             row = conn.execute(
                 "SELECT * FROM observation WHERE observation_id = ?", (observation_id,)
             ).fetchone()
-        return _observation_from(row) if row is not None else None
+        return observation_from(row) if row is not None else None
 
     def get_patch(self, patch_id: str) -> Patch | None:
         with self._conn() as conn:
             row = conn.execute("SELECT * FROM patch WHERE patch_id = ?", (patch_id,)).fetchone()
-        return _patch_from(row) if row is not None else None
+        return patch_from(row) if row is not None else None
 
     def queue(
         self,
@@ -687,7 +601,7 @@ class FeedbackStore:
                 (*params, limit, offset),
             ).fetchall()
         return Page(
-            rows=tuple(_observation_from(r) for r in rows),
+            rows=tuple(observation_from(r) for r in rows),
             total=total,
             truncated=offset + len(rows) < total,
         )
@@ -704,7 +618,7 @@ class FeedbackStore:
                 "SELECT * FROM observation WHERE turn_id = ? ORDER BY filed_at, rowid",
                 (str(turn_id),),
             ).fetchall()
-        return tuple(_observation_from(r) for r in rows)
+        return tuple(observation_from(r) for r in rows)
 
     def patches(
         self,
@@ -735,7 +649,7 @@ class FeedbackStore:
                 (*params, limit, offset),
             ).fetchall()
         return Page(
-            rows=tuple(_patch_from(r) for r in rows),
+            rows=tuple(patch_from(r) for r in rows),
             total=total,
             truncated=offset + len(rows) < total,
         )
@@ -747,7 +661,7 @@ class FeedbackStore:
                 "WHERE op.observation_id = ? ORDER BY p.created_at, p.rowid",
                 (observation_id,),
             ).fetchall()
-        return tuple(_patch_from(r) for r in rows)
+        return tuple(patch_from(r) for r in rows)
 
     def observations_of(self, patch_id: str) -> tuple[Observation, ...]:
         with self._conn() as conn:
@@ -757,7 +671,7 @@ class FeedbackStore:
                 "ORDER BY o.filed_at, o.rowid",
                 (patch_id,),
             ).fetchall()
-        return tuple(_observation_from(r) for r in rows)
+        return tuple(observation_from(r) for r in rows)
 
     def history(self, entity_id: str) -> tuple[dict[str, Any], ...]:
         """Every transition on one entity, oldest first. The audit trail, unfiltered."""
@@ -796,122 +710,14 @@ def _record_transition(
     )
 
 
-def _observation_row(obs: Observation) -> dict[str, Any]:
-    row: dict[str, Any] = {
-        "observation_id": obs.observation_id,
-        "filed_at": obs.filed_at,
-        "source": obs.source.value,
-        "kind": obs.kind.value,
-        "category": obs.category.value if obs.category else None,
-        "note": obs.note,
-        "state": obs.state.value,
-        "decline_reason": obs.decline_reason.value if obs.decline_reason else None,
-        "duplicate_of": obs.duplicate_of,
-        "blocked_note": obs.blocked_note,
-        "triaged_at": obs.triaged_at,
-        "turn_id": obs.turn_id,
-        "thread_id": obs.thread_id,
-        "question": obs.question,
-        "outcome": obs.outcome,
-        "refused_by": obs.refused_by,
-        "generated_sql": obs.generated_sql,
-        "gold_sql": obs.gold_sql,
-        "gold_fingerprint": obs.gold_fingerprint,
-        "pred_fingerprint": obs.pred_fingerprint,
-        "corpus_content_hash": obs.corpus_content_hash,
-        "prompt_set_hash": obs.prompt_set_hash,
-        "git_sha": obs.git_sha,
-        "arm": obs.arm,
-        "question_id": obs.question_id,
-        "db_id": obs.db_id,
-        "external_key": obs.external_key,
-    }
-    for attr, column in _JSON_TUPLES.items():
-        row[column] = json.dumps(list(getattr(obs, attr)))
-    return row
 
 
-def _observation_from(row: sqlite3.Row) -> Observation:
-    return Observation(
-        observation_id=row["observation_id"],
-        filed_at=row["filed_at"],
-        source=Source(row["source"]),
-        kind=Kind(row["kind"]),
-        state=ObservationState(row["state"]),
-        category=Category(row["category"]) if row["category"] else None,
-        note=row["note"],
-        turn_id=row["turn_id"],
-        thread_id=row["thread_id"],
-        question=row["question"],
-        outcome=row["outcome"],
-        refused_by=row["refused_by"],
-        generated_sql=row["generated_sql"],
-        licensed=tuple(json.loads(row["licensed_json"])),
-        schemas=tuple(json.loads(row["schemas_json"])),
-        missing_tables=tuple(json.loads(row["missing_tables_json"])),
-        gold_sql=row["gold_sql"],
-        gold_fingerprint=row["gold_fingerprint"],
-        pred_fingerprint=row["pred_fingerprint"],
-        quality_flags=tuple(json.loads(row["quality_flags_json"])),
-        corpus_content_hash=row["corpus_content_hash"],
-        prompt_set_hash=row["prompt_set_hash"],
-        git_sha=row["git_sha"],
-        arm=row["arm"],
-        question_id=row["question_id"],
-        db_id=row["db_id"],
-        external_key=row["external_key"],
-        decline_reason=DeclineReason(row["decline_reason"]) if row["decline_reason"] else None,
-        duplicate_of=row["duplicate_of"],
-        blocked_note=row["blocked_note"],
-        triaged_at=row["triaged_at"],
-    )
 
 
-def _patch_row(patch: Patch) -> dict[str, Any]:
-    return {
-        "patch_id": patch.patch_id,
-        "created_at": patch.created_at,
-        "author": patch.author.value,
-        "intent": patch.intent.value,
-        "state": patch.state.value,
-        "namespace": patch.namespace,
-        "rationale": patch.rationale,
-        "asset_type": patch.asset_type.value if patch.asset_type else None,
-        "asset_id": patch.asset_id,
-        "field_path": patch.field_path,
-        "was": patch.was,
-        "becomes": patch.becomes,
-        "asset_yaml": patch.asset_yaml,
-        "base_corpus_content_hash": patch.base_corpus_content_hash,
-        "expected_corpus_content_hash": patch.expected_corpus_content_hash,
-        "ladder_json": json.dumps(dict(patch.ladder), sort_keys=True),
-        "withdrawn_reason": patch.withdrawn_reason,
-    }
 
 
-def _patch_from(row: sqlite3.Row) -> Patch:
-    return Patch(
-        patch_id=row["patch_id"],
-        created_at=row["created_at"],
-        author=Source(row["author"]),
-        intent=PatchIntent(row["intent"]),
-        state=PatchState(row["state"]),
-        namespace=row["namespace"],
-        rationale=row["rationale"],
-        asset_type=AssetType(row["asset_type"]) if row["asset_type"] else None,
-        asset_id=row["asset_id"],
-        field_path=row["field_path"],
-        was=row["was"],
-        becomes=row["becomes"],
-        asset_yaml=row["asset_yaml"],
-        base_corpus_content_hash=row["base_corpus_content_hash"],
-        expected_corpus_content_hash=row["expected_corpus_content_hash"],
-        ladder=json.loads(row["ladder_json"]),
-        withdrawn_reason=row["withdrawn_reason"],
-    )
 
 
-_Row = TypeVar("_Row", Observation, Patch)
 
 
 def _edge_faults(
@@ -972,27 +778,12 @@ def _observation_or_none(conn: sqlite3.Connection, observation_id: str) -> Obser
     row = conn.execute(
         "SELECT * FROM observation WHERE observation_id = ?", (observation_id,)
     ).fetchone()
-    return _observation_from(row) if row is not None else None
+    return observation_from(row) if row is not None else None
 
 
 def _patch_or_none(conn: sqlite3.Connection, patch_id: str) -> Patch | None:
     """One patch, on a connection the caller already holds inside a transaction."""
     row = conn.execute("SELECT * FROM patch WHERE patch_id = ?", (patch_id,)).fetchone()
-    return _patch_from(row) if row is not None else None
+    return patch_from(row) if row is not None else None
 
 
-def _replace(row: _Row, **changes: Any) -> _Row:
-    """``dataclasses.replace`` over a slotted frozen class, spelled out.
-
-    Written by hand rather than imported so the field list is checked at call time: a typo in a
-    keyword would otherwise be a silently ignored change on some Python versions. One function for
-    both rows, because "the same row with one field moved" is one concept and two copies of it is
-    how ``Patch`` acquires a field ``Observation``'s copy silently drops.
-    """
-    known = {f.name for f in dataclass_fields(row)}
-    unknown = set(changes) - known
-    if unknown:
-        raise KeyError(f"{type(row).__name__} has no field(s) {sorted(unknown)}")
-    current = {f.name: getattr(row, f.name) for f in dataclass_fields(row)}
-    current.update(changes)
-    return type(row)(**current)

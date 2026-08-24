@@ -276,8 +276,12 @@ a pipeline that cannot conclude "there is nothing to patch" will patch.
 ### Schema
 
 ```sql
--- feedback/store.py::_SCHEMA, applied by _migrate(). `PRAGMA journal_mode = WAL` is set outside
--- the transaction, because it is a database-level property and not a change.
+-- feedback/rows.py::SCHEMA, applied by store.py::_migrate(). `PRAGMA journal_mode = WAL` is set
+-- outside the transaction, because it is a database-level property and not a change.
+--
+-- The DDL sits beside both mappers rather than beside the statements, because a new column changes
+-- the DDL, `observation_row` and `observation_from` together -- and a read/write split would have
+-- put a module boundary between the last two.
 
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 
