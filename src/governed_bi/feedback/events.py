@@ -4,6 +4,9 @@ Text, enums and frozen dataclasses. No I/O, no settings, nothing outside stdlib 
 :mod:`governed_bi.register.assets` for :class:`AssetType`. The store owns persistence and
 :mod:`.lifecycle` owns the transitions; this module owns the words.
 
+Two *event* shapes, and two result shapes at the end (:class:`Drafted`, :class:`Unmoved`) that say
+what one write did. They are shapes with no I/O, which is what this module is for.
+
 **Two layers, and the split is the design's load-bearing decision.** An :class:`Observation` is
 what somebody or something *saw* — one failure, attributed to one turn, in the language of whoever
 saw it. A :class:`Patch` is a typed corpus change an operator or an agent *authors*. One
@@ -47,9 +50,12 @@ __all__ = [
     "DerivedState",
     "TERMINAL_OBSERVATION_STATES",
     "OPERATOR_ONLY_CATEGORIES",
+    "DRAFTABLE_PATCH_INTENTS",
     "CATEGORY_KIND",
     "Observation",
     "Patch",
+    "Drafted",
+    "Unmoved",
     "PATCHABLE_ASSET_TYPES",
 ]
 
@@ -65,17 +71,23 @@ class Source(str, Enum):
     It also gates behaviour: :data:`OPERATOR_ONLY_CATEGORIES` is refused from any other source.
     """
 
-    #: A person who asked a question and read the answer.
+    #: A person who asked a question and read the answer. **What an unauthenticated caller of
+    #: ``POST /turns/{id}/raised`` is**, and the route said ``operator`` until it stopped claiming a
+    #: capability nothing verified: ``operator`` names somebody who can read the corpus, and
+    #: reaching the port is not that.
     reader = "reader"
-    #: A person operating the engine, who can read the corpus and name an asset.
+    #: A person operating the engine, who can read the corpus and name an asset. Written when
+    #: ``GOVERNED_BI_FEEDBACK_ADMIN`` is set, which is the switch that mounts the steward's verbs
+    #: and is documented as "whoever reaches the port is the steward" -- the same switch, read once,
+    #: rather than a second control invented here. Also the author of every patch, since the only
+    #: route that drafts one is on that router.
     operator = "operator"
     #: A model-driven process. Present so a future pipeline has a name; nothing writes it yet.
     agent = "agent"
-    #: An evaluation artifact, imported from ``runs/eval/*.jsonl``. **The only producer in the
-    #: first cut.** Distinct from ``agent`` because nothing judged anything: a grader compared a
-    #: fingerprint, so the evidence is a gold statement rather than an opinion. It also makes the
-    #: fields that mean "a human clicked" — ``filed_at``, and any per-turn rate limit — stop
-    #: pretending to.
+    #: An evaluation artifact, imported from ``runs/eval/*.jsonl``. Distinct from ``agent`` because
+    #: nothing judged anything: a grader compared a fingerprint, so the evidence is a gold
+    #: statement rather than an opinion. It also makes the fields that mean "a human clicked" --
+    #: ``filed_at``, and any per-turn rate limit -- stop pretending to.
     eval = "eval"
 
 
@@ -190,6 +202,13 @@ class ObservationState(str, Enum):
     #: The same failure as another observation, and it joins that one's patch set.
     duplicate = "duplicate"
     #: At least one patch exists for it. **Not ``resolved``** — see :class:`DerivedState`.
+    #:
+    #: **Produced by ``store.draft``**, in the same call that inserts the patch, and by nothing
+    #: else. It had no producer at all: ``draft`` recorded a *patch* transition and left the
+    #: observation where it was, while the review surface said the state "is set by drafting a
+    #: patch" and drafted. A row with a live patch stayed ``triaged`` forever, and the
+    #: ``addressed -> triaged`` edge that exists because a patch can be withdrawn was declared for a
+    #: state nothing could reach.
     addressed = "addressed"
     #: Waiting on a person, with a note saying which question. Not a routing action: there is
     #: nobody to escalate to, so this is a state with a name rather than an assignee.
@@ -246,9 +265,15 @@ class PatchState(str, Enum):
 
 
 class PatchIntent(str, Enum):
-    """What a patch is for. Two of the members author no asset at all, deliberately."""
+    """What a patch is for. Two of the members author no asset at all, deliberately.
 
-    #: A corpus asset that does not exist yet.
+    Not every member may be **drafted**: see :data:`DRAFTABLE_PATCH_INTENTS`, which is the set a
+    tool can carry to a handoff.
+    """
+
+    #: A corpus asset that does not exist yet. **Declared and not draftable** -- see
+    #: :data:`DRAFTABLE_PATCH_INTENTS`. ``corpus/patch.py`` has no create primitive, so this is the
+    #: one member that promises a corpus change with nothing able to produce it.
     new_asset = "new_asset"
     #: One field of an existing asset, replaced in place.
     edit_asset = "edit_asset"
@@ -261,6 +286,31 @@ class PatchIntent(str, Enum):
     #: Looked at, nothing to change. Kept as a patch rather than only as a decline so the
     #: *reasoning* has somewhere to live.
     no_change = "no_change"
+
+
+#: Intents a patch may be **stored** with, because something can carry each one to a handoff.
+#:
+#: ``edit_asset`` produces a diff an engineer applies (``tools/export_bundle.py``). The three prose
+#: intents author no asset on purpose and are carried by being *read* -- ``export_bundle``'s own
+#: refusal says so: "an exclusion_request is prose a human transcribes by hand; engine_defect and
+#: no_change author nothing on purpose."
+#:
+#: ``new_asset`` is absent, and that is the whole content of this constant. It promises a corpus
+#: change, ``corpus/patch.py`` has **no create primitive**, and both ``tools/export_bundle.py`` and
+#: ``tools/verify_patch.py`` exit 2 on any other intent. So a steward could draft one, write the
+#: ``asset_yaml``, and learn at the handoff -- from a different program, in an exit code -- that
+#: nothing would ever carry it. Refused at the draft instead.
+#:
+#: One set rather than an ``is not edit_asset`` test in each tool: when a create primitive exists,
+#: adding the member here is the change.
+DRAFTABLE_PATCH_INTENTS: frozenset[PatchIntent] = frozenset(
+    {
+        PatchIntent.edit_asset,
+        PatchIntent.exclusion_request,
+        PatchIntent.engine_defect,
+        PatchIntent.no_change,
+    }
+)
 
 
 class DerivedState(str, Enum):
@@ -405,7 +455,10 @@ class Patch:
     field_path: str | None = None
     was: str | None = None
     becomes: str | None = None
-    #: A whole document, ``new_asset`` only.
+    #: A whole document, ``new_asset`` only -- so **no draftable intent may carry it**, since
+    #: ``new_asset`` is not in :data:`DRAFTABLE_PATCH_INTENTS`. Kept rather than deleted because it
+    #: is the field a create primitive would fill, and the column already exists in every store
+    #: file; a validator refuses it on every intent that can be stored today.
     asset_yaml: str | None = None
 
     # ── what it was verified against ──
@@ -416,6 +469,44 @@ class Patch:
     ladder: Mapping[str, object] = field(default_factory=dict)
 
     withdrawn_reason: str = ""
+
+
+# ── what a write did ──────────────────────────────────────────────────────────
+#
+# Frozen result shapes, and they are here rather than beside `draft` for the reason ADR 0005 §6's
+# hard cap forces: `store.py` measured 1,020 lines with them in it and 1,000 is fatal. They carry no
+# I/O, which is what this module holds, so this is the one home that is not a compromise. `Page` is
+# the same kind of shape and stayed in `store.py`: it is 13 lines and moving it buys margin the
+# store needs a real seam for, not a second relocation.
+
+
+@dataclass(frozen=True, slots=True)
+class Unmoved:
+    """An observation a draft attached a patch to and could **not** move to ``addressed``.
+
+    ``why`` is the store's own refusal sentence, carried rather than reworded: a second phrasing of
+    which states the move is declared from is how the two come to disagree.
+    """
+
+    observation_id: str
+    state: ObservationState
+    why: str
+
+
+@dataclass(frozen=True, slots=True)
+class Drafted:
+    """What :meth:`FeedbackStore.draft` did, including what it deliberately did not do.
+
+    ``draft`` returned the patch id, which was true and not the whole answer once the same call
+    moves observations: a bare id leaves "which of them moved" answerable only by re-reading each
+    row, and a caller that has to look for a half-done write will not.
+    """
+
+    patch_id: str
+    #: Moved to ``addressed`` by this draft, in the order they were given.
+    addressed: tuple[str, ...] = ()
+    #: Attached to the patch and left where they were, with the reason.
+    not_addressed: tuple[Unmoved, ...] = ()
 
 
 # ── import-time closure ───────────────────────────────────────────────────────
@@ -448,6 +539,23 @@ def _assert_the_vocabularies_are_closed() -> None:
     stray = OPERATOR_ONLY_CATEGORIES - set(Category)
     if stray:  # pragma: no cover - import-time guard
         raise AssertionError(f"OPERATOR_ONLY_CATEGORIES names non-members: {sorted(map(str, stray))}")
+    if not OPERATOR_ONLY_CATEGORIES:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            "OPERATOR_ONLY_CATEGORIES is empty, so the Source axis gates nothing. It shipped as a "
+            "gate that could not fire once -- every filed row claimed `operator` -- and an empty "
+            "set is the same claim with the evidence removed."
+        )
+    if not DRAFTABLE_PATCH_INTENTS < set(PatchIntent):  # pragma: no cover - import-time guard
+        raise AssertionError(
+            "DRAFTABLE_PATCH_INTENTS must be a strict subset of PatchIntent. Equal to it, the "
+            "constant is a gate that admits everything, which is how `new_asset` came to be "
+            "accepted by the store and refused by every tool that would have to carry it."
+        )
+    if PatchIntent.edit_asset not in DRAFTABLE_PATCH_INTENTS:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            "edit_asset is not draftable, so nothing can produce the one thing this loop exists "
+            "to produce: a diff an engineer can apply."
+        )
     if not TERMINAL_OBSERVATION_STATES < set(ObservationState):  # pragma: no cover
         raise AssertionError(
             "TERMINAL_OBSERVATION_STATES must be a strict subset of ObservationState -- if every "

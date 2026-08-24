@@ -427,3 +427,209 @@ def test_the_declared_question_set_is_the_dataset_commit_it_names() -> None:
             f"[arm.{name}] declares question_subset {profile.question_subset!r}, but "
             f"{profile.dataset}'s test split hashes to {len(ids)}:{short_digest(ids)}"
         )
+
+
+# ── the three fields the loader did not read ──────────────────────────────────
+#
+# `hypothesised_effect`, `readout` and `corpus_release` were added to `ArmProfile` on the
+# return-path branch, and the constructor call in `_parse_profiles` passed nine keys, none of them
+# these three. So a file could declare an effect size, the loader would drop it, and
+# `arm_power_refusal` -- the whole reason the field exists -- read `None` and abstained on every
+# arm forever. The power gate was silent by construction and an underpowered paid arm still
+# started.
+#
+# Every test below goes through `load_arm_profiles`. That is the point: the tests that existed
+# built `ArmProfile(**base)` directly, which cannot see a loader that drops a field, and that is
+# exactly how this survived being written, reviewed, and marked Closed in `open-work.md` §3.10.
+
+
+def _load(tmp_path: Path, name: str, body: str) -> dict:
+    """One TOML file per call, under its own name, driven through the real loader.
+
+    Distinct names because ``load_arm_profiles`` is ``lru_cache``d on the path: two writes to one
+    filename inside one test would compare the second body against the first body's result.
+    """
+    path = tmp_path / f"{name}.toml"
+    path.write_text(textwrap.dedent(body), encoding="utf-8")
+    return dict(load_arm_profiles(path))
+
+
+#: The two mandatory fields, so each fixture below tests the field it is about and not one of
+#: those two. Indented to survive ``textwrap.dedent`` after interpolation.
+_MINIMAL = """    corpus_content_hash = "86ed1dbf"
+    question_subset = "1351:423a3f4b65fb\""""
+
+
+def test_the_loader_carries_a_declared_hypothesis_off_the_file(tmp_path: Path) -> None:
+    """The defect itself, as one assertion.
+
+    ``arm_power_refusal`` reads ``profile.hypothesised_effect``. A loader that drops it makes the
+    gate return ``None`` for every arm ever declared, which is indistinguishable from "this arm
+    claims nothing" -- and that is the reading the field was added to replace.
+    """
+    profiles = _load(tmp_path, "effect", f"""
+    [arm.v6]
+    treatment = ["prompt_set"]
+    hypothesised_effect = 0.05
+    readout = "EX"
+{_MINIMAL}
+    """)
+
+    assert profiles["v6"].hypothesised_effect == 0.05, (
+        "the file declared an effect size and the loader dropped it"
+    )
+    assert profiles["v6"].readout == "EX", "the file declared a readout and the loader dropped it"
+
+
+def test_the_loader_carries_a_declared_corpus_release_off_the_file(tmp_path: Path) -> None:
+    """``reconcile``'s ``corpus_release`` branch reads ``profile.corpus_release``, so a dropped
+    field makes that block unreachable and the one comparability knob that names the corpus as a
+    treatment reconciles against nothing."""
+    profiles = _load(tmp_path, "release", f"""
+    [arm.v6]
+    treatment = ["corpus_release"]
+    corpus_release = "v2026.08.20"
+{_MINIMAL}
+    """)
+
+    assert profiles["v6"].corpus_release == "v2026.08.20"
+
+
+def test_a_declared_release_reaches_reconcile_and_catches_the_wrong_one(tmp_path: Path) -> None:
+    """Driven end to end rather than asserted on the dataclass, because the dataclass was never
+    the broken part: ``ArmProfile(corpus_release=...)`` worked all along and the file could not
+    reach it."""
+    profile = _load(tmp_path, "release_wire", f"""
+    [arm.v6]
+    treatment = ["corpus_release"]
+    corpus_release = "v2026.08.20"
+{_MINIMAL}
+    """)["v6"]
+
+    agreeing = {
+        "corpus_content_hash": "86ed1dbf",
+        "knobs_resolved": {"question_subset": SUBSET, "corpus_release": "v2026.08.20"},
+    }
+    assert reconcile(profile, agreeing) == ()
+
+    other = {
+        "corpus_content_hash": "86ed1dbf",
+        "knobs_resolved": {"question_subset": SUBSET, "corpus_release": "v2026.08.13"},
+    }
+    problems = reconcile(profile, other)
+    assert problems and "v2026.08.13" in problems[0], (
+        "an arm whose declared treatment is the corpus release accepted a different release"
+    )
+
+
+def test_an_unknown_key_in_an_arm_table_is_refused(tmp_path: Path) -> None:
+    """The rule that makes a dropped field impossible to add silently.
+
+    Until this existed, ``_parse_profiles`` read nine named keys and ignored everything else, so
+    the way this defect looked from the *file* side was that writing ``hypothesised_effect = 0.03``
+    into ``arms.toml`` parsed clean and did nothing. The field is spelled the British way, which
+    makes ``hypothesized_effect`` the likeliest single edit in this tree to be discarded in
+    silence.
+    """
+    with pytest.raises(ValueError, match="hypothesized_effect"):
+        _load(tmp_path, "typo", f"""
+    [arm.v6]
+    treatment = ["prompt_set"]
+    hypothesized_effect = 0.05
+    readout = "EX"
+{_MINIMAL}
+        """)
+
+
+def test_an_effect_with_no_readout_is_refused_at_load(tmp_path: Path) -> None:
+    """``arm_power_refusal`` already refuses this pair, but it is reached only after a corpus, a
+    dataset, a database and four models are built. Load is where refusing is free."""
+    with pytest.raises(ValueError, match="declares no readout"):
+        _load(tmp_path, "no_readout", f"""
+    [arm.v6]
+    treatment = ["prompt_set"]
+    hypothesised_effect = 0.05
+{_MINIMAL}
+        """)
+
+
+def test_a_readout_with_no_effect_is_refused_at_load(tmp_path: Path) -> None:
+    """The other half, and it is not the mirror of the one above: a readout alone reaches
+    ``arm_power_refusal``'s first branch, which returns ``None`` on the missing effect and
+    abstains. So this direction has no run-time lock at all, and load is the only place it can be
+    caught."""
+    with pytest.raises(ValueError, match="declares no hypothesised_effect"):
+        _load(tmp_path, "no_effect", f"""
+    [arm.v6]
+    treatment = ["prompt_set"]
+    readout = "EX"
+{_MINIMAL}
+        """)
+
+
+def test_an_effect_in_percentage_points_is_refused(tmp_path: Path) -> None:
+    """``3`` where ``0.03`` was meant passes the power gate at every n, because the floor is a
+    proportion and ``abs(3) > 0.0956`` always. A unit error that makes a gate pass is the same
+    class of defect as a field the gate cannot read: ``require_power(discordant=0.29)`` is already
+    on record as approving the exact arm shape it exists to refuse."""
+    with pytest.raises(ValueError, match="points of the readout"):
+        _load(tmp_path, "pp", f"""
+    [arm.v6]
+    treatment = ["prompt_set"]
+    hypothesised_effect = 3
+    readout = "EX"
+{_MINIMAL}
+        """)
+
+
+def test_a_zero_effect_is_refused_rather_than_read_as_no_claim(tmp_path: Path) -> None:
+    """Zero is not "no hypothesis" and must not be spelled the same way as one. No n detects it,
+    so an arm declaring it is refused by ``require_power`` at every sample size -- which is a
+    load-time fact about the file, not a run-time fact about the sample."""
+    with pytest.raises(ValueError, match="points of the readout"):
+        _load(tmp_path, "zero", f"""
+    [arm.v6]
+    treatment = ["prompt_set"]
+    hypothesised_effect = 0.0
+    readout = "EX"
+{_MINIMAL}
+        """)
+
+
+def test_an_arm_whose_treatment_is_the_corpus_release_must_name_one(tmp_path: Path) -> None:
+    """The one place ``corpus_release`` is mandatory, and the reason it is conditional elsewhere.
+
+    An arm declaring ``treatment = ["corpus_release"]`` claims the corpus release *is* what
+    changed. Not naming it leaves ``reconcile``'s release branch unentered, so the arm's own
+    treatment is the single thing about it that nothing checks. Arms whose treatment is something
+    else keep the field optional: every artifact on disk predates the knob, and refusing them
+    would strand all seven to gain nothing the digest does not already reconcile.
+    """
+    with pytest.raises(ValueError, match="treatment is corpus_release"):
+        _load(tmp_path, "release_unnamed", f"""
+    [arm.v6]
+    treatment = ["corpus_release"]
+{_MINIMAL}
+        """)
+
+
+def test_the_shipped_arms_declare_no_hypothesis_and_that_is_the_committed_state() -> None:
+    """**Read this before quoting the power gate as being in force.** On this file it is not.
+
+    All four arms in ``arms.toml`` declare no ``hypothesised_effect``, so ``arm_power_refusal``
+    abstains on every one of them. That is the honest outcome: all four were measured before the
+    field existed, and an effect size written down after the measurement is not a hypothesis. What
+    is *not* honest is leaving that inferable only from the absence of a key, which is how the
+    dropped field went unnoticed. This asserts the inventory, so the first arm to declare one has
+    to come through here and say so.
+    """
+    declared = {
+        name: (p.hypothesised_effect, p.readout)
+        for name, p in load_arm_profiles().items()
+        if p.hypothesised_effect is not None or p.readout
+    }
+    assert declared == {}, (
+        f"arms.toml now declares a hypothesis for {sorted(declared)}. That is fine and expected "
+        "eventually -- update this test, and check the value was pre-registered rather than read "
+        "off the arm's own result"
+    )

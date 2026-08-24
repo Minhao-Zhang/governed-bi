@@ -244,3 +244,53 @@ def test_the_validator_and_the_store_agree(tmp_path: Path) -> None:
     good = _filed(category=Category.wrong_value)
     assert faults_with(good) == []
     assert _store(tmp_path).file(good) == good.observation_id
+
+
+# ── an intent nothing can carry to a handoff ──────────────────────────────────
+
+
+def test_new_asset_is_refused_at_the_draft_and_not_at_the_handoff(tmp_path: Path) -> None:
+    """``new_asset`` promised a corpus change no tool can produce.
+
+    ``corpus/patch.py`` has no create primitive, and ``tools/export_bundle.py`` and
+    ``tools/verify_patch.py`` both exit 2 on any intent but ``edit_asset``. So the store accepted a
+    patch whose whole point was a file, the steward wrote ``asset_yaml``, and the refusal arrived at
+    the handoff -- after the work, from a different program, in an exit code.
+
+    Fail closed at the point of entry. The three prose intents are **not** refused: they author
+    nothing on purpose and are carried by being read, which is what ``export_bundle``'s own error
+    message says.
+    """
+    store = _store(tmp_path)
+    with pytest.raises(Rejected) as caught:
+        store.draft(
+            _patch(
+                intent=PatchIntent.new_asset,
+                asset_id=None,
+                field_path=None,
+                was=None,
+                becomes=None,
+                asset_yaml="kind: term\nname: active customer\n",
+            ),
+            observations=[],
+        )
+    message = str(caught.value)
+    assert "edit_asset" in message, f"the refusal must name the declared set: {message}"
+    assert "new_asset" in message
+    assert store.patches(limit=10).total == 0, "and nothing was written"
+
+
+def test_the_draftable_set_is_the_one_the_tools_can_carry() -> None:
+    """The gate is a declared set rather than an ``is not edit_asset`` test in three files.
+
+    ``DRAFTABLE_PATCH_INTENTS`` is what a steward may store; the tools decide what is in it. When a
+    create primitive exists, adding ``new_asset`` here is the whole change -- and until then the
+    member is refused in one place instead of two tools and neither.
+    """
+    from governed_bi.feedback.events import DRAFTABLE_PATCH_INTENTS
+
+    assert PatchIntent.edit_asset in DRAFTABLE_PATCH_INTENTS
+    assert PatchIntent.new_asset not in DRAFTABLE_PATCH_INTENTS
+    assert DRAFTABLE_PATCH_INTENTS < set(PatchIntent), (
+        "a gate that admits every member is the gate that cannot fire"
+    )

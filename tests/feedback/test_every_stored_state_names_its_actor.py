@@ -200,12 +200,17 @@ def test_reopening_needs_every_patch_withdrawn(tmp_path: Path) -> None:
 
     Reopening while a patch is live leaves a row in the queue whose patch still derives a landing
     state, so the same observation reads as both open work and answered work.
+
+    **There is no `move(to=addressed)` here any more, and its absence is the point.** This test
+    used to draft the patch and then move the row itself, which is how the state came to have no
+    producer outside a test: `store.draft` is the mover now, so an explicit move after it would be
+    `addressed -> addressed`, an edge the table does not declare.
     """
     store = FeedbackStore(tmp_path / "f.sqlite")
     obs = _filed(store)
     store.move(obs.observation_id, to=ObservationState.triaged)
     patch = _drafted(store, obs)
-    store.move(obs.observation_id, to=ObservationState.addressed)
+    assert store.get(obs.observation_id).state is ObservationState.addressed  # type: ignore[union-attr]
 
     with pytest.raises(Rejected, match="withdrawn"):
         store.move(obs.observation_id, to=ObservationState.triaged)

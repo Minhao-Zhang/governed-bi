@@ -37,7 +37,7 @@ import { ApiError } from "@/lib/api-client";
 import { classifyEdit } from "@/lib/asset-diff";
 import { HASH_CHARS, patchHashProblem } from "@/lib/patch-fields";
 import { REVIEW_COPY } from "@/lib/review-copy";
-import type { Observation } from "@/lib/types";
+import type { DraftEnvelope, Observation } from "@/lib/types";
 
 
 /** A patch as it arrives on an observation's detail: opaque on the wire, so the fields this panel
@@ -76,6 +76,8 @@ export function HandoffPanel({
   const [becomes, setBecomes] = useState("");
   const [rationale, setRationale] = useState("");
   const [hash, setHash] = useState("");
+  // Kept after the form closes: it is the one thing the steward has to act on next.
+  const [unmoved, setUnmoved] = useState<DraftEnvelope["not_addressed"]>([]);
 
   const patches = (observation.patches ?? []) as PatchRow[];
   const live = patches.filter((p) => str(p.state) !== "withdrawn");
@@ -91,7 +93,12 @@ export function HandoffPanel({
     !draft.isPending;
 
   async function submit(): Promise<void> {
-    await draft.mutateAsync({
+    // The response is read, not discarded. Drafting is the only producer of `addressed`, and the
+    // move is declared only from `triaged` and `blocked_on_a_person` — so drafting against a row
+    // still `open`, which is the ordinary sequence from the queue, attaches the patch and leaves
+    // the row where it was. The server reports that instead of refusing the draft; dropping the
+    // response here turned a row that did not move into one indistinguishable from a row that did.
+    const result = await draft.mutateAsync({
       intent: "edit_asset",
       namespace: observation.db_id ?? observation.schemas[0] ?? "",
       asset_type: "table",
@@ -105,11 +112,29 @@ export function HandoffPanel({
     });
     setWas("");
     setBecomes("");
-    onClose();
+    setUnmoved(result.not_addressed);
+    if (result.not_addressed.length === 0) onClose();
   }
 
   return (
     <div className="space-y-4">
+      {unmoved.length > 0 && (
+        <Card className="space-y-1 p-4">
+          <h3 className="text-sm font-medium">Drafted, and these rows did not move</h3>
+          <p className="text-xs text-muted-foreground">
+            The patch is attached to each of them. <code>addressed</code> is declared only from{" "}
+            <code>triaged</code> and <code>blocked_on_a_person</code>, so a row you had not triaged
+            stays where it is.
+          </p>
+          {unmoved.map((row) => (
+            <p key={row.observation_id} className="text-xs">
+              <code>{row.observation_id}</code> is <Badge variant="outline">{row.state}</Badge>{" "}
+              <span className="text-muted-foreground">{row.why}</span>
+            </p>
+          ))}
+        </Card>
+      )}
+
       {live.length > 0 && (
         <Card className="space-y-3 p-4">
           <h3 className="text-sm font-medium">Drafted changes</h3>

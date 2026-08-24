@@ -16,8 +16,14 @@
  * validator refuses a `declined` row without one. The form asks for it because a 422 arriving after
  * the click is a worse way to learn it.
  *
- * The buttons come from the server's declared vocabulary rather than a hard-coded pair, so a state
- * added to `ObservationState` appears here.
+ * **`MOVES` below is hand-maintained, and this comment used to claim it was not.** It said the
+ * buttons come from the server's declared vocabulary, so a state added to `ObservationState` would
+ * appear here. Nothing serves that vocabulary: `lifecycle.py` exports `allowed_next`, no route
+ * exposes it, and `MOVES` is a literal. So a member added to the enum is a move no steward can make
+ * until somebody edits this file, and nothing says so at the time.
+ *
+ * What would remove the second copy is a route that answers "what can this row do next" from the
+ * transition table. Until then the list is a copy, named as one.
  */
 
 import { useState } from "react";

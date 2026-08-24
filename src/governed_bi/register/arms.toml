@@ -61,6 +61,49 @@
 # compares `comparability_keys()`, and `question_subset` is `Role.scope`, so nothing stops two
 # arms measured on two question sets from both being quotable. What the field buys is that each
 # arm's rows are now checked against a claim a reader can diff, so such a pair has to say so here.
+#
+# ── three fields no arm below declares, and why ───────────────────────────────
+#
+# `hypothesised_effect`, `readout` and `corpus_release` are **optional**, and every arm in this
+# file leaves all three blank. That is a decision, not an omission, and the loader now enforces
+# the shape of it: an unrecognised key in an `[arm.*]` table is refused outright, because these
+# three were fields of `ArmProfile` that `register/arm_profiles.py` never passed to it —
+# nine keys against twelve fields — so writing `hypothesised_effect = 0.03` here parsed clean,
+# arrived as `None`, and left `eval/provenance.py::arm_power_refusal` abstaining on every arm that
+# could ever be declared. The gate that stops an underpowered paid arm was silent by construction.
+# `hypothesized_effect`, the American spelling, is one keystroke from the same silence; it is now
+# a load error.
+#
+#   hypothesised_effect  the effect the arm exists to detect, as a PROPORTION of the readout:
+#                        3pp is `0.03`, and `3` is refused, because `eval/power.py::require_power`
+#                        compares it against a floor that is a proportion and so a
+#                        percentage-point figure clears every floor at every n. Must be strictly
+#                        between 0 and 1; zero is not "no hypothesis" and is refused too.
+#   readout              the quantity the effect is in, e.g. `"EX"`. Mandatory beside an effect
+#                        and absent without one. It is not in the arithmetic — MDE is denominated
+#                        in points of the whole population, and a mechanism indicator with a
+#                        2.15pp ceiling has 1.9 resolvable steps against EX's 28.5, so a draft
+#                        read the smaller MDE as the better instrument. Naming the readout is what
+#                        makes that unit error visible to whoever reads the refusal.
+#   corpus_release       the corpus TAG the arm was measured on, matching the `corpus_release`
+#                        comparability knob. Mandatory only for an arm whose `treatment` names
+#                        `corpus_release` — such an arm otherwise leaves the one field it exists
+#                        to vary unchecked. A tag, not a ref and not a digest.
+#
+# **Why all four arms below are blank, stated rather than left to inference.**
+#
+# No effect size: all four were measured before the field existed, so any number here would be
+# read off the arm's own result. That is not a hypothesis, and it is worse than the silence in one
+# specific way — a fabricated effect makes `arm_power_refusal` *pass*, where an absent one makes it
+# abstain. The gate is therefore not in force on this file, which
+# `tests/conformance/test_arm_profiles_are_declared.py::
+# test_the_shipped_arms_declare_no_hypothesis_and_that_is_the_committed_state` asserts as an
+# inventory, so the first arm to declare one has to come through that test.
+#
+# No release: `../BIRD-corpus` carries no tags at all (checked 2026-08-24, `git tag --list` is
+# empty). All four arms were measured against a working tree, identified by the content digest
+# above, and minting a release name now to attach retroactively would be a claim about the corpus
+# repository that the corpus repository does not make. The digest already reconciles the rows.
 
 [arm.v3_fold]
 description = "ANALYST v3 with the fold prompt, routing pinned."

@@ -19,7 +19,7 @@ two things in the register answering to one word is how the second reader gets i
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
@@ -45,7 +45,16 @@ ARMS_FILE = Path(__file__).resolve().parent / "arms.toml"
 
 @dataclass(frozen=True, slots=True)
 class ArmProfile:
-    """One arm's declared identity. ``treatment`` is the only field a gate reads."""
+    """One arm's declared identity.
+
+    **Five fields are read by a gate**, and the docstring here said ``treatment`` was the only
+    one until 2026-08-24 — which is how three of the five came to be added without a loader.
+    ``treatment`` is ``eval/report.py::knobs_comparable``'s; ``corpus_content_hash``,
+    ``question_subset`` and ``corpus_release`` are :func:`reconcile`'s; ``hypothesised_effect``
+    and ``readout`` are ``eval/provenance.py::arm_power_refusal``'s. ``corpus``, ``dataset``,
+    ``compare_to``, ``description`` and ``notes`` are for a human, and the driver prints the last
+    three.
+    """
 
     name: str
     description: str
@@ -87,6 +96,72 @@ class ArmProfile:
     notes: str = ""
 
 
+#: Every key an ``[arm.*]`` table may carry: :class:`ArmProfile`'s own fields, less ``name``,
+#: which is the table's name rather than a key inside it.
+#:
+#: **Derived and not hand-listed**, because a hand-list is what this was. ``_parse_profiles``
+#: passed nine keys while the dataclass had twelve fields, so ``hypothesised_effect``, ``readout``
+#: and ``corpus_release`` could be declared in the file, parse without complaint, and arrive as
+#: ``None`` — which is the same value as "this arm claims nothing". ``arm_power_refusal`` reads
+#: the first of those and abstains on ``None``, so the gate that stops an underpowered paid arm
+#: was silent for every arm that could ever be declared.
+_ARM_KEYS = frozenset(f.name for f in fields(ArmProfile)) - {"name"}
+
+
+def _hypothesis(body: Mapping[str, Any], *, arm: str, source: str) -> tuple[float | None, str]:
+    """The arm's pre-registered effect and the quantity it is in, or ``(None, "")``.
+
+    **Optional, and refused unless it is complete.** Optional because no arm on disk declares one:
+    all four in ``arms.toml`` were measured before the field existed, and an effect size written
+    down after the measurement is not a hypothesis — it is the result, and a made-up one makes
+    ``arm_power_refusal`` *pass* rather than abstain, which is strictly worse than the silence.
+    So absence stays legal here, and what is refused is every way of declaring it that a reader
+    could mistake for a declaration: an unknown key, half a pair, a non-number, or a number in
+    the wrong unit.
+    """
+    effect = body.get("hypothesised_effect")
+    readout = body.get("readout")
+    if effect is None and readout is None:
+        return None, ""
+    if effect is None:
+        raise ValueError(
+            f"{source}: [arm.{arm}] declares no hypothesised_effect beside readout {readout!r}. "
+            "A readout alone reaches `arm_power_refusal`, which returns None on the missing "
+            "effect and abstains -- so this half-declaration is the one shape that looks like a "
+            "pre-registered hypothesis and gates nothing."
+        )
+    if readout is None:
+        raise ValueError(
+            f"{source}: [arm.{arm}] declares no readout beside hypothesised_effect {effect!r}. "
+            "MDE is denominated in points of the whole population and two readouts' base rates "
+            "differ by two orders of magnitude, so an effect size with no quantity attached "
+            "cannot be compared against a detection floor."
+        )
+    if not isinstance(readout, str) or not readout.strip():
+        raise ValueError(
+            f"{source}: [arm.{arm}].readout must be the name of the quantity the effect is in, "
+            f"not {readout!r}"
+        )
+    # `0 < e < 1`, because `require_power` compares `abs(effect)` against a floor that is a
+    # proportion. `hypothesised_effect = 3` for "3pp" clears every floor at every n, so the unit
+    # error would make the gate pass -- the same shape as `require_power(discordant=0.29)`, which
+    # is already on record as approving the exact arm it exists to refuse. Zero is refused too: it
+    # is not "no hypothesis" and must not be spelled the same way as one.
+    if isinstance(effect, bool) or not isinstance(effect, (int, float)):
+        raise ValueError(
+            f"{source}: [arm.{arm}].hypothesised_effect must be a number in points of the "
+            f"readout ({readout!r}), not {effect!r}"
+        )
+    if not 0 < float(effect) < 1:
+        raise ValueError(
+            f"{source}: [arm.{arm}].hypothesised_effect is {effect!r}, which is not in points of "
+            f"the readout ({readout!r}) -- those are proportions, so 3pp is 0.03. `require_power` "
+            "compares it against a floor that is a proportion, so a percentage-point figure "
+            "clears every floor at every n and a zero clears none."
+        )
+    return float(effect), readout
+
+
 def _parse_profiles(data: Mapping[str, Any], *, source: str) -> dict[str, ArmProfile]:
     arms = data.get("arm")
     if not isinstance(arms, Mapping):
@@ -97,6 +172,16 @@ def _parse_profiles(data: Mapping[str, Any], *, source: str) -> dict[str, ArmPro
     for name, body in arms.items():
         if not isinstance(body, Mapping):
             raise ValueError(f"{source}: [arm.{name}] is not a table")
+        # **Refused, not ignored, and this is the lock on the defect the whole file is about.**
+        # Ignoring an unrecognised key is how `hypothesised_effect = 0.03` in `arms.toml` came to
+        # parse clean and do nothing for a fortnight. The field is spelled the British way, so
+        # `hypothesized_effect` is one keystroke from a declaration that gates nothing.
+        unknown_keys = sorted(set(body) - _ARM_KEYS)
+        if unknown_keys:
+            raise ValueError(
+                f"{source}: [arm.{name}] declares {unknown_keys}, which are not ArmProfile "
+                f"fields. Accepted keys are {sorted(_ARM_KEYS)}."
+            )
         raw = body.get("treatment", [])
         if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
             raise ValueError(f"{source}: [arm.{name}].treatment must be a list of knob names")
@@ -138,7 +223,28 @@ def _parse_profiles(data: Mapping[str, Any], *, source: str) -> dict[str, ArmPro
                 "the arm's question ids the way eval/provenance.py::scope_identity does; "
                 "`dataset` is the git ref and is not it."
             )
-        out[name] = ArmProfile(
+        # **Mandatory only for the arm that says the release IS its treatment**, which is the
+        # opposite convention from the two fields above and matches `reconcile`'s. An arm
+        # declaring `treatment = ["corpus_release"]` and no release leaves `reconcile`'s release
+        # branch unentered, so the one thing the arm exists to vary is the one thing nothing
+        # checks. Arms treating something else keep it optional: every artifact in `runs/eval/`
+        # predates the knob, and refusing all seven buys nothing the digest does not already
+        # reconcile.
+        if "corpus_release" in treatment and not body.get("corpus_release"):
+            raise ValueError(
+                f"{source}: [arm.{name}] says its treatment is corpus_release and does not name "
+                "one. `reconcile` compares a release only when the profile declares it, so this "
+                "arm's own treatment would be the single field about it that nothing checks. "
+                "Name the corpus TAG the arm was measured on; `corpus` is the git ref and "
+                "`corpus_content_hash` is the digest, and neither is it."
+            )
+        hypothesised_effect, readout = _hypothesis(body, arm=name, source=source)
+        # Explicit, one key per field, because `**body` would take a knob's value from a file --
+        # the second home for a knob that AGENTS.md names -- and would silently accept whatever a
+        # future TOML key is called. What makes the explicit list safe is the coverage check
+        # below: this call passed nine keys against twelve fields for a fortnight, and the three
+        # it dropped were the three a gate reads.
+        values: dict[str, Any] = dict(
             name=name,
             description=str(body.get("description", "")),
             treatment=treatment,
@@ -147,8 +253,24 @@ def _parse_profiles(data: Mapping[str, Any], *, source: str) -> dict[str, ArmPro
             corpus_content_hash=body.get("corpus_content_hash"),
             dataset=body.get("dataset"),
             question_subset=body.get("question_subset"),
+            corpus_release=body.get("corpus_release"),
+            hypothesised_effect=hypothesised_effect,
+            readout=readout or None,
             notes=str(body.get("notes", "")),
         )
+        # The structural half, and it is what keeps this defect from recurring rather than
+        # merely fixed. A field added to `ArmProfile` and not to the call above arrives as its
+        # dataclass default -- `None`, which every consumer reads as "no claim was made" -- so
+        # the omission is invisible at the declaration site and at the reading site both. Loud
+        # on the first load instead, which in this tree means CI.
+        unwired = sorted({f.name for f in fields(ArmProfile)} - set(values))
+        if unwired:
+            raise RuntimeError(
+                f"ArmProfile declares {unwired}, which _parse_profiles does not pass, so every "
+                "profile would carry the field's default no matter what the file says. That is "
+                "how `hypothesised_effect` silenced the power gate: add the key here."
+            )
+        out[name] = ArmProfile(**values)
     return out
 
 

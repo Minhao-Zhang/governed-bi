@@ -402,7 +402,7 @@ class FeedbackStore:
                    moved_by: Actor | None = None, detail: str = "",
                    withdrawn_reason: str = "",
                    expected_corpus_content_hash: str | None = None) -> Patch: ...
-    def draft(self, patch: Patch, *, observations: Sequence[str]) -> str: ...
+    def draft(self, patch: Patch, *, observations: Sequence[str]) -> Drafted: ...
     def amend_note(self, observation_id: str, note: str) -> None: ...
     def record_ladder(self, patch_id: str, tier: str, result: Mapping[str, Any]) -> None: ...
 
@@ -418,7 +418,6 @@ class FeedbackStore:
     def patches_of(self, observation_id: str) -> tuple[Patch, ...]: ...
     def observations_of(self, patch_id: str) -> tuple[Observation, ...]: ...
     def history(self, entity_id: str) -> tuple[dict[str, Any], ...]: ...
-    def counts_by(self, column: str) -> dict[str, int]: ...
 ```
 
 `move` and `move_patch` write the new state **and** its transition row inside one `BEGIN IMMEDIATE`
@@ -580,10 +579,16 @@ def apply_edit(path: Path, *, asset_id: str, field_path: str,
 ```
 
 Beside those two: `read_field`, `Span`, and the refusals as exception types —
-`FieldNotLocatable`, `StaleValue`, `UnwritableValue`. **There is no create primitive.** `new_asset`
-is a declarable patch intent and `asset_yaml` is validated, but no tool exports one:
-`export_bundle.py` refuses every intent other than `edit_asset`, because only an edit produces a
-diff an engineer can apply. A whole new asset is a hand-written file.
+`FieldNotLocatable`, `StaleValue`, `UnwritableValue`. **There is no create primitive, and
+`new_asset` is therefore refused at the draft.** It used to be draftable and to fail at the handoff:
+`export_bundle.py` exits 2 on it, so a steward learned at the export that nothing would ever carry
+the patch they had written. `feedback/events.py::DRAFTABLE_PATCH_INTENTS` now refuses it when the
+patch is created, and the refusal names the set. The enum member stays, because a create primitive
+would want the name and the gate is one set — adding it back is then the whole change.
+
+The three *prose* intents — `exclusion_request`, `engine_defect`, `no_change` — are draftable and
+also exit 2 at the exporter, and that is deliberate rather than the same defect: they author nothing
+by design, and refusing them would delete the way a loop concludes there is nothing to patch.
 
 **Two field paths, and no others.** `patch.py::EDITABLE` is `{summary, body}` — deliberately the
 same set `feedback/validate.py::EDITABLE_FIELD_PATHS` allows, with an import-time guard that fails

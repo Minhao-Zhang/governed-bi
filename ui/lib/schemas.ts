@@ -825,6 +825,25 @@ export const patchEnvelopeSchema = z.object({
   patch: patchSchema,
 });
 
+/**
+ * `POST /patches` only. The envelope plus what drafting did to the observations the patch answers.
+ *
+ * Drafting is the producer of `addressed` — nothing else sets it — and the move is declared only
+ * from `triaged` and `blocked_on_a_person`. A steward's real sequence is *read the queue, draft*,
+ * so a row that is still `open` attaches the patch and does not move. The server reports that
+ * rather than refusing the draft, and this schema is why the report survives the client: parsed
+ * through `patchEnvelopeSchema` the two fields were stripped, so the case arrived as silence.
+ *
+ * Its own schema and not two optional fields on the shared one: `patchEnvelopeSchema` is also the
+ * withdraw response, which cannot produce them.
+ */
+export const draftEnvelopeSchema = patchEnvelopeSchema.extend({
+  addressed: z.array(z.string()),
+  not_addressed: z.array(
+    z.object({ observation_id: z.string(), state: z.string(), why: z.string() }),
+  ),
+});
+
 export const observationEnvelopeSchema = z.object({
   ok: z.boolean(),
   observation: observationSchema,

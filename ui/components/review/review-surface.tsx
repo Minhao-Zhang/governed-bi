@@ -9,8 +9,9 @@
  *
  * **The panes scroll internally rather than growing the page.** Copied structurally from
  * `AuditSurface`, which already solved the same thing: selecting a row must not make the page taller,
- * because the decision belongs on screen with the evidence. `/review` has no decision bar yet, and
- * when it gains one this is why it can be sticky.
+ * because the decision belongs on screen with the evidence. That is why `DecisionBar` -- which
+ * `ClusterPanel` renders -- can be sticky. This comment said `/review` had no decision bar yet; it
+ * has had one since the surface shipped.
  */
 
 import { ClusterPanel } from "@/components/review/cluster-panel";

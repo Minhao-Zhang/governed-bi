@@ -116,9 +116,50 @@ def test_a_draft_attaches_to_the_observations_it_answers(
 
     detail = client.get(f"/observations/{observation_id}").json()
     assert [p["patch_id"] for p in detail["patches"]] == [patch["patch_id"]]
+    assert "derived_state" in detail["patches"][0], (
+        "the key must be present and null rather than absent: a client forced to tell 'no answer' "
+        "from 'no such key' guesses, and this is the field it would guess about"
+    )
     assert detail["patches"][0]["derived_state"] is None, (
         "this route has no session and cannot read the corpus; a stale landing state here would "
         "disagree with tools/check_landed.py"
+    )
+
+
+def test_the_landing_state_is_null_on_this_route_whatever_the_patch_did(
+    client_and_store: tuple[Any, FeedbackStore],
+) -> None:
+    """The null above cannot fail, because nothing in the route can produce another value. What
+    earns a test is the **contract**: it is null on every patch state, so a client must not treat a
+    null as "not landed".
+
+    Landing is CLI-only. `tools/check_landed.py` is the one reader of `lifecycle.derived_state`, and
+    it needs the loaded corpus, which a request handler does not have. Anything on a screen that
+    renders this field renders nothing.
+    """
+    client, store = client_and_store
+    filed = client.post(f"/turns/{TURN}/raised", json={"kind": "wrong_answer"}).json()
+    observation_id = filed["observation"]["observation_id"]
+    patch_id = _draft(client, observations=[observation_id]).json()["patch"]["patch_id"]
+    store.move_patch(
+        patch_id,
+        to=PatchState.exported,
+        expected_corpus_content_hash="d" * CONTENT_HASH_CHARS,
+        detail="bundle written",
+    )
+
+    detail = client.get(f"/observations/{observation_id}").json()
+    assert detail["patches"][0]["state"] == "exported"
+    assert detail["patches"][0]["derived_state"] is None, (
+        "a bundle went out and the field is still null, which is what makes it unreadable as "
+        "'not landed'"
+    )
+
+    listed = client.get("/patches").json()["patches"]
+    assert [p["patch_id"] for p in listed] == [patch_id]
+    assert "derived_state" not in listed[0], (
+        "the list route does not carry the field at all, and adding a stale one here would be the "
+        "second answer to 'did this land'"
     )
 
 
@@ -277,3 +318,57 @@ def test_a_duplicate_of_naming_no_row_is_422_and_not_a_500(
     )
     assert done.status_code == 422, f"{done.status_code}: {done.text[:300]}"
     assert "duplicate_of" in done.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# What the draft did to the observations it answers, on the wire.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_the_draft_response_says_what_it_addressed_and_what_it_did_not(
+    client_and_store: tuple[Any, FeedbackStore],
+) -> None:
+    """`addressed` had no producer, and drafting is the producer the review surface already claims.
+
+    Both halves are on the response. A triaged row moves; an `open` one cannot -- `-> addressed` is
+    declared only from `triaged` and `blocked_on_a_person` -- and the row that did not move is
+    **named**, with the state it is in and why. A caller who has to GET the observation back to
+    learn that half is a caller who will not.
+    """
+    client, store = client_and_store
+    moved = client.post(f"/turns/{TURN}/raised", json={"kind": "wrong_answer"}).json()
+    moved_id = moved["observation"]["observation_id"]
+    client.post(f"/observations/{moved_id}/triage", json={"to": "triaged"})
+
+    stays = client.post(f"/turns/{TURN}/raised", json={"kind": "wrong_answer"}).json()
+    stays_id = stays["observation"]["observation_id"]
+
+    body = _draft(client, observations=[moved_id, stays_id]).json()
+    assert body["addressed"] == [moved_id]
+    assert [row["observation_id"] for row in body["not_addressed"]] == [stays_id]
+    assert body["not_addressed"][0]["state"] == "open"
+    assert "triaged" in body["not_addressed"][0]["why"]
+
+    assert store.get(moved_id).state.value == "addressed"  # type: ignore[union-attr]
+    assert store.get(stays_id).state.value == "open"  # type: ignore[union-attr]
+
+
+def test_an_intent_no_tool_can_carry_is_422_at_the_draft(
+    client_and_store: tuple[Any, FeedbackStore],
+) -> None:
+    """`new_asset` is accepted by nothing downstream: `corpus/patch.py` has no create primitive and
+    both `tools/export_bundle.py` and `tools/verify_patch.py` exit 2 on it. Refused here, where the
+    steward is still looking at the form, rather than at the handoff."""
+    client, store = client_and_store
+    response = _draft(
+        client,
+        intent="new_asset",
+        asset_id=None,
+        field_path=None,
+        was=None,
+        becomes=None,
+        asset_yaml="kind: term\nname: active customer\n",
+    )
+    assert response.status_code == 422, f"{response.status_code}: {response.text[:300]}"
+    assert "edit_asset" in response.text, "the refusal names the declared set"
+    assert store.patches(limit=10).total == 0

@@ -175,7 +175,14 @@ def _edge(table: Mapping[Any, Transition], state: Any, to: Any) -> Transition:
 
 
 def allowed_next(state: ObservationState | None) -> frozenset[ObservationState]:
-    """States reachable from ``state`` in one declared move. Empty is a real answer."""
+    """States reachable from ``state`` in one declared move. Empty is a real answer.
+
+    **Read by ``tests/feedback/`` and by nothing else.** No route exposes it, so the table does not
+    reach the client: ``ui/components/review/decision-bar.tsx``'s ``MOVES`` is a hard-coded literal
+    of three edges, which is a second copy of this data maintained by hand. What would remove it is
+    a route that serves ``allowed_next(observation.state)`` on the observation payload -- a contract
+    change, not a refactor, which is why the copy is named here instead of being quietly tolerated.
+    """
     return frozenset(to for (frm, to) in TRANSITIONS if frm == state)
 
 
@@ -187,8 +194,13 @@ def transition_for(
 
 
 def patch_allowed_next(state: PatchState | None) -> frozenset[PatchState]:
-    """The same question about a patch. The review surface draws its buttons from this rather
-    than from a hard-coded pair, so a state added to the table appears without a UI change."""
+    """The same question about a patch, with the same reader: ``tests/feedback/``.
+
+    This said "the review surface draws its buttons from this rather than from a hard-coded pair".
+    It does not and never did -- see :func:`allowed_next` for the copy that exists instead. The
+    sentence described the design the wire was never built for, which is the same defect class as a
+    stored state nobody moves: a claim with nothing on the other end of it.
+    """
     return frozenset(to for (frm, to) in PATCH_TRANSITIONS if frm == state)
 
 

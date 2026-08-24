@@ -63,6 +63,18 @@ ATTEMPTS = 40
 
 
 def _triaged(store: FeedbackStore) -> str:
+    """A ``triaged`` row **with a live patch attached**, which is what makes the race a race.
+
+    Both halves of that are load-bearing and the second one was missing. ``triaged -> addressed``
+    requires at least one patch in ``draft`` or ``exported``, so once that clause was enforced the
+    ``_address`` thread was refused on every attempt and the "both moves succeeded" count below ran
+    at **0 of 40** while its own docstring claimed 22. The print is not an assertion, so nothing went
+    red: the file kept passing as a single-writer test.
+
+    The patch is drafted while the row is still ``open`` on purpose. ``store.draft`` moves an
+    observation it *can* move to ``addressed``, and ``open`` has no such edge -- so this attaches the
+    patch without spending the state the race is about.
+    """
     observation = Observation(
         observation_id=mint_observation_id(),
         filed_at=utc_now(),
@@ -73,6 +85,20 @@ def _triaged(store: FeedbackStore) -> str:
         turn_id="turn-1",
     )
     store.file(observation)
+    drafted = store.draft(
+        Patch(
+            patch_id=mint_patch_id(),
+            created_at=utc_now(),
+            author=Source.operator,
+            intent=PatchIntent.engine_defect,
+            state=PatchState.draft,
+            namespace="sales",
+            rationale="nothing in the corpus is at fault",
+            base_corpus_content_hash="a" * CONTENT_HASH_CHARS,
+        ),
+        observations=[observation.observation_id],
+    )
+    assert drafted.addressed == (), "the row is `open`, so the draft must not have moved it"
     store.move(observation.observation_id, to=ObservationState.triaged)
     return observation.observation_id
 

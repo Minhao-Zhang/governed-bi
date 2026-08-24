@@ -250,6 +250,10 @@ def _assets_of(document: dict[str, Any], path: Path) -> list[tuple[str, dict[str
     on disk. The unpacking mirrors ``cc.load_assets`` -- if that ever grows a third case this has
     to follow, which is why the shape is asserted by
     ``tests/conformance/test_the_ladder_checks_the_edit_and_not_the_file.py``.
+
+    **Private and borrowed.** ``tools/export_bundle.py`` imports it rather than carrying a second
+    copy, because two document-to-triples unpackers is two loaders that can disagree about what an
+    asset is. Renaming it breaks that import at load time, which is the failure anyone would want.
     """
     out: list[tuple[str, dict[str, Any], Path]] = [
         (str(document.get("asset_type") or "<missing>"), document, path)
@@ -287,6 +291,13 @@ def _findings(
             out |= {f"[{rule}] {line}" for line in lines}
     if whole_tree:
         for rule, lines in (
+            # **V12 is deliberately not here, and this is the reason.** The ladder is a
+            # *delta* check a steward reads and can override with
+            # `--despite-a-red-ladder`; leakage must not be overridable. So V12 runs in
+            # `tools/export_bundle.py::_refuse`, which is called before that flag is
+            # consulted and is not covered by it -- the one gate on the path to a bundle
+            # that cannot be waived. Adding it here would put a 1,351-question scan on
+            # every tier run to re-answer a question already answered where it counts.
             ("V9", cc.check_references(assets)),
             ("V19", cc.check_excluded_not_named(assets)),
             ("V23", cc.check_unique_ids(assets)),

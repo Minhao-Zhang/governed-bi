@@ -1301,7 +1301,8 @@
                       "exclusion_request",
                       "engine_defect",
                       "no_change"
-                    ]
+                    ],
+                    "description": " `new_asset` is **declared and not draftable**: `corpus/patch.py` has no create primitive, so no tool can carry it and the store refuses it at the draft rather than at the handoff. The member stays because a create primitive would want the name."
                   },
                   "namespace": {
                     "type": "string"
@@ -1403,7 +1404,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PatchEnvelope"
+                  "$ref": "#/components/schemas/DraftEnvelope"
                 }
               }
             }
@@ -4615,7 +4616,7 @@
               "engine_defect",
               "no_change"
             ],
-            "description": "What the patch is for. **Two members author no asset on purpose**: an `exclusion_request` is an argument a human transcribes by hand, because exclusion is enforced by the absence of a tool; `engine_defect` and `no_change` record that the corpus is not at fault. Only `edit_asset` produces a bundle."
+            "description": "What the patch is for. **Two members author no asset on purpose**: an `exclusion_request` is an argument a human transcribes by hand, because exclusion is enforced by the absence of a tool; `engine_defect` and `no_change` record that the corpus is not at fault. Only `edit_asset` produces a bundle. `new_asset` is **declared and not draftable**: `corpus/patch.py` has no create primitive, so no tool can carry it and the store refuses it at the draft rather than at the handoff. The member stays because a create primitive would want the name."
           },
           "state": {
             "type": "string",
@@ -4969,6 +4970,55 @@
         "required": [
           "patches",
           "meta"
+        ]
+      },
+      "DraftEnvelope": {
+        "type": "object",
+        "title": "DraftEnvelope",
+        "description": "`POST /patches` only. `PatchEnvelope` plus what drafting did to the observations the patch answers. Its own schema rather than two optional fields on `PatchEnvelope`, which is also the withdraw response and never sends them: a field declared on a shape that one of its two callers cannot produce is indistinguishable from a field nobody serves.",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "patch": {
+            "$ref": "#/components/schemas/PatchResponse"
+          },
+          "addressed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Observation ids this draft moved to `addressed`. Drafting is the producer of that state; nothing else sets it."
+          },
+          "not_addressed": {
+            "type": "array",
+            "description": "Observations the patch attached to and could **not** move, each with the state it is in and the store's refusal. `-> addressed` is declared only from `triaged` and `blocked_on_a_person`, so drafting against an `open` row attaches the patch and leaves the row where it is. Reported rather than refused, because refusing would break the steward's actual sequence — read the queue, draft — and silence would make a row that did not move look like one that did.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "observation_id": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "why": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "observation_id",
+                "state",
+                "why"
+              ]
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "patch",
+          "addressed",
+          "not_addressed"
         ]
       }
     }

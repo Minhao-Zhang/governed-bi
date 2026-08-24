@@ -45,6 +45,7 @@ import {
   observationClustersSchema,
   observationEnvelopeSchema,
   observationsSchema,
+  draftEnvelopeSchema,
   patchEnvelopeSchema,
   patchesSchema,
   pendingQueueSchema,
@@ -62,6 +63,7 @@ import type {
   ObservationClusters,
   ObservationEnvelope,
   Observations,
+  DraftEnvelope,
   PatchEnvelope,
   Patches,
   AssetRow,
@@ -420,9 +422,11 @@ export const api = {
     rationale?: string;
     base_corpus_content_hash: string;
     observations?: string[];
-  }): Promise<PatchEnvelope> => {
-    if (USE_MOCKS) return Promise.resolve({ ok: true, patch: MOCK_PATCH });
-    return post("/patches", body, patchEnvelopeSchema);
+  }): Promise<DraftEnvelope> => {
+    if (USE_MOCKS) {
+      return Promise.resolve({ ok: true, patch: MOCK_PATCH, addressed: [], not_addressed: [] });
+    }
+    return post("/patches", body, draftEnvelopeSchema);
   },
 
   /** Abandon a patch. The reason is required by the server, not just by the form. */

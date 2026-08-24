@@ -437,15 +437,33 @@ and they are kept here rather than deleted because neither is visible to
 `check_declared_is_consumed.py` — it reads the register and not the call graph — so nothing in CI
 would have noticed either one being reopened.
 
-- ~~`eval/power.py::require_power` has no caller.~~ **Closed.** `ArmProfile` gained
-  `hypothesised_effect` and `readout`, and `eval/provenance.py::arm_power_refusal` is the caller,
+- **`eval/power.py::require_power` has a caller, and until 2026-08-24 it could never receive a
+  value.** This entry read *"Closed"* on the strength of `ArmProfile` gaining
+  `hypothesised_effect` and `readout` and `eval/provenance.py::arm_power_refusal` reading them,
   invoked by `tools/run_datalake_eval.py` beside `arm_startup_refusal` — before the first paid
-  question, which is the only point where refusing is free. It is silent when a profile declares no
-  hypothesis: every arm on disk predates the field, and inventing an effect size so the gate has
-  something to check would put that module's number into a later quotation of the arm's. `readout`
-  is required alongside the effect and is not in the arithmetic — MDE is denominated in points of
-  the whole population, and a draft of the design read a mechanism indicator's smaller MDE as the
-  better instrument when its base rate was two orders of magnitude lower.
+  question, which is the only point where refusing is free. That much was true. What nothing
+  checked is that **`load_arm_profiles` never passed the three new fields**: it constructed
+  `ArmProfile` from nine explicit keys, so the gate read `None` for every arm on every run and
+  abstained. The old wording defended the silence — "silent when a profile declares no hypothesis" —
+  and the reason it gave was the wrong one: no profile *could* declare one. Writing
+  `hypothesised_effect` into `arms.toml` parsed clean and did nothing, and the tests could not see it
+  because they built `ArmProfile(**base)` directly and never called the loader.
+
+  The wire is real now, and a coverage guard raises at load if a field exists on the dataclass and
+  the loader does not pass it — so the next field cannot arrive as a silent `None`. Unknown keys in
+  an `[arm.*]` table are refused against the field names, which is the file-side half: the field is
+  spelled the British way, and `hypothesized_effect` was one keystroke from the same silence.
+
+  **Still open: no arm declares an effect, so the gate abstains on all four.** That is deliberate.
+  Every arm was measured before the field existed, so any number would be read off the arm's own
+  result — and a fabricated effect makes the gate *pass* where an absent one makes it abstain, which
+  is strictly worse. `../BIRD-corpus` has no git tag either (checked 2026-08-24), so there is no
+  honest `corpus_release` to attach retroactively. The absence is now a committed inventory rather
+  than an inference: a test asserts the empty set, so the first arm to declare a hypothesis has to
+  come through it. `readout` is required alongside the effect and is not in the arithmetic — MDE is
+  denominated in points of the whole population, and a draft of the design read a mechanism
+  indicator's smaller MDE as the better instrument when its base rate was two orders of magnitude
+  lower.
 - ~~`corpus/snapshot.py` has no caller.~~ **Still no caller, and now deliberately so.** The
   verification ladder was the path that would have needed it; `tools/verify_patch.py` applies the
   edit **in memory** instead, because `corpus/patch.py::apply_edit` returns text and writes nothing.

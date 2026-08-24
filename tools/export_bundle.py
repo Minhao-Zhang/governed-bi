@@ -14,19 +14,30 @@ the served corpus keeps a table's columns inline and ``store.load`` splits them 
 standalone column file duplicates the id its table already derives — accepted by the loader with
 zero problems, then fatal in ``build_index``, *after* the commit.
 
-**Two content checks are fatal here and nowhere else.**
+**Two conformance rules are fatal here and nowhere else, and they are called rather than copied.**
 
-* **An excluded column named in model-visible prose.** ADR 0003 found a corpus asset naming a
-  ``governance.excluded`` column in text that was then injected verbatim into the SQL prompt, and
-  concluded a content-scanning validator was the structural answer. None shipped. This is it, at the
-  one gate a change has to pass. Measured 2026-08-23: **zero** assets are excluded in either corpus,
-  so today the check has no population and cannot refuse a legitimate bundle — which is exactly why
-  adding it now is free.
-* **A held-out question quoted in an asset.** The importer's rows carry question text from the
+* **V19 — an excluded column or asset named in model-visible text**, which is
+  ``conformance_rules_metric_and_content.check_excluded_not_named``. ADR 0003 found a corpus asset
+  naming a ``governance.excluded`` column in text that was then injected verbatim into the SQL
+  prompt, and concluded a content-scanning validator was the structural answer. None shipped. This
+  is it, at the one gate a change has to pass. Measured 2026-08-23: **zero** assets are excluded in
+  either corpus, so today the check has no population and cannot refuse a legitimate bundle.
+* **V12 — a held-out question quoted in an asset**, which is
+  ``check_corpus_conformance.check_split_leak``. The importer's rows carry question text from the
   held-out split, and the loop's whole purpose is that a person reads it and writes corpus prose.
-  A verbatim phrase travelling from a graded question into a ``summary`` contaminates every EX
-  number measured afterwards, invisibly. Conformance rule V12 is the check; running it here is the
-  obligation ``eval/feedback_import.py`` records as owed.
+  A question travelling from the graded split into a ``body`` contaminates every EX number measured
+  afterwards, invisibly. Running V12 here is the obligation ``eval/feedback_import.py`` records as
+  owed.
+
+**Both used to be re-implemented in this file**, as a regex over
+``for_analyst(...).excluded_columns`` and a "five shared words" phrase matcher. Measured 2026-08-24:
+on six inputs the copies and the rules **disagreed on four**, in both directions. The copy searched
+for an excluded column called ``SSN`` as ``ssn`` with a case-sensitive pattern — ``for_analyst``
+keys columns through ``slug(physical_name).lower()`` — and exported a body the rule refuses. It
+compared new text only against the questions of this patch's own observations, so a body quoting
+some other graded question passed. And it refused on a five-word run and on a name in a ``summary``,
+neither of which V12 or V19 calls a violation anywhere else in the tree. Two implementations of one
+gate is two answers, and the one a reviewer trusts is whichever fired.
 
 Neither is a claim of safety. ``tools/check_train_only.py``'s own docstring says paraphrase leaks
 are undetectable, so the last control is a person who knows what they are reading — which is why the
@@ -38,18 +49,36 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
-import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from governed_bi.corpus.analyst import for_analyst
-from governed_bi.corpus.hash import corpus_content_hash
-from governed_bi.corpus.patch import StaleValue, UnwritableValue, apply_edit, locate
-from governed_bi.corpus.store import load
-from governed_bi.feedback.events import Patch, PatchIntent, PatchState, Source
-from governed_bi.feedback.store import FeedbackStore
-from governed_bi.paths import REPO_ROOT
+import yaml
+
+# `tools/` is a directory of scripts and not a package, so the two conformance modules are reached
+# the way `verify_patch.py` reaches them: one path insert, then a plain import. Copied there from
+# `tests/conformance/`, and it is the only convention in the tree for a tool calling a rule.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import check_corpus_conformance as cc  # noqa: E402 - after the path insert, by design
+
+# The one asset-shaping helper this needs, imported rather than restated: it turns a parsed
+# document into the `(kind, mapping, path)` triples the rules take, unpacking a table's inline
+# columns exactly as `cc.load_assets` does. A second copy here would be a second loader, and the
+# rules would then be answering about an asset neither tool builds.
+from verify_patch import _assets_of  # noqa: E402
+
+from governed_bi.corpus.hash import corpus_content_hash  # noqa: E402
+from governed_bi.corpus.patch import (  # noqa: E402
+    StaleValue,
+    UnwritableValue,
+    apply_edit,
+    locate,
+)
+from governed_bi.feedback.events import Patch, PatchIntent, PatchState, Source  # noqa: E402
+from governed_bi.feedback.store import FeedbackStore  # noqa: E402
+from governed_bi.paths import REPO_ROOT  # noqa: E402
 
 DEFAULT_DB = "runs/feedback.sqlite"
 DEFAULT_OUT = "bundles"
@@ -72,6 +101,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default=DEFAULT_DB)
     parser.add_argument("--out", default=DEFAULT_OUT)
     parser.add_argument("--corpus-dir", default=None, help="defaults to GOVERNED_BI_CORPUS_DIR")
+    parser.add_argument(
+        "--test-split",
+        # The same default as `check_corpus_conformance`, read from it rather than restated: V12
+        # asking a different question here than in the corpus report is the defect this file had.
+        default=str(cc.DEFAULT_DATASET / "test_final.jsonl"),
+        help="the held-out split V12 forbids quoting. Absent, V12 falls back to the questions this "
+        "patch's own eval observations carry, and says so",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -130,18 +167,28 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     diff = _unified(target.relative_to(corpus_root), before, after)
 
-    refusals = _refuse(patch, corpus_root=corpus_root, store=store)
+    refusals, notes = _refuse(
+        patch,
+        corpus_root=corpus_root,
+        store=store,
+        target=target,
+        after=after,
+        test_split=_resolve(args.test_split),
+    )
     print(diff or "(the edit produced no textual change)")
     print(f"\n{_summarise(diff)}")
+    for note in notes:
+        print(f"\nNOTE: {note}")
 
     if refusals:
         print("\nREFUSED, and no bundle was written:")
         for refusal in refusals:
             print(f"  {refusal}")
         print(
-            "\nBoth of these are fatal by decision rather than by convention: an excluded column "
-            "named in model-visible prose is ADR 0003's unfixed finding, and a held-out question "
-            "quoted in an asset contaminates every measurement taken afterwards."
+            "\nThese are the conformance rules themselves, so the corpus report will say the same "
+            "thing. They are fatal here and reported there by decision rather than by convention: "
+            "V19 is ADR 0003's unfixed finding, and V12 is the last mechanical control on corpus "
+            "text a person wrote while reading a held-out question."
         )
         return 1
 
@@ -253,64 +300,128 @@ def _ladder_verdict(patch: Patch) -> tuple[list[str], list[str]]:
     return refusals, warnings
 
 
-def _refuse(patch: Patch, *, corpus_root: Path, store: FeedbackStore) -> list[Refusal]:
-    """Every fatal finding on this patch's new text, in the order they were decided."""
-    out: list[Refusal] = []
-    becomes = str(patch.becomes or "")
+def _refuse(
+    patch: Patch,
+    *,
+    corpus_root: Path,
+    store: FeedbackStore,
+    target: Path,
+    after: str,
+    test_split: Path,
+) -> tuple[list[Refusal], list[str]]:
+    """``(refusals, notes)`` from the two conformance rules, run on the text this patch introduces.
 
-    # V19 — an excluded column's name in model-visible prose. `for_analyst` is the same function
-    # the serve path uses to decide what an analyst may see, so this asks the question the engine
-    # asks rather than a second version of it.
-    assets, _ = load(corpus_root)
-    analyst = for_analyst(assets)
-    excluded = {key.rsplit(".", 1)[-1] for key in getattr(analyst, "excluded_columns", ()) or ()}
-    for name in sorted(excluded):
-        if name and re.search(rf"\b{re.escape(name)}\b", becomes):
-            out.append(
-                Refusal(
-                    "V19",
-                    f"the new text names {name!r}, a governance-excluded column. `body` reaches the "
-                    "model's prompt and `summary` reaches the retrieval index, so the name would "
-                    "leak even though the column itself is correctly hidden -- ADR 0003's finding, "
-                    "verbatim.",
-                )
-            )
+    **The rules are called, not restated.** V19 is
+    ``conformance_rules_metric_and_content.check_excluded_not_named`` and V12 is
+    ``check_corpus_conformance.check_split_leak``. What a rule owns is what the rule *is*: which
+    names count as excluded, what text the model sees, and what counts as quoting a question. This
+    file carried its own answer to all three, and all three differed -- see the module docstring for
+    the four measured disagreements.
 
-    # V12 — a held-out question quoted in an asset. Compared against the questions of the
-    # observations this patch answers, which is the population that can actually have leaked: the
-    # steward read those and nothing else.
-    for observation in store.observations_of(patch.patch_id):
-        # `question_is_held_out` is a *wire* field the route computes; the row itself carries the
-        # source it was computed from, and reading that is one fewer thing to keep in step.
-        if observation.source is not Source.eval:
-            continue
-        overlap = _longest_shared_phrase(observation.question, becomes)
-        if len(overlap.split()) >= 5:
-            out.append(
-                Refusal(
-                    "V12",
-                    f"the new text shares the phrase {overlap!r} with a held-out question "
-                    f"({observation.question_id or observation.observation_id}). A phrase from a "
-                    "graded question in an asset contaminates every EX number measured afterwards, "
-                    "and the contamination is invisible.",
-                )
-            )
-    return out
-
-
-def _longest_shared_phrase(question: str, text: str) -> str:
-    """The longest run of consecutive words the two share, case-insensitively.
-
-    Word-level rather than character-level: a shared substring of characters is mostly noise
-    ("the reference tab"), and a shared run of five words is the thing V12 is about.
+    **Two properties here are the caller's and stay.** A finding is **fatal**: this is the last
+    mechanical control before a person commits corpus text they wrote while reading a held-out
+    question, and a finding somebody has to go looking for is not a gate. And the population is
+    what **this edit introduces**, diffed against the same rules on the tree as it stands.
+    ``../BIRD-corpus`` carries 125 findings on 101 pinned identities, so an absolute gate here
+    would refuse production, get waived, and a waiver is how a real finding goes green.
     """
-    left = re.findall(r"\w+", question.lower())
-    right = re.findall(r"\w+", text.lower())
-    matcher = difflib.SequenceMatcher(None, left, right, autojunk=False)
-    block = max(matcher.get_matching_blocks(), key=lambda b: b.size, default=None)
-    if block is None or block.size == 0:
-        return ""
-    return " ".join(left[block.a : block.a + block.size])
+    out: list[Refusal] = []
+    notes: list[str] = []
+    # `after` is the post-edit file, and it parses: `apply_edit` re-reads its own output and raises
+    # `UnwritableValue` otherwise, which `main` has already turned into a refusal by here.
+    edited = _assets_of(yaml.safe_load(after), target)
+
+    # V19 needs the whole tree. The rule derives "excluded" from the asset list it is handed, so a
+    # narrower list is a smaller answer: the column this text names may be declared in any file.
+    tree = cc.walk(corpus_root)
+    patched = [(k, a, p) for k, a, p in tree if p != target] + edited
+    for finding in _introduced(
+        cc.check_excluded_not_named(tree), cc.check_excluded_not_named(patched)
+    ):
+        out.append(
+            Refusal(
+                "V19",
+                f"{finding} ADR 0003 found exactly this and concluded a content-scanning validator "
+                "was the structural answer; this is that gate, and here it refuses.",
+            )
+        )
+
+    # V12 gets the edited file alone, which is a complete population for it: the rule reads one
+    # asset's own `summary` and `body` against a file on disk and looks at no second asset, which
+    # is why `check_corpus_conformance` runs it in `--file` mode too. Scoped deliberately -- the
+    # cost is assets times questions, and the split carries 1,351 of the latter.
+    with tempfile.TemporaryDirectory() as scratch:
+        split, supplied = _held_out(Path(scratch), store=store, patch=patch, test_split=test_split)
+        if not supplied:
+            notes.append(
+                "V12 not evaluated: this patch carries no eval-sourced observation, and there is "
+                f"no held-out split at {test_split}. So nothing here says whether the new text "
+                "quotes a graded question -- pass --test-split to ask. Reported rather than "
+                "refused: a corpus that is not a benchmark has no split, and refusing would refuse "
+                "every export on one."
+            )
+        else:
+            for finding in _introduced(
+                cc.check_split_leak(cc.load_assets(target), split),
+                cc.check_split_leak(edited, split),
+            ):
+                out.append(
+                    Refusal(
+                        "V12",
+                        f"{finding} ({supplied} held-out question(s) were checked.) A question from "
+                        "the graded split in an asset contaminates every EX number measured "
+                        "afterwards, and the contamination is invisible.",
+                    )
+                )
+    return out, notes
+
+
+def _introduced(before: list, after: list) -> list[str]:
+    """Findings the edit adds, by message.
+
+    By message rather than by ``(rule, asset)`` as ``check_ratchet.py`` keys: the ratchet pins a
+    corpus's standing debt, where a reworded message must not read as new, and this asks what one
+    edit changed -- where the message *is* the change. Same argument as ``verify_patch._delta``,
+    which cannot be reused directly because it runs every rule and these two run alone.
+    """
+    return sorted({str(f) for f in after} - {str(f) for f in before})
+
+
+def _held_out(scratch: Path, *, store: FeedbackStore, patch: Patch, test_split: Path) -> tuple[Path, int]:
+    """The held-out questions this bundle may not quote, as the JSONL ``check_split_leak`` reads.
+
+    **Two sources, unioned.** The questions of this patch's own eval observations are always
+    available in process, and they are the text a steward demonstrably read. The split file is every
+    graded question there is, and it is what the corpus-wide V12 reads -- so a bundle quoting a
+    question that is not attached to it is caught here as well. The inline copy this replaced had
+    only the first source, and that is one of the two measured disagreements.
+
+    Written to a file because ``check_split_leak`` takes a path, and this may not change its
+    signature. One temporary file per export, deleted with the scratch directory.
+    """
+    lines: list[str] = []
+    for observation in store.observations_of(patch.patch_id):
+        # `question_is_held_out` is a *wire* field the route computes; the row carries the source it
+        # was computed from, and reading that is one fewer thing to keep in step.
+        if observation.source is Source.eval and observation.question:
+            lines.append(
+                json.dumps(
+                    {
+                        "question_id": observation.question_id or observation.observation_id,
+                        "question": observation.question,
+                    }
+                )
+            )
+    if test_split.exists():
+        lines += [
+            line for line in test_split.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
+
+    path = scratch / "held_out.jsonl"
+    path.write_text("".join(line + "\n" for line in lines), encoding="utf-8", newline="\n")
+    # The count is questions *supplied*, not questions the rule used: it discards anything 25
+    # characters or shorter, and this does not know that number without restating it.
+    return path, len(lines)
 
 
 # ── writing ──────────────────────────────────────────────────────────────────
@@ -327,8 +438,6 @@ def _write_bundle(
     diff: str,
 ) -> Path:
     """The directory, in the layout ADR 0015 §4 declares."""
-    import yaml
-
     (bundle / "after" / relative.parent).mkdir(parents=True, exist_ok=True)
     (bundle / "evidence").mkdir(parents=True, exist_ok=True)
 

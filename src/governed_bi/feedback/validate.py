@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from governed_bi.feedback.events import (
     CATEGORY_KIND,
+    DRAFTABLE_PATCH_INTENTS,
     OPERATOR_ONLY_CATEGORIES,
     PATCHABLE_ASSET_TYPES,
     DeclineReason,
@@ -197,6 +198,20 @@ def _may_file_operator_only(obs: Observation) -> bool:
 def _patch_problems(patch: Patch) -> list[str]:
     out: list[str] = []
 
+    # The entry gate, first and on its own. An intent nothing can carry is refused while the steward
+    # is still looking at the form, rather than by `tools/export_bundle.py` exiting 2 after the work
+    # is written. The remaining rules are about a patch that has somewhere to go, so they would only
+    # add noise to this refusal.
+    if patch.intent not in DRAFTABLE_PATCH_INTENTS:
+        return [
+            f"intent {patch.intent.value} cannot be drafted. Draftable: "
+            f"{sorted(i.value for i in DRAFTABLE_PATCH_INTENTS)}. `edit_asset` produces a diff "
+            "tools/export_bundle.py can write; the prose intents author nothing on purpose and are "
+            f"carried by being read. {patch.intent.value} promises a corpus change and corpus/"
+            "patch.py has no create primitive, so export_bundle and verify_patch both exit 2 on it "
+            "-- the steward would learn that at the handoff instead of here."
+        ]
+
     if not patch.patch_id:
         out.append("patch_id is empty")
     if not patch.created_at:
@@ -283,20 +298,11 @@ def _patch_problems(patch: Patch) -> list[str]:
             )
         )
 
-    if patch.intent is PatchIntent.new_asset:
-        if not patch.asset_yaml:
-            out.append("a new_asset patch needs asset_yaml")
-        if patch.field_path or patch.was is not None or patch.becomes is not None:
-            out.append(
-                "a new_asset patch must not carry field_path/was/becomes: there is no prior value"
-            )
-        if not patch.namespace:
-            out.append(
-                "a new_asset patch needs a namespace. ADR 0005 does not say where a join, metric "
-                "or term with no schema field lives, so store.write refuses to guess and so does "
-                "this."
-            )
-    elif patch.intent is PatchIntent.edit_asset:
+    # There is no `new_asset` branch, because the gate at the top of this function returns before
+    # here. The rules it held -- asset_yaml present, no field_path/was/becomes, a namespace to write
+    # into -- are the rules a *create primitive* would need, and they belong with it rather than
+    # sitting here validating a shape no tool accepts.
+    if patch.intent is PatchIntent.edit_asset:
         if not patch.asset_id:
             out.append("an edit_asset patch needs the asset_id it edits")
         if not patch.field_path:

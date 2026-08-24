@@ -40,6 +40,7 @@ from typing import Any, Iterator, Mapping, Sequence, TypeVar
 from governed_bi.feedback.events import (
     Category,
     DeclineReason,
+    Drafted,
     Kind,
     Observation,
     ObservationState,
@@ -47,6 +48,7 @@ from governed_bi.feedback.events import (
     PatchIntent,
     PatchState,
     Source,
+    Unmoved,
 )
 from governed_bi.feedback.lifecycle import (
     Actor,
@@ -362,7 +364,7 @@ class FeedbackStore:
                     f"duplicate_of names {proposed.duplicate_of!r}, which is not an observation in "
                     "this store"
                 )
-            faults.extend(_edge_faults(conn, observation_id, to))
+            faults.extend(_edge_faults(conn, observation_id, current.state, to))
             if faults:
                 raise Rejected(f"observation {observation_id} -> {to.value}", faults)
 
@@ -415,23 +417,40 @@ class FeedbackStore:
         assert moved is not None  # noqa: S101 - just written in this transaction
         return moved
 
-    def draft(self, patch: Patch, *, observations: Sequence[str]) -> str:
-        """Insert a patch and attach it to the observations it answers.
+    def draft(self, patch: Patch, *, observations: Sequence[str]) -> Drafted:
+        """Insert a patch, attach it to the observations it answers, and move the ones it addresses.
 
         ``observations`` may be empty and that is not an error: a patch drafted from a corpus audit
         rather than from a failure answers nobody, and refusing it would push that work outside the
         store where nothing records it.
+
+        **This is the only producer of ``ObservationState.addressed``** (see the member's own note
+        for what its absence cost).
+
+        **The move is per observation, because the edge is.** ``-> addressed`` exists from
+        ``triaged`` and ``blocked_on_a_person`` and nowhere else, so a row still ``open`` cannot
+        take it. Refusing the whole draft over that would block the steward's actual sequence --
+        read the queue, draft the change -- and skipping it silently is the defect family this
+        module keeps removing. So it is neither: :class:`Drafted` names every row that moved and
+        every row that did not, with its state and the reason.
+
+        The moves run **after** the patch commits and each goes through :meth:`move`, so every
+        guard that method documents applies. A move the table or a racing writer refuses lands in
+        ``not_addressed`` rather than rolling back a patch that is correct.
         """
         faults = faults_with(patch)
         if faults:
             raise Rejected(f"patch {patch.patch_id or '(no id)'}", faults)
 
+        # Deduplicated, order kept: the same id twice is one attachment, and moving it twice would
+        # report the second copy as a refused move against a row this call just moved.
+        wanted = list(dict.fromkeys(str(o) for o in observations))
         row = _patch_row(patch)
         with self._tx() as conn:
             cols = ", ".join(row)
             marks = ", ".join("?" for _ in row)
             conn.execute(f"INSERT INTO patch ({cols}) VALUES ({marks})", tuple(row.values()))
-            for observation_id in observations:
+            for observation_id in wanted:
                 conn.execute(
                     "INSERT OR IGNORE INTO observation_patch (observation_id, patch_id) "
                     "VALUES (?, ?)",
@@ -444,9 +463,36 @@ class FeedbackStore:
                 from_state=None,
                 to_state=patch.state.value,
                 moved_by=Actor.steward,
-                detail=f"intent={patch.intent.value}, observations={len(observations)}",
+                detail=f"intent={patch.intent.value}, observations={len(wanted)}",
             )
-        return patch.patch_id
+
+        addressed: list[str] = []
+        not_addressed: list[Unmoved] = []
+        for observation_id in wanted:
+            current = self.get(observation_id)
+            if current is None:  # pragma: no cover - the join insert above enforces this
+                continue
+            try:
+                self.move(
+                    observation_id,
+                    to=ObservationState.addressed,
+                    detail=f"addressed by {patch.patch_id}",
+                )
+            except (TransitionRefused, Rejected) as refusal:
+                not_addressed.append(
+                    Unmoved(
+                        observation_id=observation_id,
+                        state=current.state,
+                        why=str(refusal),
+                    )
+                )
+            else:
+                addressed.append(observation_id)
+        return Drafted(
+            patch_id=patch.patch_id,
+            addressed=tuple(addressed),
+            not_addressed=tuple(not_addressed),
+        )
 
     def amend_note(self, observation_id: str, note: str) -> None:
         """Replace the note on an untriaged observation. Refuses once somebody has looked.
@@ -723,20 +769,10 @@ class FeedbackStore:
             ).fetchall()
         return tuple(dict(r) for r in rows)
 
-    def counts_by(self, column: str) -> dict[str, int]:
-        """``{value: n}`` over one column. For the import report and the queue's own header.
-
-        The column name is checked against the table's real columns rather than interpolated,
-        because this is the one read that takes an identifier from a caller.
-        """
-        with self._conn() as conn:
-            known = {r["name"] for r in conn.execute("PRAGMA table_info(observation)")}
-            if column not in known:
-                raise KeyError(f"observation has no column {column!r}; it has {sorted(known)}")
-            rows = conn.execute(
-                f"SELECT {column} AS k, count(*) AS n FROM observation GROUP BY {column}"
-            ).fetchall()
-        return {("" if r["k"] is None else str(r["k"])): int(r["n"]) for r in rows}
+    # There is no `counts_by`. Its docstring said it was "for the import report and the queue's own
+    # header" and neither called it -- one grep, one definition, one quotation of its signature in
+    # `docs/return-path.md`. Deleted rather than wired: the import report counts what it imported
+    # and the queue header already has `Page.total`. It also held the only `f"SELECT {column}"` here.
 
 
 # ── row mapping ───────────────────────────────────────────────────────────────
@@ -879,7 +915,10 @@ _Row = TypeVar("_Row", Observation, Patch)
 
 
 def _edge_faults(
-    conn: sqlite3.Connection, observation_id: str, to: ObservationState
+    conn: sqlite3.Connection,
+    observation_id: str,
+    frm: ObservationState,
+    to: ObservationState,
 ) -> list[str]:
     """The ``requires`` clauses on the observation table that read the *patch* set.
 
@@ -892,6 +931,13 @@ def _edge_faults(
       about a patch that does not exist.
     * ``addressed -> triaged`` requires every patch withdrawn. Reopening while one is live leaves
       the same row reading as open work and answered work at once.
+
+    **``frm`` is a parameter because a clause belongs to an edge, not to a target state.** Taking
+    only ``to``, this refused *every* move to ``triaged`` with a live patch -- two edges too many:
+    ``open -> triaged`` is "I am looking at this" and ``blocked_on_a_person -> triaged`` is a block
+    clearing, and neither is about withdrawing anything. Reachable as soon as ``draft`` could attach
+    a patch to an ``open`` row: drafting from the queue and then clicking "I am looking at this" was
+    answered with "reopening requires every patch withdrawn".
 
     ``(None, open)``'s "the turn exists and has finished" stays prose: this store has no turn log
     and injecting one to satisfy a docstring would put the audit surface inside the writer.
@@ -912,7 +958,7 @@ def _edge_faults(
             f"{len(states) or 'no'} patch(es), none of them live. `addressed` is the state that "
             "says somebody answered this; with no artifact it says nobody can check."
         ]
-    if to is ObservationState.triaged and (states & live):
+    if frm is ObservationState.addressed and to is ObservationState.triaged and (states & live):
         return [
             "reopening requires every patch withdrawn, and "
             f"{len(states & live)} is still draft or exported. Withdraw it first, so the row is "

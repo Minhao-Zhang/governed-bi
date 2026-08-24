@@ -16,6 +16,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from governed_bi.api.routes import make_app
 from governed_bi.feedback.events import ObservationState, Source
 from governed_bi.feedback.store import FeedbackStore
@@ -88,10 +90,17 @@ def test_the_path_and_the_kind_values_did_not_change(tmp_path: Path) -> None:
     assert store.queue().total == 1
 
 
-def test_filing_copies_the_turn_rather_than_joining_to_it(tmp_path: Path) -> None:
+def test_filing_copies_the_turn_rather_than_joining_to_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The turn's record elides after 25 turns and its thread index deletes itself on a bare
     exception, so a foreign key into it returns nothing six months from now — which is when a
-    reviewer reads the queue."""
+    reviewer reads the queue.
+
+    The switch is deleted explicitly because ``source`` now depends on it: this is the default
+    deployment, where nothing authenticates and the filer is a ``reader``.
+    """
+    monkeypatch.delenv("GOVERNED_BI_FEEDBACK_ADMIN", raising=False)
     client, store = _client(tmp_path)
     client.post(f"/turns/{TURN}/raised", json={"kind": "from_refusal"})
 
@@ -102,7 +111,11 @@ def test_filing_copies_the_turn_rather_than_joining_to_it(tmp_path: Path) -> Non
     assert obs.generated_sql == "SELECT 1"
     assert obs.licensed == ("sales.orders",)
     assert obs.corpus_content_hash == "corpus-a"
-    assert obs.source is Source.operator
+    assert obs.source is Source.reader, (
+        "this route hardcoded `operator`, which claims the caller can read the corpus and name an "
+        "asset. Nothing here authenticates, so the claim made OPERATOR_ONLY_CATEGORIES a gate that "
+        "could not fire on any row in the store"
+    )
     assert obs.state is ObservationState.open
 
 

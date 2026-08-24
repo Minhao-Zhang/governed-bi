@@ -192,6 +192,16 @@ def make_feedback_router(
         Validated before the turn is read, so a rejected body costs one comparison. The store
         validates again — it is the thing that must not accept a bad row — and this layer's job is
         only to turn a refusal into a status code a client can act on.
+
+        **``source`` is ``reader`` unless the steward switch is on.** It was ``operator``
+        unconditionally, on a route that authenticates nothing, and ``operator`` is a *capability* --
+        "can read the corpus and name an asset". The consequence was not cosmetic:
+        ``validate.py`` waves through :data:`~governed_bi.feedback.events.OPERATOR_ONLY_CATEGORIES`
+        for any ``operator``, so ``column_excluded``, ``column_suspect`` and ``reusable_fact`` -- the
+        three that name a column -- were filable by anybody who could reach the port, and the gate
+        could not fire on any row in the store. ``for_steward`` is the switch that already decides
+        this (it mounts the steward's verbs, and ``make_admin_router`` says what it means), so the
+        source follows it rather than a second control invented here.
         """
         kind = _kind_or_422(body)
         category = _category_or_422(body)
@@ -235,7 +245,7 @@ def make_feedback_router(
         observation = Observation(
             observation_id=mint_observation_id(),
             filed_at=utc_now(),
-            source=Source.operator,
+            source=Source.operator if for_steward else Source.reader,
             kind=kind,
             state=ObservationState.open,
             category=category,
@@ -379,7 +389,14 @@ def make_feedback_router(
 
     @router.get("/observations/{observation_id}")
     def get_observation(observation_id: str) -> dict[str, Any]:
-        """One observation, its patches, and each patch's **derived** landing state."""
+        """One observation, its patches, and its transition trail.
+
+        **No landing state.** ``derived_state`` is on every patch row and is ``null`` on all of
+        them, for the reason ``_wire_observation_detail`` gives: answering "did this land" needs the
+        loaded corpus and a request handler does not have it. Landing is CLI-only --
+        ``tools/check_landed.py`` is the one reader of ``lifecycle.derived_state``. This docstring
+        promised the derived state for as long as the code returned ``None``.
+        """
         row = _wire_observation_detail(store, observation_id, for_steward=for_steward)
         if row is None:
             raise HTTPException(status_code=404, detail="observation not found")
@@ -449,8 +466,13 @@ def _wire_observation_detail(
         **_wire_observation(obs, for_steward=for_steward),
         # `derived_state` is null on every row here. It is derived and stored nowhere, and this
         # route has no session, so it cannot read the corpus; answering "did this land" from an
-        # empty corpus view would say `superseded` about everything. The review surface composes
-        # the corpus half, and `tools/check_landed.py` is the one that reads it.
+        # empty corpus view would say `superseded` about everything. The key is present rather than
+        # absent so a client is not left telling "no answer" from "no such key".
+        #
+        # **Nothing composes the corpus half.** This comment used to say the review surface did;
+        # it does not -- `ui/components/review/handoff-panel.tsx` reads this field straight off the
+        # payload and renders a badge only when it is truthy, so the badge is permanently absent.
+        # Landing state is CLI-only, and `tools/check_landed.py` is its one reader.
         "patches": [
             {**_wire_patch(store, patch, for_steward=for_steward), "derived_state": None}
             for patch in store.patches_of(observation_id)
@@ -613,6 +635,12 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
         may say lives in ``feedback/validate.py``, so a field this endpoint forgot to police is
         still refused. It does **not** write to the corpus and cannot: the only write is a human's
         ``git commit``, and this row is what produces the diff for it.
+
+        **The response carries what the draft did to the observations it answers.** Drafting is the
+        producer of ``addressed`` (``store.draft``), and the move is per observation because the
+        edge is: a row still ``open`` has no ``-> addressed`` edge and stays where it is. Both lists
+        go out, so a client learns the half that did not happen from the answer rather than by
+        re-fetching each row and comparing.
         """
         try:
             patch = _patch_from_body(body or {})
@@ -629,12 +657,21 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
                     status_code=404, detail=f"no observation {observation_id!r}"
                 )
         try:
-            patch_id = store.draft(patch, observations=observations)
+            drafted = store.draft(patch, observations=observations)
         except Rejected as exc:
             raise HTTPException(status_code=422, detail=list(exc.faults)) from exc
         return {
             "ok": True,
-            "patch": _wire_patch(store, store.get_patch(patch_id), for_steward=True),
+            "patch": _wire_patch(store, store.get_patch(drafted.patch_id), for_steward=True),
+            "addressed": list(drafted.addressed),
+            "not_addressed": [
+                {
+                    "observation_id": unmoved.observation_id,
+                    "state": unmoved.state.value,
+                    "why": unmoved.why,
+                }
+                for unmoved in drafted.not_addressed
+            ],
         }
 
     @router.post("/patches/{patch_id}/withdraw")

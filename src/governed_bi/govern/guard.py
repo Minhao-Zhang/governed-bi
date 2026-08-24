@@ -89,7 +89,16 @@ _ROLE_INJECTION = re.compile(
 #: Text shaped like a tool call or a tool result. The forged *result* is the dangerous
 #: half: the model cannot tell one it asked for from one pasted into a question.
 _TOOL_FORGERY = re.compile(
-    r"(?ix)"
+    # ``m`` matches ``_ROLE_INJECTION`` above, and for the same reason: the last
+    # alternative below anchors on ``^``, and without it that anchor is the start of the
+    # whole question rather than of a line. A forged tool result one newline in was not
+    # seen -- which is where a question burying one would put it. Two rules with ``^``
+    # anchors, one per-line and one not, was an oversight and not a decision.
+    #
+    # Free to close: across 1,351 held-out questions and 13,304 model-visible corpus
+    # texts, adding the flag moves the firing count from 0 to 0 on both. The rule gets
+    # stricter and no measured behaviour changes.
+    r"(?imx)"
     r'"(tool_calls|tool_call_id|function_call)"'
     r"|</?tool_(call|result|use)>"
     r'|"function"\s*:\s*\{\s*"name"'

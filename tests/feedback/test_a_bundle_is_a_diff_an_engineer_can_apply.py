@@ -12,6 +12,12 @@ not have.** Both are recorded here as the tests that would now catch them:
    the landing check compares it against, so a patch nobody had touched reported ``superseded``. A
    wrong landing state is worse than a missing one: it sends a good change back to the steward with
    nothing in the output to suggest the comparison was at fault.
+
+**The two content checks are the conformance rules, called.** They used to be re-implemented in
+``export_bundle.py`` -- a regex over ``for_analyst(...).excluded_columns`` and a "five shared words"
+phrase matcher -- and on six inputs measured 2026-08-24 the copies and the rules disagreed on four,
+in both directions. Every case is a test below, and each one names which implementation answered
+what.
 """
 
 from __future__ import annotations
@@ -62,11 +68,53 @@ body: >-
 """
 
 
-def _corpus(tmp_path: Path) -> Path:
+BODY = "Grain is one order."
+
+#: The same table with one ``governance.excluded`` column. ``physical_name`` and no ``name``,
+#: because ``ColumnAsset`` refuses the second -- a fixture the loader rejects makes ``for_analyst``
+#: return an empty excluded set, and then *every* V19 assertion passes for the wrong reason. It did,
+#: on the first draft of these tests.
+def _table_with_an_excluded_column(name: str, *, body: str = BODY) -> str:
+    return f"""asset_type: table
+id: {ASSET}
+schema: sales
+physical_name: orders
+summary: {WAS}
+body: >-
+  {body}
+columns:
+  - physical_name: {name}
+    summary: the customer social security number, {ASSET}.{name}
+    body: the taxpayer identifier, one per customer.
+    governance:
+      excluded: true
+      reason: PII
+      by: human
+"""
+
+
+def _corpus(tmp_path: Path, *, table: str = _TABLE) -> Path:
     root = tmp_path / "corpus"
     (root / "sales" / "tables").mkdir(parents=True)
-    (root / "sales" / "tables" / "tbl_sales_orders.yaml").write_text(_TABLE, encoding="utf-8")
+    (root / "sales" / "tables" / "tbl_sales_orders.yaml").write_text(table, encoding="utf-8")
     return root
+
+
+def _split(tmp_path: Path, *questions: str) -> Path:
+    """A held-out split in the shape ``check_split_leak`` reads. ``../BIRD-Data-Obfuscation`` is
+    read-only and is not a fixture, so the gate is driven against a file written here."""
+    import json
+
+    path = tmp_path / "test_final.jsonl"
+    path.write_text(
+        "".join(
+            json.dumps({"question_id": f"h{i}", "question": q}) + "\n"
+            for i, q in enumerate(questions)
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    return path
 
 
 def _seeded(
@@ -75,6 +123,8 @@ def _seeded(
     becomes: str,
     question: str = "how much revenue?",
     source: Source = Source.operator,
+    field: str = "summary",
+    was: str = WAS,
 ) -> tuple[FeedbackStore, str]:
     store = FeedbackStore(tmp_path / "feedback.sqlite")
     observation = Observation(
@@ -98,8 +148,8 @@ def _seeded(
         state=PatchState.draft,
         namespace="sales",
         asset_id=ASSET,
-        field_path="summary",
-        was=WAS,
+        field_path=field,
+        was=was,
         becomes=becomes,
         base_corpus_content_hash=HASH_A,
     )
@@ -235,29 +285,80 @@ def test_the_manifest_omits_a_hash_nobody_can_compute_yet(tmp_path: Path) -> Non
     assert manifest["file"] == "sales/tables/tbl_sales_orders.yaml", "POSIX separators on the wire"
 
 
-def test_a_held_out_phrase_in_the_new_text_is_fatal(tmp_path: Path) -> None:
+HELD_OUT = "what is the average female median age in that county"
+
+
+def test_a_held_out_question_quoted_in_the_new_text_is_fatal(tmp_path: Path) -> None:
     """The leakage channel the importer opens, closed at the one gate a change has to pass.
 
-    A phrase carried from a graded question into an asset contaminates every EX number measured
-    afterwards, and the contamination is invisible. Five consecutive words is the threshold: a
-    shorter run is ordinary English, and V12 is about a quotation.
+    A question carried from the graded split into an asset contaminates every EX number measured
+    afterwards, and the contamination is invisible. The gate is conformance rule V12 --
+    ``check_split_leak`` -- **called**, so the exporter cannot answer differently from the
+    corpus-wide report.
     """
     _corpus(tmp_path)
-    question = "what is the average female median age in that county"
     store, patch_id = _seeded(
         tmp_path,
-        becomes=WAS + " Use it for the average female median age in that county.",
-        question=question,
+        becomes=f"{BODY} It answers {HELD_OUT}.",
+        question=HELD_OUT,
         source=Source.eval,
+        field="body",
+        was=BODY,
     )
 
     assert _export(tmp_path, store, patch_id) == 1, "a held-out quotation must refuse"
     assert not (tmp_path / "bundles").exists(), "a refused export must write nothing"
 
 
-def test_a_shared_phrase_that_is_ordinary_english_is_not_fatal(tmp_path: Path) -> None:
-    """The check has to be usable. Refusing every asset that shares four words with a question
-    would refuse every asset, and a gate that always fires is a gate that gets waived."""
+def test_a_held_out_question_this_patch_does_not_carry_is_fatal(tmp_path: Path) -> None:
+    """The disagreement that made the copy worth deleting, measured 2026-08-24.
+
+    The inline copy compared the new text against **the questions of this patch's own
+    observations**, on the argument that the steward read those and nothing else. A steward reads
+    the review surface; they can also have read a question elsewhere, and the corpus-wide V12 reads
+    the whole split. So the copy exported a body quoting a graded question verbatim -- exit 0,
+    bundle written -- while ``check_split_leak`` refused the same text.
+    """
+    _corpus(tmp_path)
+    store, patch_id = _seeded(
+        tmp_path,
+        becomes=f"{BODY} It answers {HELD_OUT}.",
+        question="an unrelated operator complaint",
+        field="body",
+        was=BODY,
+    )
+
+    split = _split(tmp_path, HELD_OUT)
+    assert _export(tmp_path, store, patch_id, extra=["--test-split", str(split)]) == 1
+    assert not (tmp_path / "bundles").exists()
+
+
+def test_a_partial_overlap_is_not_fatal_because_the_rule_is_about_a_quotation(
+    tmp_path: Path,
+) -> None:
+    """The other direction of the same disagreement, and the sensitivity this fix gives up.
+
+    The copy refused on **five consecutive shared words**. V12 asks whether an asset *quotes* a
+    held-out question: the whole question, normalised, as a substring. So this text -- eight words
+    of a graded question, not the question -- used to refuse here and passes the corpus-wide gate,
+    which is the two-answers problem in one input. One implementation, and the implementation is the
+    rule's. If a five-word run should be fatal, that belongs in ``check_split_leak`` and applies to
+    the 13,281 assets already in the corpus, not to this caller alone.
+    """
+    _corpus(tmp_path)
+    store, patch_id = _seeded(
+        tmp_path,
+        becomes=WAS + " Use it for the average female median age in that county.",
+        question=HELD_OUT,
+        source=Source.eval,
+    )
+    assert _export(tmp_path, store, patch_id) == 0
+
+
+def test_an_innocent_edit_passes_both_gates(tmp_path: Path) -> None:
+    """The gate has to be usable, and this is the shape of nearly every real patch: a sentence
+    about the grain, on a corpus where nothing is excluded and no held-out question is quoted. A
+    gate that fires on this is a gate that gets waived."""
     _corpus(tmp_path)
     store, patch_id = _seeded(
         tmp_path,
@@ -265,6 +366,75 @@ def test_a_shared_phrase_that_is_ordinary_english_is_not_fatal(tmp_path: Path) -
         question="how many orders were placed in the last month by each customer",
         source=Source.eval,
     )
+    assert _export(tmp_path, store, patch_id) == 0
+
+
+def test_the_leakage_gate_says_when_it_could_not_be_asked(tmp_path: Path, capsys) -> None:
+    """A rule silently absent from a loop is indistinguishable from a rule that passed.
+
+    V12 needs held-out question text. With no eval-sourced observation on the patch and no split
+    file on disk there is none, and the honest answer is *not evaluated* with the path that was
+    looked at -- which a person fixes by passing ``--test-split``. Refusing instead would refuse
+    every export on a corpus that is not a benchmark.
+    """
+    _corpus(tmp_path)
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " Grain is one order.")
+
+    assert _export(tmp_path, store, patch_id, extra=["--test-split", str(tmp_path / "gone")]) == 0
+    printed = capsys.readouterr().out
+    assert "V12" in printed and "not evaluated" in printed, printed
+
+
+def test_an_excluded_column_is_fatal_even_when_its_name_is_not_lowercase(tmp_path: Path) -> None:
+    """The V19 disagreement, measured 2026-08-24: the rule refused this body, the copy exported it.
+
+    The copy read ``for_analyst(...).excluded_columns``, whose keys come from ``column_key_for`` --
+    ``slug(physical_name).lower()``. It then matched them with a **case-sensitive** ``\\b`` regex, so
+    an excluded column called ``SSN`` was searched for as ``ssn`` and never found. Every excluded
+    column whose name is not already lowercase was invisible to the gate; ``check_excluded_not_named``
+    keys on the name as written and catches it.
+    """
+    _corpus(tmp_path, table=_table_with_an_excluded_column("SSN"))
+    store, patch_id = _seeded(
+        tmp_path,
+        becomes=f"{BODY} Do not join on SSN.",
+        field="body",
+        was=BODY,
+    )
+
+    assert _export(tmp_path, store, patch_id) == 1
+    assert not (tmp_path / "bundles").exists()
+
+
+def test_an_excluded_name_in_a_summary_is_not_fatal_because_a_summary_is_not_prompt_text(
+    tmp_path: Path,
+) -> None:
+    """The second sensitivity change, and the docstring it falsified.
+
+    The copy scanned ``becomes`` whatever field it was going to, and said in prose that "``summary``
+    reaches the retrieval index, so the name would leak". V19 is a **disclosure** rule and
+    ``model_visible_text`` is what answers "does the model see this": ``body``, plus a bodyless
+    few-shot's ``summary`` and ``sql``. A table's summary reaches the index and no prompt, so a name
+    in it is a routing signal, not a disclosure. Two documents disagreed about this and the rule's
+    is the one that runs on the whole corpus.
+    """
+    _corpus(tmp_path, table=_table_with_an_excluded_column("ssn"))
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " It excludes ssn.")
+
+    assert _export(tmp_path, store, patch_id) == 0
+
+
+def test_a_finding_the_edit_did_not_introduce_does_not_refuse_the_bundle(tmp_path: Path) -> None:
+    """The exporter-specific half, kept: this gate is about **the value being introduced**.
+
+    ``../BIRD-corpus`` carries 125 conformance findings on 101 pinned identities, so an absolute
+    gate here would refuse production, get waived, and a waiver is how a real finding goes green.
+    The body below already names the excluded column; the patch touches the summary. Refusing that
+    would refuse an unrelated improvement for a disclosure the steward did not write.
+    """
+    _corpus(tmp_path, table=_table_with_an_excluded_column("ssn", body="Grain is one order per ssn."))
+    store, patch_id = _seeded(tmp_path, becomes=WAS + " One row per placed order, always.")
+
     assert _export(tmp_path, store, patch_id) == 0
 
 
