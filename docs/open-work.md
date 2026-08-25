@@ -635,6 +635,26 @@ sits in a schema the router did reach → **11 the only repair this loop offers 
 reading and mutation testing beforehand found none of them — they are all in the joins, which is
 what you would expect of a loop that had never been driven.
 
+### 3.10e The corpus gate exists in three tools and has never run
+
+[ADR 0016](adr/0016-gating-the-corpus-repository.md), 2026-08-24. `tools/check_corpus_delta.py`
+answers "did the corpus add a conformance finding since somebody last looked", against a corpus
+revision recorded here in `tools/corpus_baseline.py` (`74ff80c4842410e54fc81964b30bbe6d4a91f872`).
+The findings it is grandfathering are **125 on 101 identities** — different nouns, and the difference
+of 24 is why every baseline carries a count per identity — measured 2026-08-24 on `../BIRD-corpus` at
+`main` = `74ff80c4` with `tools/check_corpus_conformance.py --json`: V17a 107 findings on 85 of the
+478 metric assets, V17b 17 on 15, V21 1 on 1, and the other 19 of 22 rules zero.
+
+| finding | status |
+|---|---|
+| **No runner has ever run this gate, in either shape.** The first design put the workflow in `BIRD-corpus`; its two commits were never pushed, the GitHub Actions run count there is **0**, and its `main` tree now contains zero paths under `.github/` or `.conformance/` | **open by construction** for the runner: GitHub runs a `schedule` only from the default branch and only offers `workflow_dispatch` for a workflow present on it, so the nightly starts working when `design/return-path` merges and not before. **The tool is no longer unobserved** — all three exit codes were driven by hand 2026-08-24 (0 at 78 s; 1 on a planted duplicate id, head 183 on 159 with each added finding named; 2 on a missing `--dataset-dir`, V11/V12/V15 named), and the corpus was clean with no worktree left after each. ADR 0016 §Consequences 2 carries the table |
+| **It is not a merge gate.** A corpus commit that adds a finding lands, and is caught up to a day later | **accepted**, and the price of the dependency direction. The corpus is human-owned and moves rarely — 9 commits on `main`, 2026-07-11 to 2026-08-18, one of them in the fifteen days before this was written |
+| **The baseline equals the corpus tip**, so the delta is empty by construction and the first green run proves nothing | open; the gate becomes informative only after the corpus moves |
+| **A bump made without reading the findings is indistinguishable from one made after.** The edit to `BASELINE_SHA` *is* the acknowledgement, and nothing detects a bump that skipped the looking | open, and there is no obvious instrument for it |
+| **`check_ratchet.py` still has no automated reader.** The pins moved from the corpus into this repository as `.conformance/bird-corpus-pins.txt` (109 lines, 101 pins), which fixes the *side of the merge* — this repository's CI could read them, and a rule change and a pin edit can now land in one commit. It does not fix enforcement: the nightly runs the delta tool, which passes a closure by design | **open.** The ratchet's policy, "closing a finding must be declared", is enforced only when a person runs it |
+| Two records of one fact: `tools/corpus_baseline.py` carries 125/101 and the pin file carries the 101 identities by name | a test asserts they agree; see the other agent's `tests/conformance/` |
+| `docs/return-path.md` carried a **"### Corpus repository"** section describing CI that ran *there* — three commands from inside the corpus checkout, including `--pins .conformance/pins.txt` | fixed the same day: the section is now **"Corpus repository — none, and the check runs here instead"**, and it prints the `corpus` job's actual command. It was outside the ADR change's file scope and was nearly left behind, which is the whole hazard of splitting a change by file ownership |
+
 ### 3.11 Selective prediction is closed at 0.80, and the reflector closed it
 
 The reflector ran, once, as the last untested source of information: everything that does not

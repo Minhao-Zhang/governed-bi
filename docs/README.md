@@ -63,7 +63,7 @@ build in the present tense after that build was deleted.
 | [0013](adr/0013-the-declared-abstention-policy.md) | The declared abstention policy |
 | [0014](adr/0014-one-conversation-store.md) | One conversation store, on a durable LangGraph checkpointer — **supersedes 0004 §5** |
 | [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **Accepted; steps 0–6 built** (the agentic pipeline, T4/T5, the categorised capture surface and `/reports` are not; a minimal note control does ship) |
-| [0016](adr/0016-gating-the-corpus-repository.md) | Gating the corpus repository: "did this commit add a conformance finding?" — **Accepted; built in both repositories and never executed** (the workflow is unpushed and pins a temporary `ref:`; answers 0015's open "who owns the corpus repository's CI") |
+| [0016](adr/0016-gating-the-corpus-repository.md) | Gating the served corpus: "did the corpus add a finding since somebody last looked?" — **Accepted; never run** (a nightly job **here**, not in the corpus: the rules are statements about this engine, so the consumer runs the check. Baseline is a corpus SHA in `tools/corpus_baseline.py`; bumping it is the acknowledgement. Answers 0015's open "who owns the corpus repository's CI" — nobody, by design) |
 
 ## Measurement findings
 

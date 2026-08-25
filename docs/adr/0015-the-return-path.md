@@ -322,6 +322,11 @@ taken: the loop **may not create a `column` asset at all** — columns are autho
 their table and their ids are derived (`corpus/identity.py::derive_column_id`) — and uniqueness of
 asset ids becomes a conformance rule that runs in the corpus repository's CI, before the merge.
 
+> **Amended 2026-08-24: "in the corpus repository's CI, before the merge" is wrong on both halves.**
+> [ADR 0016](0016-gating-the-corpus-repository.md) puts the gate in *this* repository's nightly, for
+> the reason in *What this ADR does not cover*, so the rule runs here and it runs after the corpus
+> commit lands. The rule itself is unchanged and still executes; what it cannot do is block a merge.
+
 ### 5. The pipeline is a local process, not a served graph, and each role's boundary is its tool list
 
 **None of this section is built.** There is no `triage/` package, no Reproducer, Diagnoser, Author
@@ -864,6 +869,22 @@ this branch; four wait on the pipeline; one is retired. Each says which.
   (§Context 5) and it has no CI at all. The pins live in it — `.conformance/pins.txt`, in a directory `corpus_content_hash` excludes so a lint's state does not enter the treatment identity — and
   `tools/check_ratchet.py` reads them from this repository, which is the wrong side of the merge
   and is named as such rather than counted as the control §Decision 4 asked for.
+
+  > **Amended 2026-08-24: the answer is "nobody, by design", and the two sentences above are
+  > stale.** [ADR 0016](0016-gating-the-corpus-repository.md) settles this. The corpus still has no
+  > CI and now will not get any: a conformance rule is a statement about what *this* engine requires
+  > of an asset — V16 imports `governed_bi.serve.context` — so a workflow in the corpus repository
+  > would be data asserting a fact about an engine it cannot see. The gate is a nightly job in this
+  > repository that checks the corpus out, against a corpus revision recorded here in
+  > `tools/corpus_baseline.py`. Two consequences for this record. **The wrong-side-of-the-merge
+  > problem is gone as stated and back in a different form:** the pins moved to
+  > `.conformance/bird-corpus-pins.txt` *here*, which is the side that can read them, but the
+  > nightly runs the delta tool and not the ratchet, so nothing automated reads them yet and §Decision
+  > 4's control is still not the control. **And it is not a merge gate at all.** A corpus commit that
+  > adds a finding lands, and is caught up to a day later. §Decision 4's sentence that asset-id
+  > uniqueness "becomes a conformance rule that runs in the corpus repository's CI, before the
+  > merge" is wrong on both halves: the rule runs here, and after. Nothing about the design of the
+  > return path changes; where the check runs does.
 - **Row-level security, tenancy, or a user store.** `docs/enterprise-fork.md` is unchanged by this
   ADR. In particular the store records no identity for who filed an observation, because
   `api/auth.py` returns one principal and inventing a per-user notion here would be a boundary

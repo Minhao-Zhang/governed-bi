@@ -956,15 +956,35 @@ Nothing on the return path has a CI step of its own, and it does not need one.
 rest is `pytest` over the whole suite, which is the only caller of several `tools/` checks and so
 fails loudly when one of them breaks.
 
-### Corpus repository
+### Corpus repository — none, and the check runs here instead
 
-This is the CI the engineer's commit passes through, and it is specified here because the engine
-is where the checker lives. It must **not** need a model credential or a database.
+This section used to specify a workflow *in* the corpus repository, running the engine's checkers
+against `--corpus-dir .`. There is no such workflow: the one that existed was deleted with the
+dependency direction it implied, having never executed once. ADR 0016 records why the direction was
+rejected — a conformance rule is a statement about what *this* engine requires of an asset (V16
+imports `governed_bi.serve.context`, so the job has to `uv sync` the whole engine), and data
+asserting a fact about an engine it cannot see is the wrong way round. The checker lives with the
+consumer, so the consumer runs it, in the `corpus` job of `.github/workflows/ci.yml`:
 
 ```bash
-uv run --frozen python ../governed-bi/tools/check_corpus_conformance.py --corpus-dir .
-uv run --frozen python ../governed-bi/tools/check_ratchet.py --pins .conformance/pins.txt
-uv run --frozen python -c "from governed_bi.retrieve import build_index; ..."   # T1: it must start
+# nightly and on workflow_dispatch; never on a push or a pull request
+uv run --frozen python tools/check_corpus_delta.py \
+  --corpus-dir "$GITHUB_WORKSPACE/BIRD-corpus" \
+  --dataset-dir "$GITHUB_WORKSPACE/BIRD-Data-Obfuscation/eval_dataset" \
+  --base "$(uv run --frozen python tools/corpus_baseline.py)" \
+  --every-rule-must-run
+```
+
+Still no model credential and no database, which is what made this specifiable at all. What it
+gives up is stated in the job's own comment: it is **not** a merge gate on the corpus. A corpus
+commit that adds a finding lands, and is caught up to a day later.
+
+`tools/check_ratchet.py` is the manual half and its pin file moved into this repository too —
+`.conformance/bird-corpus-pins.txt`, which is also what stops the pin file from entering
+`corpus_content_hash` and moving the treatment identity:
+
+```bash
+uv run --frozen python tools/check_ratchet.py --corpus-dir ../BIRD-corpus
 ```
 
 ### What runs in neither

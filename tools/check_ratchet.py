@@ -1,20 +1,26 @@
 #!/usr/bin/env python
 """Conformance findings may shrink and may not grow, and closing one must be declared.
 
-    uv run --frozen python tools/check_ratchet.py --pins ../BIRD-corpus/.conformance/pins.txt
-    uv run --frozen python tools/check_ratchet.py --pins ... --write    # after fixing something
+    uv run --frozen python tools/check_ratchet.py --corpus-dir ../BIRD-corpus
+    uv run --frozen python tools/check_ratchet.py --corpus-dir ... --write   # after a real fix
 
 **Why a ratchet at all.** The corpus carries findings today — 125 on ``../BIRD-corpus``, measured
 2026-08-23 — so a gate that demands zero rejects production. That gate gets waived, and a waiver is
-how a real finding goes green. The ratchet is the version that can run on every commit *of a corpus
-repository*: the set may shrink freely, it may not grow, and *shrinking* fails the build too until
-the pin file is updated in the same commit.
+how a real finding goes green. The ratchet is the version that could run on every commit: the set
+may shrink freely, it may not grow, and *shrinking* fails too until the pin file is updated in the
+same commit. Nothing runs it on a commit; see the next paragraph for why that is a decision.
 
-**It is not in this repository's CI, and it cannot be.** Both the pin file and the tree it describes
-are siblings of this checkout, so a CI job here has neither. It is declared manual in
-``tests/conformance/test_the_lint_gates_fire_on_a_synthetic_violation.py`` and its behaviour is
-pinned on a synthetic corpus in ``tests/conformance/test_the_ratchet_only_turns_one_way.py``. What
-runs on a commit *here* is that test; what runs on a commit *there* is this tool.
+**It is not in any CI, and only half of the old reason survives.** The pin file is now
+``.conformance/bird-corpus-pins.txt`` **in this repository** (see the last paragraph), so "the
+baseline is a sibling of this checkout" is no longer true of it. The corpus tree still is, and that
+is what stops a CI step: ``.github/workflows/ci.yml``'s nightly job checks out a corpus and runs
+``check_corpus_delta.py`` against it, and running *this* tool there as well would fail the build on
+the first genuine fix -- a closure is exit 1 here until somebody rewrites the pin file, which is
+the policy and not an accident. So the automated reader is the delta gate; this tool is the
+instrument a person runs when they want the whole debt named rather than the change. It is declared
+manual in ``tests/conformance/test_the_lint_gates_fire_on_a_synthetic_violation.py`` and its
+behaviour is pinned on a synthetic corpus in
+``tests/conformance/test_the_ratchet_only_turns_one_way.py``.
 
 **By name and not by count.** 125 findings and 125 *different* findings are the same integer, so a
 count-based ratchet passes a commit that fixes one metric and breaks another. A finding's identity
@@ -35,11 +41,25 @@ rewording and renumbering, which is what the identity was chosen for.
 
 **Pins written before counts existed carry none, and this tool says so rather than implying it
 checked.** A two-field line is read as "count not recorded" and only its presence is enforced. Run
-``--write`` once, in the corpus repository, to record them.
+``--write`` once to record them.
 
-**The pin file lives in the corpus repository, not here.** The findings are properties of a corpus
-tree, and this tree is the engine — pinning them here would mean an engine commit could not be
-reviewed without a corpus in the reviewer's checkout, and two corpora could never both be clean.
+**The pin file lives HERE, in ``.conformance/bird-corpus-pins.txt``, and it used to live beside the
+corpus.** The old arrangement had a measured cost that this one does not: at the corpus root the pin
+file entered ``corpus_content_hash``, moving the treatment identity every measured number is pinned
+to from ``6e5c7b4be83d5682…`` to ``8bb37531cff9155a…`` — the gate changed the thing it was gating.
+Putting it in a ``.conformance/`` directory the digest ignores fixed the symptom by an exclusion
+list; putting it in this repository removes the class, because a file here cannot be in a digest of
+a tree over there. Verified after the move: ``../BIRD-corpus`` at ``74ff80c4`` hashes
+``6e5c7b4be83d56828bab66183eec03bbdcf486d7454d34acd066530010ebed85``, unchanged, with no
+``.conformance/`` and no ``.github/`` in that tree at all.
+
+What the old placement bought, and what it costs to give up: the findings are properties of *a*
+corpus, so a pin file here is a pin file about one named tree, and two corpora cannot both be
+described by :data:`DEFAULT_PINS`. That is why the default is named for the corpus it is about
+rather than ``pins.txt``, and why ``--pins`` stays a flag: a second corpus gets a second file, not
+a second meaning for this one. The other half of the old objection — that an engine commit could
+not be reviewed without a corpus in the reviewer's checkout — was already false, because reviewing
+this file needs the *pins*, and running the tool needs the corpus either way.
 """
 
 from __future__ import annotations
@@ -53,7 +73,11 @@ from conformance_findings import CannotRun, compare, read  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS = ROOT.parent / "BIRD-corpus"
-DEFAULT_PINS = DEFAULT_CORPUS / ".conformance" / "pins.txt"
+#: In **this** repository, and named for the corpus it describes. See the docstring's last
+#: paragraph for what moving it here removed and what it gave up. ``.conformance/`` keeps the name
+#: it had beside the corpus so the two are recognisably the same artifact; it is also still in
+#: ``corpus/identity.py::_NON_CORPUS_DIRS``, defensively, for a corpus that re-acquires one.
+DEFAULT_PINS = ROOT / ".conformance" / "bird-corpus-pins.txt"
 
 HEADER = """# Conformance findings pinned for `tools/check_ratchet.py`.
 #
@@ -102,10 +126,11 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.write:
-        # The default pin path lives in a directory the corpus digest excludes, and a
-        # fresh clone does not have it. `write_text` does not create parents, so the
-        # first `--write` on a tree nobody has set up -- which is the only tree this
-        # flag is for -- raised `FileNotFoundError` from inside the tool.
+        # `write_text` does not create parents, so the first `--write` against a path whose
+        # `.conformance/` nobody has made raised `FileNotFoundError` from inside the tool. The
+        # default path's parent is tracked here now, so the case this guards is a `--pins`
+        # pointed somewhere new -- a second corpus getting its first pin file, which is the only
+        # tree this flag is for.
         args.pins.parent.mkdir(parents=True, exist_ok=True)
         args.pins.write_text(
             HEADER
@@ -124,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.pins.exists():
         print(
             f"no pin file at {args.pins}. Run with --write once to record the {sum(found.values())} "
-            "finding(s) this tree carries today, and commit it to the corpus repository.",
+            "finding(s) this tree carries today, and commit it beside this tool.",
             file=sys.stderr,
         )
         return 2
@@ -144,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     if uncounted:
         print(
             f"  {uncounted} pin(s) carry no count, so only their presence is checked. "
-            "Re-run with --write in the corpus repository to record them."
+            "Re-run with --write to record them."
         )
 
     if new:

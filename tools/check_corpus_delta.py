@@ -1,18 +1,30 @@
 #!/usr/bin/env python
-"""Did *this commit* add a conformance finding? Git is the baseline, not a pin file.
+"""Did the corpus add a conformance finding since somebody last looked? Git is the baseline.
 
     uv run --frozen python tools/check_corpus_delta.py --corpus-dir ../BIRD-corpus --base origin/main
-    uv run --frozen python tools/check_corpus_delta.py --base HEAD --every-rule-must-run   # CI
+    # CI, with the accepted baseline substituted in by the workflow step:
+    uv run --frozen python tools/check_corpus_delta.py --every-rule-must-run
+        --base "$(uv run --frozen python tools/corpus_baseline.py)"
 
     exit 0  no finding was added
     exit 1  a finding is present at head and not at base, or a pinned identity's count grew
     exit 2  could not run at all -- bad ref, not a git repository, conformance crashed or emitted
             no JSON, or --every-rule-must-run and a rule did not run
 
+**This runs HERE, on a nightly, and never in the corpus repository.** ADR 0016 records why: a
+conformance rule is a statement about what *this* engine requires of an asset -- V16 imports
+``governed_bi.serve.context`` -- so the checker lives with the consumer, and therefore the consumer
+runs it. A workflow in the corpus repository would be data asserting a fact about an engine it
+cannot see, and executing that engine's default branch unpinned to do it. The baseline is a corpus
+revision recorded on this side, in ``tools/corpus_baseline.py``; bumping it is a human saying "I
+read the new findings and I accept them". The cost of the direction is honest and is in that ADR's
+consequences: this is **not** a merge gate. A corpus commit that adds a finding lands, and is caught
+up to a day later.
+
 **This is ``check_ratchet.py``'s question with a different baseline, and the baseline is the whole
-point.** The ratchet compares a corpus against ``.conformance/pins.txt``, a file committed beside
-it. That file is the right instrument for a human declaring "this is the debt we accept" and the
-wrong one for CI, for three measured reasons.
+point.** The ratchet compares a corpus against ``.conformance/bird-corpus-pins.txt``, a file
+committed in **this** repository. That file is the right instrument for a human declaring "this is
+the debt we accept" and the wrong one for CI, for three measured reasons.
 
 *A stricter rule reds a corpus that did not change.* Two rule changes landed on 2026-08-23 alone --
 V21 went from running one guard rule to four, and V23 gained 45% of the tree. Either would have
@@ -20,16 +32,21 @@ turned a pin-based corpus build red with no corpus commit behind it, and the cor
 fix that in their own repository. Here the same rule set runs on both sides, so a rule change
 cancels: it fires at base and at head, and the difference is empty.
 
-*The pin file has to live in the corpus tree, and ``corpus_content_hash`` digests every file
+*The pin file had to live in the corpus tree, and ``corpus_content_hash`` digests every file
 there.* This is not a hazard, it happened: at the corpus root the pin file moved the treatment
-identity from ``6e5c7b4be83d5682…`` to ``8bb37531cff9155a…``, so the gate changed the thing it was
-gating. The fix was to give lints a directory the digest ignores — the pins moved to
-``.conformance/`` and ``corpus/identity.py::_is_tooling`` now excludes it, restoring the hash ADR
-0015 records. This tool needs no such directory, because its baseline is not a file.
+identity from ``6e5c7b4be83d5682…`` to the now-superseded ``8bb37531cff9155a…``, so the gate changed
+the thing it was gating. That is gone by construction rather than by an exclusion list: the pins
+live in this repository now, and the corpus tree has no ``.conformance`` or ``.github`` in it at
+all. ``corpus/identity.py::_NON_CORPUS_DIRS`` still excludes both, as defence against the next tool
+that wants a corner of that tree, and the hash reads ``6e5c7b4be83d5682…`` with neither present --
+the same value it read with both, which is what makes the exclusion measured rather than argued.
 
 *Closing a finding fails a pin-based build* until someone rewrites the pin file in the same commit.
 That ceremony exists only because there is a file to keep in sync. Here a fix is simply green --
-``tests/conformance/test_a_commit_does_not_add_a_finding.py`` pins both halves side by side.
+``tests/conformance/test_a_commit_does_not_add_a_finding.py`` pins both halves side by side. This
+reason is the one that only *shrank*: ``tools/corpus_baseline.py`` is still a line somebody keeps in
+step, but it is one sha rather than 109 lines of findings, and editing it is the acknowledgement
+rather than bookkeeping.
 
 **The base tree comes from ``git worktree add --detach`` into a temp directory.** Never a checkout
 in place, which would need a clean tree and would move the operator's HEAD, and never a directory
@@ -39,12 +56,23 @@ the measurement -- three checkouts of one commit, three content hashes -- that m
 The worktree is removed on every exit path, including the failing ones, because a leak registers a
 directory in the corpus repository's ``.git/worktrees`` on every red build.
 
+**When ``--base`` cannot be resolved this exits 2, and the condition is narrower than it looks.**
+With ``fetch-depth: 0`` on the checkout, the parent of any non-root commit is present -- so the
+cases that actually fire are a **root commit**, which has no parent, and a **base ref absent from
+the clone**: a sha on an unfetched fork, or a baseline whose commit was rewritten away. "The first
+push of a branch" was the reason given for this in an earlier draft of the CI, and it was wrong.
+Either way nothing was compared, so nothing was checked, and the message names the ref
+(``test_a_bad_base_ref_exits_two_and_says_which``).
+
 **A finding's identity is ``(rule, where)`` and each identity carries a count**, which is the
 ratchet's notion and deliberately not a new one: the identity alone cannot see growth. 125 findings
-on ``../BIRD-corpus`` live on 101 identities, so an asset already carrying a V17a finding could take
-on any number more without the set growing by one line. The comparison below is duplicated from
-``check_ratchet.py`` rather than imported -- **two copies of one rule, marked here so the next
-reader knows**. Extracting it is the right call and is left for a commit that owns both files.
+on ``../BIRD-corpus`` at ``main`` = ``74ff80c4`` live on 101 identities (measured 2026-08-24), so an
+asset already carrying a V17a finding could take on any number more without the set growing by one
+line. **Different nouns:** "carries 101 findings" is wrong, and so is "125 identities".
+
+The comparison below is duplicated from ``check_ratchet.py`` rather than imported -- **two copies
+of one rule, marked here so the next reader knows**. Extracting it is the right call and is left
+for a commit that owns both files.
 
 **``--every-rule-must-run`` is fatal, and it exits 2 rather than 1.** The conformance JSON reports
 rules it could not evaluate: V11, V12 and V15 need the obfuscation dataset's manifests. On a laptop

@@ -19,13 +19,20 @@ on:
   push:
     branches: [main, v2]
   pull_request:
-  # Nightly, for the `mutate` job at the bottom of this file and for nothing else. GitHub only
-  # runs a schedule from the default branch, so what it measures is `main` — which is the right
-  # population for a mutation run, because the question it asks is whether the tests guarding
-  # shipped invariants can still fail. The two jobs above run on this trigger too; that is
-  # harmless and cheaper than teaching each of them to opt out.
+  # Nightly, for the two jobs at the bottom of this file — `corpus` and `mutate` — and for nothing
+  # else. GitHub only runs a schedule from the default branch, so what it measures is `main`. That
+  # is the right population for both: a mutation run asks whether the tests guarding *shipped*
+  # invariants can still fail, and the corpus gate compares a corpus against a baseline recorded in
+  # `tools/corpus_baseline.py`, which is only an accepted baseline once it is on `main`. The two
+  # jobs above run on this trigger too; that is harmless and cheaper than teaching each of them to
+  # opt out.
   schedule:
     - cron: "0 7 * * *"
+  # Added for `corpus`. Its trigger is "rarely, and when somebody asks" — the corpus moves a few
+  # times a year, and after a corpus commit the honest thing is to be able to ask *now* instead of
+  # waiting for 07:00 UTC. Dispatching also runs `test` and `ui`, for the same reason the schedule
+  # does; `mutate` opts out with an `if` and keeps it.
+  workflow_dispatch:
 
 jobs:
   # The Python engine: everything under `src`, `tools`, `tests` and `docs`. None of
@@ -196,6 +203,155 @@ jobs:
       # introduces it); `check:stream-messages` is pure and could run, but it is a red/green
       # reproduction of one screenshot bug rather than a gate, and it asserts against fixtures it
       # ships with. Both are named in `docs/usage.md` as manual.
+
+  # Did the corpus add a conformance finding? **Nightly or on demand, and deliberately not on a
+  # push or a pull request.**
+  #
+  # This job exists because the dependency direction was inverted. The gate used to live in
+  # `BIRD-corpus`'s own CI, which checked *this* repository out to borrow the tool — and the tool
+  # cannot move to the data: V16 imports `governed_bi.serve.context` and measures a table with the
+  # same `_structural_line` the engine serves, V17a parses a metric expression at the dialect
+  # `govern/` parses generated SQL at, V21 runs `govern/guard.py`'s own `GUARD_RULES`. A second copy
+  # of any of those beside the data is a second answer free to disagree with the first, and the
+  # install is not small either: `serve/__init__.py` re-exports the graph, so the job needs a full
+  # `uv sync` of the engine. The conformance rules are this engine's requirements. So the checker
+  # lives with the consumer, and the consumer runs it.
+  #
+  # **Why not on push.** `../BIRD-corpus` has **9** commits on `main` in its whole history and this
+  # repository has **485** over the same window (2026-07-11 to 2026-08-18, counted 2026-08-24), so a
+  # per-push gate here would run about 54 times per thing worth checking. Worse, it
+  # would go red for something no PR in this repository caused: a finding belongs to a corpus
+  # commit, and blocking an unrelated engine PR on it teaches people that a red X is noise. That is
+  # the same argument that rejected a zero-findings gate with a waiver table (ADR 0016 §Context 2) —
+  # a gate that fires on work it cannot be about gets routed around, and then it protects nothing.
+  #
+  # **What that gives up, plainly: this is no longer a push-time gate on the corpus.** A corpus
+  # commit that adds a finding *lands*. Nothing blocks it. It is caught on the next nightly, or
+  # sooner if somebody dispatches this workflow — which is why `workflow_dispatch` is on the `on:`
+  # block. The window is up to 24 hours, and during it the corpus's own repository has no CI at all.
+  # At the corpus's measured rate — 9 commits in 39 days — that window opens about twice a week.
+  #
+  # **This job has never executed on a runner, and neither did the one it replaces.** The GitHub
+  # Actions run count for `Minhao-Zhang/BIRD-corpus` was 0 when its workflow was deleted (measured
+  # 2026-08-24). So the *checkout layout, the token and the clean ordering below are argued* from
+  # the actions' documented behaviour, not read off a build log.
+  #
+  # **The tool's own contract is not argued. All three exit codes were driven on 2026-08-24**,
+  # against `../BIRD-corpus` at `74ff80c4` with `--base 30872d3b`:
+  #
+  #   exit 0  base 125 findings on 101 identities, head 125 on 101, in **78 s**
+  #   exit 1  one asset copied to a second filename keeping its `id` — head 183 on 159, and the
+  #           58 added V23 findings printed one per line with the asset that already declares each
+  #   exit 2  `--dataset-dir` pointed at a path that does not exist — V11, V12 and V15 each
+  #           reported `not evaluated` by name, which is the silent-green failure this flag exists
+  #           for. Note it exits 0 with the flag and *no* `--dataset-dir` at all, because the
+  #           default resolves to a local sibling: that is exactly why the step below passes both
+  #           paths explicitly instead of trusting resolution it cannot see.
+  #
+  # The corpus was clean afterwards with no worktree left registered, on every one of the three.
+  #
+  # **Three checkouts, and the layout is the part that goes silently wrong.** `actions/checkout`'s
+  # `path:` must stay inside `$GITHUB_WORKSPACE`, and this repository is checked out at the
+  # workspace root, so the two data repositories are *nested* rather than siblings. That is on
+  # purpose. Both tools resolve their default corpus and dataset from
+  # `Path(__file__).parent.parent.parent` — under this layout `/home/runner/work/governed-bi`,
+  # which contains neither directory, so a step that forgot `--corpus-dir` exits 2 saying so. Lay
+  # them out as real siblings and the defaults resolve, which means a wrong or missing flag reads as
+  # a working gate. Both paths below are therefore explicit, and the failure mode of getting one
+  # wrong is a loud one.
+  #
+  # The engine checkout must come **first**: `actions/checkout` cleans its destination with
+  # `git clean -ffdx`, and at the workspace root that would delete two untracked sibling directories
+  # if it ran after them.
+  #
+  # All three repositories are public with Actions enabled, so `${{ github.token }}` — which is what
+  # `actions/checkout` uses when no `token:` is given — can read the two it does not own. No PAT.
+  corpus:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Two whole-tree conformance runs over 7,361 files, measured end to end at 78 s locally on
+    # 2026-08-24 (82 s when the tool landed in `3b191d5`; same order, a different laptop minute). A ceiling this far above that is not a performance budget — it is so that a run
+    # wedged on a checkout or on `git worktree add` dies while somebody still associates it with
+    # last night, instead of holding a runner for the default six hours.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # `fetch-depth: 0` is load-bearing, and only here. `check_corpus_delta.py` runs
+      # `git worktree add --detach <baseline sha>` inside this checkout to read the base tree, and a
+      # shallow clone does not have that commit — the tool would exit 2 with "does not resolve to a
+      # commit in ...", which is honest but is not a gate. The engine and dataset checkouts need no
+      # history and keep the default depth.
+      - uses: actions/checkout@v4
+        with:
+          repository: Minhao-Zhang/BIRD-corpus
+          path: BIRD-corpus
+          fetch-depth: 0
+
+      # **The repository is named `BIRD-Obfuscation`; the directory is `BIRD-Data-Obfuscation`.**
+      # That is not a typo to tidy up: `BIRD-Data-Obfuscation` is the name the tools' defaults, the
+      # docs and every local checkout use, so the directory keeps it and `repository:` names what
+      # GitHub actually hosts. The path is passed explicitly below, so neither name is inferred —
+      # and if either side is renamed, the manifests go missing and `--every-rule-must-run` turns
+      # that into exit 2 rather than three rules quietly not running.
+      - uses: actions/checkout@v4
+        with:
+          repository: Minhao-Zhang/BIRD-Obfuscation
+          path: BIRD-Data-Obfuscation
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      # The same line as the `test` job, deliberately, even though this job needs nothing the extra
+      # adds: no conformance rule imports `model/bedrock_embedder.py` or the proxy gateway's boto3
+      # use. Two jobs installing different dependency sets is a second environment nobody tests,
+      # and the trimmed-install idea has a measured cost already — a three-package install died at
+      # V16's `governed_bi.serve.context` import, because `serve/__init__.py` pulls langgraph
+      # (ADR 0016 §Rejected alternatives 5). One wheel is cheaper than a way for this job to fail
+      # differently from the one above it.
+      - name: Sync (frozen)
+        run: uv sync --frozen --extra bedrock
+
+      # `tools/corpus_baseline.py` prints one sha and nothing else, which is why the baseline is
+      # substituted in a shell rather than read with a `sys.path.insert(0, 'tools')` one-liner like
+      # the parcel report above: `tools/` is not a package, and importing it here to read a single
+      # constant would put four lines of Python between the reader and the ref. `run:` uses
+      # `bash -e`, so a baseline module that fails to run aborts the step instead of handing
+      # `--base ""` to the tool.
+      #
+      # Exit codes, from `check_corpus_delta.py`'s docstring: **0** nothing was added, **1** a
+      # finding is present at head and absent at the baseline (or a baseline identity's count grew),
+      # **2** it could not run at all. 1 and 2 both fail the job and mean opposite things — 1 is a
+      # verdict about the corpus, 2 is "this checked nothing".
+      #
+      # `--every-rule-must-run` is why the checkout naming above is written out at length. V11, V12
+      # and V15 need the obfuscation manifests, and without them conformance reports them
+      # `not_evaluated` — which produces zero findings on *both* sides, an empty delta and a green
+      # build. V12 is the held-out-split leakage rule. The flag turns that into exit 2.
+      #
+      # What this cannot see: the engine getting stricter. Both sides are read with whichever engine
+      # revision this job checked out, so a new or widened rule fires at the baseline too and
+      # cancels. That is the property the git baseline was chosen for, and the cost is that this job
+      # reports corpus movement only.
+      - name: Gate — the corpus added no finding since the accepted baseline
+        run: |
+          base="$(uv run --frozen python tools/corpus_baseline.py)"
+          echo "accepted baseline: $base"
+          uv run --frozen python tools/check_corpus_delta.py \
+            --corpus-dir "$GITHUB_WORKSPACE/BIRD-corpus" \
+            --dataset-dir "$GITHUB_WORKSPACE/BIRD-Data-Obfuscation/eval_dataset" \
+            --base "$base" \
+            --every-rule-must-run
+
+      # `tools/check_ratchet.py` is deliberately NOT a second step here, and it has the corpus it
+      # needs right there. Its policy is that a *closure* fails too, until the pin file
+      # `.conformance/bird-corpus-pins.txt` is rewritten in the same commit — so wiring it up would
+      # red this job the first time anybody fixes a metric. It stays a manual instrument, declared
+      # as one in `tests/conformance/test_the_lint_gates_fire_on_a_synthetic_violation.py`. The
+      # consequence is real and worth naming: the pin file has no automated reader, so a closure
+      # makes it stale with nothing noticing.
 
   # Mutation testing. **Nightly, and deliberately not on a push.** `tools/mutate.py`'s own
   # docstring gives the reason: it runs a pytest selection per declared mutation, so it is slow,

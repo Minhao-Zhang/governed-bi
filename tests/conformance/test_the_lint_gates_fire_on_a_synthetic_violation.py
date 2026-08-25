@@ -24,8 +24,36 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+CI = ROOT / ".github" / "workflows" / "ci.yml"
+
+
+def _ci_run_commands() -> str:
+    """Every ``run:`` script in ``.github/workflows/ci.yml``, concatenated.
+
+    **Not the file's raw text**, which is what the closure check below read until 2026-08-24, and
+    the difference is a hole rather than a nicety. That file names ``tools/check_train_only.py`` in
+    a comment explaining why it is *absent*, so a substring search over the whole file counted it
+    as running — a gate whose only appearance is "deliberately not here" read as CI-enforced.
+    Nothing failed, because that entry is on the ``manual`` list as well, so the check was passing
+    for the wrong reason; the same comment written about a gate that was *not* on the list would
+    have passed for no reason at all. It also blocked the honest fix for this commit's change:
+    ``ci.yml``'s new corpus job discusses ``check_ratchet.py`` and ``check_corpus_conformance.py``
+    in prose, and under a raw-text search that alone would have promoted both into CI.
+
+    Reading the parsed ``run:`` scripts means a gate counts as CI only when a step executes it,
+    which is what lets the two lists be asserted as a *partition* instead of two lists free to
+    overlap.
+    """
+    document = yaml.safe_load(CI.read_text(encoding="utf-8"))
+    return "\n".join(
+        str(step["run"])
+        for job in document["jobs"].values()
+        for step in job.get("steps", [])
+        if "run" in step
+    )
 
 # ── the lint gates must run, and must fail on a violation ─────────────────────
 
@@ -61,7 +89,7 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
 
     ADR 0005 §6 calls these CI-enforced. A gate nobody runs is a preference.
     """
-    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    ci = _ci_run_commands()
     gates = sorted(p.name for p in (ROOT / "tools").glob("check_*.py"))
     #: Gates that cannot run in CI, each with the precondition that stops them. Declared here
     #: so "not in CI" is a decision with a reason rather than an omission.
@@ -84,22 +112,6 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
         "check_train_only.py": (
             "needs a corpus tree (untracked), the held-out question file (a separate "
             "repository) and a third corpus certified train-only"
-        ),
-        "check_corpus_delta.py": (
-            "the corpus repository's gate, not this one's: it needs that tree, its git history "
-            "for a base revision, and BIRD-Data-Obfuscation -- all siblings, all absent here. It "
-            "runs in `.github/workflows/conformance.yml` **in BIRD-corpus**, on every push there. "
-            "That workflow pins `ref: design/return-path` for now, because this file is not on "
-            "`main` yet and a job pointed at the default branch fails with `can't open file` -- "
-            "which reports a missing tool as a conformance result. The `ref:` line goes when the "
-            "branch merges. "
-            "There is deliberately no mirror-image step in this repository. The obvious one would "
-            "report, on an engine commit, whether a rule change adds findings to the corpus -- and "
-            "under a git baseline it cannot: a stricter rule fires at the base revision too, so it "
-            "produces no delta and cannot redden the corpus build. That is the property the git "
-            "baseline was chosen for, and it is also what makes the report pointless. Its "
-            "behaviour is pinned in tests/conformance/test_a_commit_does_not_add_a_finding.py, "
-            "which does run in CI"
         ),
         "check_corpus_conformance.py": (
             "needs the corpus repository and BIRD-Data-Obfuscation, both siblings of this "
@@ -129,6 +141,17 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
     )
     stale = sorted(set(manual) - set(gates))
     assert not stale, f"{stale} are declared manual and no longer exist"
+
+    # A partition, not two lists. `check_corpus_delta.py` sat on the `manual` list while it was
+    # the corpus repository's gate; it is now a CI step here (the nightly `corpus` job), and
+    # leaving the entry behind would have left a reason for its absence beside the step that runs
+    # it -- the exact "declared and enforced disagree" shape the whole file is about. Assertable
+    # only because `ci` above reads `run:` scripts rather than the file's prose.
+    both = sorted(g for g in gates if g in ci and g in manual)
+    assert not both, (
+        f"{both} run in CI *and* carry a manual declaration saying what stops them. One of the "
+        "two is wrong: delete the entry, or delete the step."
+    )
 
 
 #: What ``tools/check_declared_is_consumed.py`` finds on this tree, with whose decision each
