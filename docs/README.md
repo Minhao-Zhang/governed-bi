@@ -17,7 +17,7 @@ SQLite is the offline test/CI substrate.
 7. [Glossary](glossary.md) — canonical terms.
 8. [Open work](open-work.md) — what is unfinished, and the evidence for each.
 9. [Return path](return-path.md) — how reader and engineer feedback becomes a corpus change
-   ([ADR 0015](adr/0015-the-return-path.md), **steps 0–6 built** on `design/return-path`; the
+   ([ADR 0015](adr/0015-the-return-path.md), **steps 0–6 built and on `main`**; the
    agentic pipeline, T4/T5, the categorised capture surface and `/reports` are not). Both pages open with a note on
    where the design and what shipped differ, and the evidence is in
    [open work](open-work.md) §3.10a–3.10c.
@@ -63,7 +63,7 @@ build in the present tense after that build was deleted.
 | [0013](adr/0013-the-declared-abstention-policy.md) | The declared abstention policy |
 | [0014](adr/0014-one-conversation-store.md) | One conversation store, on a durable LangGraph checkpointer — **supersedes 0004 §5** |
 | [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **Accepted; steps 0–6 built** (the agentic pipeline, T4/T5, the categorised capture surface and `/reports` are not; a minimal note control does ship) |
-| [0016](adr/0016-gating-the-corpus-repository.md) | Gating the served corpus: "did the corpus add a finding since somebody last looked?" — **Accepted; never run** (a nightly job **here**, not in the corpus: the rules are statements about this engine, so the consumer runs the check. Baseline is a corpus SHA in `tools/corpus_baseline.py`; bumping it is the acknowledgement. Answers 0015's open "who owns the corpus repository's CI" — nobody, by design) |
+| [0016](adr/0016-gating-the-corpus-repository.md) | Gating the served corpus: "did the corpus add a finding since somebody last looked?" — **Accepted; the nightly is now on `main`** (a job **here**, not in the corpus: the rules are statements about this engine, so the consumer runs the check. `ci.yml`'s `corpus` job, `schedule` plus `workflow_dispatch`. Baseline is a corpus SHA in `tools/corpus_baseline.py`; bumping it is the acknowledgement. Answers 0015's open "who owns the corpus repository's CI" — nobody, by design. What is still open is that the baseline equals the corpus tip, so the first green run proves nothing: [open work](open-work.md) §3.10e) |
 
 ## Measurement findings
 

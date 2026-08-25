@@ -21,7 +21,18 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 
-import check_corpus_conformance as cc
+# Two imports because there are two things under test: the CLI adapter, for `main`'s report and
+# exit codes, and the library, for the rules and the dispatch they are asked through.
+import check_corpus_conformance as cli  # noqa: E402 - after the path insert, by design
+
+from governed_bi import conform as cc  # noqa: E402
+from governed_bi.conform.check import WHOLE_TREE_CHECKS  # noqa: E402
+from governed_bi.conform.rules_metric_and_content import (  # noqa: E402
+    check_excluded_not_named,
+    check_guard_rules,
+    check_metric_bindings,
+    check_unique_ids,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFORMANCE = ROOT / "tools" / "check_corpus_conformance.py"
@@ -82,7 +93,7 @@ def _join(left: str, right: str) -> Asset:
 
 
 def test_v17b_fires_on_a_column_that_is_on_no_table() -> None:
-    findings = cc.check_metric_bindings(
+    findings = check_metric_bindings(
         [_table("addr.zip_data", "zip_code"), _metric("addr.zip_data", "COUNT(grade_points)")]
     )
     assert findings, "an identifier on no table in the corpus must fire"
@@ -93,7 +104,7 @@ def test_v17b_fires_on_a_column_that_is_on_no_table() -> None:
 def test_v17b_fires_on_a_column_that_needs_an_undeclared_join() -> None:
     """The half that makes this a rule and not a lint: an expression reading another table's
     column is a query with an undeclared join in it, and the engine cannot write that join."""
-    findings = cc.check_metric_bindings(
+    findings = check_metric_bindings(
         [
             _table("cs.registration", "sid"),
             _table("cs.course", "credit"),
@@ -106,7 +117,7 @@ def test_v17b_fires_on_a_column_that_needs_an_undeclared_join() -> None:
 
 def test_v17b_passes_when_the_column_is_on_the_base_table() -> None:
     assert (
-        cc.check_metric_bindings(
+        check_metric_bindings(
             [_table("addr.zip_data", "zip_code"), _metric("addr.zip_data", "COUNT(zip_code)")]
         )
         == []
@@ -117,7 +128,7 @@ def test_v17b_accepts_a_qualified_reference_through_a_declared_join() -> None:
     """The negative control that keeps the rule from being "one table only". A declared join plus
     a qualified reference is exactly the shape the engine *can* write."""
     assert (
-        cc.check_metric_bindings(
+        check_metric_bindings(
             [
                 _table("cs.registration", "sid"),
                 _table("cs.course", "credit"),
@@ -132,7 +143,7 @@ def test_v17b_accepts_a_qualified_reference_through_a_declared_join() -> None:
 def test_v17b_does_not_accept_a_bare_name_because_a_joined_table_happens_to_have_it() -> None:
     """SQL would resolve this ambiguously or not at all, so accepting it here would bless an
     expression the warehouse rejects."""
-    findings = cc.check_metric_bindings(
+    findings = check_metric_bindings(
         [
             _table("cs.registration", "sid"),
             _table("cs.course", "credit"),
@@ -149,7 +160,7 @@ def test_v17b_does_not_accept_a_bare_name_because_a_joined_table_happens_to_have
 def test_v19_fires_when_a_body_names_an_excluded_column() -> None:
     """ADR 0003's finding, verbatim: an asset naming a `governance.excluded` column in text that
     is then injected into the SQL prompt. The column is hidden and its name is not."""
-    findings = cc.check_excluded_not_named(
+    findings = check_excluded_not_named(
         [
             _table(
                 "hr.people",
@@ -176,7 +187,7 @@ def test_v19_ignores_a_summary_because_a_summary_never_reaches_the_prompt() -> N
     """**`body`, not `summary`.** `serve/context.py` reads `body`; `summary` goes to the retrieval
     index. A name in a summary is a routing signal and a name in a body is a disclosure, and a
     rule that conflated them would fire on the wrong field."""
-    findings = cc.check_excluded_not_named(
+    findings = check_excluded_not_named(
         [
             _table(
                 "hr.people",
@@ -203,7 +214,7 @@ def test_v19_has_no_population_when_nothing_is_excluded() -> None:
     legitimate asset today. That is why adding it was free, and it is worth a test because the
     argument stops holding the day an asset is excluded."""
     assert (
-        cc.check_excluded_not_named(
+        check_excluded_not_named(
             [
                 _table("hr.people", "salary"),
                 _asset(
@@ -227,7 +238,7 @@ def test_v23_fires_on_two_files_declaring_one_id() -> None:
     """The defect `corpus/store.py::write` produces on an existing id. It passes every other rule
     here, loads with zero problems, and then raises `duplicate index id` in `build_index` --
     **after** the commit. Which is why a bundle is a diff and never a file copy."""
-    findings = cc.check_unique_ids(
+    findings = check_unique_ids(
         [
             _asset("term", {"id": "t.pay", "summary": "s", "body": "b"}, "one.yaml"),
             _asset("term", {"id": "t.pay", "summary": "s2", "body": "b2"}, "two.yaml"),
@@ -239,7 +250,7 @@ def test_v23_fires_on_two_files_declaring_one_id() -> None:
 
 def test_v23_passes_on_distinct_ids() -> None:
     assert (
-        cc.check_unique_ids(
+        check_unique_ids(
             [
                 _asset("term", {"id": "t.pay", "summary": "s", "body": "b"}, "one.yaml"),
                 _asset("term", {"id": "t.bonus", "summary": "s", "body": "b"}, "two.yaml"),
@@ -252,7 +263,7 @@ def test_v23_passes_on_distinct_ids() -> None:
 def test_v23_does_not_fire_on_assets_with_no_id() -> None:
     """Inline columns carry no `id` in YAML -- the loader derives it -- so a rule that grouped on
     the empty string would report every table's columns as one giant duplicate."""
-    assert cc.check_unique_ids([_asset("column", {"physical_name": "zip_code"}, f"{i}.yaml") for i in range(3)]) == []
+    assert check_unique_ids([_asset("column", {"physical_name": "zip_code"}, f"{i}.yaml") for i in range(3)]) == []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -271,7 +282,7 @@ def test_v19_reads_a_bodyless_few_shot_summary_because_that_one_does_reach_the_p
     not live. It is pinned because the rule's stated reason was false, and a false reason is what
     stops the next reader from checking.
     """
-    findings = cc.check_excluded_not_named(
+    findings = check_excluded_not_named(
         [
             _table(
                 "hr.people",
@@ -300,7 +311,7 @@ def test_v19_still_ignores_a_summary_that_cannot_reach_the_prompt() -> None:
     A term's summary reaches the retrieval index and not the prompt, so a name in it is a routing
     signal. That was always the right call; it was the *scope* of the claim that was wrong.
     """
-    findings = cc.check_excluded_not_named(
+    findings = check_excluded_not_named(
         [
             _table(
                 "hr.people",
@@ -345,7 +356,7 @@ def test_v21_runs_the_guard_rules_it_says_it_reuses(rule_id: str, body: str) -> 
     rules, which are the whole reason a corpus body is the more dangerous channel: a question is
     one turn, and a body is every turn that retrieves it.
     """
-    findings = cc.check_guard_rules(
+    findings = check_guard_rules(
         "term", {"id": "t.x", "summary": "x: a thing.", "body": body}, "f.yaml:t.x"
     )
     assert findings, f"{rule_id} did not fire on {body!r}"
@@ -355,7 +366,7 @@ def test_v21_runs_the_guard_rules_it_says_it_reuses(rule_id: str, body: str) -> 
 def test_v21_still_skips_the_length_rule() -> None:
     """``g_length`` caps a *reader's question* and V13 already caps a body. Running it here would
     refuse a long asset for the wrong reason, and the reason is what a writer acts on."""
-    findings = cc.check_guard_rules(
+    findings = check_guard_rules(
         "term", {"id": "t.x", "summary": "x: a thing.", "body": "word " * 4000}, "f.yaml:t.x"
     )
     assert findings == [], "a long body is V13's finding, not V21's"
@@ -367,7 +378,7 @@ def test_v21_screens_a_bodyless_few_shot_summary_too() -> None:
     One definition of "model-visible" serves both rules. Two would be two answers able to disagree,
     which is the defect V21's own docstring names.
     """
-    findings = cc.check_guard_rules(
+    findings = check_guard_rules(
         "few_shot",
         {
             "id": "fs.x",
@@ -382,7 +393,7 @@ def test_v21_screens_a_bodyless_few_shot_summary_too() -> None:
 def test_v17b_resolves_a_column_declared_as_its_own_asset() -> None:
     """The column index read ``table``; the field is ``parent_table``.
 
-    ``register/assets.py:46`` declares ``parent_table`` and ``corpus/analyst.py`` writes it -- and
+    ``register/assets.py`` declares ``parent_table`` and ``corpus/analyst.py`` writes it -- and
     its docstring says the field "holds the table's **asset id**", which is exactly what
     ``columns_of`` is keyed on. So ``a.get("table")`` was always empty, the guard below it always
     failed, and the standalone-column branch contributed nothing.
@@ -392,7 +403,7 @@ def test_v17b_resolves_a_column_declared_as_its_own_asset() -> None:
     the failure is a **false positive against correct work** -- and ``../BIRD-corpus`` happens to
     carry zero standalone column assets, so nothing in the measured population could have caught it.
     """
-    findings = cc.check_metric_bindings(
+    findings = check_metric_bindings(
         [
             _table("shop.orders", "name", columns=[]),
             _asset(
@@ -426,7 +437,7 @@ def test_v17b_does_not_point_at_an_alphabetically_first_stranger() -> None:
     join could reach. A hint that names the wrong fix costs more than no hint, because the writer
     acts on it.
     """
-    findings = cc.check_metric_bindings(
+    findings = check_metric_bindings(
         [
             _table("shop.orders", "name", columns=[{"name": "order_id", "summary": "The id."}]),
             _table("aaa.unrelated", "name", columns=[{"name": "total", "summary": "A total."}]),
@@ -524,7 +535,7 @@ columns:
     for name in ("a.yaml", "b.yaml"):
         assets.extend(cc.load_assets(tmp_path / name))
 
-    findings = cc.check_unique_ids(assets)
+    findings = check_unique_ids(assets)
     assert any("shop.orders.order_id" in str(f) for f in findings), (
         f"no finding names the duplicated column id: {[str(f) for f in findings]}"
     )
@@ -547,7 +558,7 @@ columns:
 
 def _run_json(capsys: pytest.CaptureFixture[str], *argv: str) -> dict[str, Any]:
     """``--json`` output of one run. Exits 0 by contract -- it is an inventory, not a gate."""
-    assert cc.main(["--json", *argv]) == 0
+    assert cli.main(["--json", *argv]) == 0
     return json.loads(capsys.readouterr().out)
 
 
@@ -808,5 +819,5 @@ def test_the_whole_tree_dispatch_is_the_declaration() -> None:
     V15 is the one entry outside the mapping, because it takes three manifests rather than
     ``assets`` alone, and it is asserted here so that exception stays a single named one.
     """
-    assert set(cc.WHOLE_TREE_ONLY) == set(cc.WHOLE_TREE_CHECKS) | {"V15"}
+    assert set(cc.WHOLE_TREE_ONLY) == set(WHOLE_TREE_CHECKS) | {"V15"}
     assert set(cc.WHOLE_TREE_ONLY) == {"V9", "V15", "V17b", "V19", "V23"}

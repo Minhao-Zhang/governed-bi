@@ -111,7 +111,8 @@ def pipeline_error_attempt(path: ExecutorPath, detail: str) -> AttemptRecord:
     presented as a clean, quotable arm.
 
     That the escape is reachable is deliberate on the governance side and correct there:
-    ``check()`` normalises its key arguments **outside** its own ``try`` (``check.py:89-100``) so
+    ``check()`` normalises its key arguments (the ``normalise_column_key`` calls over
+    ``excluded_columns`` / ``suspect_columns`` / ``allowed_columns``) **outside** its own ``try`` so
     that a malformed key raises instead of producing a blocked verdict, because "a security
     parameter was not wired up" is never a statement's fault. The defect was on the *recording*
     side — the raise had nowhere to land.

@@ -1,6 +1,6 @@
 """The mechanical floor for a summary rewrite: move `body`'s domain vocabulary into `summary`.
 
-Only ``summary`` is indexed (ADR 0005 I1, ``retrieve/index.py:41``) and the gold layer's domain
+Only ``summary`` is indexed (ADR 0005 I1, ``retrieve/index.IndexEntry``) and the gold layer's domain
 prose all sits in ``body``, so the indexed text is an identifier list with a function-word ratio
 of 0.00. This drops stopwords and duplicates from ``body`` and puts the leading content words in
 front of that list. No model call, no judgement.

@@ -53,6 +53,12 @@ talks to.
   stage: the governance ledger, the licensed set, and which required register
   fields are absent.
 - **Pending** — clarifications the engine asked that nobody answered.
+- **Review** — the data steward's half of the return path (ADR 0015): the queue of observations
+  readers filed against served turns, weakly clustered; one row's evidence bundle beside the
+  statement and the reference answer; and a corpus edit drafted against `{summary, body}` only,
+  checked by the same validator the loader uses, then handed off as a diff. No string on this
+  surface says a landed change fixed anything — `ui/lib/review-copy.ts` holds every one of them in
+  a single module so that discipline is readable as a set.
 - **Settings** — client display preferences.
 
 Governance outcome is the one "loud" color channel (green/amber/red = what the
@@ -64,8 +70,11 @@ always means *an observation about this turn*.
 The UI is a **pure client** of the engine's **LangGraph Server** (see
 [ADR 0001](../docs/adr/0001-langgraph-server-chat-runtime.md)):
 chat streams over the LangChain **`useStream`** protocol; schema, corpus and the audit
-surface are **custom REST routes** on that same server (fourteen reads and one write,
-inventoried in [`docs/openapi.json`](../docs/openapi.json)); the UI adapts its affordances to
+surface are **custom REST routes** on that same server (seventeen reads and five writes,
+inventoried in [`docs/openapi.json`](../docs/openapi.json) — three of the writes and one of the
+reads are the steward's four verbs, unmounted unless `GOVERNED_BI_FEEDBACK_ADMIN` is set, and 404
+rather than 403 when they are, because a 403 confirms the route exists); the UI adapts its
+affordances to
 `GET /capabilities`. It owns no database — conversation state is the runtime's
 thread state. When no backend URL is configured, all reads resolve to mock
 fixtures and chat uses a synthetic transport, so the app is fully explorable

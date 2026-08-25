@@ -16,8 +16,8 @@
  *
  * **What a green result licenses is on the panel, permanently.** The tables the reference answer
  * reads are reachable again — not that the answer is right. On turns where every gold table *was*
- * licensed, measured accuracy is 0.7555, so about one in four complaints closed on a green check
- * would still come back wrong.
+ * licensed and the gold names at least one table, measured accuracy is 0.7548 (n=1,150), so about
+ * one in four complaints closed on a green check would still come back wrong.
  *
  * The three cases where the check does not apply are named rather than hidden, because a panel
  * offering a command that cannot answer is how somebody concludes the tool is broken.

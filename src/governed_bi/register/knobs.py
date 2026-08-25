@@ -369,7 +369,7 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "than about 3pp is demonstrable at this sample size"),
 
     _k("abstention_policy_enabled", False, Role.comparability,
-       "the declared abstention policy (serve/nodes/abstain.py, ADR 0013), OFF. It decides "
+       "the declared abstention policy (serve/abstention.py, ADR 0013), OFF. It decides "
        "before the agent spends its run_query attempts whether this turn should be answered at "
        "all, and writes a closed-vocabulary reason either way. Comparability and not "
        "operational because it changes which turns are delivered, which is the coverage half "

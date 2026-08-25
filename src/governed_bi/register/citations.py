@@ -483,6 +483,26 @@ RETIRED_CLAIMS: tuple[RetiredClaim, ...] = (
             "belongs in the artifact name is a comparability rule; it needs no gap.",
         replaced_by="nothing yet",
     ),
+    RetiredClaim(
+        # The populations are in the pattern, not only the accuracies: the 2026-08-24 defect was
+        # found in two `ui/` comments that carried the old *figure*, but a doc updating one number
+        # and not its `n=` is the same staleness wearing a fresh-looking accuracy.
+        pattern=r"0\.7555|0\.7131|n=1,145|n=1,272",
+        observed="on turns where every gold table was licensed the measured accuracy is 0.7555",
+        why="the retrieval-covered accuracy pair, superseded 2026-08-24 when `table_coverage` "
+            "stopped comparing a gold statement's physical name against `licensed`, which holds "
+            "asset ids -- so the one table of 656 whose id is not its own name read as unlicensed "
+            "on all five questions that had licensed it. Same arm, same rows, fixed instrument. "
+            "Registered because it is this repository's best-documented case of a figure with "
+            "more than one home: `open-work.md` recorded 'all ten sites are updated' and two "
+            "were not, both of them comments in `ui/`, one sitting 196 lines above a string "
+            "carrying the new value. `ui/scripts/check-review-copy.ts` gates the client and "
+            "`tests/conformance/test_the_prose_states_the_accuracy_pair_the_claim_carries.py` "
+            "gates `docs/`; this entry is what makes the *stale* spelling fail anywhere in the "
+            "tree, which is the half neither of those covers.",
+        replaced_by="0.7548 (n=1,150) / 0.7126 (n=1,277), in "
+                    "`tools/reproduce_observation.py::CLAIM`",
+    ),
 )
 
 

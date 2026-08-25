@@ -206,6 +206,17 @@ jobs:
       - name: Observation projections — reader mode parses too
         run: npm run check:observation-projections
 
+      # Three things: every wire enum member has a reader-facing sentence, no string claims
+      # `automatically` or `will be fixed` outside a negation, and no accuracy figure appears on
+      # the review surfaces that `tools/reproduce_observation.py::CLAIM` does not carry. That last
+      # one is why this is a gate and not a review habit: the pair moved 0.7555 -> 0.7548 on
+      # 2026-08-24, `docs/open-work.md` recorded "all ten sites are updated", and the two that were
+      # missed were both here — one of them a module header sitting 196 lines above a string with
+      # the new figure. Review passed it twice. Hermetic: it imports the copy module and reads two
+      # repository files as text, so it needs no engine.
+      - name: Review copy — one figure, one source, and every state has a sentence
+        run: npm run check:review-copy
+
       # `npm run check:api` and `npm run check:stream-messages` are deliberately NOT here.
       # `check:api` needs a live engine and a loaded corpus (ADR 0009 says so in the section that
       # introduces it); `check:stream-messages` is pure and could run, but it is a red/green

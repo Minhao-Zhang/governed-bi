@@ -41,6 +41,14 @@ LAYERS: tuple[tuple[str, ...], ...] = (
     ("datasource",),
     ("model",),
     ("serve",),
+    # Corpus conformance (ADR 0016). Directly above `serve` because `serve` is the latest layer any
+    # of its rules reaches -- V16 measures a table with `serve/context.py`'s own renderer -- and no
+    # lower, because the set would then have to split across `corpus`, `govern` and `serve`, which
+    # is three rule tables and three reports for one question the ratchet keys as one. Above `serve`
+    # and not after `eval` for the reason `feedback` is where it is: the position claims only what
+    # the rules import, and `eval` reporting a corpus's conformance beside a run's numbers is the
+    # next thing anyone will want.
+    ("conform",),
     ("eval",),
     ("api",),
 )

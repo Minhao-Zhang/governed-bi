@@ -5,8 +5,9 @@ without importing an adapter. Single-adapter seams are rejected (no ChatModel /
 Tracer / Grader / Redactor / Checkpointer / Clock ports — adapters or values
 elsewhere satisfy the need).
 
-Every ``Adapters:`` line below must name a file that exists; where a port has one adapter
-it says so rather than claiming two.
+Every ``Adapters:`` line below must name files that exist, and every port left here has at
+least two of them. One adapter is a seam nothing can move, so the adapter list doubles as the
+evidence that each port earns its declaration.
 
 **"Zero implementations" was the rule until ADR 0012 and is now narrower: no port is
 implemented here, and the only classes with bodies are the frozen values a port's own
@@ -21,9 +22,10 @@ where the identifier rules already are.
 from __future__ import annotations
 
 import hashlib
+from abc import abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Any, Protocol, Sequence, runtime_checkable
 
 __all__ = [
     "Vector",
@@ -32,7 +34,6 @@ __all__ = [
     "TableInfo",
     "Embedder",
     "Connector",
-    "CorpusStore",
     "Principal",
     "Reach",
     "PredicateEnforcement",
@@ -73,7 +74,21 @@ class Embedder(Protocol):
 
     Adapters: ``model/openai_embedder.py``, ``model/bedrock_embedder.py``,
     ``model/proxy_embedder.py`` (the three ``model/provider.py::embedder`` builds) and
-    ``model/deterministic_embedder.py``. All four subclass ``model/embedder.py::BaseEmbedder``.
+    ``model/deterministic_embedder.py``. All four subclass ``model/embedder.py::BaseEmbedder``,
+    which subclasses **this**.
+
+    **This is the seam's only declaration.** ``BaseEmbedder`` used to restate ``model``,
+    ``dimensions`` and ``embed`` as a second set of abstract members, so "what must an embedder
+    do" had two answers and a change had two places to land. It now inherits them, which is why
+    the three below are ``@abstractmethod`` where no other port here is: ``Protocol`` members
+    with a ``...`` body are inherited as *concrete* methods returning ``None``, so without the
+    decorator an adapter that forgot ``model`` would construct and report ``None`` as its cache
+    key. Nothing is implemented here; explicit inheritance is legal because ``model`` is layer
+    11 and may import layer 3, never the reverse — which is also why ``retrieve/`` and
+    ``serve/`` annotate against this name and not against ``BaseEmbedder``.
+
+    Still a Protocol, and still ``runtime_checkable``: test doubles satisfy it structurally
+    without importing ``model/``, and ``isinstance`` holds for them.
 
     * ``embed`` returns one vector per input, in order, each of length ``dimensions``.
     * Callers must not pass empty/whitespace-only strings (adapters disagree on them).
@@ -82,17 +97,24 @@ class Embedder(Protocol):
     """
 
     @property
+    @abstractmethod
     def model(self) -> str:
         """Provider-qualified model identity. Part of every cache key."""
         ...
 
     @property
+    @abstractmethod
     def dimensions(self) -> int:
         """Vector width. Part of every cache key."""
         ...
 
+    @abstractmethod
     def embed(self, texts: Sequence[str]) -> list[Vector]:
-        """Embed ``texts``, returning one vector each, in order."""
+        """Embed ``texts``, returning one vector each, in order.
+
+        ``model/embedder.py::BaseEmbedder`` overrides this with the batching, blank-input and
+        width checks every adapter shares, leaving each adapter only ``_embed_batch``.
+        """
         ...
 
 
@@ -140,33 +162,6 @@ class Connector(Protocol):
     # reaches the database without a ledger row. ``serve/fetch`` builds that statement as a
     # syntax tree and runs it through ``prepare()``. One path to the database, and it is
     # ``execute``.
-
-
-@runtime_checkable
-class CorpusStore(Protocol):
-    """Where a corpus lives.
-
-    Adapter: ``corpus/store.py`` — one, breaking this module's own no-single-adapter rule.
-    It stays because the protocol is what keeps ``eval/`` from importing the only reader of
-    the corpus tree.
-    """
-
-    def load(self, *, schemas: Sequence[str]) -> tuple[Sequence[Mapping[str, Any]], Sequence[str]]:
-        """Load raw asset mappings for ``schemas``. Returns ``(assets, problems)``."""
-        ...
-
-    def write(self, asset: Mapping[str, Any]) -> None:
-        """Persist one asset. Path components validated before any filesystem access."""
-        ...
-
-    def content_hash(self, *, schemas: Sequence[str]) -> str:
-        """Digest of the stored content for ``schemas``.
-
-        Paths relative and sorted, so a staging directory cannot leak into the digest. A file
-        that exists but cannot be read is named in the digest **without its bytes**: skipping
-        it silently made an unreadable corpus hash identically to one never written.
-        """
-        ...
 
 
 class Reach(str, Enum):
@@ -353,6 +348,19 @@ class AccessPolicy(Protocol):
         ...
 
 
+# There was a ``CorpusStore`` port, deleted 2026-08-25. Its stated reason was that the Protocol
+# "keeps ``eval/`` from importing the only reader of the corpus tree", and nothing ever typed
+# against it: ``corpus/store.py`` exposes ``load`` and ``write`` as free functions that
+# ``serve/session.py`` imports by name, and the digest was never in ``store.py`` at all — it is
+# ``corpus/hash.py::corpus_content_hash``, which ``eval/feedback_import.py`` also imports
+# directly, so the port's own signature had already drifted from the code it described.
+# One adapter and no reader is a declaration, not a seam, which is the defect
+# ``docs/open-work.md`` §3.10 names. Its three method docstrings were the only thing it carried,
+# and each rule was already stated on the function that enforces it — error isolation on
+# ``store.load``, path validation as a security control on ``store.write``, relative sorted paths
+# and named-but-unread files on ``corpus_content_hash`` — so the port was a second copy of prose
+# that would have drifted from the code the day one of them changed.
+#
 # There is no ``Sink`` port and no ``record/`` package. Records are written by
 # ``api/graph_app.record_node`` onto ``ServeState.turns``, verbatim and unredacted, and the
 # checkpointer persists it.

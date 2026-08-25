@@ -215,8 +215,8 @@ class TurnEntry(TypedDict, total=False):
     either way.
 
     Three fields are ``| None`` because ``record_node`` really writes ``None`` into them
-    (``api/graph_app.py:425-431``) — a refusal has no prose, and a turn derived from a non-text
-    message has no question. Declaring them ``str`` would describe a shape the only writer
+    (the ``TurnEntry`` literal in ``api/graph_app.record_node``) — a refusal has no prose, and a
+    turn derived from a non-text message has no question. Declaring them ``str`` would describe a shape the only writer
     violates, and the readers (``api/thread_turns.summarise_turn``, the audit routes) already
     treat null as "not present".
     """

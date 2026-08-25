@@ -146,7 +146,7 @@ class _Probe:
 
 
 def _entry(asset: Any, schema: str) -> Any:
-    """One asset as an ``IndexEntry``, the mapping ``tests/serve/conftest.py:27`` is the only working
+    """One asset as an ``IndexEntry``, the mapping ``tests/serve/conftest.build_two_schema_corpus`` is the only working
     example of. The tag comes from the declared ``TagRule`` table, not a second local rule."""
     from governed_bi.retrieve.index import IndexEntry, schema_tag_for
 

@@ -1,14 +1,11 @@
-"""The conformance rules added on 2026-08-23, split out of ``check_corpus_conformance.py``.
+"""The conformance rules added on 2026-08-23, and the reason they are not in ``rules_asset.py``.
 
-Imported back into that module, which owns the ``RULES`` table and the report; these are the
-predicates. The split is along a real line rather than at a line number: every rule here reuses
-machinery from **elsewhere in the tree** -- ``sqlglot`` and ``govern/functions.py`` for the metric
-rules, ``govern/guard.py`` for V21 -- where every older rule is a predicate over one YAML mapping.
-
-**Not named ``check_*.py``.** ``tests/conformance/test_the_lint_gates_fire_on_a_synthetic_violation
-.py`` globs ``tools/check_*.py`` as the inventory of gates, and a module of predicates with no
-``main`` is not a gate. A file that looked like one would have to be declared manual with a reason
-that does not exist.
+The split is along a real line rather than at a line number: every rule here reuses machinery from
+**elsewhere in the engine** -- ``sqlglot`` and ``govern/functions.py`` for the metric rules,
+``govern/guard.py`` for V21 -- where every rule in ``rules_asset.py`` is a predicate over one YAML
+mapping. Reuse, not restatement, is the argument ADR 0016 makes for the checker living with the
+engine at all: a corpus expression that passes here and fails in ``govern/`` is a metric that
+fails at serve time, and two allowlists is how that happens.
 
 | rule | what it asks | live findings on ../BIRD-corpus, measured 2026-08-23 |
 |---|---|---|
@@ -39,39 +36,10 @@ from typing import Any
 
 from governed_bi.register.assets import AssetType
 
+from .findings import Finding, _text, where_of
 
-class Finding(str):
-    """One violation line. A ``str`` so the report can just sort them."""
-
-
-def _text(value: Any) -> str:
-    return value.strip() if isinstance(value, str) else ""
-
-
-def _where(kind: str, asset: dict[str, Any], path: Path) -> str:
-    """``file:asset`` for a finding, and it must name an *asset* and never a kind.
-
-    Inline columns carry no ``id`` in YAML -- the loader derives it -- so the label falls back to
-    ``physical_name`` and then to ``name``. Both fallbacks are there because the alternative was
-    measured: on a two-column table with neither field set, five findings collapsed to three
-    identities, both columns reporting as ``t.yaml:column``.
-
-    That costs more than a vague report. ``check_ratchet.py`` pins ``(rule, where)``, so two columns
-    sharing one identity means fixing one while breaking the other moves no line in the pin file and
-    the ratchet reports a hold on a tree that changed. A column has a stable name; there is no
-    reason to key on its kind.
-    """
-    label = asset.get("id") or _column_label(kind, asset) or kind
-    return f"{path.name}:{label}"
-
-
-def _column_label(kind: str, asset: dict[str, Any]) -> str:
-    if kind != "column":
-        return ""
-    return _text(asset.get("physical_name")) or _text(asset.get("name"))
-
-
-
+#: Dialect for V17a. The same one ``govern/`` parses generated SQL at -- restated nowhere, because
+#: a metric expression that parses here and not there is a metric that fails at serve time.
 SQL_DIALECT = "postgres"
 
 
@@ -223,7 +191,7 @@ def check_metric_bindings(assets: list[tuple[str, dict[str, Any], Path]]) -> lis
     for kind, a, path in assets:
         if kind != AssetType.metric.value:
             continue
-        where = _where(kind, a, path)
+        where = where_of(kind, a, path)
         base = _text(a.get("base_table"))
         expression = _text(a.get("expression"))
         if not base or not expression:
@@ -333,7 +301,7 @@ def check_excluded_not_named(assets: list[tuple[str, dict[str, Any], Path]]) -> 
         body = model_visible_text(kind, a)
         if not body:
             continue
-        where = _where(kind, a, path)
+        where = where_of(kind, a, path)
         for name in sorted(excluded):
             if re.search(rf"\b{re.escape(name)}\b", body):
                 out.append(

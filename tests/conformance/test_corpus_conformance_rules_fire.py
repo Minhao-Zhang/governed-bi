@@ -1,4 +1,4 @@
-"""Every rule in ``tools/check_corpus_conformance.py`` must actually fire.
+"""Every rule in ``governed_bi.conform`` must actually fire.
 
 A gate that matches nothing reports a clean corpus. V11 shipped that way for twenty minutes:
 it keyed on ``(schema, physical_name)`` while an inline column carries no ``schema`` of its
@@ -13,15 +13,23 @@ real temporary manifests rather than being skipped.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-
-import check_corpus_conformance as cc  # noqa: E402
+# The rules, as the library. This file reached them with a `sys.path.insert` into `tools/` until
+# 2026-08-25, which is what a test has to do when the rules live in a script.
+from governed_bi import conform as cc
+from governed_bi.conform.rules_asset import AUTHORED_ONLY, BODY_CAP, check_local
+from governed_bi.conform.rules_tree import (
+    check_delivery_closure,
+    check_loadable,
+    check_references,
+    check_split_leak,
+    check_suspect_set,
+    check_suspect_summaries,
+)
 
 CLEAN_TABLE = {
     "asset_type": "table",
@@ -42,7 +50,7 @@ CLEAN_TABLE = {
 
 
 def _findings(kind: str, asset: dict) -> dict[str, list]:
-    return cc.check_local(kind, asset, "t.yaml:x")
+    return check_local(kind, asset, "t.yaml:x")
 
 
 def _fires(rule: str, kind: str, asset: dict) -> bool:
@@ -166,12 +174,12 @@ def test_v9_catches_a_reference_to_nothing(tmp_path: Path) -> None:
         ("table", CLEAN_TABLE, tmp_path / "t.yaml"),
         ("term", {"id": "term_x", "binding": {"target_id": "addr.zip_data.nope"}}, tmp_path / "x.yaml"),
     ]
-    bad = cc.check_references(assets)
+    bad = check_references(assets)
     assert bad and "nope" in bad[0]
 
     ok = [("table", CLEAN_TABLE, tmp_path / "t.yaml"),
           ("term", {"id": "term_y", "binding": {"target_id": "addr.zip_data.zip_code"}}, tmp_path / "y.yaml")]
-    assert cc.check_references(ok) == []
+    assert check_references(ok) == []
 
 
 def test_v9_spells_a_column_id_the_way_the_loader_does(tmp_path: Path) -> None:
@@ -201,7 +209,7 @@ def test_v9_spells_a_column_id_the_way_the_loader_does(tmp_path: Path) -> None:
         ("table", awkward, tmp_path / "t.yaml"),
         ("term", {"id": "term_c", "binding": {"target_id": real_id}}, tmp_path / "c.yaml"),
     ]
-    assert cc.check_references(assets) == [], (
+    assert check_references(assets) == [], (
         "a term bound to the id the loader actually mints must resolve"
     )
 
@@ -224,14 +232,14 @@ def test_the_few_shot_exemption_is_enforced_by_authored_only(tmp_path: Path) -> 
         "summary": "How many customers bought 'The Trap' (column title)?",
         "body": "Question and SQL.",
     }
-    assert {r for r in cc.check_local("few_shot", harvested, "f.yaml:fs") if r in cc.AUTHORED_ONLY} == set(), (
+    assert {r for r in check_local("few_shot", harvested, "f.yaml:fs") if r in AUTHORED_ONLY} == set(), (
         "every rule in AUTHORED_ONLY must be exempt for a few_shot, including both halves of V5"
     )
 
     # The same text authored on a column is still policed, so the exemption is about the type.
     authored = {**harvested, "asset_type": "column", "physical_name": "title"}
-    fired = set(cc.check_local("column", authored, "c.yaml:title"))
-    assert cc.AUTHORED_ONLY & fired, f"authored prose must still be policed, got {fired}"
+    fired = set(check_local("column", authored, "c.yaml:title"))
+    assert AUTHORED_ONLY & fired, f"authored prose must still be policed, got {fired}"
 
 
 def test_v11_needs_the_column_schema_and_catches_the_named_resemblance(tmp_path: Path) -> None:
@@ -255,11 +263,11 @@ def test_v11_needs_the_column_schema_and_catches_the_named_resemblance(tmp_path:
     loaded = cc.load_assets(path)
     assert any(k == "column" and a.get("physical_name") == "postal_code" and a.get("schema") == "addr"
                for k, a, _ in loaded), "load_assets must copy the table's schema onto inline columns"
-    assert cc.check_suspect_summaries(loaded, manifest)
+    assert check_suspect_summaries(loaded, manifest)
 
     quiet = {**suspect, "summary": "postal_code, a numeric column on the zip_data table."}
     path.write_text(yaml.safe_dump({**CLEAN_TABLE, "columns": [quiet]}, allow_unicode=True), encoding="utf-8")
-    assert cc.check_suspect_summaries(cc.load_assets(path), manifest) == []
+    assert check_suspect_summaries(cc.load_assets(path), manifest) == []
 
 
 def test_v12_catches_a_quoted_held_out_question(tmp_path: Path) -> None:
@@ -268,8 +276,8 @@ def test_v12_catches_a_quoted_held_out_question(tmp_path: Path) -> None:
     split.write_text(json.dumps({"question": question}) + "\n", encoding="utf-8")
 
     leaked = [("table", {"id": "t", "summary": "s", "body": f"For example: {question}"}, tmp_path / "t.yaml")]
-    assert cc.check_split_leak(leaked, split)
-    assert cc.check_split_leak([("table", CLEAN_TABLE, tmp_path / "t.yaml")], split) == []
+    assert check_split_leak(leaked, split)
+    assert check_split_leak([("table", CLEAN_TABLE, tmp_path / "t.yaml")], split) == []
 
 
 def test_v15_catches_a_real_column_marked_suspect(tmp_path: Path) -> None:
@@ -299,7 +307,7 @@ def test_v15_catches_a_real_column_marked_suspect(tmp_path: Path) -> None:
         path = tmp_path / "tbl.yaml"
         path.write_text(yaml.safe_dump({**CLEAN_TABLE, "columns": columns}, allow_unicode=True),
                         encoding="utf-8")
-        return cc.check_suspect_set(cc.load_assets(path), traps, tables, rename)
+        return check_suspect_set(cc.load_assets(path), traps, tables, rename)
 
     planted, real = "code_zone_geo", "code_zone"
     assert check([col(planted, suspect=True), col(real, suspect=False)]) == [], (
@@ -347,18 +355,18 @@ def test_v16_catches_the_cost_no_per_asset_cap_can_see(tmp_path: Path) -> None:
         return path
 
     wide = table_of(600)
-    findings = cc.check_delivery_closure([wide])
+    findings = check_delivery_closure([wide])
     assert findings, "a 600-column table renders past the cap and must be caught"
     assert "roster" in findings[0], f"the finding must say where the cost is: {findings[0]}"
 
-    assert cc.check_delivery_closure([table_of(40)]) == [], (
+    assert check_delivery_closure([table_of(40)]) == [], (
         "an ordinary table must pass, or the rule is just 'tables are too big'"
     )
 
     # The half V13 cannot answer: every asset in the oversized file is individually fine.
     loaded, _ = __import__("governed_bi.corpus.store", fromlist=["load_file"]).load_file(wide)
     worst = max(len(str(getattr(a, "body", "") or "")) for a in loaded)
-    assert worst < cc.BODY_CAP["*"], (
+    assert worst < BODY_CAP["*"], (
         f"the widest body is {worst}, so V13 sees nothing wrong and only V16 can catch this"
     )
 
@@ -377,12 +385,12 @@ def test_v14_catches_a_file_the_engine_cannot_load(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    findings = cc.check_loadable([broken])
+    findings = check_loadable([broken])
     assert findings and "introspection" in findings[0]
 
     ok = tmp_path / "ok.yaml"
     ok.write_text(yaml.safe_dump(CLEAN_TABLE, allow_unicode=True), encoding="utf-8")
-    assert cc.check_loadable([ok]) == []
+    assert check_loadable([ok]) == []
 
 
 #: Rules ``check_local`` cannot emit: four need the whole tree or an external manifest, V14 needs
@@ -409,8 +417,8 @@ def test_every_rule_is_documented_and_exercised() -> None:
     emitted: set[str] = set()
     for _, kind, asset in BROKEN:
         emitted |= set(_findings(kind, asset))
-    assert emitted <= set(cc.RULES), f"undocumented rule ids: {emitted - set(cc.RULES)}"
-    assert set(cc.RULES) - emitted == NOT_LOCAL, (
+    assert emitted <= set(cc.RULE_DESCRIPTIONS), f"undocumented rule ids: {emitted - set(cc.RULE_DESCRIPTIONS)}"
+    assert set(cc.RULE_DESCRIPTIONS) - emitted == NOT_LOCAL, (
         "a local rule has no case in BROKEN, so nothing proves it can fire: "
-        f"{set(cc.RULES) - emitted - NOT_LOCAL}"
+        f"{set(cc.RULE_DESCRIPTIONS) - emitted - NOT_LOCAL}"
     )

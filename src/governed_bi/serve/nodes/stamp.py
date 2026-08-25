@@ -1,4 +1,14 @@
-"""``stamp`` — sole writer of ``answer`` (ADR 0005 §3.1 / §4.1)."""
+"""``stamp`` — sole writer of ``answer`` (ADR 0005 §3.1 / §4.1).
+
+**Two halves, one node.** ``stamp`` *decides* what happened to the turn and *projects* the turn
+into the register's 42-field record. The decision's seven channels are declared, as
+:class:`~governed_bi.serve.outcome.OutcomeInputs`, and :func:`classify_turn` takes that view and
+never a state dict; the projection's 25 are the register's own, read by field name, and
+``serve/outcome.py`` argues why declaring them a second time here would be worse than not.
+
+So the state dict is read in exactly two places in this file: :func:`stamp` itself, at the seam,
+and :func:`_extract_factory`'s ``extract``, which the register drives by field name.
+"""
 
 from __future__ import annotations
 
@@ -14,10 +24,10 @@ from governed_bi.register.quantity import Measured
 from governed_bi.register.record import project
 from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY, Outcome, Stage, classify_outcome
 from governed_bi.serve.events import emit, rail_event_id
-from governed_bi.serve.ledger import answering_attempts, attempt_field, execution_from_attempts
-from governed_bi.serve.state import cleared
+from governed_bi.serve.ledger import answering_attempts, attempt_field
+from governed_bi.serve.outcome import OutcomeInputs, TurnOutcome, normalised
 
-__all__ = ["stamp"]
+__all__ = ["classify_turn", "stamp"]
 
 
 def _usage_for_turn(state: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -67,19 +77,6 @@ def _latency_sec(state: Mapping[str, Any]) -> float | Measured[float]:
     return max(0.0, time.time() - float(started))
 
 
-def _execution(state: Mapping[str, Any]) -> ExecutionRecord:
-    """The turn's ``ExecutionRecord``, written on every path including "no SQL".
-
-    ``terminal`` is never derived here from ``path_kind``: ``execution_from_attempts`` is the
-    one derivation and it reads the attempts, so a turn that attempted nothing says ``no_sql``
-    whether it was guard-blocked, declined or stubbed.
-    """
-    existing = state.get("execution")
-    if isinstance(existing, Mapping) and "attempts" in existing:
-        return existing  # type: ignore[return-value]
-    return execution_from_attempts(())  # type: ignore[return-value]
-
-
 def _facet_channels(state: Mapping[str, Any]) -> dict[str, Any] | None:
     """``{facet: {channel: state}}`` as the record carries it, or ``None``.
 
@@ -109,8 +106,7 @@ def _attempts(execution: Mapping[str, Any] | Any) -> list[Any]:
 
 
 def _path_signals(
-    state: Mapping[str, Any],
-    execution: Mapping[str, Any],
+    inputs: OutcomeInputs,
 ) -> tuple[str | None, str | None, str | None, str | None, bool, str | None]:
     """Return ``(refused_by, failed_stage, error_type, text, has_sql, terminal)``.
 
@@ -119,37 +115,36 @@ def _path_signals(
     observed an ending. ``None`` everywhere else, which is what keeps an unmarked or crashed turn
     classifying as ``crashed`` rather than as a turn that merely ran no statement.
 
-    ``execution`` is passed in rather than re-read from ``state``: :func:`_execution` is the one
-    place that substitutes ``execution_from_attempts(())`` for a turn nothing wrote a ledger for
-    — the ``--no-model`` stub is one — and reading ``state["execution"]`` here instead would see
-    ``None`` and report a stubbed turn as a crash.
+    Takes the projection and never a state dict, which closes a hazard this function used to
+    carry a paragraph about. ``execution`` was passed in separately precisely so that nobody
+    re-read ``state["execution"]`` here and saw the ``None`` that
+    :meth:`~governed_bi.serve.outcome.OutcomeInputs.from_state`'s substitution exists to replace
+    — the ``--no-model`` stub writes no ledger, and reading the raw channel reported it as a
+    crash. The only ledger in scope now is the substituted one, so the warning is a type.
     """
-    path_kind = state.get("path_kind")
-    failure = state.get("failure")
-    generated_sql = state.get("generated_sql")
-    has_sql = bool(generated_sql)
+    execution = inputs.execution
+    path_kind = inputs.path_kind
+    has_sql = inputs.has_sql
 
-    if path_kind == "crashed" or failure is not None:
-        stage = failure.get("stage") if isinstance(failure, Mapping) else None
-        err = failure.get("error_type") if isinstance(failure, Mapping) else None
+    if path_kind == "crashed" or inputs.failed:
         return (
             None,
-            stage if isinstance(stage, str) else None,
-            err if isinstance(err, str) else None,
+            inputs.failed_stage,
+            inputs.error_type,
             None,
             has_sql,
             None,
         )
 
     if path_kind == "refuse":
-        reason = state.get("terminal_reason")
+        reason = inputs.terminal_reason
         if not isinstance(reason, str) or not reason:
-            guard = state.get("guard") or {}
+            guard = inputs.guard or {}
             reason = "guard" if guard.get("outcome") == "blocked" else "negative_example"
         return reason, None, None, GUARD_PUBLIC_MESSAGE, False, None
 
     if path_kind == "decline":
-        reason = state.get("terminal_reason")
+        reason = inputs.terminal_reason
         if not isinstance(reason, str) or not reason:
             reason = "no_schema_matched"
         return reason, None, None, None, False, None
@@ -320,46 +315,83 @@ def _extract_factory(
     return extract
 
 
-def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Build the turn ``Answer`` and the register projection. Sole writer of ``answer``.
+def classify_turn(inputs: OutcomeInputs) -> TurnOutcome:
+    """What happened to this turn. **The whole decision, and a pure function of the view.**
 
-    ``Session.turn`` writes :data:`~governed_bi.serve.state.RESET` to ``path_kind``, ``failure``
-    and ``facets``, and the first two must be normalised here: their annotations are Unions, so
-    the channel seeds ``MISSING`` and LangGraph assigns the first write raw (see
-    :func:`~governed_bi.serve.state.cleared`). ``failure`` is the one that bites — a successful
-    turn never writes it, so the bare sentinel made ``state.get("failure") is not None`` true on
-    every successful first turn of a fresh thread. ``facets`` strips to ``dict`` and is never at
-    risk; it stays in the tuple for symmetry.
+    Nothing here reads a model, a clock, the environment, the network — or the graph's state
+    dict, since the signature changed: what it can see is exactly the seven fields of
+    :class:`~governed_bi.serve.outcome.OutcomeInputs`. So the same verdict can be recomputed from
+    an artifact's own fields, which is what makes ``outcome`` auditable rather than merely
+    recorded, and a test of a path is ``OutcomeInputs(path_kind="refuse")`` rather than a turn.
 
-    Normalised in ``stamp`` rather than in each reader because this is the only node that
-    *interprets* these channels — every other reader compares them against known values, where
-    an unrecognised string already behaves as "not terminal".
+    Three steps, and the order is the argument:
+
+    1. :func:`_path_signals` reads the route and the ledger together, so the ``outcome`` a reader
+       sees and the ``execution`` printed beside it came out of the same record.
+    2. :func:`~governed_bi.register.stages.classify_outcome` turns those signals into an
+       :class:`~governed_bi.register.stages.Outcome`.
+    3. A crash overrides whatever came back, unconditionally — including for a turn that raised
+       *after* a statement passed, which step 2 has no way to see.
     """
-    state = {**state, **{k: cleared(state.get(k)) for k in ("path_kind", "failure", "facets")}}
-    path_kind = state.get("path_kind")
-    # The ledger first, because the classification now reads it. One derivation, shared with the
-    # projection below, so the `outcome` a reader sees and the `execution` printed beside it came
-    # out of the same record.
-    execution = _execution(state)
-    refused_by, failed_stage, error_type, text, has_sql, terminal = _path_signals(state, execution)
+    refused_by, failed_stage, error_type, text, has_sql, terminal = _path_signals(inputs)
 
     outcome = classify_outcome(
         error=None,
         refused_by=refused_by,
         has_sql=has_sql,
-        clarification_requested=bool(state.get("clarification_requested")),
+        clarification_requested=inputs.clarification_requested,
         terminal=terminal,
     )
 
     # Crash with a failed stage but no refused_by: classify_outcome already returns crashed when
     # has_sql is false and no ledger verdict was handed over. Keep outcome as stamped.
-    if path_kind == "crashed" or state.get("failure") is not None:
+    if inputs.path_kind == "crashed" or inputs.failed:
         outcome = Outcome.crashed
 
     # Attempts stay; rewrite terminal so outcome=crashed never sits beside
     # execution.terminal=answered (a careless reader would treat the crash as answered).
+    execution = inputs.execution
     if outcome is Outcome.crashed and execution.get("terminal") != "crashed":
         execution = {**execution, "terminal": "crashed"}
+
+    return TurnOutcome(
+        outcome=outcome,
+        refused_by=refused_by,
+        failed_stage=failed_stage,
+        error_type=error_type,
+        text=text,
+        execution=execution,
+        rail_status=_final_status(inputs.path_kind, outcome),
+    )
+
+
+def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the turn ``Answer`` and the register projection. Sole writer of ``answer``.
+
+    **The seam.** Two lines of it: :func:`~governed_bi.serve.outcome.normalised` turns the reset
+    sentinels back into absence, and
+    :meth:`~governed_bi.serve.outcome.OutcomeInputs.from_state` projects the seven channels the
+    decision reads. :func:`classify_turn` then decides, taking the view and nothing else, and
+    everything below this point is translation: the ledger and the outcome onto the register
+    projection, the outcome and the text onto the ``answer``, the status onto the one ``final``
+    row.
+
+    The remaining state reads in this function are the two the projection does not carry, and
+    they are here because they are not decision inputs: ``result_table`` and ``answer_text`` go
+    onto the ``answer`` and never into the record (ADR 0006 §11), and ``turn_id`` — through
+    :func:`~governed_bi.serve.events.rail_event_id` — keys the ``final`` row. The register's own
+    25 reads are :func:`_extract_factory`'s, by field name, which is where they belong.
+    """
+    state = normalised(state)
+    inputs = OutcomeInputs.from_state(state)
+    verdict = classify_turn(inputs)
+    # Unpacked once, so the translation below reads the way it did when the derivation was
+    # inline. `execution` is the verdict's, not the state's: `classify_turn` rewrites `terminal`
+    # on a crash, and the record must carry the same ledger the outcome was decided from.
+    outcome = verdict.outcome
+    execution = verdict.execution
+    failed_stage = verdict.failed_stage
+    error_type = verdict.error_type
     usage = _usage_for_turn(state)
 
     # ``guard`` is Absence.never and must **not** be substituted here. Standing in
@@ -367,7 +399,7 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
     # guard ran, errored and let the question through, and it is what a reader counts to find
     # out whether the gate worked. (No quotability gate reads it: ``measure/gates.py`` declares
     # no gate over ``guard``. The rule the sentinel stands in for is
-    # ``govern/guard.BI_SCOPE_RULE_ID`` == ``g_bi_scope``, ``guard.py:160``.)
+    # ``govern/guard.BI_SCOPE_RULE_ID`` == ``g_bi_scope``.)
     # An absent guard stays absent; ``missing_required`` names it as the wiring failure it is.
     projected_state: dict[str, Any] = dict(state)
     projected_state["execution"] = execution
@@ -400,10 +432,10 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
 
     answer = {
         "outcome": outcome.value,
-        "text": text,
+        "text": verdict.text,
         "failed_stage": failed_stage,
         "error_type": error_type,
-        "refused_by": refused_by,
+        "refused_by": verdict.refused_by,
         "record": record,
         # On the `answer` and deliberately **not** in `record`: ADR 0006 §11 puts result rows in
         # the class the durable projection drops, and the audit log persists the record only.
@@ -422,7 +454,7 @@ def stamp(state: Mapping[str, Any]) -> dict[str, Any]:
     emit(
         kind="final",
         step="stamp",
-        status=_final_status(path_kind, outcome),
+        status=verdict.rail_status,
         event_id=rail_event_id("stamp", state),
         detail={"outcome": outcome.value, "failed_stage": failed_stage},
     )

@@ -30,6 +30,7 @@ __all__ = [
     "render_context",
     "escape_field",
     "EMPTY_CONTEXT",
+    "rendered_closure_chars",
     "table_qualifier",
     "column_qualifier",
     "withheld_by_grant",
@@ -236,6 +237,28 @@ def _fold_pulled_in_columns(
         roster.setdefault(parent, []).append(_roster_entry(asset))
         folded.add(aid)
     return roster, folded
+
+
+def rendered_closure_chars(table: Any, columns: Sequence[Any]) -> tuple[int, int]:
+    """``(the table's own cost, the cost of the roster its columns fold into)``, in characters.
+
+    **What one table actually costs this block**, asked of the renderer that does the delivering.
+    Conformance rule V16 bounds it (``conform/rules_tree.py::check_delivery_closure``) and reached
+    through to ``_structural_line`` and ``_roster_entry`` to compute it, which is a rule holding a
+    copy of an arithmetic it claims to bound: either function could change its output and the cap
+    would silently start measuring something else. This is the same two numbers, computed here.
+
+    Two numbers rather than one because the finding names both -- a table over cap because of its
+    own body and a table over cap because it carries 156 columns are different defects, and the
+    second is a fact about a schema rather than something a writer can rewrite.
+
+    The ``+ 1`` per roster entry is the newline it is joined with. A *hit* column keeps its own
+    body instead of folding, so the true worst case is slightly above this; that gap cannot be
+    computed without a query, which a conformance rule does not have.
+    """
+    own = len(_structural_line(table, terse=False)) + len(str(_field(table, "body") or ""))
+    roster = sum(len(_roster_entry(column)) + 1 for column in columns)
+    return own, roster
 
 
 def _roster_entry(asset: Any) -> str:

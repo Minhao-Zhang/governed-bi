@@ -125,8 +125,10 @@ def test_the_no_model_stub_records_no_statement_too() -> None:
 
     ``_path_signals`` used to read ``state["execution"]`` directly, where the stub's update leaves
     ``None``; deriving the outcome from a raw ``None`` would have classified the stub ``crashed``.
-    :func:`~governed_bi.serve.nodes.stamp._execution` is the one place that substitutes
-    ``execution_from_attempts(())``, so the ledger it reads is the one the record carries.
+    ``serve/outcome.py``'s ``_execution`` is the one place that substitutes
+    ``execution_from_attempts(())``, and since 2026-08-25 it is reached only through
+    :meth:`~governed_bi.serve.outcome.OutcomeInputs.from_state` — so the derivation has no raw
+    channel left to read, and the ledger it sees is the one the record carries.
 
     Driven through ``_stub``'s own update rather than a hand-written dict, so the shape under test
     is the shape the node actually returns — the ``--no-model`` CLI path (``python -m
@@ -143,7 +145,7 @@ def test_the_no_model_stub_records_no_statement_too() -> None:
 
     assert answer["outcome"] == Outcome.no_sql.value, (
         f"the stub path recorded {answer['outcome']!r}. `crashed` means the classification is "
-        "reading a raw absent `execution` instead of `_execution`'s substitution; `answered` "
+        "reading a raw absent `execution` instead of `OutcomeInputs`' substitution; `answered` "
         f"means the fall-through is back. ({STUB_ANSWER} is not a governed answer either way.)"
     )
     assert answer["record"]["execution"] == {

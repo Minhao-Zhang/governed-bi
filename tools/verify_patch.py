@@ -47,9 +47,21 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import check_corpus_conformance as cc  # noqa: E402 - after the path insert, by design
-import corpus_target  # noqa: E402
+import corpus_target  # noqa: E402 - after the path insert, by design
 
+# The rules, from the library rather than from the CLI beside this file. Individual predicates and
+# not `problems_with_corpus`, because this asks a narrower question than that one answers: a
+# **delta** over a tree that is not on disk (the edit is applied in memory), across a deliberate
+# subset -- V12's exclusion is argued in `_findings`, and V14 and V16 need real files to load and
+# render. `walk` and `load_assets` come from the same place so there is one reader of a corpus tree.
+from governed_bi.conform import RawAsset, load_assets, walk, where_of  # noqa: E402
+from governed_bi.conform.rules_asset import check_local  # noqa: E402
+from governed_bi.conform.rules_metric_and_content import (  # noqa: E402
+    check_excluded_not_named,
+    check_metric_bindings,
+    check_unique_ids,
+)
+from governed_bi.conform.rules_tree import check_references  # noqa: E402
 from governed_bi.corpus.patch import (  # noqa: E402
     FieldNotLocatable,
     StaleValue,
@@ -178,7 +190,7 @@ def _t0(edited: str, target: Path) -> GateResult:
     own -- 94 of the corpus's metrics do. An edit to a `summary` must not be blocked by a
     pre-existing problem in the same file's `expression`.
     """
-    before = cc.load_assets(target)
+    before = load_assets(target)
     try:
         document = yaml.safe_load(edited)
     except Exception as err:  # noqa: BLE001 - any parse failure is the answer
@@ -203,7 +215,7 @@ def _t1(corpus_root: Path, target: Path, edited: str) -> GateResult:
     here -- **after** the commit, if nobody ran this.
     """
     document = yaml.safe_load(edited)
-    before = cc.walk(corpus_root)
+    before = walk(corpus_root)
     after = [
         entry
         for kind, a, path in before
@@ -230,11 +242,11 @@ def _t2(corpus_root: Path, target: Path, edited: str) -> GateResult:
     engine cannot write, and nothing about loading the tree notices.
     """
     document = yaml.safe_load(edited)
-    before = cc.walk(corpus_root)
+    before = walk(corpus_root)
     after = [(k, a, p) for k, a, p in before if p != target] + _assets_of(document, target)
 
-    was = {str(f) for f in cc.check_metric_bindings(before)}
-    now = {str(f) for f in cc.check_metric_bindings(after)}
+    was = {str(f) for f in check_metric_bindings(before)}
+    now = {str(f) for f in check_metric_bindings(after)}
     new = sorted(now - was)
     if new:
         return GateResult("T2", False, f"{len(new)} new unresolvable identifier(s)", tuple(new))
@@ -244,11 +256,11 @@ def _t2(corpus_root: Path, target: Path, edited: str) -> GateResult:
 # ── plumbing ──────────────────────────────────────────────────────────────────
 
 
-def _assets_of(document: dict[str, Any], path: Path) -> list[tuple[str, dict[str, Any], Path]]:
+def _assets_of(document: dict[str, Any], path: Path) -> list[RawAsset]:
     """One parsed document in ``load_assets``' shape, columns unpacked from their table.
 
     Rebuilt here rather than re-reading the file, because the point is to check text that is not
-    on disk. The unpacking mirrors ``cc.load_assets`` -- if that ever grows a third case this has
+    on disk. The unpacking mirrors ``load_assets`` -- if that ever grows a third case this has
     to follow, which is why the shape is asserted by
     ``tests/conformance/test_the_ladder_checks_the_edit_and_not_the_file.py``.
 
@@ -256,7 +268,7 @@ def _assets_of(document: dict[str, Any], path: Path) -> list[tuple[str, dict[str
     copy, because two document-to-triples unpackers is two loaders that can disagree about what an
     asset is. Renaming it breaks that import at load time, which is the failure anyone would want.
     """
-    out: list[tuple[str, dict[str, Any], Path]] = [
+    out: list[RawAsset] = [
         (str(document.get("asset_type") or "<missing>"), document, path)
     ]
     if document.get("asset_type") == "table":
@@ -267,8 +279,8 @@ def _assets_of(document: dict[str, Any], path: Path) -> list[tuple[str, dict[str
 
 
 def _delta(
-    before: list[tuple[str, dict[str, Any], Path]],
-    after: list[tuple[str, dict[str, Any], Path]],
+    before: list[RawAsset],
+    after: list[RawAsset],
     *,
     whole_tree: bool = False,
 ) -> list[str]:
@@ -284,11 +296,11 @@ def _delta(
 
 
 def _findings(
-    assets: list[tuple[str, dict[str, Any], Path]], *, whole_tree: bool
+    assets: list[RawAsset], *, whole_tree: bool
 ) -> set[str]:
     out: set[str] = set()
     for kind, a, path in assets:
-        for rule, lines in cc.check_local(kind, a, cc._where(kind, a, path)).items():
+        for rule, lines in check_local(kind, a, where_of(kind, a, path)).items():
             out |= {f"[{rule}] {line}" for line in lines}
     if whole_tree:
         for rule, lines in (
@@ -299,9 +311,9 @@ def _findings(
             # consulted and is not covered by it -- the one gate on the path to a bundle
             # that cannot be waived. Adding it here would put a 1,351-question scan on
             # every tier run to re-answer a question already answered where it counts.
-            ("V9", cc.check_references(assets)),
-            ("V19", cc.check_excluded_not_named(assets)),
-            ("V23", cc.check_unique_ids(assets)),
+            ("V9", check_references(assets)),
+            ("V19", check_excluded_not_named(assets)),
+            ("V23", check_unique_ids(assets)),
         ):
             out |= {f"[{rule}] {line}" for line in lines}
     return out

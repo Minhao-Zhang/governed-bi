@@ -418,9 +418,9 @@ def record_node() -> Any:
                 return {}
             entry: TurnEntry = {
                 # This node is the only place ``asked_at`` is set -- nothing else writes a turn
-                # envelope. ``api/thread_turns`` sorts on it (``thread_turns.py:227``,
-                # ``:803``) and ``summarise_turn`` projects it onto the wire
-                # (``thread_turns.py:104``), so a row that omits it sorts on the empty string.
+                # envelope. ``api/thread_turns`` sorts on it in both list paths, and
+                # ``summarise_turn`` projects it onto the wire, so a row that omits it sorts on
+                # the empty string.
                 "asked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "question": str(state.get("question") or "") or None,
                 "answer_text": surface_answer_text(answer, state),
@@ -456,9 +456,12 @@ def build_serve_graph(session: Session) -> Any:
     over two sessions gets the second one's constants, and ``trust()`` with no argument clears.
 
     No checkpointer — the server supplies its own (needed for ``/threads``).
-    ``POST /turns/{id}/raised`` must not call this Pregel: a saver-less
-    ``aupdate_state`` raises, and even a later copy would leave the thread row
-    that pending/trace read stale. That write lives in ``api/raised_write.py``.
+    ``POST /turns/{id}/raised`` must not call this Pregel: a saver-less ``aupdate_state`` raises,
+    and even a later copy would leave the thread row that pending/trace read stale. It no longer
+    wants to — ADR 0015 §2 moved that write off graph state into ``runs/feedback.sqlite``
+    (``api/feedback_routes.py``), which deleted ``api/raised_write.py`` and the 409 it had to
+    answer on a paused thread. The constraint is kept because it binds the next write that is
+    tempted to reach for state from an HTTP handler, not because anything violates it today.
     """
     trust(dict(session.configurable()["configurable"]))
     return build_graph(accept=accept_node(session), record=record_node()).compile()

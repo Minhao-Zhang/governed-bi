@@ -16,6 +16,22 @@ output, because a behavioural check passes on the day it is written.
 declared field — asserted on the update itself, not inferred from a passing turn. On, the policy
 withholds the same turn *before the agent is called at all*, which is the property "evaluated
 before the agent spends its five attempts" actually means.
+
+**Which tests build a state dict, and why so few of them do.** ``ServeState`` has 47 channels and
+the node signature names none of them, so a policy test used to have to assemble a plausible turn
+— nested ``delivery`` and ``facets`` mappings included — to say "nothing failed". The rules take
+:class:`~governed_bi.serve.abstention.AbstentionInputs` now, so a rule test states the one fact
+it is about and the dict appears in exactly two places: the tests of the projection itself, and
+the end-to-end pair that goes through ``build_serve_graph``. That split is asserted, not merely
+observed — ``test_only_the_projection_reads_the_state_dict`` fails if a second reader appears.
+
+**Two files, one scan.** The policy moved to ``serve/abstention.py`` and the LangGraph adapter
+stayed in ``serve/nodes/abstain.py``, which is where the seam already was. The two source-reading
+tests below therefore had to stop naming a path: a scan that walks one file after the logic moved
+into two has silently narrowed, and would go on passing. :func:`_sources_of_the_policy` derives
+its file set from where the policy's own symbols *live*, so a further split moves the scan with
+it, and :func:`test_the_source_scan_covers_every_file_the_policy_lives_in` fails if the set ever
+collapses back to one file or stops containing the names it claims to have read.
 """
 
 from __future__ import annotations
@@ -37,26 +53,31 @@ from governed_bi.register.stages import (
     Stage,
     classify_outcome,
 )
-from governed_bi.serve.graph import as_sync
-from governed_bi.serve.nodes.abstain import (
+from governed_bi.serve.abstention import (
     ABSTENTION_POLICY,
     ABSTENTION_RULES,
+    AbstentionInputs,
+    AbstentionPatch,
+    AbstentionRule,
     abstention_evidence,
+    apply_policy,
     decide,
 )
+from governed_bi.serve.graph import as_sync
+from governed_bi.serve.nodes.abstain import abstain_node
 from governed_bi.serve.scripted_model import ScriptedChatModel
 from governed_bi.serve.session import from_assets
 
 QUESTION = "how many sales orders are there"
 
-#: A state the policy has no objection to: a table licensed, a block rendered, no failure.
-GOOD = {
-    "licensed": ["sales.orders"],
-    "delivery": {"context_block": "## Context\ntable sales.orders", "context_hash": "h"},
-    "schemas": ["sales"],
-    "facets": {"facet_schema": {"channels": {"lexical": "ran", "semantic": "ran"}}},
-    "retrieved": {"lexical_coverage": 0.75},
-}
+#: Inputs the policy has no objection to: a table licensed and a block rendered. Every other
+#: field defaults, and the defaults are what "nothing failed, nothing was evicted" looks like —
+#: which is why this is two facts and not a turn.
+GOOD = AbstentionInputs(licensed=("sales.orders",), context_block="## Context\ntable sales.orders")
+
+#: The smallest state dict the *node* needs to be a turn the policy would withhold. One key: the
+#: adapter's own reads (``path_kind``, the knob) are absent, so the register's default applies.
+WITHHELD_STATE: dict[str, Any] = {"licensed": []}
 
 
 @pytest.fixture(autouse=True)
@@ -155,44 +176,153 @@ def test_the_verdict_carries_no_trust_signal() -> None:
     assert verdict["outcome"] in ("answer", "withhold")
 
 
-def _vocabulary_of_the_policy() -> str:
-    """Every name and string literal ``abstain.py`` *uses*, with prose excluded.
+#: Every piece the policy and its adapter are made of, as objects — the *code*, not a list of
+#: paths. :func:`_sources_of_the_policy` asks each one where it lives, which is what makes the
+#: source scans follow a split instead of quietly aiming at the file the logic used to be in.
+#:
+#: Public symbols and the rule predicates, because both halves declare an ``__all__`` and a rule
+#: is a lambda that can be moved on its own. The residual gap is honest and small: a *private*
+#: helper moved to a third module, with no public symbol going with it, would leave the scan
+#: behind. The floor in :func:`test_the_source_scan_covers_every_file_the_policy_lives_in` is
+#: what catches the likely version of that — a file set that shrank.
+_THE_POLICY: tuple[Any, ...] = (
+    AbstentionInputs,
+    AbstentionInputs.from_state,
+    AbstentionPatch,
+    AbstentionRule,
+    abstention_evidence,
+    apply_policy,
+    decide,
+    abstain_node,
+    *(rule.fires for rule in ABSTENTION_RULES),
+)
 
-    An AST walk rather than a grep over the file, because the module's own docstring argues at
+
+def _sources_of_the_policy() -> tuple[Path, ...]:
+    """Every file the policy's own code lives in, derived from the code.
+
+    Two files today — ``serve/abstention.py`` holds the decision and ``serve/nodes/abstain.py``
+    the LangGraph adapter — and this function does not know that. It asks
+    :mod:`inspect` where each object in :data:`_THE_POLICY` was defined, so the day the rules
+    move again the forbidden-word scan moves with them. A hardcoded path would have gone on
+    passing over the half that stayed behind, which is the failure this whole file exists to
+    make impossible for a *verdict field* and would have been embarrassing to reintroduce for
+    the scan itself.
+
+    Sorted, so a diff of what was scanned is stable.
+    """
+    import inspect
+
+    files = {Path(inspect.getsourcefile(obj) or "").resolve() for obj in _THE_POLICY}
+    return tuple(sorted(files))
+
+
+def _trees_of_the_policy() -> tuple[tuple[Path, Any], ...]:
+    """One parsed module per file. Two tests read the source rather than the behaviour — a
+    forbidden field and a second projection are both things a behavioural check passes on the
+    day it is written — and they share this file set, so a moved definition changes both scans
+    or neither.
+
+    Per file and never over a concatenation: two modules each opening with a docstring and
+    ``from __future__ import annotations`` do not parse as one module at all, so joining the
+    text would trade a scan for a ``SyntaxError``.
+    """
+    import ast
+
+    return tuple(
+        (path, ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+        for path in _sources_of_the_policy()
+    )
+
+
+def _vocabulary_of_the_policy() -> str:
+    """Every name and string literal the policy's files *use*, with prose excluded.
+
+    An AST walk rather than a grep over the files, because the modules' own docstrings argue at
     length about why there is no confidence field, and a grep would fail on the explanation of
     the rule it is enforcing. Bare string statements — docstrings, at module, class and function
     level — are the only thing dropped; a string used as a dict key, an argument or a value is
     code and is kept, because ``{"confidence": ...}`` is exactly the shape being forbidden.
+
+    One tree per file — see :func:`_trees_of_the_policy` for why a concatenation is not an
+    option — and the union of their vocabularies, because a forbidden name is forbidden wherever
+    the decision keeps it.
     """
     import ast
 
-    tree = ast.parse(
-        (
-            Path(__file__).resolve().parents[2]
-            / "src" / "governed_bi" / "serve" / "nodes" / "abstain.py"
-        ).read_text(encoding="utf-8")
-    )
-    prose = {
-        id(node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
-    }
     words: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            words.append(node.id)
-        elif isinstance(node, ast.Attribute):
-            words.append(node.attr)
-        elif isinstance(node, ast.arg):
-            words.append(node.arg)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            words.append(node.name)
-        elif isinstance(node, ast.keyword) and node.arg:
-            words.append(node.arg)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if id(node) not in prose:
-                words.append(node.value)
+    for _path, tree in _trees_of_the_policy():
+        prose = {
+            id(node.value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+        }
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                words.append(node.id)
+            elif isinstance(node, ast.Attribute):
+                words.append(node.attr)
+            elif isinstance(node, ast.arg):
+                words.append(node.arg)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                words.append(node.name)
+            elif isinstance(node, ast.keyword) and node.arg:
+                words.append(node.arg)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if id(node) not in prose:
+                    words.append(node.value)
     return "\n".join(words)
+
+
+def test_the_source_scan_covers_every_file_the_policy_lives_in() -> None:
+    """The split's one dangerous consequence, closed.
+
+    ``serve/nodes/abstain.py`` was 470 lines against ADR 0005 §6's soft cap of 400, and the
+    split that pays that back separates the decision from the adapter. The risk it creates is
+    not behavioural: it is that :func:`test_the_verdict_carries_no_trust_signal` goes on walking
+    one file while half the logic sits in another, and passes for a ``confidence`` field it
+    can no longer see.
+
+    So four properties, all of them about the *scan* rather than the policy:
+
+    * both halves are in it **by name** — the file :func:`decide` lives in and the file
+      :func:`~governed_bi.serve.nodes.abstain.abstain_node` lives in. This is the assertion that
+      fails if :data:`_THE_POLICY` is ever pruned down to one module's symbols;
+    * more than one file, which is a tripwire on today's structure and not a law: if the two
+      halves are deliberately merged back into one module, this line is the one to delete, and
+      having to delete it is the point;
+    * every file is real source under ``src/governed_bi/serve/``, so a stale ``.pyc`` or a
+      test-local shim cannot stand in for it;
+    * every name both halves export appears in the vocabulary the scan built. That is the
+      anti-vacuity floor — the same shape as ``MIN_SOURCE_FILES`` in
+      ``tests/api/test_http_contract_answer_and_stream.py`` — and it is what fails if
+      :func:`_sources_of_the_policy` ever returns a file set that does not contain the code.
+    """
+    import inspect
+
+    from governed_bi.serve import abstention
+    from governed_bi.serve.nodes import abstain
+
+    sources = _sources_of_the_policy()
+    for half in (decide, abstain_node):
+        assert Path(inspect.getsourcefile(half) or "").resolve() in sources, half
+    assert len(sources) >= 2, (
+        f"the policy's code was found in {len(sources)} file(s): {sources}. The decision and the "
+        "adapter live in two modules; a one-file scan is the narrowing this test exists to catch"
+    )
+    src = Path(__file__).resolve().parents[2] / "src" / "governed_bi" / "serve"
+    for path in sources:
+        assert path.suffix == ".py" and path.is_file(), path
+        assert src in path.parents, f"{path} is not under {src}"
+
+    vocabulary = _vocabulary_of_the_policy()
+    exported = [*abstention.__all__, *abstain.__all__]
+    assert len(exported) >= 8, exported
+    missing = [name for name in exported if name not in vocabulary]
+    assert not missing, (
+        f"the scan read {len(sources)} file(s) and never saw {missing}, which both halves "
+        "export. Whatever it read is not the policy"
+    )
 
 
 def test_no_rule_reads_a_threshold() -> None:
@@ -207,8 +337,8 @@ def test_no_rule_reads_a_threshold() -> None:
     Driven, not read: two states differing **only** in ``lexical_coverage``, one at the floor,
     must reach the same verdict.
     """
-    floor = {**GOOD, "retrieved": {"lexical_coverage": 0.0}}
-    ceiling = {**GOOD, "retrieved": {"lexical_coverage": 1.0}}
+    floor = replace(GOOD, question_terms_in_corpus=0.0)
+    ceiling = replace(GOOD, question_terms_in_corpus=1.0)
     assert decide(floor)["outcome"] == decide(ceiling)["outcome"] == "answer"
     assert decide(floor)["reason"] is decide(ceiling)["reason"] is None
     assert abstention_evidence(floor)["question_terms_in_corpus"] == 0.0
@@ -219,28 +349,27 @@ def test_no_rule_reads_a_threshold() -> None:
 
 
 @pytest.mark.parametrize(
-    ("reason", "state"),
+    ("reason", "inputs"),
     [
-        (
-            "retrieval_channel_failed",
-            {**GOOD, "facets": {"facet_term": {"channels": {"semantic": ChannelState.failed}}}},
-        ),
-        ("nothing_licensed", {**GOOD, "licensed": []}),
-        ("empty_context", {**GOOD, "delivery": {"context_block": "(no context)"}}),
-        (
-            "licensed_table_evicted",
-            {**GOOD, "delivery": {**GOOD["delivery"], "evicted": {"tables_dropped": 1}}},
-        ),
+        ("retrieval_channel_failed", replace(GOOD, failed_channels=("facet_term.semantic",))),
+        ("nothing_licensed", replace(GOOD, licensed=())),
+        ("empty_context", replace(GOOD, context_block="(no context)")),
+        ("licensed_table_evicted", replace(GOOD, tables_evicted=1)),
     ],
 )
-def test_each_rule_fires_on_its_own_evidence(reason: str, state: dict) -> None:
-    """One state per rule, differing from a clean one in exactly the fact the rule reads.
+def test_each_rule_fires_on_its_own_evidence(reason: str, inputs: AbstentionInputs) -> None:
+    """One case per rule, differing from a clean one in exactly the fact the rule reads.
+
+    ``replace`` and one field, which is the shape of a predicate over named facts. It used to be
+    a nested state dict per case — ``{"facets": {"facet_term": {"channels": {...}}}}`` to say one
+    channel errored — and the *state* those built was never the thing under test: how a channel
+    map becomes ``failed_channels`` is the projection's, and is asserted once, below.
 
     ``rules_evaluated`` stops at the rule that fired, and that is asserted rather than
     incidental: listing the rules after it would claim a check the policy never performed,
     which is the same class of untruth as a gate that leaves no trace.
     """
-    verdict = decide(state)
+    verdict = decide(inputs)
     assert verdict["outcome"] == "withhold", verdict
     assert verdict["reason"] == reason, verdict
     assert verdict["rules_evaluated"][-1] == reason
@@ -262,6 +391,58 @@ def test_a_clean_turn_records_that_the_policy_let_it_through() -> None:
     assert verdict["rules_evaluated"] == [rule.reason for rule in ABSTENTION_RULES]
 
 
+def test_the_verdict_is_a_pure_function_of_its_inputs() -> None:
+    """So a reader can recompute it from the row instead of trusting it.
+
+    That is the property a score does not have, and it is what "in terms a person can check"
+    means. Nothing here reads a model, a clock, the environment or the network — and, since the
+    policy is handed :class:`AbstentionInputs` rather than the graph's state, "a pure function
+    of *what*" is now answerable by reading the signature. Two equal inputs, two equal verdicts.
+    """
+    inputs = replace(GOOD, licensed=())
+    assert decide(inputs) == decide(replace(inputs))
+    assert decide(inputs)["evidence"] == abstention_evidence(inputs)
+
+
+# ── the projection: the one place a state dict is read ────────────────────────
+
+
+def test_the_projection_names_every_channel_the_policy_reads() -> None:
+    """The node's read set, written down — the thing ``(state, config) -> dict`` does not say.
+
+    Asserted as **whole-object equality**, so a ninth field cannot be added without this test
+    naming it. Six channels arrive here (``licensed``, ``delivery`` twice over, ``facets``,
+    ``retrieved``, ``schemas``, ``knobs_resolved``); the two the adapter keeps for itself,
+    ``path_kind`` and ``turn_id``, are asserted where the adapter is.
+
+    The empty case is the second half: an absent channel projects to the field's default, so
+    "nothing recorded" and "recorded as empty" are one value here on purpose — every one of these
+    fields is a count or a collection, and the policy's question of it is "is there any".
+    """
+    state = {
+        "licensed": ["sales.orders", "sales.customers"],
+        "delivery": {
+            "context_block": "## Context",
+            "evicted": {"tables_dropped": 2, "bodies_dropped": 3},
+        },
+        "facets": {"facet_schema": {"channels": {"lexical": "ran", "semantic": ChannelState.failed}}},
+        "retrieved": {"lexical_coverage": 0.5},
+        "schemas": ["sales"],
+        "knobs_resolved": {"abstention_policy_enabled": True},
+    }
+    assert AbstentionInputs.from_state(state) == AbstentionInputs(
+        licensed=("sales.orders", "sales.customers"),
+        context_block="## Context",
+        failed_channels=("facet_schema.semantic",),
+        tables_evicted=2,
+        bodies_evicted=3,
+        schemas=("sales",),
+        question_terms_in_corpus=0.5,
+        policy_enabled=True,
+    )
+    assert AbstentionInputs.from_state({}) == AbstentionInputs()
+
+
 def test_an_unconfigured_channel_is_not_a_failed_one() -> None:
     """The laptop case, and the reason this rule reads ``failed`` and not ``is_degraded``.
 
@@ -269,23 +450,78 @@ def test_an_unconfigured_channel_is_not_a_failed_one() -> None:
     design. ``register/facets.is_degraded`` counts that as degradation — correctly, for a
     *health* gate — and a policy built on it would withhold every turn on every machine without
     an embedding key, which is most of them.
+
+    A test of the **projection**, and it always was: the distinction lives in how a channel map
+    becomes ``failed_channels``, so it is asserted on the field and then once more on the verdict
+    that reads it.
     """
     unconfigured = {
-        **GOOD,
+        "licensed": ["sales.orders"],
+        "delivery": {"context_block": "## Context"},
         "facets": {"facet_term": {"channels": {"semantic": ChannelState.not_configured}}},
     }
-    assert decide(unconfigured)["outcome"] == "answer"
+    inputs = AbstentionInputs.from_state(unconfigured)
+    assert inputs.failed_channels == ()
+    assert decide(inputs)["outcome"] == "answer"
 
 
-def test_the_verdict_is_a_pure_function_of_state() -> None:
-    """So a reader can recompute it from the row instead of trusting it.
+def test_only_the_projection_reads_the_state_dict() -> None:
+    """One projection, structurally — the property the whole split rests on.
 
-    That is the property a score does not have, and it is what "in terms a person can check"
-    means. Nothing here reads a model, a clock, the environment or the network.
+    If two functions both know how to pull ``licensed`` out of a state dict then the read set is
+    not written down anywhere after all, and the second reader is free to disagree with the
+    first. That is not hypothetical here: ``measure/gates.py`` read ``Outcome.clarification`` as
+    a witness of "reached stamp" and silently dropped every row that carried the corpus hash out
+    of a gate's denominator.
+
+    So: the functions that take a ``state`` at all are the projection's parts plus the adapter,
+    and the private readers are called from ``from_state`` and nowhere else — including not from
+    ``abstain_node``, which is the regression that would look most reasonable while re-opening
+    exactly this. The rules are checked from the other side: each takes ``inputs``.
+
+    Across **every** file the policy lives in, since the split. Walking only the module the
+    readers happen to sit in would let a second reader appear in the other one, which is the
+    same defect with a file boundary in front of it.
     """
-    state = {**GOOD, "licensed": []}
-    assert decide(state) == decide(dict(state))
-    assert decide(state)["evidence"] == abstention_evidence(state)
+    import ast
+
+    functions: dict[str, Any] = {}
+    lambdas: list[Any] = []
+    for _path, tree in _trees_of_the_policy():
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                assert node.name not in functions, (
+                    f"{node.name} is defined in two of the policy's files; "
+                    "tools/check_one_implementation.py has more to say about that"
+                )
+                functions[node.name] = node
+            elif isinstance(node, ast.Lambda):
+                lambdas.append(node)
+
+    projection = {
+        "_failed_channels", "_evicted", "_context_block", "_licensed", "_lexical_coverage",
+    }
+    assert projection <= set(functions)
+    assert {name for name, fn in functions.items()
+            if any(arg.arg == "state" for arg in fn.args.args)} == projection | {
+        "from_state", "abstain_node"
+    }
+
+    for name, fn in functions.items():
+        if name in projection or name == "from_state":
+            continue
+        used = {node.id for node in ast.walk(fn) if isinstance(node, ast.Name)}
+        assert not used & projection, (
+            f"{name} projects the state dict itself. AbstentionInputs.from_state is the one "
+            "place that knows how to read a channel, and a second one is a second answer"
+        )
+
+    assert len(lambdas) == len(ABSTENTION_RULES)
+    for fires in lambdas:
+        assert [arg.arg for arg in fires.args.args] == ["inputs"], (
+            "a rule that takes the state dict can grow a fifth input the node's declared "
+            "interface does not carry"
+        )
 
 
 # ── off by default, and the node's whole effect is the declared field ─────────
@@ -306,15 +542,12 @@ def test_the_disabled_node_writes_one_key_and_nothing_else() -> None:
     """
     import asyncio
 
-    from governed_bi.serve.nodes.abstain import abstain_node
-
-    withheld_if_on = {**GOOD, "licensed": []}
-    assert decide(withheld_if_on)["outcome"] == "withhold", (
+    assert decide(AbstentionInputs.from_state(WITHHELD_STATE))["outcome"] == "withhold", (
         "precondition: this state must be one the policy would withhold, or the assertion "
         "below passes because there was nothing to suppress"
     )
 
-    update = asyncio.run(_call(abstain_node, withheld_if_on))
+    update = asyncio.run(_call(abstain_node, WITHHELD_STATE))
     assert set(update) == {"abstention"}, update
     assert update["abstention"] == {
         "policy": ABSTENTION_POLICY,
@@ -343,7 +576,6 @@ def test_the_knob_is_what_turns_it_on() -> None:
     import asyncio
 
     from governed_bi.register.knobs import comparability_keys, knob_default
-    from governed_bi.serve.nodes.abstain import abstain_node
 
     assert knob_default("abstention_policy_enabled") is False
     assert "abstention_policy_enabled" in comparability_keys(), (
@@ -351,13 +583,16 @@ def test_the_knob_is_what_turns_it_on() -> None:
         "operating points compare as one treatment"
     )
 
-    state = {**GOOD, "licensed": [], "knobs_resolved": {"abstention_policy_enabled": True}}
+    state = {**WITHHELD_STATE, "knobs_resolved": {"abstention_policy_enabled": True}}
     update = asyncio.run(_call(abstain_node, state))
+    # Key order too: the update is a payload, and `stamp` copies the verdict onto an artifact
+    # row a reader diffs across arms. The adapter translates the patch and adds nothing.
+    assert list(update) == ["abstention", "path_kind", "terminal_reason"], update
     assert update["path_kind"] == "decline"
     assert update["terminal_reason"] == "nothing_licensed"
     assert update["abstention"]["outcome"] == "withhold"
 
-    off = {**GOOD, "licensed": [], "knobs_resolved": {"abstention_policy_enabled": "false"}}
+    off = {**WITHHELD_STATE, "knobs_resolved": {"abstention_policy_enabled": "false"}}
     assert set(asyncio.run(_call(abstain_node, off))) == {"abstention"}
 
 

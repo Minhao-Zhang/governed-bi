@@ -173,13 +173,15 @@ class ThreadTurnLog:
     a reader whose rules go untested.
     """
 
-    def __init__(self, client_factory: Any | None = None, state_writer: Any | None = None) -> None:
+    def __init__(self, client_factory: Any | None = None) -> None:
         self._client_factory = client_factory
         self._client: Any | None = None
-        #: In-process append of ``raised``. Tests inject a callable
-        #: ``(thread_id, row) -> None``; production hops onto the server loop and
-        #: files through ``api/raised_write.py`` (checkpointer + thread-row copy).
-        self._state_writer = state_writer
+        # There was a second parameter here, ``state_writer``: the in-process append of the
+        # ``raised`` channel, injected by tests and hopped onto the server loop in production
+        # through the deleted ``api/raised_write.py``. ADR 0015 §2 moved filing to
+        # ``runs/feedback.sqlite`` and no caller has passed it since; it was assigned and read
+        # nowhere, so this reader was carrying a field whose only remaining content was a
+        # sentence about a module that no longer exists.
 
     summarise = staticmethod(summarise_turn)
     #: Read off the instance by ``routes.turns_page`` to build ``meta.columns``.

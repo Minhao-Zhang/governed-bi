@@ -198,7 +198,7 @@ _STRUCTURE_CACHE_MAX = 8
 
 
 #: Run constants no request may name. Empty in-process by default; registered once by
-#: ``api/graph_app.build_serve_graph`` (``graph_app.py:463``) as the graph is compiled -- which is
+#: ``api/graph_app.build_serve_graph`` as the graph is compiled -- which is
 #: what ``make_graph`` calls at server start. See :func:`trust`.
 _TRUSTED: dict[str, Any] = {}
 

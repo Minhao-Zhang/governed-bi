@@ -127,13 +127,16 @@ and [the usage guide](docs/usage.md#serve-langgraph-server) says so in full. Do 
 anywhere but `127.0.0.1`. Copy [`ui/.env.example`](ui/.env.example) to `ui/.env.local` to point
 the client at the engine.
 
-Chat is one of seven views. The others show the semantic layer as an ER diagram and a knowledge
+Chat is one of eight views. The others show the semantic layer as an ER diagram and a knowledge
 graph, page through every corpus asset, list past conversations, replay any served turn stage by
-stage, report what this engine is running on, and hold the questions the engine asked that nobody
+stage, report what this engine is running on, hold the questions the engine asked that nobody
 came back to answer — a clarification whose reader closed the tab leaves no trace in the thread's
 own channels, so that queue is read out of the platform's interrupt state and is the only place an
-abandoned one is visible. Leave `NEXT_PUBLIC_LANGGRAPH_URL` unset and the client runs on mock
-fixtures with no engine attached.
+abandoned one is visible — and give a data steward the return path: the queue of answers readers
+handed back, the evidence for one of them beside the statement that produced it, and a corpus edit
+drafted, verified against a snapshot and exported as a diff an engineer applies by hand
+([the return path](docs/return-path.md)). Leave `NEXT_PUBLIC_LANGGRAPH_URL` unset and the client
+runs on mock fixtures with no engine attached.
 
 Everything else — every environment variable, both API surfaces, and the UI's own quirks — is in
 [the usage guide](docs/usage.md).

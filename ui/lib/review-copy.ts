@@ -8,7 +8,8 @@
  * this design refuses to make.
  *
  * **The one claim never made here.** No string says a landed change fixed anything. On turns where
- * every gold table *was* licensed the engine's measured accuracy is 0.7555, so about one in four
+ * every gold table *was* licensed and the gold names at least one table, the engine's measured
+ * accuracy is 0.7548 (n=1,150), so about one in four
  * complaints closed on a landed commit would still be wrong. `addressed` is the stored word,
  * `retrieval_verified` is the narrowest upgrade the free ladder licenses ("the tables needed are
  * reachable"), and `resolved` is not in the vocabulary.

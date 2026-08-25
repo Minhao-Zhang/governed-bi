@@ -48,6 +48,20 @@ those beside the data would be a second answer free to disagree with the first.
 So the gate and the tree it gates are in different repositories, and one of them has to reach
 across. Which one is §Decision 1.
 
+> **Amended 2026-08-25.** The reasoning above holds and got stronger, but two of its coordinates
+> moved. The 22 rules are no longer in `tools/`: they are `src/governed_bi/conform/`, a package
+> between `serve` and `eval` in `tools/check_imports.py::LAYERS`, behind
+> `conform.problems_with_corpus(root)` / `problems_with_asset_file(path)`.
+> `tools/check_corpus_conformance.py` survives as a thin adapter and keeps its exact argv contract
+> and its three exit codes, which is why the `corpus` job in `.github/workflows/ci.yml` needed no
+> edit. The layer had to be at or above `serve`, because this section's own argument names the
+> reason: V16 reaches into `serve/context.py` and V21 into `govern/guard.py`, so `corpus/` at layer
+> 6 was never legal. That reach is also now a real interface —
+> `serve/context.py::rendered_closure_chars` replaced V16's use of the private `_structural_line`
+> and `_roster_entry`. What this buys beyond tidiness is the thing this section argues for: "the
+> rules are statements about what the engine will do with an asset" is now a claim the engine can
+> answer in-process, instead of one only a subprocess could.
+
 ### 2. A zero-findings gate would have been rejected on its first run
 
 Measured on `../BIRD-corpus` at `main` = `74ff80c4842410e54fc81964b30bbe6d4a91f872`, 2026-08-24,
@@ -418,9 +432,11 @@ notion would disagree with the ratchet's.
 
 ## What this ADR does not cover
 
-- **What the rules say.** ADR 0005 §1.2 is the field spec; `tools/check_corpus_conformance.py` and
-  `tools/conformance_rules_metric_and_content.py` are its executable form, and `WHOLE_TREE_CHECKS`
-  is the dispatch that decides which rules `--file` mode cannot answer.
+- **What the rules say.** ADR 0005 §1.2 is the field spec; the `conform/` package is its executable
+  form, and `WHOLE_TREE_CHECKS` is the dispatch that decides which rules `--file` mode cannot
+  answer. (Written against `tools/check_corpus_conformance.py` and
+  `tools/conformance_rules_metric_and_content.py`, which held the rules at the time. Amended
+  2026-08-25: see §Context 1.)
 - **Whether the corpus is any good.** Retrieval quality, coverage and the measured arms are
   `docs/measurement.md` and `docs/open-work.md`.
 - **The rest of this repository's CI.** The other jobs in `.github/workflows/ci.yml`, and the five

@@ -76,6 +76,9 @@ Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 | `GOVERNED_BI_CONVERSATION_DB` | Served conversations' checkpoint database; defaults to `runs/conversations.sqlite`. A **file path**: `serve/checkpointer.py::assert_not_a_warehouse` refuses a value carrying `host=`, `dbname=`, `password=` or a `postgres://`-style URL at configuration time, because a checkpointer pointed at the analytics warehouse writes conversation state into it on the first turn |
 | `GOVERNED_BI_HARNESS_DB` | The one-turn CLI's and the eval driver's checkpoint database; defaults to `runs/harness-checkpoints.sqlite`. Separate from the above so 131 benchmark questions do not become the conversation history. Same refusal applies |
 | `GOVERNED_BI_VECTOR_CACHE` | Persistent vector cache directory — one LanceDB database per model, one table per vector width. Defaults to `runs/vectors/`. The server, the one-turn CLI and the eval driver share it |
+| `GOVERNED_BI_CORPUS_RELEASE` | The corpus **tag** an arm is measured against — a name a human pinned, not a directory and not the content hash, which moves for reasons that are not a treatment. Overrides the `corpus_release` comparability knob, so it participates in the config hash and `register/arm_profiles.py::recorded_corpus_release` refuses a profile claiming a different one. Set it when the treatment *is* the corpus |
+| `GOVERNED_BI_FEEDBACK_DB` | The return path's store; defaults to `runs/feedback.sqlite`, resolved against the repo root. Goes through `paths.assert_not_a_warehouse`, so a DSN here is refused rather than quietly accepted ([return path](return-path.md)) |
+| `GOVERNED_BI_FEEDBACK_ADMIN` | Mounts the steward's four verbs — triage an observation, draft a patch, withdraw one, list them. **Unset means they are not mounted at all, and answer 404 rather than 403**, because a 403 confirms the route exists. They are new authority on a surface where reaching the port is sufficient, so a deployment opts in. Read through `_truthy`: `=false` disables it, which a bare `os.environ.get` did not |
 | `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` | Wall clock for the whole `agent_core` loop, overriding the `agent_node_timeout_s` knob (default 1200.0). `0` means no wall; empty means unset |
 | `GOVERNED_BI_AGENT_RECURSION_LIMIT` | Superstep ceiling for the nested `create_agent` graph, overriding the `agent_recursion_limit` knob (default 40) |
 | `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | Wall clock for one cancellable utility rail — today only `guard` — overriding the `rail_node_timeout_s` knob (default 120.0) |
@@ -204,10 +207,17 @@ Serving a turn is `POST /threads/{id}/runs/stream` with
 ([ADR 0010](adr/0010-live-stage-events.md)), and **there is no second way**: `POST /chat` and
 `POST /chat/resume` were deleted on 2026-08-18 ([ADR 0014](adr/0014-one-conversation-store.md)).
 They kept their own `InMemorySaver`, so degrading to them silently lost the conversation they
-were meant to rescue. Custom routes this app mounts are reads, plus one write that does not
-resume a turn: `POST /turns/{id}/raised` files a reader note onto checkpointed thread state. A paused thread (or an in-flight run) answers 409, because that write's `as_node` would consume the live interrupt.
-`GET /clarifications/pending` is unanswered `ask_user` prompts union those open notes, oldest
-first. Answering a pending interrupt from that page is still refused (ADR 0006 B9).
+were meant to rescue. Custom routes this app mounts are reads, plus writes that do not resume a
+turn: `POST /turns/{id}/raised` files a reader observation into `runs/feedback.sqlite`, and
+`PATCH /observations/{id}` adds the after-the-fact extras. Neither touches graph state — the
+`aupdate_state(as_node="raise_note")` write and the `409` it had to answer on a paused thread are
+both gone, which is a feature: the reader whose turn is paused is the one most likely to want to
+complain, and can now file ([ADR 0015](adr/0015-the-return-path.md) §2). The remaining 409s are
+state-transition refusals, not pause refusals. Four more write verbs are mounted only when
+`GOVERNED_BI_FEEDBACK_ADMIN` is set; the whole surface, verb by verb with its status codes, is in
+[return path](return-path.md).
+`GET /clarifications/pending` is unanswered `ask_user` prompts union those open observations,
+oldest first. Answering a pending interrupt from that page is still refused (ADR 0006 B9).
 
 A clarification is answered by posting a run with `{"command": {"resume": …}}` on the same thread.
 Resume maps: `{answer}` and `{choice_id}` proceed, `{declined: true}` fails closed,
@@ -400,8 +410,18 @@ npm run build
 ```
 
 `npx tsc --noEmit` is not redundant with the linter, which does not type-check: a payload field
-renamed on the engine side passes lint and fails only in a browser. `npm run check:answer-delivery`
-runs in CI too: it asserts that every refusal reason carries a sentence, so a refusal cannot render
-as a bare catalog. Two more stay manual: `npm run check:api` validates every route against the
-client's zod schemas but needs a live engine and a loaded corpus, and
-`npm run check:stream-messages` is a red/green reproduction of one rendering bug.
+renamed on the engine side passes lint and fails only in a browser.
+
+Five more run in CI, all hermetic (no engine, no corpus, no network):
+
+| | |
+|---|---|
+| `check:answer-delivery` | every refusal reason carries a sentence, so a refusal cannot render as a bare catalog |
+| `check:asset-diff` | the diff a steward reads is minimal |
+| `check:patch-fields` | the client refuses the field paths the engine refuses |
+| `check:observation-projections` | both observation shapes the engine can serve still parse |
+| `check:review-copy` | every wire enum member has a reader-facing sentence; no string claims `automatically` or `will be fixed` outside a negation; and **no accuracy figure appears on the review surfaces that `tools/reproduce_observation.py::CLAIM` does not carry**, comments included |
+
+Two stay manual: `npm run check:api` validates every route against the client's zod schemas but
+needs a live engine and a loaded corpus, and `npm run check:stream-messages` is a red/green
+reproduction of one rendering bug.

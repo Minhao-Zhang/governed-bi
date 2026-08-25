@@ -36,7 +36,7 @@ class UnsafeName(ValueError):
 
     A ``ValueError`` so a loader's ``except Exception`` catches it as a per-item problem,
     but raised rather than returned: on the write path this is a security control, not a
-    degradation (``ports.CorpusStore``).
+    degradation (``store.py::write`` raises where ``store.py::load`` isolates).
     """
 
 

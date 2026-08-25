@@ -301,9 +301,14 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
         path="src/governed_bi/api/auth.py",
         anchor="@auth.on.threads.create_run\n",
         replacement="",
+        # Re-pointed 2026-08-25. This named
+        # `test_the_handler_is_actually_registered_for_run_creation`, which was renamed to
+        # `test_both_handlers_are_actually_registered` when the second action was added, and the
+        # entry was not moved with it. Pytest exits 4 on a node id it cannot find, which
+        # `mutate.py` read as the suite noticing — so this entry printed `caught` while running
+        # nothing. `why_it_proves_nothing` is the guard that stops it recurring.
         tests=(
-            "tests/api/test_a_run_cannot_write_state.py::"
-            "test_the_handler_is_actually_registered_for_run_creation",
+            "tests/api/test_a_run_cannot_write_state.py::test_both_handlers_are_actually_registered",
         ),
         finding="`_get_handler` returns None on no match and `handle_event` treats that as allow; "
                 "deleting this one line left the original A4 test green",
@@ -379,8 +384,13 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
         anchor="def paired(",
         replacement="def mcnemar(",
         # The gate, through the conformance test that runs every gate on a clean tree.
+        #
+        # Re-pointed 2026-08-25, with `d11` below: both named this node id in
+        # `test_register_closure.py`, the file the lint-gate parametrisation was split *out of*.
+        # The file still exists, so only resolving the node id finds it — and until it was
+        # resolved, pytest's exit 4 read as a catch and neither entry ran.
         tests=(
-            "tests/conformance/test_register_closure.py::"
+            "tests/conformance/test_the_lint_gates_fire_on_a_synthetic_violation.py::"
             "test_lint_gate_passes_on_a_clean_tree[check_one_implementation.py]",
         ),
         finding="D5 — the copy intersected unit sets and returned no MDE",
@@ -392,7 +402,7 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
         anchor='        tools_dir = ROOT / "tools"',
         replacement='        tools_dir = ROOT / "tools_that_do_not_exist"',
         tests=(
-            "tests/conformance/test_register_closure.py::"
+            "tests/conformance/test_the_lint_gates_fire_on_a_synthetic_violation.py::"
             "test_lint_gate_passes_on_a_clean_tree[check_one_implementation.py]",
         ),
         finding="an off-by-one parent made the new rule pass vacuously; caught by hand once",

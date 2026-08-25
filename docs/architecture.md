@@ -108,6 +108,7 @@ Server entry: [`api/graph_app.py:make_graph`](../src/governed_bi/api/graph_app.p
 | `corpus` | Typed assets, load, validate |
 | `datasource` | Connectors |
 | `eval` | Measurement harness |
+| `feedback` | The return path: observations, patches, the derived lifecycle ([ADR 0015](adr/0015-the-return-path.md)). Nothing in it runs during a turn |
 | `govern` | The layer stack (six that run, `COST` declared and off), ledger, tool bounds |
 | `measure` | Population / stats helpers |
 | `model` | Chat and embedder adapters |
@@ -139,6 +140,34 @@ for first:
   "routing found nothing" and "the join graph is disconnected" are not one row.
 - **`execution`** — every attempt, with its verdict layer, reason code and executor
   path.
+
+### Outcome precedence, and the one pair it masks
+
+`classify_outcome` tests in a fixed order: an infra-prefixed error or a `CRASH_REFUSED_BY` value
+is `crashed`, then `attempt_cap` is `capped`, then `clarification_requested` is `clarification`,
+then any `refused_by` is `refused`, then a statement makes it `answered`, then a declared
+`no_sql` terminal, else `crashed`. The order is the decision; two things follow from it that a
+reader cannot get from the enum.
+
+**`clarification` is not a witness of "never reached `stamp`", and must not be read as one.** The
+pause itself never reaches `classify_outcome` at all — `ask_user` raises `GraphInterrupt`, and the
+`clarification` on such a row is written by the transport or by `eval/projection.py` when no
+answer exists. What reaches this function is the *answered-and-declined* case: `ask_user` returns
+`clarification_requested=True` when the reader declines or cancels a ranking, the inner loop ends,
+and the turn stamps a full record including both treatment identities. `measure/gates.py` read the
+outcome as "reached stamp" and therefore dropped these rows — which do carry the corpus hash — out
+of the population that checks it.
+
+**Clarification is tested before `refused_by`, and masks exactly one pair.**
+`clarification_requested` is only ever true on the answered path, where `stamp` returns some
+`refused_by` whenever no answering attempt passed. Two of the three values it can return there
+already outrank the branch (`guardrail_error` is our bug, `attempt_cap` is the cap), so the only
+masked pair is `guardrail`: a layer refused every attempt, then the model asked and the reader
+declined. The decline wins deliberately — it is a decision something took on this turn, while
+`guardrail` there is a summary derived from "nothing passed", and this register puts a decision
+above a derived summary, the same rule that makes `terminal` the last thing read. The cost is
+worth naming: the row keeps its `refused_by` and its per-attempt trace, so the layer refusal is
+readable, but it leaves `eval/report.refusal_histogram`, which counts rows classified `refused`.
 
 > **There is no reliability stamp on any path.** A turn carries the fields above and
 > nothing that summarises them. A single collapsed trust score is worse than none, and

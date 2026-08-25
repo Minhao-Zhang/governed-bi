@@ -17,13 +17,13 @@ zero problems, then fatal in ``build_index``, *after* the commit.
 **Two conformance rules are fatal here and nowhere else, and they are called rather than copied.**
 
 * **V19 — an excluded column or asset named in model-visible text**, which is
-  ``conformance_rules_metric_and_content.check_excluded_not_named``. ADR 0003 found a corpus asset
+  ``conform.rules_metric_and_content.check_excluded_not_named``. ADR 0003 found a corpus asset
   naming a ``governance.excluded`` column in text that was then injected verbatim into the SQL
   prompt, and concluded a content-scanning validator was the structural answer. None shipped. This
   is it, at the one gate a change has to pass. Measured 2026-08-23: **zero** assets are excluded in
   either corpus, so today the check has no population and cannot refuse a legitimate bundle.
 * **V12 — a held-out question quoted in an asset**, which is
-  ``check_corpus_conformance.check_split_leak``. The importer's rows carry question text from the
+  ``conform.rules_tree.check_split_leak``. The importer's rows carry question text from the
   held-out split, and the loop's whole purpose is that a person reads it and writes corpus prose.
   A question travelling from the graded split into a ``body`` contaminates every EX number measured
   afterwards, invisibly. Running V12 here is the obligation ``eval/feedback_import.py`` records as
@@ -56,9 +56,10 @@ from pathlib import Path
 
 import yaml
 
-# `tools/` is a directory of scripts and not a package, so the two conformance modules are reached
-# the way `verify_patch.py` reaches them: one path insert, then a plain import. Copied there from
-# `tests/conformance/`, and it is the only convention in the tree for a tool calling a rule.
+# `tools/` is a directory of scripts and not a package, so a sibling script is reached the way
+# `verify_patch.py` reaches one: one path insert, then a plain import. That applies to the two
+# scripts below and no longer to the rules, which are `governed_bi.conform` and import like any
+# other part of the engine.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import check_corpus_conformance as cc  # noqa: E402 - after the path insert, by design
@@ -66,10 +67,17 @@ import corpus_target  # noqa: E402 - sibling script
 
 # The one asset-shaping helper this needs, imported rather than restated: it turns a parsed
 # document into the `(kind, mapping, path)` triples the rules take, unpacking a table's inline
-# columns exactly as `cc.load_assets` does. A second copy here would be a second loader, and the
+# columns exactly as `load_assets` does. A second copy here would be a second loader, and the
 # rules would then be answering about an asset neither tool builds.
 from verify_patch import _assets_of  # noqa: E402
 
+# Two rules, named individually: this is a refusal gate over the text one patch introduces, not a
+# conformance report, and V19 and V12 are the two whose failure is fatal at export.
+from governed_bi.conform import load_assets, walk  # noqa: E402
+from governed_bi.conform.rules_metric_and_content import (  # noqa: E402
+    check_excluded_not_named,
+)
+from governed_bi.conform.rules_tree import check_split_leak  # noqa: E402
 from governed_bi.corpus.hash import corpus_content_hash  # noqa: E402
 from governed_bi.corpus.patch import (  # noqa: E402
     StaleValue,
@@ -104,8 +112,9 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--corpus-dir", default=None, help="defaults to GOVERNED_BI_CORPUS_DIR")
     parser.add_argument(
         "--test-split",
-        # The same default as `check_corpus_conformance`, read from it rather than restated: V12
-        # asking a different question here than in the corpus report is the defect this file had.
+        # The same default as `check_corpus_conformance`'s CLI, read from it rather than restated:
+        # V12 asking a different question here than in the corpus report is the defect this file
+        # had. The rules come from the library; this one path is the CLI's own repository layout.
         default=str(cc.DEFAULT_DATASET / "test_final.jsonl"),
         help="the held-out split V12 forbids quoting. Absent, V12 falls back to the questions this "
         "patch's own eval observations carry, and says so",
@@ -313,8 +322,8 @@ def _refuse(
     """``(refusals, notes)`` from the two conformance rules, run on the text this patch introduces.
 
     **The rules are called, not restated.** V19 is
-    ``conformance_rules_metric_and_content.check_excluded_not_named`` and V12 is
-    ``check_corpus_conformance.check_split_leak``. What a rule owns is what the rule *is*: which
+    ``conform.rules_metric_and_content.check_excluded_not_named`` and V12 is
+    ``conform.rules_tree.check_split_leak``. What a rule owns is what the rule *is*: which
     names count as excluded, what text the model sees, and what counts as quoting a question. This
     file carried its own answer to all three, and all three differed -- see the module docstring for
     the four measured disagreements.
@@ -334,10 +343,10 @@ def _refuse(
 
     # V19 needs the whole tree. The rule derives "excluded" from the asset list it is handed, so a
     # narrower list is a smaller answer: the column this text names may be declared in any file.
-    tree = cc.walk(corpus_root)
+    tree = walk(corpus_root)
     patched = [(k, a, p) for k, a, p in tree if p != target] + edited
     for finding in _introduced(
-        cc.check_excluded_not_named(tree), cc.check_excluded_not_named(patched)
+        check_excluded_not_named(tree), check_excluded_not_named(patched)
     ):
         out.append(
             Refusal(
@@ -349,7 +358,7 @@ def _refuse(
 
     # V12 gets the edited file alone, which is a complete population for it: the rule reads one
     # asset's own `summary` and `body` against a file on disk and looks at no second asset, which
-    # is why `check_corpus_conformance` runs it in `--file` mode too. Scoped deliberately -- the
+    # is why `problems_with_asset_file` runs it in `--file` mode too. Scoped deliberately -- the
     # cost is assets times questions, and the split carries 1,351 of the latter.
     with tempfile.TemporaryDirectory() as scratch:
         split, supplied = _held_out(Path(scratch), store=store, patch=patch, test_split=test_split)
@@ -363,8 +372,8 @@ def _refuse(
             )
         else:
             for finding in _introduced(
-                cc.check_split_leak(cc.load_assets(target), split),
-                cc.check_split_leak(edited, split),
+                check_split_leak(load_assets(target), split),
+                check_split_leak(edited, split),
             ):
                 out.append(
                     Refusal(

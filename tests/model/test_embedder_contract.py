@@ -185,6 +185,77 @@ def test_an_empty_or_whitespace_input_refuses(adapter: str) -> None:
     assert any(component != 0.0 for component in good[0])
 
 
+# ── one declaration of the seam ───────────────────────────────────────────────
+
+
+def test_the_shared_half_inherits_the_port_instead_of_restating_it() -> None:
+    """Four adapters make this a real seam, and a real seam gets **one** declaration.
+
+    `model` and `dimensions` were declared twice — as abstract properties on
+    `model/embedder.py::BaseEmbedder` and as members of `ports.py::Embedder` — so "what must an
+    embedder do" had two answers, and `retrieve/` and `serve/` annotate against the port, which
+    is the copy a rule added to the base class would never reach.
+
+    So the base class subclasses the port. This asserts the collapse held: `BaseEmbedder` binds
+    no member the port already declares, and it is a real subclass rather than a structural
+    coincidence, which is what makes the port's declaration the only one there is to change.
+    """
+    from governed_bi.model.embedder import BaseEmbedder
+    from governed_bi.ports import Embedder
+
+    # Read off the MRO, not `issubclass`: `model` and `dimensions` are properties, so the port is
+    # a data protocol and `issubclass` against it raises by design. The MRO is the stronger claim
+    # anyway — it says the declaration is *inherited*, where the hook would accept a lookalike.
+    assert Embedder in BaseEmbedder.__mro__
+
+    restated = {"model", "dimensions"} & set(vars(BaseEmbedder))
+    assert not restated, (
+        f"{sorted(restated)} are declared on both BaseEmbedder and ports.Embedder. Two "
+        "declarations of one seam is two places a rule has to land, and the port is the one "
+        "retrieve/ and serve/ type against."
+    )
+    # `embed` is the exception and is deliberate: the base class *overrides* it with the
+    # batching, blank and width checks, which is shared implementation and not a second signature.
+    assert "embed" in vars(BaseEmbedder)
+
+
+def test_an_adapter_that_forgets_the_model_identity_cannot_be_constructed() -> None:
+    """The reason the port's members carry ``@abstractmethod`` — and it is not decoration.
+
+    A `Protocol` member with a ``...`` body is inherited as a *concrete* method returning
+    `None`, so without the decorator an adapter that omitted `model` would construct happily
+    and publish `None` as its half of every cache key. That is the v1 shape this whole file is
+    about: a missing measurement rendered as a value.
+
+    Also asserts the port stays structural, because deleting the second declaration must not
+    force a test double through `model/`: a duck with the three members is still an `Embedder`.
+    """
+    from typing import Sequence
+
+    from governed_bi.model.embedder import BaseEmbedder
+    from governed_bi.ports import Embedder, Vector
+
+    class ForgotItsIdentity(BaseEmbedder):
+        @property
+        def dimensions(self) -> int:
+            return 4
+
+        def _embed_batch(self, texts: Sequence[str]) -> list[Vector]:
+            return [[0.5, 0.5, 0.5, 0.5] for _ in texts]
+
+    with pytest.raises(TypeError, match="model"):
+        ForgotItsIdentity()
+
+    class NotOurBaseClass:
+        model = "deterministic:duck"
+        dimensions = 4
+
+        def embed(self, texts: Sequence[str]) -> list[Vector]:
+            return [[0.5, 0.5, 0.5, 0.5] for _ in texts]
+
+    assert isinstance(NotOurBaseClass(), Embedder)
+
+
 # ── the cache key, which is where v1 actually died ────────────────────────────
 
 

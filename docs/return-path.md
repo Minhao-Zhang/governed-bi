@@ -1,7 +1,7 @@
 # The return path — working reference
 
 How reader and engineer feedback becomes a corpus change. The binding decision is
-[ADR 0015](adr/0015-the-return-path.md); this page describes the code on `design/return-path`.
+[ADR 0015](adr/0015-the-return-path.md); this page describes the code as it stands on `main`.
 Where the design and the measurement disagreed, what is written here is what the code does, and
 the design that was cut has been deleted from this page rather than marked.
 
@@ -1019,17 +1019,27 @@ One screen that shipped, two that did not, and one module that owns every string
 
 **Not built.** Every path here is absent from the tree: `ui/app/reports/page.tsx`,
 `ui/components/answer/category-picker.tsx`, `ui/components/reports/report-list.tsx`,
-`report-status.tsx`, `re-ask-button.tsx`, `ui/lib/category-taxonomy.ts`, `ui/lib/my-reports.ts`,
-`ui/scripts/check-review-copy.ts`. `ui/components/answer/raise-note.tsx` exists and was not
-rewritten.
+`report-status.tsx`, `re-ask-button.tsx`, `ui/lib/category-taxonomy.ts`, `ui/lib/my-reports.ts`.
+`ui/components/answer/raise-note.tsx` exists and was not rewritten, and
+`ui/scripts/check-review-copy.ts` was built on 2026-08-25 (below).
 
-**`ui/lib/review-copy.ts` is where the honest-copy rule would be made mechanical, and it is only
-half made.** Every string lives there, keyed by state, which is what makes the rule checkable at
-all — but the check is not written. `ui/scripts/check-review-copy.ts` does not exist, so nothing
-asserts that every member of the observation / patch / decline state unions has a string, and
-nothing bans `robust`, `seamless`, `comprehensive`, or the two this project cares about most,
-**`automatically`** and **`will be fixed`** outside a negation. The module makes the check possible;
-review is what enforces it today.
+**`ui/lib/review-copy.ts` is where the honest-copy rule is made mechanical, and as of 2026-08-25 it
+is made.** Every string lives there, keyed by state, which is what makes the rule checkable at all.
+`ui/scripts/check-review-copy.ts` now runs as `npm run check:review-copy` and in CI, and pins three
+things:
+
+- **Coverage both ways.** Every member of `ObservationState`, `DeclineReason` and `Category` has a
+  string, and no key exists that the engine cannot send. The member lists are scanned out of
+  `feedback/events.py` rather than restated, with a per-union floor as the positive control, so
+  adding a member on the engine side fails the check instead of agreeing with it.
+- **Banned phrases.** `automatically` and `will be fixed` outside a negation (a negation is allowed,
+  because "nothing is chasing this on its own" is the honest sentence), plus `robust`, `seamless`
+  and `comprehensive`.
+- **One figure, one source.** No accuracy-shaped number may appear anywhere under
+  `ui/components/review/` or in the copy module, comments included, unless
+  `tools/reproduce_observation.py::CLAIM` carries it. This is the check that had already earned
+  itself before it was written: see [open work](open-work.md) §1.5 for the two sites that kept
+  0.7555 after the pair moved.  <!-- [retired]: the superseded accuracy pair, quoted as history; register/citations.py -->
 
 ### 12.2 The analyst: capture in two clicks
 
@@ -1055,7 +1065,9 @@ receipt, each saveable on its own:
 - `expected` — `"If you know it: what should the answer have been?"`, 200 chars. **The single
   highest-value field a steward can get**, because it is the only falsifiable claim on the page, and
   it needs no schema knowledge (a number, a name, "about 400, not 40").
-- `note` — the existing free text, cap unchanged at `RAISED_NOTE_MAX_CHARS = 4000`, relabelled
+- `note` — the existing free text, cap unchanged at `NOTE_MAX_CHARS = 4000` (the number carried
+  over from the deleted `serve/raised.py::RAISED_NOTE_MAX_CHARS`; it lives in
+  `feedback/validate.py` now), relabelled
   `"Anything else that would help (optional)"`.
 
 **This inversion is the point.** Today the note gates the filing, so an analyst who does not want to

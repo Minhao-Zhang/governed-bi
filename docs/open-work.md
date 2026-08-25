@@ -12,9 +12,11 @@ could not be re-verified were dropped, not demoted.
 `30872d3` is the treatment identity and not that sibling's current tip. Its HEAD is `74ff80c4` as
 of 2026-08-22, and the two commits in between add only `LICENSE` and `README.md` — no asset
 changed, so the hash is still the right name for the content and the corpus items below still read
-on the tip. What this tree *loads* is a third thing: `.env:76` points `GOVERNED_BI_CORPUS_DIR` at
-`../MS Fabric Facilities/corpus` and `GOVERNED_BI_PG_DSN` at the 5432 facilities warehouse, so a
-run started here today is not on BIRD until both are flipped back. They are one switch.
+on the tip. What this tree *loads* is BIRD, and has since 2026-08-23: `.env` sets
+`GOVERNED_BI_CORPUS_DIR=../BIRD-corpus` and leaves `GOVERNED_BI_PG_DSN` unset, so
+`credentials.PG_DSN_NAMES` falls through to `PG_RENAME_DECOY_DSN` on port 5435 — the obfuscated
+lake. The facilities pair (`../MS Fabric Facilities/corpus`, the 5432 warehouse) is commented out
+beside it. A run started here today is on BIRD without touching anything.
 
 Binding design lives in the [ADRs](adr/). This is a work list, not a decision record.
 
@@ -39,14 +41,19 @@ because those are the numbers §1.5 and §7 are about:
 
 | bucket | n | nature |
 |---|---:|---|
-| full-coverage answered wrong | **257** | genuine semantics — the generic text-to-SQL problem |
+| full-coverage answered wrong | **259** | genuine semantics — the generic text-to-SQL problem |
 | answered, frozen-literal gold | 75 | dataset defect, unwinnable |
 | capped | 49 | the agent spent all five attempts without a passing statement |
-| answered, coverage incomplete | 33 | retrieval |
+| answered, coverage incomplete | 31 | retrieval |
 | refused | 20 | none with full coverage |
 | clarification | 4 | all zero-licensed |
 
-Across all outcomes: **73** failures had incomplete table coverage and **85** had a
+These are the post-fix figures. The 2026-08-24 `table_coverage` repair described in §1.5 moved
+two of these rows — 257 → 259 and 33 → 31 — and this table carried the old pair until
+2026-08-25 while §1.5 twenty lines below it carried the new one.
+[`failure-modes.md`](failure-modes.md) §1 has the before/after.
+
+Across all outcomes: **71** failures had incomplete table coverage and **85** had a
 frozen-literal gold. The `refused` and `capped` rows are where those two overlap the
 outcome buckets — 19 of the 20 refusals had partial or no coverage and the twentieth
 had a tableless gold, and 26 of the 49 capped turns were not fully covered either.
@@ -88,11 +95,60 @@ gold statement's identifier against `licensed`, which holds asset **ids**, so th
 whose id is not its own name (`airline."Air Carriers"` → `airline.Air_Carriers_66c534`) read as
 unlicensed on all five questions that had licensed it. It replaces 0.936, 1 145, 6 and 73.
 `docs/failure-modes.md` §1 carries the full before/after. The **accuracy pair moved with it
-and the engine did not**: 0.7555 (n=1,145) / 0.7131 (n=1,272) — the figure six documents,
+and the engine did not**: 0.7555 (n=1,145) / 0.7131 (n=1,272) — the figure six documents,  <!-- [retired]: the superseded accuracy pair, quoted as history; register/citations.py -->
 `tools/reproduce_observation.py::CLAIM` and one test carry — is now **0.7548 (n=1,150) /
-0.7126 (n=1,277)**, same arm, same rows, fixed instrument. All ten sites are updated and the
-test docstring records why, because a figure that moves without a stated reason reads as a
-second measurement.
+0.7126 (n=1,277)**, same arm, same rows, fixed instrument. The test docstring records why, because
+a figure that moves without a stated reason reads as a second measurement.
+
+**This line claimed "all ten sites are updated" and two were not** (found 2026-08-25):
+`ui/lib/review-copy.ts`'s module header and `ui/components/review/reproduce-panel.tsx`'s both still
+said 0.7555, and the first of those sat 196 lines above the reader-facing string that said 0.7548 —  <!-- [retired]: the superseded accuracy pair, quoted as history; register/citations.py -->
+a comment contradicting the code in the same file. Both are fixed, and a *count* of updated sites is
+not evidence that they were updated, which is why the count is no longer the instrument.
+
+**Closed on the `ui/` side, and only there.** `ui/scripts/check-review-copy.ts` now fails CI if any
+accuracy-shaped number appears under `ui/components/review/` or in `ui/lib/review-copy.ts` — in a
+comment as readily as in a string — that `tools/reproduce_observation.py::CLAIM` does not carry. It
+was written against the planted regression: restoring 0.7555 fails it, naming both the found and the  <!-- [retired]: the superseded accuracy pair, quoted as history; register/citations.py -->
+expected figures. `tests/feedback/test_the_reproducer_answers_one_question_for_nothing.py` already
+pinned the Python side to `CLAIM`, so the two live ends now agree by construction.
+
+**Closed on the docs side too, and `grep` is no longer the instrument.**
+`tests/conformance/test_the_prose_states_the_accuracy_pair_the_claim_carries.py` keys the four
+documents to `CLAIM` and restates no figure of its own — it reads both figures and both populations
+out of that one literal. Sweep one: every block of prose under `docs/`, `src/`, `tools/` and
+`tests/` containing the phrase *measured accuracy* — 8 blocks in 6 files, this paragraph among them
+— may state only the numbers `CLAIM` carries (0.7548 / 0.7126, over n=1,150 / 1,277), and a block
+that uses the phrase
+while naming neither figure fails as well. Sweep two: `glossary.md`, `return-path.md`, `adr/0015`
+and this page must each state **both** figures, which is what catches a paraphrase that never
+repeats the anchoring phrase — `glossary.md` is the case that needs it. Every floor is asserted
+(D13): the walk, the block count, the file count, and these four paths being in the scanned set.
+
+**Written against the planted regression.** Restoring the old figure in `glossary.md` fails both
+sweeps, naming the file, the line, the number found and the numbers `CLAIM` carries; planting the
+old denominator in `return-path.md` fails the first the same way; and repointing the walk at
+`docs/adr/` fails on the floor instead of passing over 16 files.
+
+**The retired spelling is gated separately, and now registered.** A *retired* figure reappearing is
+deliberately not checked in the conformance test, because the mechanism already exists:
+`register/citations.py::RETIRED_CLAIMS` plus `tools/check_citations.py` fail on a declared retired
+pattern anywhere in `src`, `tools`, `docs` or `tests`, with a `[retired]` line marker for a
+deliberate quotation. A second denylist in the conformance test would have been a second answer to a
+question this repository already answers in one place. The entry landed 2026-08-25 — `0.7555`,  <!-- [retired]: the superseded accuracy pair, quoted as history; register/citations.py -->
+`0.7131`, `n=1,145`, `n=1,272` — and the gate immediately named all nine lines that quote the old  <!-- [retired]: the superseded accuracy pair, quoted as history; register/citations.py -->
+pair as history, five on this page, one in `return-path.md`, three across two test files. Each now
+carries the marker. The populations are in the pattern and not only the accuracies, because a
+document that updates one number and not its `n=` is the same staleness wearing a fresh-looking
+figure.
+
+Three gates now, one question: `check-review-copy.ts` for the client, the conformance test for
+`docs/`, and `check_citations.py` for the stale spelling anywhere. The general form of the defect is
+§3.10's: a figure with more than one home and no gate between them.
+
+**What is still not gated.** The anchor is a phrase, so a paraphrase that drops it and states one
+figure alone is invisible, and so are other spellings (`75.48%`, a space-grouped `n`) unless they
+match a retired pattern.
 
 This is a **licensing figure, not a delivered one**; see §3.3 for what the char budget drops on
 top of it. Concentrated in `works_cycles` (7), then `law_episode` and `superstore` (5 each).
@@ -213,14 +269,21 @@ loads a versioned tree; it does not write one. Mechanical structure and prose bo
 in that sibling checkout. Versioned is not reproducible-from-source, and no document
 may describe it as such.
 
-### 3.2a Closed: two resolver defects, 2026-08-12
+### 3.2a The resolver's `r_ambiguous_fold` family, and the re-check it is still owed
 
-Both 
-_ambiguous_fold holes (derived-source alias; self-colliding bare name) were fixed.
-A later CTE-scope hole of the same family is in
+Not a closed item wearing an open item's clothes — the open part is the last line. Two
+`r_ambiguous_fold` holes (a derived-source alias; a self-colliding bare name) were fixed
+2026-08-12, and a third of the same family, a CTE-scope hole, is written up in
 `git-history:docs/analysis/binding-scope-and-statement-timeout-2026-08-19.md`, deleted by
 `2396ca2` — `git show 2396ca2^:` that path.
-Re-check both properties before trusting the resolver on a rebuilt corpus.
+
+**What is open:** all three were measured on the corpus of the day, and the BINDING layer's answer
+depends on what the corpus declares. Re-check both properties before trusting the resolver on a
+rebuilt corpus. §3.11 cites this section for the other half of the lesson — the first repair was
+tree-wide, scored 2/46 on the adversarial suite's benign half, and was withdrawn for it.
+
+(The first sentence of this section was physically damaged until 2026-08-25: a lost backtick left
+it reading "Both \_ambiguous\_fold holes" across a line break, with the leading `r` eaten.)
 
 ### 3.3 The char budget is not the binding constraint
 
@@ -342,7 +405,7 @@ passing ones on either slice.
 
 All eight are covered by the nine declared mutations under the `s39-` prefix, which moved on
 2026-08-19 (`77d5f9f`): `tools/mutation_catalogue.py` is a 26-line re-export shim with no `s39`
-hit left in it, and the nine live at `tools/mutation_catalogue_data_2.py:159-245`. Verified
+hit left in it, and the nine live in `tools/mutation_catalogue_data_2.py`. Verified
 caught on 2026-08-11: `routing_pinned` pinned to either
 constant, `corpus_content_hash` and `prompt_set_hash` set to `None`, `_attempt_trace` returning
 empty, `computed_correct` always `None`, and three anchors along the eviction chain — the
@@ -635,7 +698,7 @@ sits in a schema the router did reach → **11 the only repair this loop offers 
 reading and mutation testing beforehand found none of them — they are all in the joins, which is
 what you would expect of a loop that had never been driven.
 
-### 3.10e The corpus gate exists in three tools and has never run
+### 3.10e The corpus gate is wired to a nightly, and its baseline still equals the corpus tip
 
 [ADR 0016](adr/0016-gating-the-corpus-repository.md), 2026-08-24. `tools/check_corpus_delta.py`
 answers "did the corpus add a conformance finding since somebody last looked", against a corpus
@@ -647,12 +710,12 @@ of 24 is why every baseline carries a count per identity — measured 2026-08-24
 
 | finding | status |
 |---|---|
-| **No runner has ever run this gate, in either shape.** The first design put the workflow in `BIRD-corpus`; its two commits were never pushed, the GitHub Actions run count there is **0**, and its `main` tree now contains zero paths under `.github/` or `.conformance/` | **open by construction** for the runner: GitHub runs a `schedule` only from the default branch and only offers `workflow_dispatch` for a workflow present on it, so the nightly starts working when `design/return-path` merges and not before. **The tool is no longer unobserved** — all three exit codes were driven by hand 2026-08-24 (0 at 78 s; 1 on a planted duplicate id, head 183 on 159 with each added finding named; 2 on a missing `--dataset-dir`, V11/V12/V15 named), and the corpus was clean with no worktree left after each. ADR 0016 §Consequences 2 carries the table |
+| **No runner had ever run this gate, in either shape.** The first design put the workflow in `BIRD-corpus`; its two commits were never pushed, the GitHub Actions run count there is **0**, and its `main` tree contains zero paths under `.github/` or `.conformance/` | **closed for the wiring, 2026-08-25.** The branch merged, so `ci.yml`'s `corpus` job is on the default branch with a `schedule` and a `workflow_dispatch`, which is the condition GitHub requires; this row said "starts working when `design/return-path` merges and not before" for a day after it had. The tool was already observed — all three exit codes driven by hand 2026-08-24 (0 at 78 s; 1 on a planted duplicate id, head 183 on 159 with each added finding named; 2 on a missing `--dataset-dir`, V11/V12/V15 named), corpus clean with no worktree left after each. ADR 0016 §Consequences 2 carries the table. What is **not** closed is the row below: a scheduled run against a baseline that equals the tip is a green light measuring nothing |
 | **It is not a merge gate.** A corpus commit that adds a finding lands, and is caught up to a day later | **accepted**, and the price of the dependency direction. The corpus is human-owned and moves rarely — 9 commits on `main`, 2026-07-11 to 2026-08-18, one of them in the fifteen days before this was written |
 | **The baseline equals the corpus tip**, so the delta is empty by construction and the first green run proves nothing | open; the gate becomes informative only after the corpus moves |
 | **A bump made without reading the findings is indistinguishable from one made after.** The edit to `BASELINE_SHA` *is* the acknowledgement, and nothing detects a bump that skipped the looking | open, and there is no obvious instrument for it |
 | **`check_ratchet.py` still has no automated reader.** The pins moved from the corpus into this repository as `.conformance/bird-corpus-pins.txt` (109 lines, 101 pins), which fixes the *side of the merge* — this repository's CI could read them, and a rule change and a pin edit can now land in one commit. It does not fix enforcement: the nightly runs the delta tool, which passes a closure by design | **open.** The ratchet's policy, "closing a finding must be declared", is enforced only when a person runs it |
-| Two records of one fact: `tools/corpus_baseline.py` carries 125/101 and the pin file carries the 101 identities by name | a test asserts they agree; see the other agent's `tests/conformance/` |
+| Two records of one fact: `tools/corpus_baseline.py` carries 125/101 and the pin file carries the 101 identities by name | closed by `tests/conformance/test_the_corpus_gate_is_wired_to_the_nightly.py`, which asserts the two agree *and* that the workflow's own `base=` command prints `BASELINE_SHA` |
 | `docs/return-path.md` carried a **"### Corpus repository"** section describing CI that ran *there* — three commands from inside the corpus checkout, including `--pins .conformance/pins.txt` | fixed the same day: the section is now **"Corpus repository — none, and the check runs here instead"**, and it prints the `corpus` job's actual command. It was outside the ADR change's file scope and was nearly left behind, which is the whole hazard of splitting a change by file ownership |
 
 ### 3.11 Selective prediction is closed at 0.80, and the reflector closed it
@@ -750,6 +813,64 @@ a run rather than discovered after one:
   loop's own variance.
 - Pinning routing is the only lever currently applied, and it recovers about a quarter of the
   discordance (§3.1). The attempt loop and the facet rewriters are unaddressed.
+
+---
+
+### 3.13 The treatment must be declared, and only four arms have declared it
+
+`arms.toml` arrived on 2026-08-11 with audit D9's fix: `eval/report.py::knobs_comparable`
+refuses a pair that cannot name what changed, and the profile is where the name comes from.
+Four arms are declared — `v3_fold`, `v4`, `v5` and `ask_first`, the last added with
+`treatment = ["prompt_set"]` and `compare_to = "v4"` and no measured run behind it yet
+(`register/arms.toml:114-121`). Any other artifact in `runs/eval/` is
+`cannot_evaluate` in a comparison until someone writes down what it changed, which is the
+intended pressure and not a defect.
+
+**`reconcile` is wired**, to `--arm`: the driver looks the profile up before the first paid
+question and refuses a run labelled with an arm whose declared corpus is not the one the session
+loaded, then reconciles every row again in the report. Fixing the wire also found the function
+was vacuous — reconcile compared two namespaces that could never match.
+
+**That fix was itself incomplete until 2026-08-12, for the arm that mattered most.** `v3_fold`
+declared no `corpus_content_hash`, so the repaired guard was never entered: a run launched
+`--arm v3_fold` against any corpus at all cleared the pre-flight check *and* was told in the
+report that every one of its 1 351 rows agreed with the profile. Two things changed. `v3_fold`
+now declares the digest its artifact carries (1 345 of 1 351 rows; the other 6 are §3.6a
+clarifications), and the digest is **mandatory** — `_parse_profiles` refuses `arms.toml` without
+one and `reconcile` refuses a profile it cannot reconcile, so an unreconcilable arm can no longer
+report agreement. The wire itself was untested and now is: `arm_startup_refusal` and
+`reconciliation_lines` are pure functions in `eval/provenance.py`, driven from dicts by
+`tests/eval/test_the_arm_profile_wire_is_exercised.py`.
+
+**The controls have now been run against the real null pair**, on a machine that has `runs/`. All
+six pass (`tests/eval/test_the_delivery_gate_can_fail.py`). What that establishes is narrower than
+it looks and is the reason the four artifact-backed ones were downgraded in the first place: every
+one of the **seven proxy arms** in `runs/eval/` is missing the same four comparability knobs —
+`cost_budget`, `negative_tau`, `semantic_scale_ceiling`, `sqlglot_version` — so `knobs_comparable`
+returns `cannot_evaluate` at the absence branch and never reaches the judgement. Re-measured
+2026-08-12: still exactly those four, on all seven. The eighth artifact carries all four and is the
+two-row smoke of §3.10, so it is not a pair either. **No pair on disk can reach this gate**, which
+is what the two synthetic controls exist for.
+
+What is still owed:
+
+* **No real pair is comparable** until an arm records those four knobs. The producing defect is
+  closed — `session._resolved_knobs` writes `None` for an `UNSET` knob instead of omitting the
+  key, and resolves `sqlglot_version` — but every arm on disk was measured before that, so this
+  needs a run, not a fix.
+* **`prompt_set` is `null` on every row of v4 and v5**, and it is the treatment both declare. So
+  even past the absence branch the gate would report a replicate, correctly: the artifacts
+  cannot show that the declared treatment moved. `prompt_set_hash` *does* differ (v3-fold
+  `ef30252f`, v4 `b1f9e4d7`, v5 `7a9e7102`), so the arms are distinguishable and not nameable —
+  finding 7 of `git-history:docs/analysis/declared-not-consumed.md`, deleted by `2396ca2`.
+* **`compare_to`, `description` and `notes` now have a reader** (the driver prints them under
+  `--arm`) but nothing checks `compare_to` against the pair a comparison is actually run on.
+* `GateResult.render()` prints `field`, `observed`, `population` and `detail` and **omits
+  `condition`** — the one line saying what the gate actually required. A reader of the driver's
+  output gets the verdict without the criterion. (The withdrawn 95% distinctness rule is no
+  longer asserted anywhere: `CONTEXT_HASH_THRESHOLD` survives only as an unused parameter that
+  `context_hashes_distinct` reports in its detail line as retired, and both that function and
+  `_context_hash_gate` say so in their text.)
 
 ---
 
@@ -897,63 +1018,6 @@ governance behaviour change, and no code was touched for the note.
 
 ---
 
-### 3.13 The treatment must be declared, and only four arms have declared it
-
-`arms.toml` arrived on 2026-08-11 with audit D9's fix: `eval/report.py::knobs_comparable`
-refuses a pair that cannot name what changed, and the profile is where the name comes from.
-Four arms are declared — `v3_fold`, `v4`, `v5` and `ask_first`, the last added with
-`treatment = ["prompt_set"]` and `compare_to = "v4"` and no measured run behind it yet
-(`register/arms.toml:114-121`). Any other artifact in `runs/eval/` is
-`cannot_evaluate` in a comparison until someone writes down what it changed, which is the
-intended pressure and not a defect.
-
-**`reconcile` is wired**, to `--arm`: the driver looks the profile up before the first paid
-question and refuses a run labelled with an arm whose declared corpus is not the one the session
-loaded, then reconciles every row again in the report. Fixing the wire also found the function
-was vacuous — reconcile compared two namespaces that could never match.
-
-**That fix was itself incomplete until 2026-08-12, for the arm that mattered most.** `v3_fold`
-declared no `corpus_content_hash`, so the repaired guard was never entered: a run launched
-`--arm v3_fold` against any corpus at all cleared the pre-flight check *and* was told in the
-report that every one of its 1 351 rows agreed with the profile. Two things changed. `v3_fold`
-now declares the digest its artifact carries (1 345 of 1 351 rows; the other 6 are §3.6a
-clarifications), and the digest is **mandatory** — `_parse_profiles` refuses `arms.toml` without
-one and `reconcile` refuses a profile it cannot reconcile, so an unreconcilable arm can no longer
-report agreement. The wire itself was untested and now is: `arm_startup_refusal` and
-`reconciliation_lines` are pure functions in `eval/provenance.py`, driven from dicts by
-`tests/eval/test_the_arm_profile_wire_is_exercised.py`.
-
-**The controls have now been run against the real null pair**, on a machine that has `runs/`. All
-six pass (`tests/eval/test_the_delivery_gate_can_fail.py`). What that establishes is narrower than
-it looks and is the reason the four artifact-backed ones were downgraded in the first place: every
-one of the **seven proxy arms** in `runs/eval/` is missing the same four comparability knobs —
-`cost_budget`, `negative_tau`, `semantic_scale_ceiling`, `sqlglot_version` — so `knobs_comparable`
-returns `cannot_evaluate` at the absence branch and never reaches the judgement. Re-measured
-2026-08-12: still exactly those four, on all seven. The eighth artifact carries all four and is the
-two-row smoke of §3.10, so it is not a pair either. **No pair on disk can reach this gate**, which
-is what the two synthetic controls exist for.
-
-What is still owed:
-
-* **No real pair is comparable** until an arm records those four knobs. The producing defect is
-  closed — `session._resolved_knobs` writes `None` for an `UNSET` knob instead of omitting the
-  key, and resolves `sqlglot_version` — but every arm on disk was measured before that, so this
-  needs a run, not a fix.
-* **`prompt_set` is `null` on every row of v4 and v5**, and it is the treatment both declare. So
-  even past the absence branch the gate would report a replicate, correctly: the artifacts
-  cannot show that the declared treatment moved. `prompt_set_hash` *does* differ (v3-fold
-  `ef30252f`, v4 `b1f9e4d7`, v5 `7a9e7102`), so the arms are distinguishable and not nameable —
-  finding 7 of `git-history:docs/analysis/declared-not-consumed.md`, deleted by `2396ca2`.
-* **`compare_to`, `description` and `notes` now have a reader** (the driver prints them under
-  `--arm`) but nothing checks `compare_to` against the pair a comparison is actually run on.
-* `GateResult.render()` prints `field`, `observed`, `population` and `detail` and **omits
-  `condition`** — the one line saying what the gate actually required. A reader of the driver's
-  output gets the verdict without the criterion. (The withdrawn 95% distinctness rule is no
-  longer asserted anywhere: `CONTEXT_HASH_THRESHOLD` survives only as an unused parameter that
-  `context_hashes_distinct` reports in its detail line as retired, and both that function and
-  `_context_hash_gate` say so in their text.)
-
----
 
 ### 4.3 Nothing authenticates, and audit A1 and A7 are open again
 
@@ -984,20 +1048,28 @@ therefore live again in the words they were written in:
 write.** `api/visibility.py::visible()` is the withholding seam the browse surface passes through,
 and its only callers are `api/browse_routes.py:59` and four handlers in `api/routes.py`
 (`/corpus/assets`, `/graph`, `/knowledge-graph`, `/audit/corpus`) — nothing else in `api/` names
-it. `GET /clarifications/pending` (`api/clarification_routes.py:43`) and `POST /turns/{turn_id}/raised`
-(`:66`, appending onto checkpointed `ServeState.raised` through
-`api/raised_write.py:99`'s `aupdate_state(as_node="raise_note")`) call neither it nor anything else
-grant-aware. `clarification_routes.py:9-24` states the bill in the code's own words: the GET "hands
-any caller every unanswered question, and those questions can name assets", accepted because
-`/audit/turns` "already discloses every thread's SQL to the same caller"; and the POST is "a write:
-any caller reaching the port can file a note against any turn, so the pending queue an operator
-reads is attacker-writable", bounded only by `RAISED_NOTE_MAX_CHARS` per note on a store nothing
-sweeps. It is 409 on a paused or in-flight thread and resumes nothing — it reaches neither
-`command.update` nor `POST /threads/{id}/state` — but it does persist attacker-supplied text.
+it. `GET /clarifications/pending` and `POST /turns/{turn_id}/raised` — both in
+`api/feedback_routes.py` since ADR 0015 §2 replaced `api/clarification_routes.py` and
+`api/raised_write.py` — call neither it nor anything else grant-aware. The GET hands any caller
+every unanswered question, and those questions can name assets, which was accepted because
+`/audit/turns` already discloses every thread's SQL to the same caller. The POST is a write: any
+caller reaching the port can file an observation against any turn, so the queue an operator reads
+is attacker-writable. What bounds one row is `NOTE_MAX_CHARS` (4,000) and `QUESTION_MAX_CHARS`
+(8,000) in `feedback/validate.py`; **nothing bounds the count**, and nothing sweeps the store.
+
+**Two things this write no longer does**, and both are ADR 0015 §2 improvements rather than
+mitigations of the finding above: it does not touch graph state — the
+`aupdate_state(as_node="raise_note")` path is deleted, so it reaches neither `command.update` nor
+`POST /threads/{id}/state` — and it therefore no longer answers 409 on a paused or in-flight
+thread. It still persists attacker-supplied text, into `runs/feedback.sqlite` instead of a
+checkpoint channel. The rows are attributable and movable now, which is what makes the flood
+cheaper to clean up and does nothing to prevent it.
 
 **And the write feeds a read.** `api/routes.py::trace_for` returns *both* `clarifications` and
-`raised`, so `/audit/turns/{id}/trace` hands the same unauthenticated caller back the notes any
-caller could have filed, beside the clarification answers a person typed. That is one loop, not two findings.
+`observations`, so `/audit/turns/{id}/trace` hands the same unauthenticated caller back the notes
+any caller could have filed, beside the clarification answers a person typed. That is one loop, not
+two findings. (The wire key was `raised` until ADR 0015 §2; a client reading the old name reads
+nothing.)
 
 Filed as its own item rather than folded into A7 because A7 is a disclosure finding and the POST is
 not. The open work is the module's own closing sentence — under a real `AccessPolicy` "both verbs

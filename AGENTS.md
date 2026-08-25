@@ -19,8 +19,19 @@
 
 ## Documentation Guidelines
 
-- Do not include nor trust any docstrings in the code. They are often outdated and incorrect.
-- Place all documentation in the `docs/` folder. This includes any design documents, architecture diagrams, and user guides.
+- **Docstrings and comments in this repo are the design record. Read them, and keep them.** They
+  carry the reasoning, the measurement and the rejected alternative that `docs/` has no room for,
+  and several are load-bearing:
+  `tests/feedback/test_the_store_keeps_the_promises_in_its_docstrings.py` exists because nine
+  deliberate mutations survived the whole suite and *"every one of those is a sentence in a
+  docstring"*, and 22 CLIs under `tools/` use `__doc__` as their `--help` text. Do not strip them.
+- **Trust them, and verify the ones you rely on.** They are prose, so they can drift. When one is
+  load-bearing for what you are about to change, check it against the code and *fix the prose in
+  the same commit* — a comment that contradicts the code beside it is worse than no comment.
+  Do not silently work around a stale one.
+- Place all *documents* in the `docs/` folder — design documents, architecture diagrams, user
+  guides. The root holds only `README.md`, `AGENTS.md`, `CLAUDE.md` and `LICENSE`; `ui/` holds only
+  `ui/README.md`. Nothing else goes in either root.
 
 ## Testing Guidelines
 

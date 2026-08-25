@@ -456,7 +456,9 @@ against `\A[A-Za-z0-9_]+\Z` (ADR 0006 §9). That is **not** an anti-poisoning
 measure. It is accident prevention on values that name directories or that a
 trusted writer might mistype. **v2 has no HTTP corpus write** (`POST /corpus/edit`
 is not a deliverable): corpus writes go through `CorpusStore` / CLI / the curator
-after review. A validator that refuses is cheap and cannot silently change
+after review. (The `CorpusStore` port was deleted 2026-08-25 as a seam nothing typed
+against; the write path it named is `corpus/store.py::write`, unchanged. ADR 0006 B8
+carries the amendment.) A validator that refuses is cheap and cannot silently change
 meaning; editing an identifier would produce a name the database does not have.
 
 **The specific defect the sanitizer introduced**, recorded because it is the shape

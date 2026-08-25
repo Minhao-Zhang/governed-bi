@@ -204,8 +204,8 @@ def test_the_claim_names_the_number_and_the_population_it_was_measured_on() -> N
     rows and therefore reproduced its own n and agreed with itself. So this asserts the population,
     not just the digits: a number is not a measurement until it says what it was measured over.
 
-    **The pair moved on 2026-08-24 and the engine did not.** It was 0.7555 (n=1,145) / 0.7131
-    (n=1,272) until ``gold_table_ids`` stopped comparing a gold's physical name against an asset
+    **The pair moved on 2026-08-24 and the engine did not.** It was 0.7555 (n=1,145) [retired]
+    and 0.7131 (n=1,272) [retired], until ``gold_table_ids`` stopped comparing a gold's physical name against an asset
     id, which admitted five ``airline.Air Carriers`` turns counted as uncovered. Same arm, same
     rows, a fixed instrument — which is the third reason to assert the population: a figure whose
     denominator is written down can be seen to move, and for a reason.

@@ -19,7 +19,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Sequence
 
-from governed_bi.ports import Vector
+from governed_bi.ports import Embedder, Vector
 from governed_bi.register.knobs import knob_names
 
 __all__ = [
@@ -64,25 +64,25 @@ def refuse_blank(texts: Sequence[str]) -> None:
             )
 
 
-class BaseEmbedder(ABC):
+class BaseEmbedder(Embedder, ABC):
     """Every adapter's shared half. Subclasses implement ``_embed_batch`` only.
 
-    Satisfies :class:`~governed_bi.ports.Embedder` structurally — the Protocol is
-    ``runtime_checkable``, so ``isinstance`` holds without inheriting from it.
+    **Inherits the declaration rather than restating it.** ``model`` and ``dimensions`` were
+    declared here as abstract properties *and* in :class:`~governed_bi.ports.Embedder`, which
+    made two answers to "what must an embedder do" — and the port is the one ``retrieve/`` and
+    ``serve/`` annotate against, so a rule added to only this copy would bind nothing they can
+    see. Subclassing the Protocol keeps this class to what it actually contributes: the
+    ``batch_size`` policy, the three checks in :meth:`embed`, and the ``_embed_batch`` hook.
+
+    Explicit inheritance, not the structural conformance this used to rely on, because the
+    abstract members are what stop an adapter shipping without ``model``; the port's own
+    docstring records why they carry ``@abstractmethod``. It costs nothing — ``model`` is layer
+    11 and ``ports`` is layer 3 — and the Protocol stays ``runtime_checkable``, so a test
+    double still satisfies it without coming through here.
     """
 
     #: Inputs per call to :meth:`_embed_batch`.
     batch_size: int = DEFAULT_BATCH_SIZE
-
-    @property
-    @abstractmethod
-    def model(self) -> str:
-        """Provider-qualified model identity. Part of every cache key."""
-
-    @property
-    @abstractmethod
-    def dimensions(self) -> int:
-        """Vector width. Part of every cache key."""
 
     @abstractmethod
     def _embed_batch(self, texts: Sequence[str]) -> list[Vector]:

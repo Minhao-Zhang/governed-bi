@@ -22,7 +22,8 @@ another process on the machine, a container on the same bridge, a page whose ori
 ``langgraph.json``'s ``http.cors`` allow-list happens to permit — can drive the engine, spend
 model budget, and read ``/audit/turns`` and ``/audit/turns/{id}/trace``, which return every
 thread's SQL, the full turn records and an absolute path to the thread store -- which is a file,
-``.langgraph_api/.langgraph_ops.pckl`` (``api/thread_turns.py:214``), not a directory. The
+``.langgraph_api/.langgraph_ops.pckl`` (``api/thread_turns.ThreadTurnLog.TURN_LOG_DIR``), not a
+directory. The
 binding to loopback is the whole of the remaining control. A fork that exposes this port to a network has to
 put the credential back, and ``docs/enterprise-fork.md`` is where that trigger is recorded.
 

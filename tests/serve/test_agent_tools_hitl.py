@@ -363,9 +363,10 @@ def test_a_checker_that_raises_is_recorded_rather_than_returned_as_a_string() ->
 
     The escape is reached the way it happens in production: a malformed key in the corpus.
     ``check()`` normalises its key arguments *outside* its own ``try`` on purpose
-    (``check.py:89-100``) — "a security parameter was not wired up" must not become a blocked
-    verdict — and ``normalise_column_key`` raises ``ValueError`` on a four-part key. The
-    governance side is right; the recording side had nowhere for the raise to land.
+    (the ``normalise_*_key`` block above ``check()``'s own ``try``) — "a security parameter was
+    not wired up" must not become a blocked verdict — and ``normalise_column_key`` raises
+    ``ValueError`` on a four-part key. The governance side is right; the recording side had
+    nowhere for the raise to land.
 
     Paired with ``test_tool_exception_is_not_refuse`` above: a **driver** failure keeps its
     passing row and is not a guardrail error, while a **checker** failure produces a
