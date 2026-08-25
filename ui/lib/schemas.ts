@@ -736,9 +736,17 @@ export const observationSchema = z.object({
   licensed: z.array(z.string()),
   schemas: z.array(z.string()),
   missing_tables: z.array(z.string()),
-  gold_sql: z.string().nullable(),
-  gold_fingerprint: z.string().nullable(),
-  pred_fingerprint: z.string().nullable(),
+  /** **Absent and null mean different things, and the UI must not merge them.** These three are
+   * outside `PUBLIC_OBSERVATION_FIELDS`, so an engine started without `GOVERNED_BI_FEEDBACK_ADMIN`
+   * omits them entirely; `null` means the observation genuinely has no reference answer. They were
+   * `.nullable()` alone until 2026-08-25, which made every reader-mode response a hard parse
+   * failure reported as "response did not match the expected schema" -- 219 issues over these
+   * three fields on a 73-row queue, with nothing naming the deployment flag behind it.
+   * `docs/openapi.json` has always had them out of `required`; this schema was the half that
+   * disagreed with the contract. */
+  gold_sql: z.string().nullable().optional(),
+  gold_fingerprint: z.string().nullable().optional(),
+  pred_fingerprint: z.string().nullable().optional(),
   quality_flags: z.array(z.string()),
   arm: z.string().nullable(),
   question_id: z.string().nullable(),

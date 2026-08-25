@@ -204,11 +204,15 @@ export const REVIEW_COPY = {
   /** The claim, and the number that bounds it. The one sentence between a green check and
    *  somebody reading it as "fixed". */
   reproduceClaim:
-    "The tables the reference answer reads are reachable again. Not that the answer is right: on turns where every table was already reachable, measured accuracy is 0.7555, so about one in four would still come back wrong.",
+    "The tables the reference answer reads are reachable again. Not that the answer is right: on turns where every gold table was licensed and the gold names at least one table, measured accuracy is 0.7548 (n=1,150), so about one in four would still come back wrong.",
 
   /** The two cases the check cannot answer, in the CLI's own words. */
   reproduceNoGold:
     "There is no reference answer on this row, so there is nothing for a coverage check to compare against. Somebody filed this by hand rather than importing it from an evaluation.",
+  /** Not the same sentence as `reproduceNoGold`, and the difference is the point: this engine
+   *  withheld the field rather than the row lacking it. */
+  reproduceGoldWithheld:
+    "This engine did not serve the reference answer, so a coverage check has nothing to compare against. It is running without GOVERNED_BI_FEEDBACK_ADMIN, which withholds gold_sql from every row — the row may well have one.",
   reproduceNotCoverage:
     "Every table the reference answer reads was already reachable when this was filed, so this was never a coverage failure. A coverage check cannot say anything about it — the free ladder stops here.",
 } as const;

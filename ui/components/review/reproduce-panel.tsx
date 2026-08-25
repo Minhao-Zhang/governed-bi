@@ -30,6 +30,11 @@ import type { Observation } from "@/lib/types";
 /** Why coverage cannot answer this row, or `null`. Mirrors `tools/reproduce_observation.py::_why_not`
  *  — the three sentences are the copy module's, so the CLI and the screen say the same thing. */
 function whyNot(observation: Observation): string | null {
+  // `undefined` is not `null` here. Absent means this engine is not in steward mode and withheld
+  // the field; null means the row has no reference answer. Saying "somebody filed this by hand"
+  // to a steward whose engine simply withheld it is a confident wrong answer, which is worse
+  // than the parse error this replaced.
+  if (observation.gold_sql === undefined) return REVIEW_COPY.reproduceGoldWithheld;
   if (!observation.gold_sql) return REVIEW_COPY.reproduceNoGold;
   if (observation.missing_tables.length === 0) return REVIEW_COPY.reproduceNotCoverage;
   return null;

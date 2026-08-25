@@ -199,12 +199,23 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
         path="src/governed_bi/serve/tools.py",
         anchor="""            return _reply(
                 runtime,
-                f"run_query error: {type(exc).__name__}: {exc}",
+                _attempt_budget(
+                    f"run_query error: {type(exc).__name__}: {exc}",
+                    attempt_number,
+                    book.cap,
+                ),
                 attempts_by_call={
                     call_id: pipeline_error_attempt("agent", f"{type(exc).__name__}: {exc}")
                 },
             )""",
-        replacement='            return _reply(runtime, f"run_query error: {type(exc).__name__}: {exc}")',
+        replacement="""            return _reply(
+                runtime,
+                _attempt_budget(
+                    f"run_query error: {type(exc).__name__}: {exc}",
+                    attempt_number,
+                    book.cap,
+                ),
+            )""",
         tests=(
             "tests/serve/test_agent_tools_hitl.py::"
             "test_a_checker_that_raises_is_recorded_rather_than_returned_as_a_string",
@@ -216,7 +227,7 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
         what="a swallowed layer exception records as refused, not crashed",
         path="src/governed_bi/serve/nodes/stamp.py",
         anchor="""            if isinstance(errors, int) and errors > 0:
-                return GUARDRAIL_ERROR, Stage.check.value, None, None, False
+                return GUARDRAIL_ERROR, Stage.check.value, None, None, False, terminal
 """,
         replacement="",
         tests=("tests/serve/test_a_swallowed_layer_exception_is_a_crash.py",),

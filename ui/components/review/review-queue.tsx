@@ -53,7 +53,14 @@ export function ReviewQueue({
         emptyMessage={REVIEW_COPY.storeEmpty}
       >
         {(data: ObservationClusters) => (
-          <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
+          // Not a flex column. `flex-col` here made every Card a flex item of a
+          // height-constrained parent, and `flex-shrink` defaults to 1 -- so with more clusters
+          // than fit, the browser compressed 54 cards to about 37px each and their content
+          // overflowed, which reads as overlapping rows with the text clipped top and bottom.
+          // `min-h-0 flex-1 space-y-2 overflow-y-auto pr-1` is the shape
+          // `audit/audit-surface.tsx` already uses for the same job: the scroll box is the flex
+          // child, the list inside it is not, so nothing can be squashed below its content.
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
             {data.meta.truncated && (
               <p className="text-xs text-destructive">
                 This list is short: the server had more than it returned. Narrow it or page.
@@ -91,9 +98,14 @@ export function ReviewQueue({
                     {when(cluster.oldest_filed_at)}
                   </p>
                   {cluster.shared_missing_tables.length > 0 && (
+                    // `break-words` on the code: `schema.table` gives the browser no break
+                    // opportunity, so one long id (`world_development_indicators.jiao_zhu`)
+                    // pushed the card 42px past its column — measured, at 1280px.
                     <p className="mt-1 text-xs">
                       Every member is missing:{" "}
-                      <code>{cluster.shared_missing_tables.join(", ")}</code>
+                      <code className="break-words">
+                        {cluster.shared_missing_tables.join(", ")}
+                      </code>
                     </p>
                   )}
                 </Card>

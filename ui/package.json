@@ -12,7 +12,8 @@
     "check:stream-messages": "node --experimental-strip-types scripts/check-stream-messages.ts",
     "check:answer-delivery": "node --experimental-strip-types scripts/check-answer-delivery.ts",
     "check:asset-diff": "node --experimental-strip-types scripts/check-asset-diff.ts",
-    "check:patch-fields": "node --experimental-strip-types scripts/check-patch-fields.ts"
+    "check:patch-fields": "node --experimental-strip-types scripts/check-patch-fields.ts",
+    "check:observation-projections": "node --experimental-strip-types scripts/check-observation-projections.ts"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",

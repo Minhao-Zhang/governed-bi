@@ -70,21 +70,35 @@ class _Pending:
         return PendingPage(rows=[], truncated=False, threads_scanned=0)
 
 
-def _client(tmp_path: Path) -> tuple[Any, FeedbackStore]:
-    """A client over the real app and a store in ``tmp_path``.
+def _client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, steward: bool = False
+) -> tuple[Any, FeedbackStore]:
+    """A client over the real app and a store in ``tmp_path``, in a **stated** deployment mode.
 
     The store is the app's **fourth dependency** rather than something it builds, which is what
     keeps this suite out of the operator's real queue.
+
+    ``steward`` is not a convenience. ``api/routes.py`` reads ``GOVERNED_BI_FEEDBACK_ADMIN`` from
+    the process environment at mount time, and ``tests/conftest.py`` loads the operator's ``.env``
+    into that environment at import -- so every test here inherited whatever the operator happened
+    to have set. — `test_the_steward_verbs_are_not_mounted_by_default` passed for a year without
+    ever testing the default: it tested one dotenv. Setting
+    ``GOVERNED_BI_FEEDBACK_ADMIN=1`` locally on 2026-08-25 turned it red, which is how this was
+    found. A test about a security default has to own the variable that decides it.
     """
     from fastapi.testclient import TestClient
 
+    if steward:
+        monkeypatch.setenv("GOVERNED_BI_FEEDBACK_ADMIN", "1")
+    else:
+        monkeypatch.delenv("GOVERNED_BI_FEEDBACK_ADMIN", raising=False)
     store = FeedbackStore(tmp_path / "feedback.sqlite")
     return TestClient(make_app(object(), _TurnLog(), _Pending(), store)), store
 
 
-def test_the_path_and_the_kind_values_did_not_change(tmp_path: Path) -> None:
+def test_the_path_and_the_kind_values_did_not_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A client written against the deleted route keeps working."""
-    client, store = _client(tmp_path)
+    client, store = _client(tmp_path, monkeypatch)
     response = client.post(f"/turns/{TURN}/raised", json={"kind": "from_refusal"})
     assert response.status_code == 201, response.text
     assert store.queue().total == 1
@@ -101,7 +115,7 @@ def test_filing_copies_the_turn_rather_than_joining_to_it(
     deployment, where nothing authenticates and the filer is a ``reader``.
     """
     monkeypatch.delenv("GOVERNED_BI_FEEDBACK_ADMIN", raising=False)
-    client, store = _client(tmp_path)
+    client, store = _client(tmp_path, monkeypatch)
     client.post(f"/turns/{TURN}/raised", json={"kind": "from_refusal"})
 
     obs = store.queue().rows[0]
@@ -119,10 +133,10 @@ def test_filing_copies_the_turn_rather_than_joining_to_it(
     assert obs.state is ObservationState.open
 
 
-def test_a_category_is_optional_and_validated(tmp_path: Path) -> None:
+def test_a_category_is_optional_and_validated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The first tap files something valid; a refinement is never a gate. But a refinement that
     cannot apply to the card is refused, because the queue would sort it into the wrong bucket."""
-    client, store = _client(tmp_path)
+    client, store = _client(tmp_path, monkeypatch)
 
     assert client.post(f"/turns/{TURN}/raised", json={"kind": "from_refusal"}).status_code == 201
     assert (
@@ -143,8 +157,8 @@ def test_a_category_is_optional_and_validated(tmp_path: Path) -> None:
     assert sorted(str(o.category) for o in filed) == ["Category.false_refusal", "None"]
 
 
-def test_an_unknown_kind_or_category_names_the_vocabulary(tmp_path: Path) -> None:
-    client, _ = _client(tmp_path)
+def test_an_unknown_kind_or_category_names_the_vocabulary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _ = _client(tmp_path, monkeypatch)
     for body, word in (
         ({"kind": "nope"}, "from_refusal"),
         ({"kind": "from_refusal", "category": "nope"}, "false_refusal"),
@@ -154,9 +168,9 @@ def test_an_unknown_kind_or_category_names_the_vocabulary(tmp_path: Path) -> Non
         assert word in response.text, response.text
 
 
-def test_an_over_long_note_is_refused_before_the_store_sees_it(tmp_path: Path) -> None:
+def test_an_over_long_note_is_refused_before_the_store_sees_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """"Too long" without a number is not actionable, so the refusal names the cap."""
-    client, store = _client(tmp_path)
+    client, store = _client(tmp_path, monkeypatch)
     response = client.post(
         f"/turns/{TURN}/raised", json={"kind": "wrong_answer", "note": "x" * (NOTE_MAX_CHARS + 1)}
     )
@@ -165,16 +179,18 @@ def test_an_over_long_note_is_refused_before_the_store_sees_it(tmp_path: Path) -
     assert store.queue().total == 0
 
 
-def test_a_whitespace_only_note_becomes_empty_rather_than_spending_the_cap(tmp_path: Path) -> None:
-    client, store = _client(tmp_path)
+def test_a_whitespace_only_note_becomes_empty_rather_than_spending_the_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, store = _client(tmp_path, monkeypatch)
     client.post(f"/turns/{TURN}/raised", json={"kind": "wrong_answer", "note": "   \n  "})
     assert store.queue().rows[0].note == ""
 
 
-def test_expected_is_carried_and_bounded(tmp_path: Path) -> None:
+def test_expected_is_carried_and_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The highest-value optional field, and the reason it is short: it is one claim, and a field
     that invites a paragraph gets a paragraph nobody reads."""
-    client, store = _client(tmp_path)
+    client, store = _client(tmp_path, monkeypatch)
     client.post(
         f"/turns/{TURN}/raised",
         json={"kind": "wrong_answer", "expected": "about 400, not 4102"},
@@ -188,13 +204,13 @@ def test_expected_is_carried_and_bounded(tmp_path: Path) -> None:
     assert "200" in long.text
 
 
-def test_an_unknown_turn_is_404(tmp_path: Path) -> None:
-    client, store = _client(tmp_path)
+def test_an_unknown_turn_is_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, store = _client(tmp_path, monkeypatch)
     assert client.post("/turns/nope/raised", json={"kind": "wrong_answer"}).status_code == 404
     assert store.queue().total == 0
 
 
-def test_a_note_can_be_filed_while_the_thread_is_paused(tmp_path: Path) -> None:
+def test_a_note_can_be_filed_while_the_thread_is_paused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """**The 409 that went away, asserted as an absence.**
 
     Filing used to refuse on a paused thread because the write went through
@@ -205,7 +221,7 @@ def test_a_note_can_be_filed_while_the_thread_is_paused(tmp_path: Path) -> None:
     The turn log here does not even expose a thread's status, which is the structural half of the
     same statement: filing cannot depend on something it cannot see.
     """
-    client, store = _client(tmp_path)
+    client, store = _client(tmp_path, monkeypatch)
     response = client.post(f"/turns/{TURN}/raised", json={"kind": "from_refusal"})
     assert response.status_code == 201
     assert store.queue().total == 1
@@ -214,11 +230,11 @@ def test_a_note_can_be_filed_while_the_thread_is_paused(tmp_path: Path) -> None:
     )
 
 
-def test_a_note_can_be_amended_until_somebody_looks(tmp_path: Path) -> None:
+def test_a_note_can_be_amended_until_somebody_looks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The inversion the design rests on: the note is asked for *after* filing succeeds, so it is a
     bonus rather than a gate. And it freezes at ``triaged``, because a reviewer reading a row whose
     text changes underneath them is worse than a second observation."""
-    client, store = _client(tmp_path)
+    client, store = _client(tmp_path, monkeypatch)
     filed = client.post(f"/turns/{TURN}/raised", json={"kind": "wrong_answer"}).json()
     observation_id = filed["observation"]["observation_id"]
 
@@ -232,8 +248,10 @@ def test_a_note_can_be_amended_until_somebody_looks(tmp_path: Path) -> None:
     assert store.get(observation_id).note == "it is about 400"  # type: ignore[union-attr]
 
 
-def test_the_response_carries_the_row_and_its_computed_openness(tmp_path: Path) -> None:
-    client, _ = _client(tmp_path)
+def test_the_response_carries_the_row_and_its_computed_openness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = _client(tmp_path, monkeypatch)
     body = client.post(f"/turns/{TURN}/raised", json={"kind": "wrong_answer"}).json()
     observation = body["observation"]
     assert observation["open"] is True, "`open` is computed from the state, never a column"
@@ -246,10 +264,10 @@ def test_the_response_carries_the_row_and_its_computed_openness(tmp_path: Path) 
     assert observation["history"][0]["moved_by"] == "filer"
 
 
-def test_the_steward_verbs_are_not_mounted_by_default(tmp_path: Path) -> None:
+def test_the_steward_verbs_are_not_mounted_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """404 and not 403: a 403 confirms the route exists. With one principal the switch is the whole
     of the control, so the honest default is off."""
-    client, store = _client(tmp_path)
+    client, store = _client(tmp_path, monkeypatch)
     filed = client.post(f"/turns/{TURN}/raised", json={"kind": "wrong_answer"}).json()
     observation_id = filed["observation"]["observation_id"]
 

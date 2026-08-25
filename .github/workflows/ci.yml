@@ -198,6 +198,14 @@ jobs:
       - name: Patch fields — the client refuses what the engine refuses
         run: npm run check:patch-fields
 
+      # The client parses both shapes the engine can serve for an observation. Hermetic on
+      # purpose: it reads `docs/openapi.json` and the zod schemas and starts no engine, which is
+      # why it can run here while `check:api` cannot. It is the gate that was missing when
+      # `gold_sql` went out of the reader projection and the client kept requiring it — a 73-row
+      # queue rendered as "response did not match the expected schema" and no check could see it.
+      - name: Observation projections — reader mode parses too
+        run: npm run check:observation-projections
+
       # `npm run check:api` and `npm run check:stream-messages` are deliberately NOT here.
       # `check:api` needs a live engine and a loaded corpus (ADR 0009 says so in the section that
       # introduces it); `check:stream-messages` is pure and could run, but it is a red/green

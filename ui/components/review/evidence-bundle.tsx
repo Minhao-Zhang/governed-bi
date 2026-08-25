@@ -102,7 +102,12 @@ export function EvidenceBundle({ observation }: { observation: Observation }): R
         </div>
         {observation.note && <p className="text-sm italic">{observation.note}</p>}
         {observation.gold_fingerprint && (
-          <p className="text-xs text-muted-foreground">
+          // `break-all` and not `break-words`: a 64-character hex digest is one word with no
+          // break opportunity in it, so `break-words` leaves it whole and it pushed this
+          // paragraph 17px past its column — measured at 1280px, after the grid stopped
+          // overflowing. A digest is read by comparing, not by reading, so breaking it anywhere
+          // costs nothing.
+          <p className="text-xs break-all text-muted-foreground">
             fingerprints — reference <code>{observation.gold_fingerprint}</code>, produced{" "}
             <code>{observation.pred_fingerprint ?? "none"}</code>
           </p>

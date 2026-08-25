@@ -17,7 +17,7 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
     Mutation(
         id="m2-absent-count-passes-as-clean",
         what="an unwritten count is substituted with zero, which the gate reads as a pass",
-        path="src/governed_bi/eval/harness.py",
+        path="src/governed_bi/eval/projection.py",
         anchor="    guardrail_errors = _int_or_absent(record.get(\"guardrail_errors\"))",
         replacement='    guardrail_errors = int(record.get("guardrail_errors") or 0)',
         tests=(
@@ -29,7 +29,7 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
     Mutation(
         id="m2-absent-degradation-reads-clean",
         what="stamp's deliberate None for facet_degraded is turned back into False",
-        path="src/governed_bi/eval/harness.py",
+        path="src/governed_bi/eval/projection.py",
         anchor=(
             '        "facet_degraded": (\n'
             '            None if record.get("facet_degraded") is None'
@@ -158,7 +158,7 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
     Mutation(
         id="s39-routing-pinned-always-true",
         what="every row claims its shortlist was replayed",
-        path="src/governed_bi/eval/harness.py",
+        path="src/governed_bi/eval/projection.py",
         anchor='        "routing_pinned": _routing_was_pinned(question, record),',
         replacement='        "routing_pinned": True,',
         tests=("tests/eval/test_routing_replay.py",),
@@ -167,7 +167,7 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
     Mutation(
         id="s39-routing-pinned-always-false",
         what="every row claims it routed for itself",
-        path="src/governed_bi/eval/harness.py",
+        path="src/governed_bi/eval/projection.py",
         anchor='        "routing_pinned": _routing_was_pinned(question, record),',
         replacement='        "routing_pinned": False,',
         tests=("tests/eval/test_routing_replay.py",),
@@ -177,7 +177,7 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
     Mutation(
         id="s39-row-forgets-its-corpus",
         what="the measurement row stops naming the corpus that produced it",
-        path="src/governed_bi/eval/harness.py",
+        path="src/governed_bi/eval/projection.py",
         anchor='        "corpus_content_hash": record.get("corpus_content_hash"),',
         replacement='        "corpus_content_hash": None,',
         tests=("tests/eval/test_the_row_names_its_configuration.py::"
@@ -187,7 +187,7 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
     Mutation(
         id="s39-row-forgets-its-prompt",
         what="the measurement row stops naming the prompt wording that produced it",
-        path="src/governed_bi/eval/harness.py",
+        path="src/governed_bi/eval/projection.py",
         anchor='        "prompt_set_hash": record.get("prompt_set_hash"),',
         replacement='        "prompt_set_hash": None,',
         tests=("tests/eval/test_the_row_names_its_configuration.py::"
@@ -197,7 +197,7 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
     Mutation(
         id="s39-attempt-trace-empty",
         what="the row records no per-attempt layer or reason code",
-        path="src/governed_bi/eval/harness.py",
+        path="src/governed_bi/eval/projection.py",
         anchor='        "attempts": _attempt_trace(record.get("execution")),',
         replacement='        "attempts": [],',
         tests=("tests/eval/test_eval_contract.py::"
@@ -207,7 +207,7 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
     Mutation(
         id="s39-computed-correct-never-measured",
         what="an abstained turn is never priced",
-        path="src/governed_bi/eval/harness.py",
+        path="src/governed_bi/eval/projection.py",
         anchor=(
             '        "computed_correct": (\n'
             "            None if computed_fp is None or not gold_fp else computed_fp == "
@@ -223,7 +223,7 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
     Mutation(
         id="s39-eval-row-drops-the-eviction",
         what="the consumer end of the eviction chain reports nothing",
-        path="src/governed_bi/eval/harness.py",
+        path="src/governed_bi/eval/projection.py",
         anchor='        "context_evicted": (delivery.get("evicted") '
                "if isinstance(delivery, Mapping) else None),",
         replacement='        "context_evicted": None,',
@@ -295,7 +295,14 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
         id="r4-every-resume-warns-about-clarifications",
         what="a turn that abstained before routing is reported as an unexplained missing hash",
         path="src/governed_bi/eval/provenance.py",
-        anchor='    return str(row.get("outcome")) == "clarification" and not (row.get("licensed") or ())',
+        anchor=(
+            '    return (\n'
+            '        str(row.get("outcome")) == "clarification"\n'
+            '        and not (row.get("licensed") or ())\n'
+            '        and row.get("corpus_content_hash") is None\n'
+            '        and row.get("prompt_set_hash") is None\n'
+            '    )'
+        ),
         replacement="    return False",
         tests=("tests/eval/test_resume_will_not_merge_two_treatments.py",),
         finding="3.6a — fired on every legitimate resume, the shape that teaches a reader to "

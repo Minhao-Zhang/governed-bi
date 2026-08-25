@@ -23,11 +23,19 @@ export function ReviewSurface(): React.JSX.Element {
   const { value: cluster, setValue: setCluster } = useQueryParam("cluster");
 
   return (
+    // `min-w-0` on both columns, and it is load-bearing rather than defensive. A grid track's
+    // automatic minimum is `auto`, so `1fr` cannot shrink below its content's min-content width —
+    // and the right pane holds SQL. Measured at a 1280px viewport before this: the grid's
+    // scrollWidth was 1235 against a clientWidth of 991, the right column's edge landed at
+    // x=1498, and the reference answer's Copy button sat at x=1453. Nothing showed a scrollbar,
+    // because `layout/page-shell.tsx` wraps this in `overflow-hidden`, so the 244px did not
+    // overflow — it was clipped away with no way to reach it. `sql-block.tsx`'s `<pre>` already
+    // carries `overflow-x-auto`; that only scrolls once an ancestor lets the track be narrow.
     <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(20rem,26rem)_1fr]">
-      <div className="flex min-h-0 flex-col">
+      <div className="flex min-w-0 min-h-0 flex-col">
         <ReviewQueue selected={cluster} onSelect={setCluster} />
       </div>
-      <div className="flex min-h-0 flex-col">
+      <div className="flex min-w-0 min-h-0 flex-col">
         {cluster ? (
           <ClusterPanel clusterKey={cluster} />
         ) : (
