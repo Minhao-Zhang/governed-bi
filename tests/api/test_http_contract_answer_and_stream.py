@@ -308,7 +308,7 @@ def test_every_emitted_step_name_is_a_declared_stage() -> None:
     # make it.
     ran = {(e["step"], e["status"]) for e in events}
     steps = {step for step, _ in ran}
-    for stage in ("accept", "guard", "rewrite", "negative_gate", "route", "resolve",
+    for stage in ("accept", "guard", "negative_gate", "route", "resolve",
                   "connect", "assemble", "agent_core", "narrate", "stamp"):
         assert stage in steps, f"{stage} ran and emitted nothing: {sorted(steps)}"
     assert ("stamp", "ok") in ran, "the turn answered and the final row does not say so"

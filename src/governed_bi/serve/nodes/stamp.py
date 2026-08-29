@@ -240,7 +240,6 @@ def _extract_factory(
             "prompt_set_hash",
             "knobs_resolved",
             "guard",
-            "rewrite",
             "negative",
             "crossings",
             "licensed",

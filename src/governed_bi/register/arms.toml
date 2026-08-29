@@ -62,6 +62,47 @@
 # arms measured on two question sets from both being quotable. What the field buys is that each
 # arm's rows are now checked against a claim a reader can diff, so such a pair has to say so here.
 #
+# ── two digests, one tree: why the four measured arms and the three planned ones differ ──
+#
+# The four measured arms below declare `86ed1dbf…` and the three planned arms declare
+# `6e5c7b4b…`, and they are the same 57 schemas. **Measured 2026-08-26**, in a `git archive`
+# extraction of each commit so neither checkout was disturbed:
+#
+#   corpus_content_hash('../BIRD-corpus')                        @30872d3  86ed1dbf…
+#   corpus_content_hash('../BIRD-corpus')                        @74ff80c  6e5c7b4b…
+#   corpus_content_hash('../BIRD-corpus', schemas=<the 57 dirs>) @30872d3  5a556b3c…
+#   corpus_content_hash('../BIRD-corpus', schemas=<the 57 dirs>) @74ff80c  5a556b3c…
+#
+# The two commits between those refs add `LICENSE` and `README.md` and touch no asset.
+# `corpus/hash.py::corpus_content_hash` digests every file in the selected subtrees and
+# `corpus/identity.py::_is_tooling` drops tool-owned *directories* only — its docstring is
+# explicit that a root `README.md` is deliberately **not** dropped — so the whole-tree digest
+# moved while the assets did not. That is what `docs/return-path.md` means by "`--arm v4`
+# against the checked-out tip is refused today", and the refusal is **correct**: v4's 1 351 rows
+# carry `86ed1dbf…`, and re-pointing that field at a tree v4 never ran on is the silent
+# relabelling `tests/conformance/test_arm_profiles_are_declared.py::
+# test_the_shipped_profiles_name_the_digest_their_artifacts_carry` exists to fail on. An arm
+# re-run on today's tree is a NEW arm, and that is `v4_live` below.
+#
+# **The durable fix is the third line of that table and it is not in this file.** Restricting the
+# digest to the schema subtrees makes it invariant across a commit that adds only non-asset
+# files, and it is a parameter of the one implementation rather than a second one —
+# `corpus/hash.py`'s own docstring says so ("A parameter here rather than a second function,
+# because two digest implementations is how two answers to 'is this the same corpus' come to
+# disagree"). What is missing is that the value a row *carries* comes from
+# `serve/session.py::from_corpus_dir`, and the eval driver is the one caller that can never pass
+# a manifest: `serve/__main__.py` passes one always and `api/graph_app.py` whenever a schema is
+# pinned, while the driver derives its 57 schemas from the loaded structure — *after* the digest
+# is taken. `corpus/identity.py::corpus_files` says in as many words that `schemas=None` means
+# "the tree is the manifest — right for a single-schema tree, wrong for a pooled root".
+# `../BIRD-corpus` is a pooled root. Until `tools/run_datalake_eval.py` passes one, an arm declaring
+# `5a556b3c…` would be refused against rows carrying `6e5c7b4b…`, so these three declare the
+# whole-tree digest they will actually record. That is stricter than the assets require, never
+# looser: it fails loudly when an asset changes AND when a README does. Fixing it in the driver
+# alone would put a scoped digest in the eval path beside a whole-tree one in the API path, which
+# is the second answer the parameter exists to prevent — so it is one change in one owner's
+# hands, not this file's to make.
+#
 # ── three fields no arm below declares, and why ───────────────────────────────
 #
 # `hypothesised_effect`, `readout` and `corpus_release` are **optional**, and every arm in this
@@ -90,9 +131,10 @@
 #                        `corpus_release` — such an arm otherwise leaves the one field it exists
 #                        to vary unchecked. A tag, not a ref and not a digest.
 #
-# **Why all four arms below are blank, stated rather than left to inference.**
+# **Why all seven arms below are blank, stated rather than left to inference.**
 #
-# No effect size: all four were measured before the field existed, so any number here would be
+# No effect size, for the four measured arms: all four were measured before the field existed, so
+# any number here would be
 # read off the arm's own result. That is not a hypothesis, and it is worse than the silence in one
 # specific way — a fabricated effect makes `arm_power_refusal` *pass*, where an absent one makes it
 # abstain. The gate is therefore not in force on this file, which
@@ -100,10 +142,26 @@
 # test_the_shipped_arms_declare_no_hypothesis_and_that_is_the_committed_state` asserts as an
 # inventory, so the first arm to declare one has to come through that test.
 #
+# No effect size, for the three planned arms, which is the *harder* case because these three
+# could pre-register one and are the arms the field was added for. It is left to the operator and
+# is not filled in here, because the number is a claim about a population that does not exist
+# yet: `docs/two-planes.md` §9 sizes the run at "the 74 questions of §1.5 plus the 49 capped,
+# deduplicated, ~100 questions" — a set selected for having failed once, on which the null is not
+# zero but regression to the mean at the measured 12.7% discordance. An effect size written here
+# by somebody who has not seen that set would make `arm_power_refusal` **pass**, which is the one
+# outcome worse than its abstaining. Whoever materialises the probe set declares the hypothesis in
+# the same commit.
+#
 # No release: `../BIRD-corpus` carries no tags at all (checked 2026-08-24, `git tag --list` is
-# empty). All four arms were measured against a working tree, identified by the content digest
+# empty, still true 2026-08-26). All four measured arms were measured against a working tree,
+# identified by the content digest
 # above, and minting a release name now to attach retroactively would be a claim about the corpus
 # repository that the corpus repository does not make. The digest already reconciles the rows.
+# The three planned arms leave it blank for a different reason: none of them names `corpus_release`
+# in its `treatment` — the corpus is held FIXED across all three, which is what makes them a
+# comparable set — so the field is optional for them, and a tag cut today would be a release name
+# for a tree nobody has released. Cutting one is the follow-up that makes the digest note above
+# actionable, not a precondition for these runs.
 
 [arm.v3_fold]
 description = "ANALYST v3 with the fold prompt, routing pinned."
@@ -162,3 +220,100 @@ corpus = "30872d3"
 corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
 dataset = "22fe2a6"
 question_subset = "1351:423a3f4b65fb"
+
+# ── the three planned arms: docs/two-planes.md §9, Arms A / B / C ──────────────
+#
+# **Declared before they run, which is the point and also the reason two fields below are wrong
+# on purpose.** `question_subset` is mandatory, and its value cannot be known until the ~100
+# question probe set exists; so each of the three declares a string that names itself unresolved
+# and can match no run. `arm_startup_refusal` then refuses the arm before the first paid
+# question and prints both values, and the operator pastes the recorded one back here. That is
+# the check firing, not a placeholder silencing it — the alternative on offer was
+# `"1351:423a3f4b65fb"`, the full split, which would have been a false claim that PASSED.
+#
+# The three form one comparable set only if the corpus is held fixed across them. All three
+# therefore declare `74ff80c` and the digest the driver will record against it, and none names
+# `corpus_release` in its treatment. If a corpus patch lands mid-experiment, the arms already
+# run are not re-runnable against the arms that follow, and the digest is what says so.
+
+[arm.v4_live]
+description = "v4 unchanged, re-run on today's engine. The live control for the two arms below."
+# Empty for the same reason `v3_fold`'s is: what separates this arm from `v4` is the ENGINE, and
+# the engine is `git_sha`, which is `Role.operational`. There is no comparability knob that names
+# "several retrieval fixes landed", so this arm cannot declare a treatment relative to `v4` and
+# does not pretend to. What it can be is the control for `licensed_pre_budget`, which declares a
+# real knob.
+treatment = []
+# **Deliberately no `compare_to = "v4"`, and this is the trap it avoids.** `v4` and this arm
+# resolve every comparability knob identically — the difference is the harness commit — so
+# `eval/report.py::knobs_comparable` would certify the pair, and the delta would be read as a
+# treatment effect when it is the code. `docs/open-work.md` §3.13's "no pair on disk reaches the
+# cross-arm gate" is about missing knobs; this is the opposite hazard, a pair that reaches the
+# gate and should not. Quote this arm against the two below, never against `v4`.
+corpus = "74ff80c"
+# The whole-tree digest of `../BIRD-corpus` at 74ff80c, measured 2026-08-26. See the header's
+# two-digests note for why it is not `5a556b3c…` (the asset-scoped digest, invariant across both
+# commits) and what would have to change for it to be.
+corpus_content_hash = "6e5c7b4be83d56828bab66183eec03bbdcf486d7454d34acd066530010ebed85"
+# The ref the probe set is drawn from; the operator confirms it is still the checkout.
+dataset = "22fe2a6"
+question_subset = "unresolved: the ~100-question probe set of docs/two-planes.md 9 does not exist yet"
+notes = """
+Arm A. MUST run at licensed_seed_pre_budget = False: the pre-budget seed is the treatment of the \
+arm below, and this arm is what it is measured against. That is a DEPARTURE from the shipped \
+default, which is True as of 2026-08-26 -- so the operator passes \
+`tools/run_datalake_eval.py --post-budget-licence`, which writes the override into \
+`knobs_resolved` and adds `_postbudget` to the artifact name. Running this arm without it \
+produces a replicate of Arm B wearing the control's name, and no gate can see that: the two \
+would agree on every comparability knob, which is exactly what `knobs_comparable` reads as \
+"nothing changed".
+
+`treatment` stays empty even though this arm pins a knob. The field says what an arm changed \
+relative to its control, and this arm has no control -- it IS one. The knob is named by \
+`[arm.licensed_pre_budget]` below, which is the arm that moves it.
+"""
+
+[arm.licensed_pre_budget]
+description = "v4_live plus `licensed` seeded from the pre-budget table set."
+# The knob was declared with this arm, and the arm is why it must exist. An unconditional code
+# change would leave this arm and `v4_live` resolving every comparability knob identically, so
+# `knobs_comparable` would compare them on 50 matching values, find no difference, and certify a
+# pair whose only difference is one it cannot see. The knob is what makes the treatment nameable
+# — and `check_declared_is_consumed.py` rule K1 is what says whether anything reads it. It said
+# nothing did until 2026-08-26, when `serve/nodes/route_retrieve.py::_licensable_tables` began
+# reading it; this arm runs at the shipped default and `v4_live` is the one that pins.
+treatment = ["licensed_seed_pre_budget"]
+compare_to = "v4_live"
+corpus = "74ff80c"
+corpus_content_hash = "6e5c7b4be83d56828bab66183eec03bbdcf486d7454d34acd066530010ebed85"
+dataset = "22fe2a6"
+question_subset = "unresolved: the ~100-question probe set of docs/two-planes.md 9 does not exist yet"
+notes = """
+Arm B. On the branch where this beats Arm A, docs/two-planes.md §9 records what follows: the \
+one-line seeding fix was the cause, and the rewrite's accuracy case is spent. The population is \
+selected for having failed once, so ~20 of ~100 flip to correct on a re-run of the identical \
+configuration; that regression-to-the-mean null, not zero, is what a win has to beat.
+"""
+
+[arm.licensed_pre_budget_cap10]
+description = "licensed_pre_budget plus attempt cap 10, with the node budget raised to match."
+# Two names because two knobs move, and the second is not optional. `run_query_attempt_cap` alone
+# at 10 puts 10 x 120s = 1200s of statement timeout against a 1200s node budget, so the five
+# extra attempts convert to `crashed` rather than to recoveries and the arm reads as evidence
+# that a higher cap does not help. `register/knobs.py::attempt_cap_pairing_problem` refuses that
+# configuration at import; raising `agent_node_timeout_s` to >= 2400s is what clears it, and both
+# knobs are `Role.comparability`, so both belong here or `knobs_comparable` compares the arm
+# against its control on a value that moved.
+treatment = ["run_query_attempt_cap", "agent_node_timeout_s"]
+compare_to = "licensed_pre_budget"
+corpus = "74ff80c"
+corpus_content_hash = "6e5c7b4be83d56828bab66183eec03bbdcf486d7454d34acd066530010ebed85"
+dataset = "22fe2a6"
+question_subset = "unresolved: the ~100-question probe set of docs/two-planes.md 9 does not exist yet"
+notes = """
+Arm C. Compared against Arm B and not against Arm A, because licence width and attempt cap are \
+separate treatments and an arm that moves both cannot attribute its own delta. The cap number is \
+not arbitrary: ReAct-SQL caps at 15 and observes no query above 13, so 5 truncates the tail \
+rather than bounding it. `run_query_attempt_cap` has no env_var, so raising it means editing the \
+register default -- which is exactly where the import-time pairing check is waiting.
+"""

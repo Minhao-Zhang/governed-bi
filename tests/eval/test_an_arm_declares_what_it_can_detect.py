@@ -161,8 +161,10 @@ def test_the_readout_a_file_declares_is_the_one_in_the_refusal(tmp_path: Path) -
 def test_the_shipped_arms_reach_the_gate_and_it_abstains_on_all_of_them() -> None:
     """The state of the real file, asserted rather than assumed.
 
-    None of the four arms in ``arms.toml`` declares a hypothesis, so the gate is silent on every
-    one -- and until the loader read the field, silence here was indistinguishable from silence
+    None of the seven arms in ``arms.toml`` declares a hypothesis, so the gate is silent on every
+    one -- the four measured ones because they predate the field, the three planned ones because
+    their population does not exist yet and a number invented here would make the gate *pass*.
+    Until the loader read the field, silence here was indistinguishable from silence
     caused by the drop. Driving the shipped file is what tells those two apart: this test passed
     before the fix and passes after it, and
     ``tests/conformance/test_arm_profiles_are_declared.py`` is where the difference is pinned.

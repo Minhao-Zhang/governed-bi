@@ -177,7 +177,7 @@ def test_the_turn_after_a_crashed_turn_is_still_servable(
     ``path_kind`` outlives its turn under a checkpointer and nothing cleared it, so a crashed
     turn 1 left ``"crashed"`` in the channel — and ``_after_guard`` reads exactly that key to
     decide whether to skip straight to ``stamp``. Turn 2 was therefore routed to ``stamp``
-    before ``rewrite``, ``negative_gate`` or the fan-out ran, and stamped turn 1's failure as
+    before ``negative_gate`` or the fan-out ran, and stamped turn 1's failure as
     its own. Every later turn of that conversation did the same. This is the multi-turn REST
     path, which is live.
     """
@@ -233,7 +233,7 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
             "policy": "context_sufficiency_v1", "outcome": "withhold",
             "reason": "nothing_licensed", "rules_evaluated": [], "evidence": {},
         },
-        "guard": {"outcome": "blocked"}, "rewrite": {"outcome": "rewritten"},
+        "guard": {"outcome": "blocked"},
         "retrieved": {"by_type": {"table": ["sales_a.customers"]}},
         "delivery": {"context_hash": "stale"}, "execution": {"attempts": [1], "terminal": "refused"},
         "answer": {"outcome": "crashed"}, "generated_sql": "SELECT 1",

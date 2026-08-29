@@ -21,7 +21,6 @@ from governed_bi.govern.ledger import ExecutionRecord
 from governed_bi.register.quantity import Measured
 
 __all__ = [
-    "RewriteResult",
     "NegativeVerdict",
     "AbstentionVerdict",
     "FacetResult",
@@ -78,12 +77,6 @@ def cleared(left: Any) -> Any:
     return None if isinstance(left, str) and left == RESET else left
 
 
-class RewriteResult(TypedDict):
-    before: str
-    after: str
-    outcome: Literal["rewritten", "unchanged", "failed"]
-
-
 class NegativeVerdict(TypedDict):
     outcome: Literal["hit", "clear", "disabled", "error_failed_open"]
     tau: float | None
@@ -125,6 +118,20 @@ class RetrievalResult(TypedDict):
     #: Best score that did not survive, per type. A drop at 0.97 and a drop at 0.01 want
     #: opposite decisions and a bare count cannot tell them apart.
     budget_best_dropped_score: NotRequired[dict[str, float]]
+    #: **Every table this turn's retrieval reached, before ``apply_budgets`` capped the
+    #: rendering.** This is what ``licensed`` is built from (ADR 0006 §8, ADR 0005 §3.2):
+    #: budgets shape what is *rendered* and licensing what is *reachable*, and while the seed
+    #: was the post-budget ``by_type["table"]`` those were one set — so a gold table ranked
+    #: ninth against a cap of 8 refused as ``r_table_not_licensed``, a retrieval-budget outcome
+    #: wearing a governance label.
+    #:
+    #: Absent means nothing recorded a pre-budget set, not that there were no tables; the
+    #: readers in ``serve/nodes/route_retrieve.py`` fall back to ``by_type["table"]`` so a
+    #: hand-built ``retrieved`` still licenses what it renders. ``connect`` narrows it with the
+    #: other four collections when a component cannot be joined, which is why it lives here
+    #: rather than being handed straight to the ``licensed`` channel: that channel has no
+    #: reducer precisely so a narrowing cannot be undone by a merge.
+    table_candidates: NotRequired[list[str]]
 
 
 class AbstentionVerdict(TypedDict):
@@ -595,7 +602,6 @@ class ServeState(TypedDict, total=False):
     knobs_resolved: dict[str, Any]
 
     guard: GuardVerdict
-    rewrite: RewriteResult | None
     negative: NegativeVerdict
     #: The declared abstention policy's verdict (ADR 0013). Written by ``abstain``, read by
     #: ``graph._after_abstain`` for the routing and by ``stamp`` for the record.
@@ -687,7 +693,6 @@ PER_TURN_RESET: dict[str, Any] = {
     "facets": RESET,
     "terminal_reason": None,
     "guard": None,
-    "rewrite": None,
     "negative": None,
     "abstention": None,
     "retrieved": None,

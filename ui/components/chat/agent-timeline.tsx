@@ -130,6 +130,13 @@ export function AgentTimeline({
  * `refuse`, `decline` and `stamp` are deliberately absent. They are terminals —
  * one row, at the end, at the top level — and burying a refusal inside a
  * collapsible group is the one thing this component must not do.
+ *
+ * `abstain`, `reflect` and `narrate` are absent for the neighbouring reason. `abstain`
+ * decides whether the turn answers at all (ADR 0013), and the other two run *after*
+ * `agent_core`, so filing them under "reasoning" would fold two post-loop rows into the
+ * group they follow. All three stay at top level, which is also what an unrecognised step
+ * gets — `phaseOf` returns null and `groupSteps` passes the row through, so a stage from a
+ * newer server degrades into a plain row rather than a wrong group or a crash.
  */
 const PHASE_OF = new Map<string, string>([
   ["accept", "intake"],

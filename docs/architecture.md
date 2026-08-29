@@ -10,7 +10,7 @@ Wired in [`serve/graph.py`](../src/governed_bi/serve/graph.py). Nodes live under
 [`serve/nodes/`](../src/governed_bi/serve/nodes/).
 
 ```
-[accept] → guard → rewrite → negative_gate
+[accept] → guard → negative_gate
   → fanout ─┬─ facet_schema
             ├─ facet_term
             ├─ facet_metric
@@ -40,8 +40,7 @@ REST chat pair that was the second one is deleted.
 | Stage | Role |
 |---|---|
 | `guard` | Five deterministic rules (`govern/guard.py::GUARD_RULES`), then a model-backed BI-scope gate on the utility model. **Enabled per rule id, and `guard_rules_enabled` ships `UNSET`** — the served app (`api/graph_app.py`) turns on `g_bi_scope` and nothing else; the eval driver, the one-turn CLI and `tools/` all pass `{}`, so no guard rule fires on any measured arm |
-| `rewrite` | Stub rail today; facet query rewriting lives inside `facet_*` |
-| `negative_gate` | Negative-example decline path. A stub unconditionally: `negative_node` (`serve/nodes/negative.py`) discards its state and returns `outcome: disabled` without reading `negative_tau` or the corpus, so the `decline` branch is unreachable whatever is configured and whatever is curated |
+| `negative_gate` | Negative-example decline path. A stub unconditionally: `negative_node` (`serve/nodes/negative.py`) discards its state and returns `outcome: disabled` without reading `negative_tau` or the corpus, so the `decline` branch is unreachable whatever is configured and whatever is curated. **Kept deliberately, where the `rewrite` rail was not.** `register/record.py`'s `negative` field carries `gate="no negative_gate error_failed_open"`, and `GATE_CONDITIONS` is derived from exactly those `gate=` declarations, so deleting the node's record field takes `quotable()` from seven gates to six — `measure/gates.py`'s import-time closure assertion then forces the matching `GATE_IMPLEMENTATIONS` entry out with it. Trading a quotability gate for 31 lines is an operator's decision, not a cleanup |
 | `facet_*` | Parallel retrieval channels (each may rewrite its query) |
 | `route` / `resolve` / `connect` | Schema pick, budgets, Steiner join |
 | `assemble` | Render retrieval context block |
@@ -50,6 +49,20 @@ REST chat pair that was the second one is deleted.
 | `reflect` | Post-hoc observer; never routes the turn |
 | `narrate` | Short answer over the result table (must not crash an answered turn) |
 | `stamp` | The turn record: `outcome`, `guardrail_errors`, the ledger, `latency_sec` |
+
+**The `rewrite` rail is gone (2026-08-26).** It sat between `guard` and `negative_gate` and was
+an identity function: no model call, `outcome: "unchanged"` on every turn past the first and
+`None` on the first, so it could not move any measured arm. The coreference rewriting ADR 0005
+§3.3 sketched for it never landed here — what this engine rewrites is the per-facet query,
+inside `facet_*`, which is a different string written for a different purpose. Removing it
+narrowed a register claim that is still not exact: `register/record.py` declares the `negative`
+field null "only when guard blocked first", and that is false wherever a node crashes before
+`negative_gate` runs, because `wrap_node` routes a crash straight to `stamp`. Three nodes could
+do that; two can now (`accept` and `guard`), and the remaining gap is a wording fix in the
+register rather than a graph change. The
+`Stage.rewrite` enum member survives the node by design — `register/stages.py` keeps
+declared-but-unemitted members so instrumentation does not invent a second name for a stage that
+comes back.
 
 `agent_core` tools: `read_body`, `inspect_schema`, `sample_rows`, `run_query`,
 `ask_user`.

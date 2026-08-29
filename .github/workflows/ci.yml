@@ -217,6 +217,15 @@ jobs:
       - name: Review copy — one figure, one source, and every state has a sentence
         run: npm run check:review-copy
 
+      # Two declarations of one wire format with nothing binding them: `GovEvent` is a TypeScript
+      # interface and the Python side hand-builds the payload in `serve/events.py::emit`. Deleting
+      # the `rewrite` rail on 2026-08-26 left `case "rewrite"` reachable-looking in `steps.ts` and
+      # lint, `tsc` and the build all stayed green — so this reads `register/stages.py` as the
+      # authority and fails both ways: a client name the engine never declares, and an engine stage
+      # the client cannot label. The second is the silent one. Hermetic: no engine, no corpus.
+      - name: Stage vocabulary — the client and the engine speak the same one
+        run: npm run check:stage-vocabulary
+
       # `npm run check:api` and `npm run check:stream-messages` are deliberately NOT here.
       # `check:api` needs a live engine and a loaded corpus (ADR 0009 says so in the section that
       # introduces it); `check:stream-messages` is pure and could run, but it is a red/green

@@ -1438,28 +1438,31 @@ class ServeState(TypedDict, total=False):   # partial listing — see serve/stat
 *reachable*. A Steiner point must be licensed or every multi-hop query refuses
 at ADR 0006's table layer — which is what `connect` exists to prevent.
 
-> **Correction, 2026-08-22 — the code does the opposite, and the consequence is a wrong
-> refusal.** The separation asserted above is not what ships.
-> `serve/nodes/route_retrieve.py::route_node` seeds the set directly from the post-budget
+> **The code did the opposite until 2026-08-26, and the consequence was a wrong refusal.**
+> `serve/nodes/route_retrieve.py::route_node` seeded the set directly from the post-budget
 > rendering: `licensed = retrieved["by_type"]["table"]`, and that `by_type` is assembled in
 > `serve/nodes/pass_two.py` from the hits `apply_budgets(...)` **kept** — the ones the budget
-> dropped never enter it. Only `resolve_node` (reference closure) and `connect_node` (Steiner
-> points) widen the set afterwards; nothing restores a table the budget cut.
+> dropped never entered it. Only `resolve_node` (reference closure) and `connect_node` (Steiner
+> points) widened the set afterwards, and nothing restored a table the budget cut. So budgets
+> gated what is reachable: a gold table that lost its slot to the retrieval cap was unlicensed,
+> and ADR 0006's table layer refused the statement with `r_table_not_licensed` — a
+> *retrieval-budget* outcome wearing a *governance* label.
 >
-> So budgets do gate what is reachable. A gold table that loses its slot to the retrieval cap
-> is unlicensed, and ADR 0006's table layer then refuses the statement with
-> `r_table_not_licensed` — a *retrieval-budget* outcome wearing a *governance* label. Steiner
-> points are protected only because `connect` adds them after the fact; a budget-cut table that
-> is neither a reference nor a Steiner point is simply gone.
+> **Fixed by taking open-work.md §4.2's first option: license the pre-budget table set.**
+> `pass_two` records `retrieved["table_candidates"]`, every table it scored before the caps
+> ran; `route` seeds from it and `connect` closes the licence over it. `connect`'s Steiner
+> *terminals* stay the rendered tables — the licence is now wider than the prompt, and a table
+> nobody is shown must not be able to decline the turn on `missing_join_path`. The fuller note,
+> including what the widening costs, is at
+> [ADR 0006](0006-execution-time-governance.md) §8;
+> `tests/serve/test_the_render_budget_does_not_decide_what_a_turn_may_query.py` is the gate.
 >
-> Which way this should be fixed — license the pre-budget table set, or keep the coupling and
-> stop claiming otherwise — is a pending decision, tracked in
-> [`docs/open-work.md`](../open-work.md). Nothing in code was changed for this note. The same
-> false claim stood at [ADR 0006](0006-execution-time-governance.md) §8 and carries the same
-> correction there. Note also that `licensed`'s *meaning* was narrowed by
+> Note also that `licensed`'s *meaning* was narrowed by
 > [ADR 0012](0012-access-seam-principal-and-authorization.md) §3: it is "what retrieval found
 > this turn" and nothing more, so a licensed table can still be refused
-> `r_table_not_authorized` by the grant (`govern/check.py`, `govern/layers.py`).
+> `r_table_not_authorized` by the grant (`govern/check.py`, `govern/layers.py`). Widening the
+> licence widens what that rule can name, and `_tables` asks the licence *first* precisely so
+> the pair does not become an existence oracle.
 
 ```
 licensed = { table ids from facet hits }
@@ -1684,11 +1687,16 @@ out of scope or does not exist, so the model cannot probe for existence.
 > reasoning is worth reading — but it is a caller contract, which is to say the documented
 > convention this sentence says it is not.
 >
-> **2. `licensed` is the post-budget `by_type["table"]`, plus later widenings.**
-> `serve/nodes/route_retrieve.py::route_node` sets it from `retrieved["by_type"]["table"]`,
-> built in `serve/nodes/pass_two.py` from what `apply_budgets(...)` kept; `resolve` and
-> `connect` add to it. See the fuller correction under §3.2 — including the consequence, that a
-> budget-cut gold table refuses as `r_table_not_licensed`.
+> **2. The sentence above became true on 2026-08-26 and was false before it.**
+> `serve/nodes/route_retrieve.py::route_node` used to set `licensed` from
+> `retrieved["by_type"]["table"]`, built in `serve/nodes/pass_two.py` from what
+> `apply_budgets(...)` kept, so a budget-cut gold table refused as `r_table_not_licensed`. It
+> now seeds from `retrieved["table_candidates"]`, recorded before the caps run, and `connect`
+> closes the licence over that. See §3.2 — and note the consequence for *these two tools*
+> specifically: `inspect_schema` and `sample_rows` are bounded by a set that is now wider than
+> the rendered context, so both can be asked about a table the prompt did not show. That is the
+> intent (the bound is "what this turn reached"), and it is why both also ask this principal's
+> grant — correction 3 below.
 >
 > **3. The bounds carry more than these two fields now**
 > ([ADR 0012](0012-access-seam-principal-and-authorization.md) §6, mirroring the note already

@@ -49,14 +49,16 @@ __all__ = [
 ]
 
 def _effective_question(state: Mapping[str, Any]) -> str:
-    """``rewrite.after`` when rewriting succeeded, else ``question``."""
-    rewrite = state.get("rewrite")
-    if (
-        isinstance(rewrite, Mapping)
-        and rewrite.get("outcome") == "rewritten"
-        and rewrite.get("after") is not None
-    ):
-        return str(rewrite["after"])
+    """The question the facets search: ``state["question"]``, and nothing else since 2026-08-26.
+
+    It used to prefer ``rewrite.after``. The ``rewrite`` node and its state channel are both
+    gone (``serve/graph.py::_after_guard`` records why), so that branch could only ever read a
+    key ``ServeState`` no longer declares — a reader whose writer is deleted, which returns the
+    fallback forever while reading like a live feature. Kept as a named function because
+    ``_run_facet`` asks a real question of the state and :func:`_rewritten_query` below rewrites
+    the *facet's* query, one string later and for a different purpose; collapsing the two names
+    is how those two rewrites come to be read as one.
+    """
     return str(state["question"])
 
 

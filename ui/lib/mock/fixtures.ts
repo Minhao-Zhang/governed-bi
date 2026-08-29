@@ -477,7 +477,6 @@ export const MOCK_RUN_RECORD: Record<string, unknown> = {
   licensed: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
   crossings: [],
   lexical_coverage: 0.8,
-  rewrite: null,
   guard: { outcome: "clear", rule_id: null, detail: null },
   negative: { outcome: "disabled", tau: null, top_score: null, matched_id: null },
   execution: { attempts: [], terminal: "no_sql", guardrail_errors: 0 },
@@ -570,9 +569,9 @@ export const MOCK_GRADED_ANSWER: AnswerView = {
  *
  * The shape it exercises, in order:
  *
- *  - the intake rails, including a `rewrite` that fired and the `negative_gate`
- *    reporting `gate: "disabled"` — which is what it reports on essentially every
- *    turn today, because `negative_tau` is unset until a negative corpus exists;
+ *  - the intake rails — `accept`, `guard`, then the `negative_gate` reporting
+ *    `gate: "disabled"`, which is what it reports on essentially every turn today,
+ *    because `negative_tau` is unset until a negative corpus exists;
  *  - the five facets **interleaved**, starting together and resolving out of order,
  *    which is the concurrency the grouped timeline exists to absorb;
  *  - `route`/`resolve`/`connect`/`assemble`, with a cross-schema crossing;
@@ -597,11 +596,9 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
   { seq: 2, id: "accept:turn_mock", kind: "rail", step: "accept", status: "ok", detail: { turn_index: 2 } },
   { seq: 3, id: "guard:turn_mock", kind: "rail", step: "guard", status: "start" },
   { seq: 4, id: "guard:turn_mock", kind: "rail", step: "guard", status: "ok" },
-  { seq: 5, id: "rewrite:turn_mock", kind: "rail", step: "rewrite", status: "start" },
-  { seq: 6, id: "rewrite:turn_mock", kind: "rail", step: "rewrite", status: "ok", detail: { rewritten: true } },
-  { seq: 7, id: "negative_gate:turn_mock", kind: "rail", step: "negative_gate", status: "start" },
+  { seq: 5, id: "negative_gate:turn_mock", kind: "rail", step: "negative_gate", status: "start" },
   {
-    seq: 8,
+    seq: 6,
     id: "negative_gate:turn_mock",
     kind: "rail",
     step: "negative_gate",
@@ -610,41 +607,41 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
   },
 
   /* ── the five facets, concurrent ─────────────────────────────────────────── */
-  { seq: 9, id: "facet_schema:turn_mock", kind: "rail", step: "facet_schema", status: "start" },
-  { seq: 10, id: "facet_term:turn_mock", kind: "rail", step: "facet_term", status: "start" },
-  { seq: 11, id: "facet_metric:turn_mock", kind: "rail", step: "facet_metric", status: "start" },
-  { seq: 12, id: "facet_entity:turn_mock", kind: "rail", step: "facet_entity", status: "start" },
-  { seq: 13, id: "facet_example:turn_mock", kind: "rail", step: "facet_example", status: "start" },
-  { seq: 14, id: "facet_term:turn_mock", kind: "rail", step: "facet_term", status: "ok", detail: { n_hits: 2 } },
-  { seq: 15, id: "facet_schema:turn_mock", kind: "rail", step: "facet_schema", status: "ok", detail: { n_hits: 6 } },
-  { seq: 16, id: "facet_example:turn_mock", kind: "rail", step: "facet_example", status: "ok", detail: { n_hits: 3 } },
-  { seq: 17, id: "facet_metric:turn_mock", kind: "rail", step: "facet_metric", status: "ok", detail: { n_hits: 1 } },
+  { seq: 7, id: "facet_schema:turn_mock", kind: "rail", step: "facet_schema", status: "start" },
+  { seq: 8, id: "facet_term:turn_mock", kind: "rail", step: "facet_term", status: "start" },
+  { seq: 9, id: "facet_metric:turn_mock", kind: "rail", step: "facet_metric", status: "start" },
+  { seq: 10, id: "facet_entity:turn_mock", kind: "rail", step: "facet_entity", status: "start" },
+  { seq: 11, id: "facet_example:turn_mock", kind: "rail", step: "facet_example", status: "start" },
+  { seq: 12, id: "facet_term:turn_mock", kind: "rail", step: "facet_term", status: "ok", detail: { n_hits: 2 } },
+  { seq: 13, id: "facet_schema:turn_mock", kind: "rail", step: "facet_schema", status: "ok", detail: { n_hits: 6 } },
+  { seq: 14, id: "facet_example:turn_mock", kind: "rail", step: "facet_example", status: "ok", detail: { n_hits: 3 } },
+  { seq: 15, id: "facet_metric:turn_mock", kind: "rail", step: "facet_metric", status: "ok", detail: { n_hits: 1 } },
   // Zero hits, and it says so rather than going quiet: a facet that found nothing
   // is a fact about the corpus.
-  { seq: 18, id: "facet_entity:turn_mock", kind: "rail", step: "facet_entity", status: "ok", detail: { n_hits: 0 } },
+  { seq: 16, id: "facet_entity:turn_mock", kind: "rail", step: "facet_entity", status: "ok", detail: { n_hits: 0 } },
 
   /* ── post-fan-in, deterministic ──────────────────────────────────────────── */
-  { seq: 19, id: "route:turn_mock", kind: "rail", step: "route", status: "start" },
+  { seq: 17, id: "route:turn_mock", kind: "rail", step: "route", status: "start" },
   {
-    seq: 20,
+    seq: 18,
     id: "route:turn_mock",
     kind: "rail",
     step: "route",
     status: "ok",
     detail: { schemas: [SALES], n_candidates: 4 },
   },
-  { seq: 21, id: "resolve:turn_mock", kind: "rail", step: "resolve", status: "start" },
+  { seq: 19, id: "resolve:turn_mock", kind: "rail", step: "resolve", status: "start" },
   {
-    seq: 22,
+    seq: 20,
     id: "resolve:turn_mock",
     kind: "rail",
     step: "resolve",
     status: "ok",
     detail: { n_pulled_in: 4, n_licensed: 3 },
   },
-  { seq: 23, id: "connect:turn_mock", kind: "rail", step: "connect", status: "start" },
+  { seq: 21, id: "connect:turn_mock", kind: "rail", step: "connect", status: "start" },
   {
-    seq: 24,
+    seq: 22,
     id: "connect:turn_mock",
     kind: "rail",
     step: "connect",
@@ -652,9 +649,9 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
     // One crossing: table_d lives in `billing` and the rest in `sales`.
     detail: { n_crossings: 1, n_licensed: 3 },
   },
-  { seq: 25, id: "assemble:turn_mock", kind: "rail", step: "assemble", status: "start" },
+  { seq: 23, id: "assemble:turn_mock", kind: "rail", step: "assemble", status: "start" },
   {
-    seq: 26,
+    seq: 24,
     id: "assemble:turn_mock",
     kind: "rail",
     step: "assemble",
@@ -666,11 +663,11 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
   },
 
   /* ── the agent loop ─────────────────────────────────────────────────────── */
-  { seq: 27, id: "agent_core:turn_mock", kind: "rail", step: "agent_core", status: "start" },
-  { seq: 28, id: "read_body:call_1", kind: "tool", step: "read_body", status: "start", detail: { n_asset_ids: 2 } },
-  { seq: 29, id: "read_body:call_1", kind: "tool", step: "read_body", status: "ok", detail: { n_asset_ids: 2 } },
+  { seq: 25, id: "agent_core:turn_mock", kind: "rail", step: "agent_core", status: "start" },
+  { seq: 26, id: "read_body:call_1", kind: "tool", step: "read_body", status: "start", detail: { n_asset_ids: 2 } },
+  { seq: 27, id: "read_body:call_1", kind: "tool", step: "read_body", status: "ok", detail: { n_asset_ids: 2 } },
   {
-    seq: 30,
+    seq: 28,
     id: "inspect_schema:call_2",
     kind: "tool",
     step: "inspect_schema",
@@ -678,7 +675,7 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
     detail: { table_id: `${SALES}.table_b` },
   },
   {
-    seq: 31,
+    seq: 29,
     id: "inspect_schema:call_2",
     kind: "tool",
     step: "inspect_schema",
@@ -686,7 +683,7 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
     detail: { table_id: `${SALES}.table_b` },
   },
   {
-    seq: 32,
+    seq: 30,
     id: "sample_rows:call_3",
     kind: "tool",
     step: "sample_rows",
@@ -694,7 +691,7 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
     detail: { column_id: `${SALES}.table_b.status`, limit: 5 },
   },
   {
-    seq: 33,
+    seq: 31,
     id: "sample_rows:call_3",
     kind: "tool",
     step: "sample_rows",
@@ -703,9 +700,9 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
   },
   // Attempt 1: blocked at the licensing layer. No `sql` on a blocked check —
   // nothing reached the database, so there is no executed statement to report.
-  { seq: 34, id: "check:call_4", kind: "tool", step: "check", status: "start", detail: { attempt: 1 } },
+  { seq: 32, id: "check:call_4", kind: "tool", step: "check", status: "start", detail: { attempt: 1 } },
   {
-    seq: 35,
+    seq: 33,
     id: "check:call_4",
     kind: "tool",
     step: "check",
@@ -713,9 +710,9 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
     detail: { attempt: 1, layer: "table", reason_code: "r_table_not_licensed" },
   },
   // Attempt 2: the repair clears governance and runs.
-  { seq: 36, id: "check:call_5", kind: "tool", step: "check", status: "start", detail: { attempt: 2 } },
+  { seq: 34, id: "check:call_5", kind: "tool", step: "check", status: "start", detail: { attempt: 2 } },
   {
-    seq: 37,
+    seq: 35,
     id: "check:call_5",
     kind: "tool",
     step: "check",
@@ -723,7 +720,7 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
     detail: { attempt: 2, reason_code: "passed" },
   },
   {
-    seq: 38,
+    seq: 36,
     id: "execute:call_5",
     kind: "tool",
     step: "execute",
@@ -737,7 +734,7 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
     },
   },
   {
-    seq: 39,
+    seq: 37,
     id: "agent_core:turn_mock",
     kind: "rail",
     step: "agent_core",
@@ -747,7 +744,7 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
 
   /* ── terminal ───────────────────────────────────────────────────────────── */
   {
-    seq: 40,
+    seq: 38,
     id: "stamp:turn_mock",
     kind: "final",
     step: "stamp",

@@ -912,8 +912,11 @@ Two blockers, both **measured**:
    is the corpus cannot declare it and `register/arm_profiles.py` makes it `cannot_evaluate`.
 2. `corpus_content_hash('../BIRD-corpus')` at HEAD is `6e5c7b4be83d5682…`; `arms.toml` declares
    `86ed1dbf…` on all four arms. The two commits in between add only `LICENSE` and `README.md` —
-   no asset changed — and the digest moved anyway. **`--arm v4` against the checked-out tip is
-   refused today.**
+   no asset changed — and the digest moved anyway, because the digest hashes **every** file in the
+   selected subtrees and `corpus/identity.py::_is_tooling` drops tool-owned *directories* and
+   nothing by filename. **`--arm v4` against the checked-out tip is refused today**, correctly:
+   a refusal is the right response to two identities that disagree. It is not evidence that the
+   corpus content changed, and it has been read that way — see [open work](open-work.md) §1.5.
 
 So: a comparability knob `corpus_release`, naming a **tag** and not a directory. Patches land
 continuously; arms pin releases. Plus `hypothesised_effect` and `readout` on `ArmProfile`, which
@@ -921,12 +924,28 @@ gives `eval/power.py::require_power` the caller `open-work.md` §3.10 records it
 which point an arm that cannot detect its own hypothesis fails before it spends anything.
 
 **But do not plan a release around a paired arm.** What bounds the cadence is the stock of
-detectable effect, and it is nearly spent. Everything T3 can see is the coverage debt — 79
-questions whose gold tables were never licensed — worth at most +5.85pp, which at the measured EX
-scales to +3.98pp against an EX MDE of 2.33pp: **1.7 detectable releases in the entire debt.** And
-each one needs *two* new arms, not one, because no pair on disk reaches `knobs_comparable`
+detectable effect, and it is already spent. Everything T3 can see is the coverage debt, and there
+are two numbers for it over two populations:
+
+- **74 questions on the v4 arm** — of the 1 224 with a real gold statement, those whose gold tables
+  were never licensed, measured on `proxy_v4_corpus30872d3.jsonl`. That is 5.48pp of the 1,351
+  nominal; converting at the full-coverage rate (0.7548 on n=1,150) gives **+4.13pp** against an EX
+  MDE of 2.33pp: 1.8 detectable releases, if the whole artifact debt were still live.
+- **~20 questions live** — of the 71 coverage-miss *failures* on that arm, the ones that still
+  reproduce against the current tree, re-checked 2026-08-24 with
+  `tools/reproduce_observation.py --state open --embed`. 1.48pp nominal, **+1.12pp** converted:
+  **below the 2.33pp MDE. There is not one detectable release left in the live debt.** The engine
+  paid the rest without an EX re-run to price it; [open work](open-work.md) §1.5 has the
+  reconciliation and the verification that the corpus is not what changed.
+
+This paragraph read **79** until 2026-08-26 — the pre-fix count over the same 1 224 questions,
+retired by the `table_coverage` repair `failure-modes.md` §1 records, and worth restating only as
+the thing this number is not.
+
+And a paired arm needs *two* new arms, not one, because no pair on disk reaches `knobs_comparable`
 (§Comparability blocker 1 above is why), so the first release has to buy its own control: ~150M
-input tokens, ~104 minutes.
+input tokens, ~104 minutes. Against a live debt that cannot clear the floor, that is the whole
+argument for the next paragraph.
 
 Therefore the **release headline is the T3 per-question coverage delta** — resolution one question
 (0.08pp), cost ~$0 — and a paired arm is what you buy when a *code* change needs pricing.

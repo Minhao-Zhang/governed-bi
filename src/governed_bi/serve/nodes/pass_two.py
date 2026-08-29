@@ -447,6 +447,7 @@ def _build_retrieved(
     if not by_id:
         return {
             "by_type": {},
+            "table_candidates": [],
             "selected": {},
             "attributions": {},
             "pulled_in": {},
@@ -459,6 +460,14 @@ def _build_retrieved(
             "lexical_coverage": _lexical_coverage(state, index),
         }
 
+    # **Recorded before the caps run, because this is what the turn may *reach*.** ADR 0006 §8
+    # builds `licensed` from "table ids from facet hits", not from the post-budget rendering;
+    # `route_node` reads this key. Taken from `by_id` and not from `budgeted.dropped`, which
+    # counts per type and names nothing — a count cannot license a table.
+    table_candidates = sorted(
+        asset_id for asset_id, (_i, at, _s) in by_id.items() if at is AssetType.table
+    )
+
     budgeted = apply_budgets(list(by_id.values()), pulled_in=[])
     by_type: dict[str, list[str]] = {}
     kept_ids: set[str] = set()
@@ -469,6 +478,7 @@ def _build_retrieved(
 
     out: dict[str, Any] = {
         "by_type": by_type,
+        "table_candidates": table_candidates,
         "selected": {k: v for k, v in selected.items() if k in kept_ids},
         "attributions": {k: v for k, v in attributions.items() if k in kept_ids},
         "pulled_in": {},

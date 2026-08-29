@@ -228,11 +228,14 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "feeds weak_retrieval. With an embedder every asset scores above zero, so an "
        "out-of-corpus question still returns top_k tables and a clean run stamps "
        "confidence"),
-    _f("rewrite", Tier.decision, Absence.not_applicable, Stage.rewrite,
-       "before / after / outcome. Null means the node did not run (single turn); "
-       "'failed' is a distinct outcome value, because a nullable string cannot tell "
-       "those apart and any rate built on it reads 0.0 on a run where every rewrite "
-       "failed. Free text: it holds the user's question"),
+    # `rewrite` was here and is gone (2026-08-26), with the node that owned it. It declared
+    # "before / after / outcome, null means the node did not run", and by then the node was an
+    # identity function that ran on every turn and could write no other outcome -- so the field
+    # was null by construction on every row of every arm, and `serve/state.py` no longer
+    # declares the channel it read. `Stage.rewrite` stays in `register/stages.py` (its enum
+    # docstring says why unemitted members are kept); a *record field* is different, because
+    # `project` writes one key per declared field and a permanently-null column is a measured
+    # constant nobody can distinguish from instrumentation that was never wired up.
     _f("guard", Tier.decision, Absence.never, Stage.guard,
        "total record, written every turn including clear. A gate that leaves a trace "
        "only when it fires cannot afterwards be told from one never wired up. The "

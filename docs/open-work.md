@@ -35,9 +35,20 @@ argument you are about to make may already be there with the measurement that ki
 Current arm: **v4**, engine `3c0079a`, corpus `30872d3`, **EX 0.676** (clean 0.6762).
 438 failures. Method and per-case diagnosis: [failure modes](failure-modes.md).
 
+> **0.676 is this arm's EX on engine `3c0079a`, and it is stale with respect to this tree.**
+> Not because the corpus moved — it did not; see §1.5's live-debt paragraph, where the assets are
+> shown byte-identical. Because the *engine* moved: 114 commits since `3c0079a`, ~619 changed lines
+> under `src/governed_bi/retrieve/` alone, and the one re-measurement anybody has run against the
+> current tree says retrieval now licenses the gold tables on roughly **50 of the 71** questions
+> where this arm did not. Every bucket below is a property of the 2026-08-09 artifact. Nothing has
+> priced what those 114 commits did to EX, because pricing it costs a full 1,351-question arm and
+> nobody has bought one. Read the whole of §1 as history that has not been refuted, not as a
+> description of what the tree does today.
+
 Where the remaining failures are. The six rows partition the 438 — every failure lands in
 exactly one — so the coverage-based rows below are stated again as cross-cutting totals,
-because those are the numbers §1.5 and §7 are about:
+because those are the numbers §1.5 and [`failure-modes.md`](failure-modes.md) §7 are about — this
+page has no §7, and that reference has pointed at nothing since it was written:
 
 | bucket | n | nature |
 |---|---:|---|
@@ -84,11 +95,67 @@ The gold schema was routed in 20 of the 22. This is disambiguation **inside** th
 set, not routing recall — the agent is handed tables from several schemas and picks the
 wrong one.
 
-### 1.5 Seventy-four questions never had their gold tables licensed
+### 1.5 Seventy-four questions never had their gold tables licensed on the v4 arm, and about twenty still do not
 
 Table coverage on the v4 arm is **0.940** — 1 150 of 1 224 questions with a real gold
 statement had every gold table licensed. The engine answered 3 of the uncovered 74 correctly
 and missed the other 71, which is the cross-cutting coverage total under §1.
+
+**Four numbers name this one quantity across these documents — two populations, each measured on
+two instruments.** They are stated together here because they have been read as one figure
+disagreeing with itself:
+
+| figure | where it is stated | population | status |
+|---:|---|---|---|
+| **79** | `return-path.md` §10 | questions of the 1 224 with a real gold statement, v4 arm, whose gold tables were not all licensed — **pre-fix** | **retired** by the 2026-08-24 metric fix below. 6 answered correctly + 73 missed |
+| **74** | this section; `two-planes.md` §3 | the same population, **post-fix** | **current, for the 2026-08-09 artifact.** 3 answered correctly + 71 missed |
+| **73** | §3.10b, §3.10c, §3.10d | v4 *failures* with incomplete coverage — the rows `eval/feedback_import.py` filed, computed **pre-fix** | superseded as a count of real misses; the rows stay in the store, because an observation records something that did happen. 2 of the 73 were the `airline` mis-comparison |
+| **71** | §1 cross-cutting total; §3.10d's "71 real" | the same failures, **post-fix** | **current, for the artifact.** It is the same 71 as `74 − 3 correct`, and §3.10d's "71 real" is this number, not a fifth one |
+
+So there is one figure over the 1 224 real-gold questions (74) and one over the 438 failures (71),
+each with a retired predecessor (79, 73) that the same metric fix moved. `failure-modes.md` §1
+carries the before/after and names the five questions.
+
+**And a fifth number, which is the one that matters now: ~20 still reproduce.**
+`tools/reproduce_observation.py --state open --embed`, run against the live store and the current
+tree on 2026-08-24, re-routed the imported coverage misses and found that most of them are gone —
+retrieval licenses those gold tables today. The funnel in §3.10d records **20 still reproduce** out
+of the 71 real. **That is the live coverage debt**, and it is a fifth population again: not
+"questions the v4 arm failed to cover" but "questions this tree still fails to cover", measured
+with the current engine against `../BIRD-corpus` at its tip.
+
+**The debt was paid by the engine, not by the corpus, and this is verified rather than inferred.**
+`../BIRD-corpus` is at `74ff80c`; `arms.toml` declares `86ed1dbf…` on all four arms at corpus ref
+`30872d3`. Checking `30872d3` out into a worktree and hashing it returns exactly
+`86ed1dbfef8b325e…` — the declared value — against `6e5c7b4be83d5682…` at the tip. The two trees
+hold 7 359 and 7 361 files under `corpus_files`; the added two are `LICENSE` and `README.md`, none
+is removed, and **all 7 359 shared files are byte-identical**. `corpus/identity.py::_is_tooling`
+excludes tool-owned *directories* only and says so — *"a `README.md` at the corpus root is not
+dropped"* — so `corpus_content_hash`, which hashes every file in the selected subtrees, moves on
+two non-asset additions. The digest mismatch is real; the corpus content behind it did not change.
+Since the assets the engine retrieves over are the same bytes, nothing the corpus did can explain a
+question going from uncovered to covered. What changed is on this side of the boundary: 114 commits
+since engine `3c0079a`, with `retrieve/index.py`, `retrieve/vectors.py` and `retrieve/lexical.py`
+substantially rewritten among them. This section's own metric fix is one such change and accounts
+for 2 of the 73 imported rows; the other ~50 that stopped reproducing are engine behaviour, and no
+run has attributed them to a commit. **~50 and not an exact count**: the re-check ran through
+post-fix code, so a row that was only ever the `airline` artefact reads as "gone" there too and
+would be double-counted, and the store that could settle it is not on this tree.
+
+**Two consequences, and neither is priced.**
+
+1. **The winnable bucket is roughly a quarter of what this section says it is.** ~20 questions, not
+   71 — 1.5pp of the benchmark nominal, ~1.1pp after converting at the full-coverage rate. The
+   remaining work is smaller and harder than the 71 suggests: §3.10d found that 7 of the 20 are
+   schema-routing failures no `summary` or `body` edit can reach, leaving 11 the corpus loop could
+   plausibly fix.
+2. **The 0.676 headline is stale with respect to this tree, and nothing has re-measured it.** If
+   ~50 questions gained coverage, some of them became correct answers, and EX moved by an unknown
+   amount that is bounded above by ~50 × 0.7548 ≈ 38 questions ≈ 2.8pp — above the 2.33pp EX MDE of
+   §3.12, so this is an effect a re-run could actually see. **Nobody has run it.** T3 is free per
+   question and cannot answer it; only a full 1,351-question arm can, which is the ~150M input
+   tokens `return-path.md` §10 prices. Until then every EX figure on this page belongs to engine
+   `3c0079a` and should be read with its engine attached.
 
 Recomputed 2026-08-24 on the same artifact after a metric fix — `table_coverage` was comparing the
 gold statement's identifier against `licensed`, which holds asset **ids**, so the one table of 656
@@ -155,8 +222,12 @@ top of it. Concentrated in `works_cycles` (7), then `law_episode` and `superstor
 `airline` was in that list with 5 until the fix above, and all five were the same mis-compared
 table — the schema has no uncovered question left, which is worth knowing before anyone curates it.
 
-This is still the largest *winnable* bucket after the 259 semantic errors, and unlike those it
-is corpus and retrieval work rather than generic text-to-SQL.
+**On the artifact this was the largest *winnable* bucket after the 259 semantic errors. On this
+tree it is not**, and the sentence that said so unqualified stood until 2026-08-26. Against the
+~20 that still reproduce, the 259 full-coverage semantic failures are an order of magnitude larger
+and none of the coverage argument touches them. What survives is the *kind* claim: the ~20 are
+corpus and retrieval work rather than generic text-to-SQL, and 11 of them are reachable by the one
+repair the return path offers. What does not survive is the size claim.
 
 ### 1.6 Twelve capped turns had every gold table and still built no join
 
@@ -681,11 +752,20 @@ for, and the patch was withdrawn.
 
 **The funnel, measured.** 73 imported → 71 real → **20 still reproduce** → 13 whose missing table
 sits in a schema the router did reach → **11 the only repair this loop offers could plausibly fix**.
-15%.
+15%. The 73 and the 71 are §1.5's two coverage-miss counts over the 438 failures, before and after
+the `airline` metric fix — not a population this section computed — and §1.5's table relates them
+to the 79 and the 74 stated over the 1 224 real-gold questions.
+
+**What the 71 → 20 drop is, and what it is not.** It is §1.5's live coverage debt: this tree
+licenses the gold tables on ~50 questions where the v4 arm did not. It is **not** the corpus
+changing under the artifact. §1.5 verifies that the assets are byte-identical between `30872d3` and
+the tip, so the cause is on the engine side; the header of this page has said "no asset changed"
+since it was written, and the row below contradicted it for a day.
 
 | finding | status |
 |---|---|
-| **52 of 71 open rows no longer reproduce.** 71 carry `corpus_content_hash 86ed1dbf…` and the corpus is `6e5c7b4b…` — the artifact was measured against a different tree and nothing said so | fixed: `--state` asks the queue in one pass (72s; per-row through the CLI was 32 minutes), `--decline` closes them, and the importer names both hashes. Rows are **not** dropped on import — an observation is a record of something that did happen |
+| **52 of the open queue no longer reproduce**, re-checked 2026-08-24 with `--embed` against the current tree. The rows and the corpus **do** carry different `corpus_content_hash` values — `86ed1dbf…` on 71 of the 73 rows, `6e5c7b4b…` on the corpus — but that is not why, and this row said it was. The two commits between `30872d3` and `74ff80c` add `LICENSE` and `README.md` and change no asset; §1.5 hashes both trees and finds all 7 359 shared files byte-identical. The digest moved because `corpus_content_hash` hashes every file in the subtree and `_is_tooling` excludes only tool-owned *directories*. **A mismatched digest is a reason to refuse a comparison, not evidence about what changed** — reading it as a cause is the same error as reading a red gate as a diagnosis | fixed: `--state` asks the queue in one pass (72s; per-row through the CLI was 32 minutes), `--decline` closes them, and the importer names both hashes. Rows are **not** dropped on import — an observation is a record of something that did happen. **Open:** the ~50 real non-reproductions are unattributed to any commit, and §1.5 records what that costs the 0.676 headline |
+| **The open-queue denominator is stated two ways and 52 + 20 = 72.** This section says "20 still reproduce" out of 71 real; `tools/reproduce_observation.py` says "71 of its 73 observations were `open`, 52 of them no longer reproduced"; `tools/import_eval_failures.py` says "52 of the 72 open rows". Two 71s got conflated — 71 rows carrying `86ed1dbf…`, and 71 real misses after the `airline` fix — and the arithmetic favours 72 open of 73 — 52 + 20 = 72, and this section's own heading says "72% stale", which is 52/72 and not 52/71 | **open, and not settleable here.** `runs/feedback.sqlite` is not on this tree and neither is `runs/eval/`, so the partition cannot be re-derived. It moves no conclusion: 51 or 52 gone, ~20 live |
 | **7 of the 20 are schema-routing failures.** The router never reached the schema, so no `summary` or `body` edit can help — and nothing in the queue, the reproducer or `/review` says which layer failed | **open.** The loop offers one repair and does not say when it is the wrong one |
 | A config error exited **1**, which three of these tools use for a verdict; and `return 1` sat inside `if args.record:`, so a run that found 19 live failures exited **0** | fixed: `corpus_target.Misconfigured` → 2, chosen in `main`, for all four |
 | Four tools each carried their own copy of "which corpus", and the copies disagreed about whether `.env` counts | fixed: `tools/corpus_target.py`. `credentials` has been this repo's dotenv reader since 2026-08-03 |
@@ -992,29 +1072,42 @@ been, so *"19 of 20 refusals are retrieval misses"* stops being an argument from
 feature. The underlying question is still open — `licensed` still serves both masters, and ADR
 0012 added a third set rather than splitting the two.
 
-**Filed 2026-08-22: `licensed` is seeded from the post-budget table set, which the ADRs say it
-must not be.** `serve/nodes/route_retrieve.py::route_node` (`:140`) sets it from
-`retrieved["by_type"]["table"]`, and that `by_type` is assembled in
-`serve/nodes/pass_two.py:462-468` out of the hits `apply_budgets(...)` **kept** — a hit the
-budget dropped never enters it. Only `resolve_node` (`route_retrieve.py:172-181`, reference
-closure) and `connect_node` (Steiner points) widen the set afterwards, and neither restores a
-dropped table.
+**The post-budget seeding filed on 2026-08-22 is closed (2026-08-26): the decision was taken the
+way ADR 0006 §8 always specified.** `route_node` seeds `licensed` from
+`retrieved["table_candidates"]`, recorded before `apply_budgets(...)` runs, under the
+`licensed_seed_pre_budget` knob — shipped `True`, pinned `False` by `[arm.v4_live]` so the old
+seed stays reachable as that arm's control. ADR 0006 §8 and ADR 0005 §3.2/§3.5 read as decisions
+taken rather than corrections in place, and
+`tests/serve/test_the_render_budget_does_not_decide_what_a_turn_may_query.py` pins both seeds:
+three of its tests fail against the old line and one fails against a reader that consults the knob
+and returns the same set either way.
 
-[ADR 0006](adr/0006-execution-time-governance.md) §8 says the opposite in as many words —
-"Explicitly **not** the post-budget `by_type["table"]` — budgets shape what is *rendered*, and
-licensing what is *reachable*" — and describes `licensed` as an output of `connect`;
-[ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) §3.2 and §3.5 carried the same
-claim. All three of those sections now carry a 2026-08-22 correction block pointing here. So a gold table
-cut by the retrieval cap is unlicensed and Layer 6 refuses the statement `r_table_not_licensed`
-— a retrieval-budget outcome recorded as a governance verdict, which is exactly what those
-sections say cannot happen. Steiner points survive only because `connect` adds them after the
-budget has run; a budget-cut table that is neither a reference nor a Steiner point has no path
-back. The consequence for this section is that the refusal accounting above, and §1.5's coverage
-figure, measure a seam the ADRs do not describe.
+What it did **not** buy, measured on 200 questions (lexical-only, so an undercount against
+production): the route seed widens by a mean of 2.10 tables but the final licence by only 0.97,
+because `resolve`'s reference closure had already pulled most cut tables back as join endpoints.
+The table cap bit on 84 of the 200 turns and the final licence changed on 61. The rendered prompt
+and `context_hash` are byte-identical — only what a turn may *query* moved.
 
-**The pending decision, in the ADRs' words: license the pre-budget table set, or accept the
-coupling and stop claiming the separation.** Not taken in this pass — either side moving is a
-governance behaviour change, and no code was touched for the note.
+**What is still open, and the first item is a live risk this change carries.**
+
+**The spelling namespace grows with the licence, and nothing has measured what that costs.**
+`govern/pipeline.py::spellings_for` scopes the flat identifier-spelling map to `licensed`, and its
+own docstring records that at ~26 licensed tables this refused `r_ambiguous_fold` on 119 of 1,351
+turns — 112 of them ending `capped`, at EX 0.025, burning 24% of the run's input tokens. That
+namespace now grows by the same mean +0.97, p90 +4, max +11. The per-table map protects
+*qualified* references; a bare column name still consults the flat one. So the plausible cost sits
+in the same order of magnitude as the ~20-question live coverage debt the change is aimed at
+(§1.5), and which way it nets is unmeasured. `[arm.licensed_pre_budget]` against
+`[arm.v4_live]` is the arm that answers it, and until it runs this is a change made because the
+ADRs specify it, not because it is known to help.
+
+**`licensed` still serves two masters.** ADR 0012 added a third set rather than splitting the two,
+and `r_table_not_licensed` still answers both "retrieval missed" and, for a budget-cut table,
+nothing at all now. Splitting it would change what "governed" means and needs an ADR, not a patch.
+
+**The eval funnel moved with it.** `eval/datalake.py`'s `licensed`, `licensed_schemas`,
+`reached_gold` and `table_coverage` / `all_gold_tables_licensed` all read the widened set, so those
+figures are **not comparable to any arm on disk**.
 
 ---
 

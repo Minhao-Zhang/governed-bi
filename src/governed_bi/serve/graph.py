@@ -24,7 +24,6 @@ from governed_bi.serve.nodes.guard import guard_node
 from governed_bi.serve.nodes.narrate import narrate_node
 from governed_bi.serve.nodes.negative import negative_node
 from governed_bi.serve.nodes.reflect import reflect_node
-from governed_bi.serve.nodes.rewrite import rewrite_node
 from governed_bi.serve.nodes.route_retrieve import connect_node, resolve_node, route_node
 from governed_bi.serve.nodes.stamp import stamp
 from governed_bi.serve.nodes.terminal import decline_node, refuse_node
@@ -49,19 +48,28 @@ def _after_accept(state: ServeState) -> Literal["guard", "stamp"]:
     return "guard"
 
 
-def _after_guard(state: ServeState) -> Literal["refuse", "rewrite", "stamp"]:
+def _after_guard(state: ServeState) -> Literal["refuse", "negative_gate", "stamp"]:
+    """``guard -> negative_gate`` directly. A ``rewrite`` rail sat between them until 2026-08-26.
+
+    It was an identity function — no model call, ``outcome: "unchanged"`` on every turn past the
+    first, ``None`` on the first — so it could change no arm, and the coreference rewriting ADR
+    0005 §3.3 imagined for it never landed here: what the engine actually rewrites is the
+    per-facet query, inside ``facet_*`` (``register/facets.py``'s ``FACET_EXTRACTS``), on a
+    different string for a different purpose.
+
+    Removing it *tightened* a claim rather than loosening one, without finishing the job.
+    ``register/record.py`` declares the ``negative`` field null "only when guard blocked first",
+    and that is false wherever a node can crash before ``negative_gate`` runs: ``wrap_node``
+    turns the exception into ``path_kind: "crashed"`` and every edge here short-circuits to
+    ``stamp``, so ``negative`` stays null on a turn guard cleared. There were three such nodes
+    and now there are two — ``accept`` and ``guard`` itself. Closing those two is not a graph
+    change (the crash edge is the invariant), it is a wording fix the register owns.
+    """
     if state.get("path_kind") == "crashed":
         return "stamp"
     guard = state.get("guard") or {}
     if guard.get("outcome") == "blocked":
         return "refuse"
-    return "rewrite"
-
-
-def _after_rewrite(state: ServeState) -> Literal["negative_gate", "stamp"]:
-    """Rewrite used to fall through to ``negative_gate`` even after a wrap crash."""
-    if state.get("path_kind") == "crashed":
-        return "stamp"
     return "negative_gate"
 
 
@@ -189,7 +197,6 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         graph.add_node(name, wrap_node(name, fn, timeout=_node_timeout(name), **kw))
 
     rail("guard", guard_node)
-    rail("rewrite", rewrite_node)
     rail("negative_gate", negative_node)
     for name, fn in _FACET_NODES:
         rail(name, fn)
@@ -247,12 +254,7 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     graph.add_conditional_edges(
         "guard",
         _after_guard,
-        {"refuse": "refuse", "rewrite": "rewrite", "stamp": "stamp"},
-    )
-    graph.add_conditional_edges(
-        "rewrite",
-        _after_rewrite,
-        {"negative_gate": "negative_gate", "stamp": "stamp"},
+        {"refuse": "refuse", "negative_gate": "negative_gate", "stamp": "stamp"},
     )
     graph.add_conditional_edges(
         "negative_gate",

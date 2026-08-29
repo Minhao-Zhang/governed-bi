@@ -121,7 +121,7 @@ def test_the_skipped_nodes_of_a_refused_turn_are_silent() -> None:
     steps = {step for step, _ in _pairs(_events(turn, conf))}
 
     assert steps.isdisjoint(
-        {"rewrite", "negative_gate", "facet_schema", "facet_term", "facet_metric",
+        {"negative_gate", "facet_schema", "facet_term", "facet_metric",
          "facet_entity", "facet_example", "route", "resolve", "connect", "assemble",
          "agent_core", "read_body", "check", "execute", "decline"}
     ), f"a skipped node emitted: {sorted(steps)}"

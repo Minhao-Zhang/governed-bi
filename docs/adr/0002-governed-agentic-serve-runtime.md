@@ -438,9 +438,12 @@ by the frontend on `stream_mode="custom"`):
   *(Reader note: two of those four names are still rails — `route` and `assemble` —
   and `refuse_gate` and `cache` are not. `register/stages.py::Stage` is the authority for
   the live vocabulary and `serve/graph.py::build_graph` wires it: `accept` / `guard` /
-  `rewrite` / `negative_gate` / the five `facet_*` / `route` / `resolve` / `connect` /
+  `negative_gate` / the five `facet_*` / `route` / `resolve` / `connect` /
   `assemble` / `abstain` / `agent_core` / `reflect` / `narrate` / `stamp`, plus the
-  `refuse` and `decline` terminals. Historical Amendment text left unchanged.)*
+  `refuse` and `decline` terminals. A `rewrite` rail sat between `guard` and
+  `negative_gate` until 2026-08-26; it was an identity function and is deleted, though
+  `Stage.rewrite` survives it because that enum keeps declared-but-unemitted members.
+  Historical Amendment text left unchanged.)*
 - `tool` — each governed action inside the agent loop (`search_corpus` /
   `inspect_schema` / `sample_rows` / `run_query`), as a `start` then an
   `ok` / `blocked` / `error` / `cap` / `miss` resolve, paired by tool-call id;

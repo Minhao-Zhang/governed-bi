@@ -120,6 +120,18 @@ def main(argv: list[str] | None = None) -> int:
         "committing one are two arms -- and a resume that merged them would report the "
         "coverage of one with the accuracy of the other.",
     )
+    parser.add_argument(
+        "--post-budget-licence",
+        action="store_true",
+        help="seed `licensed` from the post-budget rendering instead of the pre-budget table "
+        "set (licensed_seed_pre_budget = False). This is the OLD behaviour, and the only "
+        "reason to ask for it is `arms.toml [arm.v4_live]`, which is the control the "
+        "pre-budget arm is measured against: without it that arm and its control resolve every "
+        "comparability knob identically and `knobs_comparable` certifies a pair that measures "
+        "nothing. It narrows what the agent may query, so refusals move from "
+        "r_table_not_authorized back to r_table_not_licensed; it is a comparability knob and "
+        "enters the artifact tag, because the two seeds are two arms.",
+    )
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument(
         "--max-retries",
@@ -370,9 +382,10 @@ def main(argv: list[str] | None = None) -> int:
                     question_ids=covered_qids,
                     dataset_file=dataset_file,
                 )["question_subset"],
-                # The one comparability knob that names the *treatment*: measured 2026-08-23, not
-                # one of the other 50 contains "corpus", so an arm whose treatment is the corpus
-                # could not declare it and `arm_profiles.reconcile` returned agreement.
+                # The one comparability knob that names the *treatment*: measured 2026-08-23 and
+                # re-counted 2026-08-26, not one of the other 51 contains "corpus", so an arm
+                # whose treatment is the corpus could not declare it and
+                # `arm_profiles.reconcile` returned agreement.
                 #
                 # **Flat, not nested under `knobs_resolved`.** A real row carries it in the knob
                 # mapping and `recorded_corpus_release` reads it from there; this identity is not a
@@ -426,10 +439,15 @@ def main(argv: list[str] | None = None) -> int:
     # 2.3pp and 2.7pp (`measure.stats.mde`, n=1351). It was the one treatment input with no tag
     # segment and no readable row, so `--resume` could merge a pinned run into an unpinned one.
     pinned_tag = "_pinned" if args.replay_routing is not None else ""
+    # The licence seed is the treatment separating `arms.toml`'s `licensed_pre_budget` from its
+    # control `v4_live`, so it needs a tag segment for the reason `reflect_tag` does: the resume
+    # guard compares the corpus and prompt hashes, and a control resuming into the treated arm's
+    # artifact is the one merge that would silently answer the question the pair exists to ask.
+    licence_tag = "_postbudget" if args.post_budget_licence else ""
     tag = (
         f"{args.model}_{args.effort or 'default'}_top{args.top_n or 'default'}"
         f"_{'embed' if args.embed else 'lexical'}"
-        f"{provider_tag}{variant_tag}{reflect_tag}{abstain_tag}{pinned_tag}"
+        f"{provider_tag}{variant_tag}{reflect_tag}{abstain_tag}{pinned_tag}{licence_tag}"
     )
     out_path = args.out or pathlib.Path("runs/eval") / f"live_full_{tag}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -495,6 +513,11 @@ def main(argv: list[str] | None = None) -> int:
         knob_overrides["reflect_enabled"] = True
     if args.abstain:
         knob_overrides["abstention_policy_enabled"] = True
+    # Written only when it departs from the register default, like every override above it: the
+    # register is the one home for a knob's value, and restating the shipped `True` here would
+    # be a second declaration that goes stale the day the default moves.
+    if args.post_budget_licence:
+        knob_overrides["licensed_seed_pre_budget"] = False
     run_knobs = {**session.knobs_resolved, **knob_overrides}
 
     done: set[str] = set()

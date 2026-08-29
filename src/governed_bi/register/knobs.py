@@ -27,6 +27,7 @@ __all__ = [
     "config_hash_keys",
     "env_overrides",
     "env_override",
+    "attempt_cap_pairing_problem",
 ]
 
 
@@ -124,7 +125,9 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        hashed_by_content=True),
     _k("corpus_release", "", Role.comparability,
        "the corpus TAG an arm was measured on, and the one comparability knob that names the "
-       "treatment itself. Measured 2026-08-23: not one of the other 50 comparability names "
+       "treatment itself. Measured 2026-08-23 and re-counted 2026-08-26 after "
+       "`licensed_seed_pre_budget` joined the set and `rewrite_model` left it: not one of the "
+       "other 50 comparability names "
        "contains 'corpus', so an arm whose treatment IS the corpus could not declare it and "
        "`register/arm_profiles.py` returned `cannot_evaluate` -- the gate said 'unknown' where "
        "the honest answer was 'the thing being tested'. A TAG and not a directory, and not the "
@@ -194,9 +197,12 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("facet_model", None, Role.comparability,
        "extraction is classification; a small model. Four concurrent calls, so "
        "latency counts once and cost counts four times"),
-    _k("rewrite_model", None, Role.comparability,
-       "separate from facet_model even though both are small: two call sites under "
-       "one knob means a run with a different rewrite model hashes identically"),
+    # `rewrite_model` was here and is gone (2026-08-26). It named the model behind the `rewrite`
+    # node, and that node was deleted the same day -- an identity function with no model call
+    # behind it -- so the knob had not one reader but no *call site* either. What rewrites in
+    # this engine is the per-facet query, and `llm_utility_model` is the knob for it. Removed
+    # rather than waived, because a comparability knob nothing runs still enters the config hash:
+    # two arms setting it differently would publish two configurations over one behaviour.
     # `llm_temperature` was here and is gone (audit §10): zero readers, yet it entered the
     # config hash and recorded `None` for every run. Re-declare it when something forwards
     # a temperature to a model.
@@ -288,7 +294,10 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "one correlated-EXISTS query over a 1.2M-row table burned 1500s of a 1200s budget and "
        "returned the turn `crashed` with no answer. Paired with the two knobs above: "
        "run_query_attempt_cap * this = 5 * 120s = 600s, half of agent_node_timeout_s, so five "
-       "statements can each time out and still leave the other half for model calls. 57014 is "
+       "statements can each time out and still leave the other half for model calls. That "
+       "pairing was a sentence here and nothing else until 2026-08-26; it is now "
+       "`attempt_cap_pairing_problem`, asserted at import over the three declared defaults. "
+       "57014 is "
        "classified QueryError, not ConnectionError, so the agent sees a statement it may "
        "rewrite rather than a database it cannot reach",
        ),
@@ -332,6 +341,23 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("graded_delivery_enabled", True, Role.comparability,
        "eligible only on a cost-layer failure. An open question asks whether the path "
        "earns its complexity at all; narrowed to one layer, deleting it is small"),
+    _k("licensed_seed_pre_budget", True, Role.comparability,
+       "seed `licensed` from the PRE-budget hit set (`retrieved['table_candidates']`) instead "
+       "of the post-budget rendering (`by_type['table']`). ON as shipped, because that is the "
+       "decision ADR 0006 §8 specified and has now taken: under OFF a table the retrieval cap "
+       "dropped is never licensed, so Layer 6 refuses the statement `r_table_not_licensed` -- a "
+       "retrieval-budget outcome recorded as a governance verdict. Read in "
+       "`serve/nodes/route_retrieve.py::_licensable_tables`, which is the one seed every node "
+       "that widens the licence goes through -- a reader in `route_node` alone would be undone "
+       "by `resolve` and `connect` two nodes later. Pin it OFF to reproduce the post-budget "
+       "seed: that is the behaviour every arm on disk was measured under, and it is what "
+       "`arms.toml [arm.v4_live]` must run to be the control for `[arm.licensed_pre_budget]` "
+       "(`docs/two-planes.md` §9's Arms A and B) rather than a replicate of it. A KNOB and not "
+       "an unconditional edit, because the two arms would otherwise differ only by `git_sha`: "
+       "that is `Role.operational`, so `eval/report.py::knobs_comparable` would hash the treated "
+       "arm and its control to one configuration and certify the pair as measuring nothing. "
+       "Comparability because it changes which tables the agent may read, which moves the "
+       "outcome mix directly"),
     _k("run_query_attempt_cap", 5, Role.comparability,
        "how many governed run_query attempts a turn gets. A tool return cannot end an "
        "agent loop -- measured at cap=5, five statements executed, then 25 further "
@@ -342,7 +368,10 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "writes ledger rows and used to spend this budget. Raised 3 -> 5 on 2026-08-07: "
        "a slot is charged before governance runs, so a blocked attempt costs the same "
        "as an executed one. Comparability-roled, so every number measured at 3 is a "
-       "different arm from one measured at 5"),
+       "different arm from one measured at 5. **Paired with statement_timeout_ms and "
+       "agent_node_timeout_s** -- see `attempt_cap_pairing_problem`, which is asserted at "
+       "import: raising this alone converts the extra attempts into `crashed` rather than "
+       "recoveries"),
     _k("max_rows", 200_000, Role.comparability,
        "applied by each connector adapter as max_rows + 1 so truncation is detectable. "
        "There is no connector base class: ports.Connector is a Protocol, and "
@@ -545,6 +574,86 @@ def env_override(name: str) -> Any | None:
     raise KeyError(f"{name!r} is not a declared knob")
 
 
+#: How much of ``agent_node_timeout_s`` the statement attempts may consume in the worst case.
+#:
+#: One half, and the number is the pairing's whole content: ``statement_timeout_ms`` was
+#: declared at 120 s *because* ``run_query_attempt_cap`` is 5 and 5 x 120 s = 600 s is half of
+#: the 1 200 s node budget, "so five statements can each time out and still leave the other half
+#: for model calls". A named constant rather than ``/ 2`` inline so the message below can quote
+#: the rule it is enforcing rather than a number a reader has to reverse-engineer.
+_STATEMENT_SHARE_OF_THE_NODE_BUDGET: Final[float] = 0.5
+
+
+def attempt_cap_pairing_problem(
+    *,
+    run_query_attempt_cap: int,
+    statement_timeout_ms: int,
+    agent_node_timeout_s: float,
+) -> str | None:
+    """Why these three values cannot hold together, or ``None``.
+
+    **The pairing was prose until 2026-08-26 and prose does not fire.** ``statement_timeout_ms``'s
+    register note has always said ``run_query_attempt_cap`` x it = 5 x 120 s = 600 s, half of
+    ``agent_node_timeout_s``. Nothing checked it. Raising the cap to 10 makes the product 1 200 s
+    -- the *entire* node budget -- so the five extra attempts cannot be spent on recoveries: the
+    node's own wall clock stamps ``crashed`` first, and the arm reads as evidence that raising
+    the cap does not help when what it measured is the cap eating its own timeout. That is a
+    wrong number that no gate downstream can catch, because every row of it is a real,
+    correctly-recorded ``crashed``.
+
+    A pure function over three explicit values, with the import-time assertion below as one
+    caller, because the two situations that need this answer hold different numbers. The
+    assertion holds the **declared defaults** and fires when somebody edits the register --
+    which is how the cap gets raised, since ``run_query_attempt_cap`` has no ``env_var``. A
+    caller holding *resolved* values can ask the same question of them: ``agent_node_timeout_s``
+    is env-first (``GOVERNED_BI_AGENT_NODE_TIMEOUT_S``), so a run can lower the node budget
+    without touching this file and the declared-default check cannot see it. One implementation,
+    two callers -- not two rules.
+
+    ``statement_timeout_ms <= 0`` is a problem and not a vacuous pass: ``datasource/postgres.py``
+    only issues ``SET statement_timeout`` when the value is positive, so zero means a governed
+    statement has no server-side bound at all and the product is unbounded rather than nil.
+
+    **Milliseconds throughout the message, printed unformatted.** The two knobs are declared in
+    different units and a message that converted between them would be rounding a quantity in
+    ``src/`` -- which ``tools/check_measurement_locality.py`` refuses outside
+    ``register/quantity.py::Measured.render``, on ADR 0005 §6's grounds that v1's rounding
+    helpers turned an unmeasured quantity into ``0.0`` on the way to a report. The knob names are
+    in the text, so a reader can see which unit each number is in.
+    """
+    if run_query_attempt_cap <= 0:
+        return (
+            f"run_query_attempt_cap is {run_query_attempt_cap}, which is not a number of "
+            "attempts. A turn that may run no governed statement cannot answer a question."
+        )
+    budget_ms = float(agent_node_timeout_s) * 1000 * _STATEMENT_SHARE_OF_THE_NODE_BUDGET
+    if statement_timeout_ms <= 0:
+        return (
+            f"statement_timeout_ms is {statement_timeout_ms}, so a governed statement has no "
+            "server-side bound (datasource/postgres.py issues SET statement_timeout only for a "
+            "positive value). run_query_attempt_cap x statement_timeout_ms is then unbounded "
+            f"and cannot be held under half of agent_node_timeout_s = {agent_node_timeout_s}s, "
+            f"which is {budget_ms}ms. One blocking query emits no stream frames, so "
+            "agent_core's soft wall never sees it and the turn is stamped crashed."
+        )
+    worst_case_ms = run_query_attempt_cap * statement_timeout_ms
+    if worst_case_ms <= budget_ms:
+        return None
+    return (
+        "run_query_attempt_cap and statement_timeout_ms no longer leave agent_node_timeout_s "
+        "room for the model calls:\n"
+        f"  run_query_attempt_cap x statement_timeout_ms = {run_query_attempt_cap} x "
+        f"{statement_timeout_ms}ms = {worst_case_ms}ms\n"
+        f"  agent_node_timeout_s = {agent_node_timeout_s}s, of which the statements may claim "
+        f"at most half = {budget_ms}ms\n"
+        "  So the extra attempts convert to `crashed` rather than to recoveries: the node's "
+        "wall clock stops the turn before the last attempts can be spent, and the arm reads as "
+        "evidence that a higher cap does not help.\n"
+        "  Raise agent_node_timeout_s with the cap (it is Role.comparability, so the arm is a "
+        "new one either way), or lower statement_timeout_ms to match."
+    )
+
+
 #: Knobs whose role placement must not drift (asserted at import).
 _PLACEMENT_INVARIANTS: Mapping[str, Role] = {
     "git_sha": Role.operational,
@@ -586,4 +695,38 @@ def _assert_knobs_are_coherent() -> None:
         )
 
 
+def _assert_the_attempt_cap_fits_inside_the_node_budget() -> None:
+    """Import-time: the declared defaults satisfy :func:`attempt_cap_pairing_problem`.
+
+    An assertion and not a test, following ``measure/gates.py``, ``govern/functions.py`` and
+    ``register/facets.py``: the invariant is a property of the *register itself*, so the moment
+    it stops holding is the moment this module is imported -- and the driver, the server, every
+    tool and every test import it. A test would leave a window in which a raised cap runs.
+
+    **``agent_node_timeout_s`` is taken env-first, and that is what makes the check usable.**
+    ``run_query_attempt_cap`` has no ``env_var``, so raising the cap means editing the default
+    above; the paired budget is normally raised with ``GOVERNED_BI_AGENT_NODE_TIMEOUT_S``, which
+    ``serve/graph.py`` reads before the knob. Holding only the declared default would refuse an
+    arm that *had* kept the pairing, and a guard that fires on a correct configuration is one
+    people learn to delete. A malformed variable is left to :func:`env_override`'s caller at
+    session construction, which already names it: turning a typo into an import error in every
+    tool is a worse failure than the one it would report.
+    """
+    by_name = {k.name: k for k in KNOB_REGISTER}
+    try:
+        node_timeout = env_override("agent_node_timeout_s")
+    except ValueError:  # pragma: no cover - reported at session construction instead
+        node_timeout = None
+    problem = attempt_cap_pairing_problem(
+        run_query_attempt_cap=by_name["run_query_attempt_cap"].default,
+        statement_timeout_ms=by_name["statement_timeout_ms"].default,
+        agent_node_timeout_s=(
+            by_name["agent_node_timeout_s"].default if node_timeout is None else node_timeout
+        ),
+    )
+    if problem:  # pragma: no cover - import-time guard
+        raise AssertionError(problem)
+
+
 _assert_knobs_are_coherent()
+_assert_the_attempt_cap_fits_inside_the_node_budget()

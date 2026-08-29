@@ -28,6 +28,14 @@
  * have, so they are gone rather than kept as fallbacks: a name this module still
  * answers to is a name a reader will believe the engine can produce.
  *
+ * `rewrite` went the same way on 2026-08-26, and it is the case that argues for the
+ * rule. The rail was deleted from the spine (`serve/graph.py::_after_guard` records
+ * why), so the event stopped arriving — and nothing broke, which is the problem: the
+ * `case "rewrite"` arm below simply became unreachable, and "Rewrote the follow-up"
+ * stayed in the tree as copy for a stage that could not happen. There is no compiler
+ * between `register/stages.py` and this file, so `scripts/check-stage-vocabulary.ts`
+ * is the thing that notices; read its header for what it can and cannot see.
+ *
  * The step view is driven by these custom events only — never by the agent's
  * internal chat messages (ADR 0001 / gotcha G2), which stay node-local.
  */
@@ -37,6 +45,7 @@ import {
   BookOpenText,
   Bot,
   CircleSlash,
+  Eye,
   Gavel,
   Hand,
   Inbox,
@@ -47,6 +56,7 @@ import {
   PenLine,
   Play,
   Rows3,
+  Scale,
   Search,
   ShieldCheck,
   ShieldX,
@@ -71,22 +81,28 @@ export interface GovEvent {
   kind: "rail" | "tool" | "final";
   /**
    * A `register/stages.py` Stage value: rails
-   * accept|guard|rewrite|negative_gate|facet_{schema,term,metric,entity,example}|
+   * accept|guard|negative_gate|facet_{schema,term,metric,entity,example}|
    * route|resolve|connect|assemble|agent_core|refuse|decline, tools
    * read_body|inspect_schema|sample_rows|check|execute|cap|ask_user, final stamp.
+   *
+   * Unvalidated, deliberately: this is a wire string, and an older server may send a
+   * stage this build has never heard of. Everything downstream degrades rather than
+   * throws — `defaultLabel` returns the name, `stepIcon` returns a generic icon, and
+   * `AgentTimeline` renders the row at top level instead of filing it into a phase.
    */
   step: string;
   status: "start" | "ok" | "blocked" | "error" | "refused" | "cap" | "hit" | "miss" | "declined";
   label?: string;
   /**
    * Per-step and closed-vocabulary only (ADR 0010 §4): turn_index, rule_id, gate,
-   * rewritten, asset_id, n_hits, failed_channels, schemas, n_candidates,
-   * n_pulled_in, n_licensed, n_crossings, `reason` and `terminal_reason` (the same
-   * string under both names, deliberately), n_chars, n_attempts, n_asset_ids,
-   * table_id, column_id, limit, attempt, layer, reason_code, sql, sql_sha256,
-   * row_count, truncated, n_columns, cap, clarification_id, outcome, failed_stage,
-   * error_type. There is no `n_assets`: it was declared and never emitted, and the
-   * contract deleted it rather than invent an unobservable count.
+   * asset_id, n_hits, failed_channels, schemas, n_candidates, n_pulled_in,
+   * n_licensed, n_crossings, `reason` and `terminal_reason` (the same string under
+   * both names, deliberately), policy, verdict, source, n_chars, n_attempts,
+   * n_asset_ids, table_id, column_id, limit, attempt, layer, reason_code, sql,
+   * sql_sha256, row_count, truncated, n_columns, cap, clarification_id, outcome,
+   * failed_stage, error_type. There is no `n_assets`: it was declared and never
+   * emitted, and the contract deleted it rather than invent an unobservable count.
+   * There is no `rewritten` either: it belonged to the retired `rewrite` rail.
    * Every key is optional on the wire — labels must degrade without it.
    */
   detail?: Record<string, unknown>;
@@ -178,8 +194,6 @@ export function stepIcon(step: string): LucideIcon {
       return Inbox;
     case "guard":
       return ShieldCheck;
-    case "rewrite":
-      return PenLine;
     case "negative_gate":
       return Ban;
     case "route":
@@ -206,6 +220,12 @@ export function stepIcon(step: string): LucideIcon {
       return CircleSlash;
     case "ask_user":
       return MessageCircleQuestionMark;
+    case "abstain":
+      return Scale;
+    case "reflect":
+      return Eye;
+    case "narrate":
+      return PenLine;
     case "refuse":
       return ShieldX;
     case "decline":
@@ -331,11 +351,6 @@ export function defaultLabel(ev: {
     }
     case "rewrite": {
       if (running) return "Rewriting the question";
-      // A failed rewrite used to report `rewritten: true`, because the flag was
-      // derived as `outcome != "unchanged"`. It now arrives as `error` with the
-      // flag false, and the turn continues with the question as asked — which is
-      // the part a reader needs, since the answer is about the original wording.
-      if (s === "error") return "Rewrite failed, kept the question as asked";
       return d?.rewritten === true ? "Rewrote the follow-up" : "No rewrite needed";
     }
     case "negative_gate": {
@@ -437,6 +452,50 @@ export function defaultLabel(ev: {
         ? "Finished reasoning"
         : `Finished reasoning, ${plural(attempts, "attempt")}`;
     }
+    case "abstain": {
+      // One row, never a start/resolve pair, and only on turns where the policy actually
+      // judged something: it ships disabled (`abstention_policy_enabled`) and
+      // `serve/nodes/abstain.py` emits nothing when `rail_status` is null.
+      //
+      // The reason is echoed raw, as `refuse` and `decline` echo theirs. It is a
+      // `stages.ABSTENTION_REASONS` member written for whoever maintains the pipeline;
+      // `answer-delivery.ts` owns the reader-facing sentence for the same vocabulary, and
+      // this is the operator's row.
+      if (running) return "Deciding whether to answer";
+      if (s === "error") return "The abstention policy failed";
+      if (s === "declined") {
+        const why = reasonOf(d);
+        return why ? `Withheld an answer: ${why}` : "Withheld an answer";
+      }
+      return "Nothing to withhold on";
+    }
+    case "reflect": {
+      // An observer. `register/stages.py` is explicit that it decides nothing and ends no
+      // turn, so this row must not read like a verdict *on the turn* — "the answer looks
+      // wrong" is the judge's opinion, not the engine's outcome.
+      //
+      // `error` here means the judge did not produce a declared verdict, and `verdict` then
+      // carries `why_unmeasured` instead (`serve/nodes/reflect.py`). Shown, not swallowed: an
+      // unmeasured judge and a judge that said `unsure` are different facts.
+      if (s === "error") {
+        const why = str(d, "verdict");
+        return why ? `Answer check did not run (${why})` : "Answer check did not run";
+      }
+      const verdict = str(d, "verdict");
+      return verdict ? (REFLECT_VERDICTS.get(verdict) ?? `Answer check: ${verdict}`) : "Checked the answer";
+    }
+    case "narrate": {
+      if (running) return "Writing the answer";
+      if (s === "error") return "Could not write the answer";
+      // `source` is observed rather than declared (`serve/events.py::_narrate`): `skipped`
+      // means the node returned no `answer_text` key at all, `none` means it returned an
+      // empty one. Both are "no prose from this node", and neither is a failure — the agent's
+      // own closing text may already be the answer.
+      const source = str(d, "source");
+      if (source === "skipped" || source === "none") return "No answer text to write";
+      const chars = num(d, "n_chars");
+      return chars === null ? "Wrote the answer" : `Wrote the answer (${chars} chars)`;
+    }
     case "refuse": {
       if (running) return "Refusing";
       if (s === "error") return "The refusal path failed";
@@ -521,9 +580,13 @@ export function defaultLabel(ev: {
       return running ? "Finishing the turn" : "Answered";
     }
     default:
-      // An unrecognised step is renderable-but-unlabelled, never an error: `Stage`
-      // declares members this stream does not emit yet (`graded_delivery`,
-      // `repair`) and the client must not break when one starts arriving.
+      // An unrecognised step is renderable-but-unlabelled, never an error. `Stage`
+      // declares members no live stream emits — `graded_delivery` and `repair` are
+      // declared-not-yet-emitted, `table_select` and `sql_generate` are attributed
+      // offline by the analyser, and `rewrite` is a retired rail kept as a name for
+      // turns recorded before 2026-08-26 — and the client must not break when one
+      // starts arriving. `scripts/check-stage-vocabulary.ts` pins that list, so a
+      // stage falling through here is a decision rather than an oversight.
       return ev.step;
   }
 }
@@ -573,6 +636,20 @@ function outOfScope(subject: string | null, plural = false): string {
 function failedOpen(gate: string): string {
   return `${gate} failed open: the question went through unchecked`;
 }
+
+/**
+ * `reflect`'s closed verdict vocabulary (`serve/nodes/reflect.py::REFLECT_VERDICTS`), in
+ * prose. Mapped rather than echoed because `unsure` is a first-class value there — a judge
+ * forced to pick between two labels it cannot distinguish returns a coin flip — and a row
+ * reading "Answer check: unsure" invites the reader to treat it as a hedge on the answer.
+ * The wording keeps the judgement attributed to the judge. An unrecognised verdict is echoed
+ * raw, so a widened vocabulary is never silently swallowed.
+ */
+const REFLECT_VERDICTS = new Map<string, string>([
+  ["answered", "Answer check: looks answered"],
+  ["wrong", "Answer check: looks wrong"],
+  ["unsure", "Answer check: could not tell"],
+]);
 
 /**
  * `connect`'s two declared decline reasons, in prose. Mapped rather than echoed

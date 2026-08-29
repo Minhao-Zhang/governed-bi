@@ -119,12 +119,10 @@ WAIVED_KNOBS: tuple[Waiver, ...] = (
 
 #: R1 waivers: register fields deliberately absent from the artifact row.
 WAIVED_RECORD_FIELDS: tuple[Waiver, ...] = (
-    Waiver(
-        "rewrite",
-        "null by construction on every eval row -- the node runs only on a follow-up and the "
-        "harness serves one turn per question. Carrying it would add a column that is a "
-        "measured constant.",
-    ),
+    # `rewrite` was waived here until 2026-08-26 ("null by construction on every eval row"),
+    # and the field it waived is gone with the node that owned it. A waiver outliving its
+    # declaration is the stale half of the same defect this file exists for: it reads as a
+    # decision somebody took about live machinery.
     Waiver(
         "cache_read_tokens",
         "carried inside the row's `usage` list, one entry per model call. UsageRecord declares "

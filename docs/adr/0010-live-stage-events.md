@@ -86,7 +86,7 @@ recommendation and removes a TLS handshake from the event loop regardless of `bl
 and still not the fix.
 
 **M5 — `updates` mode already exposes every rail, for free.** A streamed run emits one
-`updates` event per node keyed by node name: `accept, guard, rewrite, negative_gate, fanout,
+`updates` event per node keyed by node name: `accept, guard, negative_gate, fanout,
 facet_×5, route, resolve, connect, assemble, agent_core, stamp`. What it does *not* expose is
 anything inside `agent_core` beyond `model` / `tools` — and `tools` does not say *which* tool,
 whether governance passed, or what it cost. **That is where the whole latency and the whole
@@ -386,7 +386,6 @@ twice, and a seq-derived id would have shown the same step twice.
 | --- | --- | --- | --- |
 | `accept` | rail | start, ok, error | `turn_index` |
 | `guard` | rail | start, ok, blocked, error | `rule_id` when blocked, `gate` on error |
-| `rewrite` | rail | start, ok, error | `rewritten` (bool) |
 | `negative_gate` | rail | start, **ok**, hit, miss, error | `gate` on ok/error, `asset_id` on hit |
 | `facet_schema` `facet_term` `facet_metric` `facet_entity` `facet_example` | rail | start, ok, error | `n_hits`, `failed_channels` on error |
 | `route` | rail | start, ok, declined, error | `schemas`, `n_candidates`, `reason` when declined |
@@ -474,6 +473,12 @@ places §3 did not think to look:
    one layer out — its predecessor reported the configuration instead of the observation. "The
    corpus has nothing to say" and "we never looked" are not the same sentence.
 5. **A failed rewrite reported `rewritten: true`**, because the flag was `outcome != "unchanged"`.
+   Moot since 2026-08-26: the `rewrite` rail was an identity function that could not fail, and it
+   is deleted — node, state channel, stream row and all. Its row is gone from the table above and
+   from `EMITTED_STEPS` in `tests/serve/test_stream_events.py`, which mirrors that table by hand
+   precisely so the two cannot drift apart. Kept here because the defect class is live: a status
+   derived from a value's *inequality to the clean case* reads every unexpected value, errors
+   included, as success.
 6. **A decline's reason reached nobody.** The engine's channel is `terminal_reason`; this table
    said `reason`; the client read `reason`. So the most important row on a failed turn rendered
    with no explanation. Both keys are now emitted — same string, each name correct in its own

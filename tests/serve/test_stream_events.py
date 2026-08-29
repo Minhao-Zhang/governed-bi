@@ -38,7 +38,6 @@ from governed_bi.serve.wrap import wrap_node
 EMITTED_STEPS = (
     "accept",
     "guard",
-    "rewrite",
     "negative_gate",
     "facet_schema",
     "facet_term",
@@ -244,14 +243,6 @@ def test_a_facet_whose_channel_never_ran_is_not_reported_as_zero_hits() -> None:
     status, detail = rail_observation("facet_term", healthy)
     assert status == "ok", "a channel that ran and found nothing really did find nothing"
     assert detail == {"n_hits": 0}
-
-
-def test_a_failed_rewrite_is_not_reported_as_rewritten() -> None:
-    """``rewritten`` was ``outcome != "unchanged"``, which made an error look like a success."""
-    status, detail = rail_observation("rewrite", {"rewrite": {"outcome": "error"}})
-    assert (status, detail) == ("error", {"rewritten": False})
-    assert rail_observation("rewrite", {"rewrite": {"outcome": "unchanged"}}) == ("ok", {"rewritten": False})
-    assert rail_observation("rewrite", {"rewrite": {"outcome": "rewritten"}}) == ("ok", {"rewritten": True})
 
 
 def test_a_decline_carries_its_reason_under_both_names() -> None:

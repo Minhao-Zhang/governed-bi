@@ -119,18 +119,21 @@ def test_every_gate_in_tools_is_either_in_ci_or_declared_manual() -> None:
             "tests/conformance/test_corpus_conformance_rules_fire.py, which does run in CI"
         ),
         "check_declared_is_consumed.py": (
-            "reports 5 real violations today, down from 14 on 2026-08-11. **Tier 1 is now "
-            "clear** -- all five items in that gate's tier-1 section (the note listing them, "
+            "reports 4 real violations today, down from 14 on 2026-08-11 and from 6 earlier on "
+            "2026-08-26 (licensed_seed_pre_budget is now read by "
+            "serve/nodes/route_retrieve.py::_licensable_tables, and rewrite_model was deleted "
+            "with the node it named). **Tier 1 is now clear** -- all five items in that gate's "
+            "tier-1 section (the note listing them, "
             "git-history:docs/analysis/declared-not-consumed.md, is deleted) are closed and "
             "each is asserted on its VALUE in "
             "tests/serve/test_the_record_follows_the_knob.py, so the condition this entry "
-            "used to name is met. What still stops a CI step is the five remaining findings: "
-            "the run would fail every commit, and waiving 5 genuine findings to make it "
+            "used to name is met. What still stops a CI step is the four remaining findings: "
+            "the run would fail every commit, and waiving 4 genuine findings to make it "
             "green is the exact lie the gate was written to catch. Two of them "
             "(expand_hops, negative_tau) need a decision in retrieve/ rather than a wire; "
-            "clarifications was the third and is now consumed by the trace route. Until then "
+            "clarifications was a third and is now consumed by the trace route. Until then "
             "test_the_declared_but_unconsumed_set_does_not_grow below runs the gate on every "
-            "commit and fails on a SIXTH -- which is the half of CI that was actually "
+            "commit and fails on a FIFTH -- which is the half of CI that was actually "
             "missing. Delete this entry, and that test, when the list reaches zero"
         ),
     }
@@ -162,12 +165,18 @@ KNOWN_UNCONSUMED: frozenset[str] = frozenset({
     # comparability knobs with no reader: setting one moves the config hash and no behaviour
     "expand_hops",
     "negative_tau",
-    # dead declarations, superseded by `llm_utility_model` (ADR 0011's two-model split)
+    # dead declaration, superseded by `llm_utility_model` (ADR 0011's two-model split).
+    # `rewrite_model` was beside it until 2026-08-26 and is deleted: the `rewrite` node it
+    # named went, so it was not a knob awaiting a reader but a knob naming no call site.
     "facet_model",
-    "rewrite_model",
     # deliberately open: the curator that would consume it is not in this repository, and
     # wiring it from the eval driver would launder it under K1's blind spot
     "build_workers",
+    # `licensed_seed_pre_budget` was here for a few hours on 2026-08-26, while the pre-budget
+    # seed was an UNCONDITIONAL edit and the knob `arms.toml`'s `licensed_pre_budget` declares
+    # as its treatment had no reader. `serve/nodes/route_retrieve.py::_licensable_tables` now
+    # reads it, so the finding is closed and the line is gone -- which is what the ratchet
+    # demands: it fails as loudly on a stale entry as on a new finding.
     # `clarifications` was here until 2026-08-19, when `/audit/turns/{id}/trace` began
     # projecting it (`ThreadTurnLog.clarifications_of`). The ratchet is what made removing it
     # mandatory rather than optional.
@@ -175,9 +184,9 @@ KNOWN_UNCONSUMED: frozenset[str] = frozenset({
 
 
 def test_the_declared_but_unconsumed_set_does_not_grow() -> None:
-    """The gate runs on every commit, and a **sixth** finding fails the build.
+    """The gate runs on every commit, and a **fifth** finding fails the build.
 
-    ``check_declared_is_consumed.py`` is on the ``manual`` list above because it exits 1 on five
+    ``check_declared_is_consumed.py`` is on the ``manual`` list above because it exits 1 on four
     real findings, and a CI step that fails every commit is a step everyone learns to ignore.
     That reasoning is sound and it left the gate running nowhere, so the thing it was written to
     prevent — a new declaration nothing consumes — could still land unnoticed. Three did between
@@ -188,8 +197,10 @@ def test_the_declared_but_unconsumed_set_does_not_grow() -> None:
     with "delete it from KNOWN_UNCONSUMED", because a shrinking list nobody updates is how a
     stale count survives.
 
-    Asserting the **names** and not the count: five findings and five different findings are the
-    same integer, which is the class of defect this whole package exists for.
+    Asserting the **names** and not the count: four findings and four different findings are the
+    same integer, which is the class of defect this whole package exists for. Both directions
+    have now fired for real — the set went 5 → 6 when ``licensed_seed_pre_budget`` was declared
+    with no reader, and 6 → 4 when that was wired and ``rewrite_model`` was deleted.
     """
     result = _gate("check_declared_is_consumed.py")
     found = _findings(result)

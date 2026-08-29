@@ -565,26 +565,40 @@ Explicitly **not** the post-budget `by_type["table"]` — budgets shape what is
 or every multi-hop query refuses at the table layer, which is what `connect`
 exists to prevent.
 
-> **Correction, 2026-08-22 — the wiring is the opposite of the sentence above, and it costs a
-> wrong refusal.** `licensed` is seeded from the post-budget set.
-> `serve/nodes/route_retrieve.py::route_node` sets `licensed = retrieved["by_type"]["table"]`,
-> and that `by_type` is assembled in `serve/nodes/pass_two.py` out of the hits
-> `apply_budgets(...)` **kept** — a hit the budget dropped never appears in it. Two nodes widen
-> the set afterwards and neither restores a dropped table: `resolve_node` adds the reference
-> closure and `connect_node` adds Steiner points.
->
-> So the two things this section separates are coupled in one direction: **a gold table cut by
-> the retrieval cap is unlicensed**, and Layer 6 then refuses the statement
+> **This was false in code from the first F2 turn until 2026-08-26, and it cost a wrong
+> refusal.** `route_node` seeded `licensed` from `retrieved["by_type"]["table"]`, which
+> `serve/nodes/pass_two.py` assembles out of the hits `apply_budgets(...)` **kept**. The table
+> budget is 8, so a gold table ranked ninth was never licensed and Layer 6 refused the statement
 > `r_table_not_licensed` — a retrieval-budget outcome recorded as a governance verdict, which is
-> exactly what the paragraph above says cannot happen. Steiner points survive only because
-> `connect` adds them after the budget has run; a budget-cut table that is neither a reference
-> nor a Steiner point has no path back.
+> exactly what the paragraph above says cannot happen. Neither widening node restored it:
+> `resolve_node` adds the reference closure, `connect_node` adds Steiner points, and a
+> budget-cut table that is neither had no path back. Steiner points survived only because
+> `connect` adds them after the budget has run.
 >
-> The decision — license the pre-budget table set, or accept the coupling and stop claiming the
-> separation — is pending and tracked in [`docs/open-work.md`](../open-work.md). **No code was
-> changed for this note.** The identical false claim stood at
-> [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §3.2 and §3.5 and carries the same
-> correction there.
+> **The decision open-work.md §4.2 left open is taken: the licence is the pre-budget set.**
+> `pass_two` now records `retrieved["table_candidates"]` — every table it scored, before the
+> caps ran — `route_node` seeds from that, and `connect_node` closes the licence over it. Three
+> things did *not* change with it, and each is load-bearing:
+>
+> * **`connect`'s terminals are still the rendered tables.** The licence is wider than the
+>   prompt now, and feeding the wider set to the Steiner search would let a table nobody is
+>   shown decline the whole turn on `missing_join_path`, or drag its component over
+>   `max_steiner_points` — the same coupling, one node further along, wearing a second reason
+>   code. What `connect` guarantees is a property of the prompt.
+> * **Join completion still runs over the rendered set**, for the same reason: completing over
+>   the licence would render the join keys of a pair of tables the prompt never names.
+> * **`check()` still asks the licence before the grant.** That ordering is what stops the pair
+>   of rules being an existence oracle, and widening the licence does not move it:
+>   `r_table_not_authorized` still names only a table this turn's own question reached.
+>
+> What it does cost is priced rather than hidden: a wider licence is a wider flat spelling
+> namespace (`govern/pipeline.py::spellings_for`, measured at 119 of 1 351 turns refusing
+> `r_ambiguous_identifier` when a turn licensed ~26 tables), and open-work.md §1.4's 22 answers
+> written against the wrong schema are a disambiguation problem the extra tables can only make
+> harder. The same false claim stood at
+> [ADR 0005](0005-v2-memory-layer-and-faceted-retrieval.md) §3.2 and §3.5 and is corrected
+> there. `tests/serve/test_the_render_budget_does_not_decide_what_a_turn_may_query.py` is the
+> gate.
 
 **`resolve` gets the same crossing accounting `connect` has.** Few-shot SQL
 closure pulls in every table a gold statement touches, so without it a

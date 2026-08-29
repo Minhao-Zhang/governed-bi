@@ -55,7 +55,7 @@ const GOVERNANCE_KEYS = [
   "failure_cause",
   "generated_sql",
   // Tier.decision, in register order — which is pipeline order: retrieve, route, budget,
-  // license, connect, rewrite, guard, then how the attempt actually went.
+  // license, connect, guard, then how the attempt actually went.
   "facet_hits",
   "facet_degraded",
   "schema_ranking",
@@ -66,7 +66,6 @@ const GOVERNANCE_KEYS = [
   "licensed",
   "crossings",
   "lexical_coverage",
-  "rewrite",
   "guard",
   "negative",
   "abstention",
@@ -197,7 +196,6 @@ const ABSENCE: Record<string, "never" | "not_measured" | "not_applicable"> = {
   licensed: "not_applicable",
   crossings: "not_applicable",
   lexical_coverage: "not_measured",
-  rewrite: "not_applicable",
   guard: "never",
   negative: "not_applicable",
   abstention: "not_applicable",

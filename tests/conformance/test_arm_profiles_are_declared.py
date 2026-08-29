@@ -237,12 +237,19 @@ def test_the_loader_refuses_an_arm_that_declares_no_digest(tmp_path: Path) -> No
 
 def test_every_shipped_arm_can_actually_be_reconciled() -> None:
     """Not just v4 and v5. ``v3_fold`` is the arm the control is measured against, and it was
-    the one with no digest — so the check that mattered most was the one that ran on nothing."""
-    digest = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
+    the one with no digest — so the check that mattered most was the one that ran on nothing.
+
+    **Each arm against its OWN declared digest**, which the literal this used to hold could not
+    express. It worked while every arm shared ``86ed1dbf…``; the three arms of
+    ``docs/two-planes.md`` §9 run on ``74ff80c`` and declare ``6e5c7b4b…``, and a shared literal
+    would have made adding them look like a defect in them rather than in this loop. What the
+    test is about is the round trip — a profile's claim is a thing a row can be found to agree
+    with and a thing another row can be found to contradict — and that is per-arm either way.
+    """
     for name in load_arm_profiles():
         profile = arm_profile(name)
         assert profile.corpus_content_hash, f"[arm.{name}] cannot be reconciled"
-        assert reconcile(profile, {"corpus_content_hash": digest}) == ()
+        assert reconcile(profile, {"corpus_content_hash": profile.corpus_content_hash}) == ()
         assert reconcile(profile, {"corpus_content_hash": "deadbeef"}), (
             f"[arm.{name}] accepts a corpus it did not run on"
         )
@@ -402,6 +409,14 @@ def test_the_declared_question_set_is_the_dataset_commit_it_names() -> None:
     Verified 2026-08-20: ``22fe2a6:eval_dataset/test_final.jsonl`` holds 1 351 questions over
     exactly the 57 schemas ``BIRD-corpus@30872d3`` covers, and their ids hash to
     ``423a3f4b65fb``.
+
+    **Only the arms that claim the whole split**, which is the four measured ones. The three arms
+    of ``docs/two-planes.md`` §9 run a ~100-question probe set that does not exist yet, so they
+    declare a string naming itself unresolved — one that no run can match and that
+    ``arm_startup_refusal`` therefore refuses, loudly, before the first paid question. Comparing
+    *that* against the full split would fail this test for the arm doing the right thing, and the
+    obvious repair — declaring ``SUBSET`` on all seven — is the false claim it exists to catch.
+    ``test_every_shipped_arm_declares_a_question_set`` above still holds all seven to having one.
     """
     import json
     import subprocess
@@ -414,6 +429,8 @@ def test_the_declared_question_set_is_the_dataset_commit_it_names() -> None:
 
     for name in load_arm_profiles():
         profile = arm_profile(name)
+        if str(profile.question_subset).startswith("unresolved:"):
+            continue
         blob = subprocess.run(
             ["git", "-C", str(repo), "cat-file", "-p",
              f"{profile.dataset}:eval_dataset/test_final.jsonl"],
@@ -616,9 +633,11 @@ def test_an_arm_whose_treatment_is_the_corpus_release_must_name_one(tmp_path: Pa
 def test_the_shipped_arms_declare_no_hypothesis_and_that_is_the_committed_state() -> None:
     """**Read this before quoting the power gate as being in force.** On this file it is not.
 
-    All four arms in ``arms.toml`` declare no ``hypothesised_effect``, so ``arm_power_refusal``
-    abstains on every one of them. That is the honest outcome: all four were measured before the
-    field existed, and an effect size written down after the measurement is not a hypothesis. What
+    All seven arms in ``arms.toml`` declare no ``hypothesised_effect``, so ``arm_power_refusal``
+    abstains on every one of them. That is the honest outcome for two different reasons: the four
+    measured arms were measured before the field existed, and an effect size written down after
+    the measurement is not a hypothesis; the three planned arms are sized against a ~100-question
+    probe set nobody has materialised, and a number guessed at here would make the gate *pass*. What
     is *not* honest is leaving that inferable only from the absence of a key, which is how the
     dropped field went unnoticed. This asserts the inventory, so the first arm to declare one has
     to come through here and say so.

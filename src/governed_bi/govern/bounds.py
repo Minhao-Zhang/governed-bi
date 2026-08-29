@@ -69,19 +69,25 @@ class ToolBounds:
 
     #: **Asset ids** this turn licensed. Not ``{schema}.{physical_name}``: ``route_node``
     #: *seeds* ``ServeState.licensed`` (``serve/nodes/route_retrieve.py``) and ``resolve`` and
-    #: ``connect`` only widen it — no node builds it at ``connect`` — while
-    #: ``serve/context.py::_tool_key`` documents the divergence for the corpora where ``slug()``
-    #: fired. The two agree on 655 of the 656 gold tables, which is why this said "table keys"
-    #: for as long as it did.
+    #: ``connect`` widen it, while ``serve/context.py::_tool_key`` documents the divergence for
+    #: the corpora where ``slug()`` fired. The two agree on 655 of the 656 gold tables, which is
+    #: why this said "table keys" for as long as it did.
     #:
-    #: **The seed is the POST-budget table set, and that costs a wrong refusal.** ``route_node``
-    #: reads ``retrieved["by_type"]["table"]``, assembled in ``serve/nodes/pass_two.py`` out of
-    #: the hits ``apply_budgets(...)`` kept, so a table the retrieval cap dropped is never
-    #: licensed and Layer 6 refuses the statement ``r_table_not_licensed`` — a retrieval-budget
-    #: outcome recorded as a governance verdict. Neither widening node restores it: a
-    #: budget-cut table that is neither a reference nor a Steiner point has no path back.
-    #: Corrected 2026-08-22; ADR 0006 §8 holds the open decision, and no behaviour changed for
-    #: the note.
+    #: **The seed is the PRE-budget table set** — ``retrieved["table_candidates"]``, which
+    #: ``serve/nodes/pass_two.py`` records before ``apply_budgets(...)`` runs. It read the
+    #: post-budget ``by_type["table"]`` until 2026-08-26, and that cost a wrong refusal: the
+    #: table budget is 8, so a gold table ranked ninth was never licensed and Layer 6 refused
+    #: the statement ``r_table_not_licensed`` — a retrieval-budget outcome recorded as a
+    #: governance verdict, on a set neither widening node could restore it to (``resolve`` adds
+    #: the reference closure, ``connect`` adds Steiner points, and a budget-cut table is usually
+    #: neither). ADR 0006 §8's separation is now what the code does: budgets shape what is
+    #: rendered, this shapes what is reachable.
+    #:
+    #: So this set is **wider than the prompt**, deliberately, and two things do not follow from
+    #: that. ``connect`` still takes the *rendered* tables as its Steiner terminals, or a table
+    #: nobody is shown could decline the turn on ``missing_join_path``; and ``check()`` still
+    #: asks the licence before the grant, so ``r_table_not_authorized`` names only a table this
+    #: turn's own question reached (``govern/check.py::_tables``).
     licensed: frozenset[str] = frozenset()
     #: Asset ids in this turn's ``hits ∪ pulled_in``, already narrowed by :attr:`withheld`.
     #: ``read_body``'s bound.

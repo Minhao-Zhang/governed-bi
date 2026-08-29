@@ -39,7 +39,13 @@ class Stage(str, Enum):
     accept = "accept"
     #: Rule-based input gate. ADR 0006 §6 owns the rules; this owns the name.
     guard = "guard"
-    #: Follow-up rewritten into a self-contained question (multi-turn only).
+    #: **Retired 2026-08-26, kept as a name.** It was "follow-up rewritten into a
+    #: self-contained question", the node was deleted (`serve/graph.py::_after_guard` records
+    #: why: an identity function with no model call), and the ``rewrite`` record field went
+    #: with it. The member stays for the reason the class docstring gives — this enum is the
+    #: live stage vocabulary and any turn recorded before that date carries the string, so a
+    #: reader meeting ``"rewrite"`` without a member here either raises or invents a second
+    #: name for a stage that used to run. Nothing emits it now.
     rewrite = "rewrite"
     #: Gate over ``NegativeExampleAsset``.
     negative_gate = "negative_gate"

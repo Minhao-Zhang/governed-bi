@@ -26,6 +26,7 @@ from governed_bi.retrieve.structure import CorpusStructure, complete_joins
 from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 from governed_bi.serve.runtime import (
     ChannelScale,
+    bool_knob,
     channel_scale,
     corpus_structure,
     facet_hits,
@@ -45,9 +46,11 @@ __all__ = [
     "connect_node",
 ]
 
-# No local defaults for `route_top_n`, `max_steiner_points` or `max_crossings`: `int_knob`
-# reads state, then `knobs_resolved`, then the register, which is the one place the value is
-# declared. A `state.get(name, <constant>)` here is a knob nothing can set. ADR 0008 D7.
+# No local defaults for `route_top_n`, `max_steiner_points`, `max_crossings` or
+# `licensed_seed_pre_budget`: `int_knob` / `bool_knob` read state, then `knobs_resolved`, then
+# the register, which is the one place the value is declared. A `state.get(name, <constant>)`
+# here is a knob nothing can set. ADR 0008 D7. `bool_knob` and not `int_knob` for the last one
+# on purpose — its docstring has the reason, and it is that `bool("false")` is `True`.
 
 
 def empty_retrieved(
@@ -56,6 +59,7 @@ def empty_retrieved(
     """Empty ``RetrievalResult``-shaped dict (ADR 0005 §3.2)."""
     return {
         "by_type": {},
+        "table_candidates": [],
         "selected": {},
         "attributions": {},
         "pulled_in": {},
@@ -137,13 +141,15 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
 
     # No ``path_kind`` key: routing succeeding is not a path kind, and ``None`` erases a crash.
     out: dict[str, Any] = {"schemas": schemas, "retrieved": retrieved}
-    # **The seed is the POST-budget table set.** ``by_type`` is assembled out of the hits
-    # ``apply_budgets(...)`` kept, so a table the retrieval cap dropped is never licensed and
-    # Layer 6 refuses the statement ``r_table_not_licensed`` — a retrieval-budget outcome
-    # recorded as a governance verdict. ``resolve`` and ``connect`` only widen this set and
-    # neither restores a budget-cut table. ``govern/bounds.py::ToolBounds.licensed`` carries the
-    # measurement; ADR 0006 §8 holds the open decision.
-    licensed = list((retrieved.get("by_type") or {}).get("table") or ())
+    # **The seed is the PRE-budget table set** (ADR 0006 §8, ADR 0005 §3.2) — as shipped, and
+    # under the `licensed_seed_pre_budget` knob rather than unconditionally, so `[arm.v4_live]`
+    # can pin the post-budget seed and be a control instead of a replicate. It used to be
+    # ``by_type["table"]``, which is assembled out of the hits ``apply_budgets(...)`` *kept*, so
+    # a table the cap dropped was never licensed and Layer 6 refused the statement
+    # ``r_table_not_licensed`` — a retrieval-budget outcome recorded as a governance verdict, on
+    # a set neither widening node could restore it to (``resolve`` adds the reference closure,
+    # ``connect`` adds Steiner points, and a budget-cut table is usually neither).
+    licensed = _licensable_tables(state, retrieved)
     if licensed:
         out["licensed"] = sorted(str(x) for x in licensed)
     return out
@@ -176,6 +182,13 @@ def resolve_node(state: dict, config: RunnableConfig) -> dict:
 
     asset_types = structure.asset_types
     licensed = set(state.get("licensed") or ())
+    # Both, because they answer different questions and this node must not narrow either: the
+    # channel carries ``route``'s seed, and ``retrieved`` carries what is rendered — which is
+    # all there is when a caller wrote no ``licensed`` at all. Through
+    # :func:`_licensable_tables`, so this line reads the same seed ``route`` did; widening to
+    # ``table_candidates`` here regardless would make ``licensed_seed_pre_budget = False`` a
+    # knob that only delays the pre-budget licence by one node.
+    licensed.update(_licensable_tables(state, retrieved))
     licensed.update(_table_ids_from_retrieved(retrieved, asset_types))
     for asset_id in added:
         if _is_table(asset_id, asset_types, retrieved):
@@ -206,7 +219,16 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
     to sit on a join path, so the pairs that most need their ``on`` clause in the prompt are
     the ones this node has just created.
 
-    **Writes a delta**, like ``resolve``: only ``pulled_in``, plus the four collections
+    **Terminals are the RENDERED tables, and the licence is wider than they are.** Those are
+    one set under ``licensed_seed_pre_budget = False`` and two under the shipped ``True`` (ADR
+    0006 §8), and this node must join the first under either. A table the
+    render budget cut is in no prompt, so making it a terminal would let an asset nobody is
+    shown decline the whole turn on ``missing_join_path``, or drag its component over
+    ``max_steiner_points`` — the budget-as-governance coupling again, wearing a second reason
+    code. What ``connect`` guarantees is about the prompt; what ``licensed`` answers is what the
+    turn may reach.
+
+    **Writes a delta**, like ``resolve``: only ``pulled_in``, plus the five collections
     :func:`_restrict_to_component` narrows when a component is dropped.
     """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
@@ -214,9 +236,13 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
 
     structure = corpus_structure(config)
     retrieved: Mapping[str, Any] = state.get("retrieved") or {}
-    terminals = set(state.get("licensed") or ())
+    terminals = _table_ids_from_retrieved(retrieved, structure.asset_types)
+    # A hand-built state with a licence and no ``retrieved`` — the shape several callers and
+    # ``tests/retrieve/test_structure_contract.py`` use — still has terminals to join. The
+    # fallback runs in this direction and not the other: reading ``licensed`` first would put
+    # the pre-budget set back in front of the Steiner search on every served turn.
     if not terminals:
-        terminals = _table_ids_from_retrieved(retrieved, structure.asset_types)
+        terminals = {str(x) for x in (state.get("licensed") or ())}
 
     edges = structure.join_edges
     max_points = int_knob(state, "max_steiner_points")
@@ -270,17 +296,31 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
         retrieved = {**retrieved, **delta}
 
     terminals = set(connected)
-    licensed = frozenset(connected | added)
+    #: What the prompt offers: the joined terminals and the points ``connect`` added to join
+    #: them. Everything below that shapes *context* reads this, and everything that shapes the
+    #: *licence* reads ``licensed``.
+    rendered = frozenset(connected | added)
 
     pulled_in = dict(retrieved.get("pulled_in") or {})
     for asset_id in added:
         pulled_in[str(asset_id)] = "connect"
-    # §2.8's last row, over the final set. Joins are `pulled_in` and never enter
-    # `licensed`: that field is govern's table allowlist (bounds.py), and a join id in
-    # it would be a table key naming no table.
-    for join_asset_id in complete_joins(licensed, structure):
+    # §2.8's last row, over the rendered set and **not** over the licence. Joins are
+    # `pulled_in` and never enter `licensed`: that field is govern's table allowlist
+    # (bounds.py), and a join id in it would be a table key naming no table. Completing over
+    # the licence would be worse than useless — it would render the join keys of a pair of
+    # budget-cut tables the prompt never names.
+    for join_asset_id in complete_joins(rendered, structure):
         pulled_in.setdefault(str(join_asset_id), "connect")
     delta["pulled_in"] = pulled_in
+
+    # **The licence, closed here** (ADR 0006 §8): the tables retrieval reached, plus the
+    # endpoints `resolve` pulled in, plus the Steiner points this node added — minus whatever
+    # `_restrict_to_component` above narrowed away, since `retrieved` is the narrowed view by
+    # now. Wider than `rendered` by exactly the tables the render budget cut, which is the
+    # separation the two ADRs assert: budgets decide what is shown, licensing what is reachable.
+    # Under `licensed_seed_pre_budget = False` the second term is the post-budget rendering, so
+    # this collapses to `rendered` and the arm reproduces the licence v4 was measured with.
+    licensed = rendered | {str(t) for t in _licensable_tables(state, retrieved)}
 
     table_schemas = structure.table_schemas
     selected_schemas = set(state.get("schemas") or ())
@@ -471,6 +511,11 @@ def _retrieved_for_schemas(
 
     return {
         "by_type": by_type,
+        # Recorded on this path too. The caps are the same caps here, so an F1 turn under an
+        # injector's hits has the same wrong refusal available to it.
+        "table_candidates": sorted(
+            asset_id for asset_id, (_i, at, _s) in by_id.items() if at is AssetType.table
+        ),
         "selected": {k: v for k, v in selected.items() if k in kept_ids},
         "attributions": {k: v for k, v in attributions.items() if k in kept_ids},
         "pulled_in": {},
@@ -489,14 +534,54 @@ def _hit_ids(retrieved: Mapping[str, Any]) -> set[Any]:
     return ids
 
 
+def _licensable_tables(state: Mapping[str, Any], retrieved: Mapping[str, Any]) -> list[str]:
+    """The tables this turn may reach, under whichever seed ``licensed_seed_pre_budget`` names.
+
+    ``True``, which is what ships: ``table_candidates``, the set recorded *before*
+    ``apply_budgets`` capped the rendering. ADR 0006 §8's decision — a table the render budget
+    cut is still reachable, so Layer 6 stops refusing it as ``r_table_not_licensed``.
+
+    ``False``: the post-budget ``by_type["table"]``. That is the behaviour every arm in
+    ``register/arms.toml`` was measured under, and pinning it is what makes ``[arm.v4_live]``
+    the control for ``[arm.licensed_pre_budget]`` rather than a replicate of it.
+
+    **The knob is read here and not at the seed in :func:`route_node` alone**, because the
+    licence is widened out of ``retrieved`` twice more: ``resolve`` re-adds this set (a caller
+    may have written no ``licensed`` channel at all) and ``connect`` closes over it. A reader
+    in ``route`` only would be a knob that ``resolve`` silently undoes two nodes later, which
+    is a control arm that does not control anything — worse than no knob, because it publishes
+    a treatment name for a difference that is not there.
+
+    Falls back to ``by_type["table"]`` when ``table_candidates`` is absent, which is the case
+    for a hand-built ``retrieved`` and for anything a ``retrieve_hooks`` caller assembles
+    itself. That fallback is the ``False`` behaviour and it under-licenses in exactly the way
+    ADR 0006 §8 describes; it is here so such a caller licenses what it renders rather than
+    nothing, not because the two sets are interchangeable.
+    """
+    if bool_knob(state, "licensed_seed_pre_budget"):
+        candidates = retrieved.get("table_candidates")
+        if candidates is not None:
+            return [str(x) for x in candidates]
+    return [str(x) for x in ((retrieved.get("by_type") or {}).get("table") or ())]
+
+
 def _table_ids_from_retrieved(
     retrieved: Mapping[str, Any],
     asset_types: Mapping[str, str],
 ) -> set[Any]:
+    """Table ids the turn **renders**: ranked survivors, plus what ``resolve`` pulled in.
+
+    ``pulled_in`` belongs here because the renderer shows those assets, and ``connect`` takes
+    this set as its terminals — a join endpoint ``resolve`` added is in the prompt and must be
+    joinable. Deliberately *not* the licensable set: see :func:`_licensable_tables`.
+    """
     tables: set[Any] = set((retrieved.get("by_type") or {}).get("table") or ())
     for asset_id, hit in (retrieved.get("selected") or {}).items():
         if _hit_asset_type(hit) == "table" or asset_types.get(asset_id) == "table":
             tables.add(asset_id)
+    for asset_id in (retrieved.get("pulled_in") or {}):
+        if asset_types.get(str(asset_id)) == "table":
+            tables.add(str(asset_id))
     return tables
 
 
@@ -557,7 +642,7 @@ def _restrict_to_component(
     *,
     dropped: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """The four narrowed collections, as a ``retrieved`` delta.
+    """The five narrowed collections, as a ``retrieved`` delta.
 
     Drops assets belonging to schemas no kept table belongs to.
 
@@ -597,4 +682,11 @@ def _restrict_to_component(
         kind: [a for a in (ids or ()) if inside(a)]
         for kind, ids in (retrieved.get("by_type") or {}).items()
     }
+    # The fifth collection, and it is narrowed for the same reason the other four are: this is
+    # what `connect` closes the licence over, so leaving it whole would re-license the losing
+    # component's tables one line after the node refused them — and `licensed` has no reducer
+    # precisely so that cannot happen by merge.
+    candidates = retrieved.get("table_candidates")
+    if candidates is not None:
+        out["table_candidates"] = [str(a) for a in candidates if inside(str(a))]
     return out

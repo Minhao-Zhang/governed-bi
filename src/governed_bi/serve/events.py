@@ -162,17 +162,6 @@ def _negative(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     return "ok", {"gate": str(outcome or "unknown")}
 
 
-def _rewrite(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
-    rewrite = update.get("rewrite")
-    if not isinstance(rewrite, Mapping):
-        # Turn 1 writes `None` — the node deliberately did not run.
-        return "ok", {"rewritten": False}
-    outcome = rewrite.get("outcome")
-    if outcome == "error":
-        return "error", {"rewritten": False}
-    return "ok", {"rewritten": outcome != "unchanged"}
-
-
 def _facet(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     """``ok`` with hit count, or ``error`` when a declared channel failed."""
     facets = update.get("facets")
@@ -264,7 +253,6 @@ _DETAIL_BY_STAGE: dict[str, Any] = {
     "accept": _accept,
     "guard": _guard,
     "negative_gate": _negative,
-    "rewrite": _rewrite,
     "facet_schema": _facet,
     "facet_term": _facet,
     "facet_metric": _facet,

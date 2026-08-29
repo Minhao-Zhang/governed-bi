@@ -1,8 +1,8 @@
 """Pins from the 2026-08-08 LangGraph runtime audit.
 
 Defects that already burned a turn or a measurement: accept soft-crash leaking into
-guard, narrate able to crash an answered turn, rewrite fall-through after crash, and
-create_agent's 9999 recursion ceiling.
+guard, narrate able to crash an answered turn, a crash falling through the rail that
+follows ``guard``, and create_agent's 9999 recursion ceiling.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import pytest
 from governed_bi.serve.graph import (
     _CANCELLABLE,
     _after_accept,
-    _after_rewrite,
+    _after_guard,
     _node_timeout,
 )
 from governed_bi.serve.nodes.agent_core import _recursion_limit
@@ -26,9 +26,22 @@ def test_accept_soft_crash_routes_to_stamp_not_guard() -> None:
     assert _after_accept({}) == "guard"
 
 
-def test_rewrite_crash_short_circuits_to_stamp() -> None:
-    assert _after_rewrite({"path_kind": "crashed"}) == "stamp"
-    assert _after_rewrite({"path_kind": None}) == "negative_gate"
+def test_a_crash_on_the_way_out_of_guard_short_circuits_to_stamp() -> None:
+    """The audit's "fall-through after crash" pin, now on the edge that carries it.
+
+    It was written against ``_after_rewrite``, because a ``rewrite`` rail sat between ``guard``
+    and ``negative_gate``. That rail was an identity function and was deleted on 2026-08-26, so
+    the edge under test is ``guard``'s own — and the guarantee is unchanged: a node that raised
+    is routed to ``stamp`` rather than allowed to continue down the spine on a state whose
+    channels the crash left half-written.
+
+    The clear case is asserted too. Without it a ``_after_guard`` that returned ``"stamp"``
+    unconditionally would pass, which is the shape of failure this file exists to catch.
+    """
+    assert _after_guard({"path_kind": "crashed"}) == "stamp"
+    assert _after_guard({"path_kind": None}) == "negative_gate"
+    assert _after_guard({}) == "negative_gate"
+    assert _after_guard({"guard": {"outcome": "blocked"}}) == "refuse"
 
 
 def test_narrate_is_not_a_cancellable_rail() -> None:
