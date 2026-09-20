@@ -39,7 +39,7 @@ REST chat pair that was the second one is deleted.
 
 | Stage | Role |
 |---|---|
-| `guard` | Five deterministic rules (`govern/guard.py::GUARD_RULES`), then a model-backed BI-scope gate on the utility model. **Enabled per rule id, and `guard_rules_enabled` ships `UNSET`** — the served app (`api/graph_app.py`) turns on `g_bi_scope` and nothing else; the eval driver, the one-turn CLI and `tools/` all pass `{}`, so no guard rule fires on any measured arm |
+| `guard` | Five deterministic rules (`govern/guard.py::GUARD_RULES`), then a model-backed BI-scope gate on the utility model. **Enabled per rule id, and `guard_rules_enabled` ships `UNSET`** — the served app (`api/graph_app.py`) turns on all six; the eval driver, the one-turn CLI and `tools/` all pass `{}`, so no guard rule fires on any measured arm. Until 2026-09-18 the served app turned on `g_bi_scope` *and nothing else*, which reads as "the guard is on" and means five of six are off: `g_bi_scope` is not a member of `GUARD_RULES`, and an id absent from the mapping is silently `False`. `GovernancePolicy.__post_init__` now refuses a key that dispatches nothing |
 | `rewrite` | Stub rail today; facet query rewriting lives inside `facet_*` |
 | `negative_gate` | Negative-example decline path. A stub unconditionally: `negative_node` (`serve/nodes/negative.py`) discards its state and returns `outcome: disabled` without reading `negative_tau` or the corpus, so the `decline` branch is unreachable whatever is configured and whatever is curated |
 | `facet_*` | Parallel retrieval channels (each may rewrite its query) |

@@ -133,7 +133,13 @@ async def _authenticate() -> Auth.types.MinimalUserDict:
     return {"identity": authenticated_principal().id, "permissions": []}
 
 
-@auth.on.threads.update
+# ``type: ignore`` on the decorator, not a signature change: the SDK's ``_ActionHandler``
+# protocol types ``value`` as ``ThreadsUpdate``, and reading it at that type is the defect
+# ``_command_of`` exists to document — the runtime nests the real payload somewhere the typed
+# model does not describe, and the first version of that function trusted the shape and allowed
+# every request. ``dict`` here is deliberate width, and the ``isinstance`` check below is what
+# replaces the type. Narrowing to satisfy mypy would reopen A4.
+@auth.on.threads.update  # type: ignore[arg-type]
 async def _no_state_writes(ctx: Auth.types.AuthContext, value: dict) -> None:
     """Deny ``POST /threads/{id}/state`` and ``PATCH /threads/{id}``.
 
@@ -216,7 +222,10 @@ def _command_of(value: object) -> dict | None:
 _STATE_WRITING_COMMANDS = ("update", "goto")
 
 
-@auth.on.threads.create_run
+# Same ``type: ignore`` as the state hook above, same reason: ``RunsCreate`` is not the shape
+# the runtime hands this hook, and ``_command_of`` reads both locations precisely because the
+# typed model is wrong about where ``command`` lives.
+@auth.on.threads.create_run  # type: ignore[arg-type]
 async def _no_state_writes_on_a_new_run(ctx: Auth.types.AuthContext, value: dict) -> None:
     """Deny ``POST /threads/{id}/runs`` when it carries a state-writing ``command`` (audit A4).
 

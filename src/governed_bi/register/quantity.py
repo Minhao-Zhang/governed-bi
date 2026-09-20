@@ -230,10 +230,11 @@ class Measured(Generic[T]):
 
 def _assert_absence_cannot_carry_a_value() -> None:
     """Import-time: absent states carry no value and require a reason."""
-    for factory in (
+    factories: tuple[Callable[[], Measured[float]], ...] = (
         lambda: Measured.unmeasured("probe"),
         lambda: Measured.inapplicable("probe"),
-    ):
+    )
+    for factory in factories:
         m = factory()
         if m.raw is not None:  # pragma: no cover - import-time guard
             raise AssertionError(f"{m.state.value} carries a value: {m.raw!r}")

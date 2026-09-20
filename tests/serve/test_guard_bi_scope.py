@@ -18,8 +18,7 @@ from typing import Any
 
 import pytest
 
-from governed_bi.govern.guard import BI_SCOPE_RULE_ID
-from governed_bi.govern.policy import GovernancePolicy
+from governed_bi.govern.policy import BI_SCOPE_RULE_ID, GovernancePolicy
 from governed_bi.serve.nodes.guard import guard_node
 
 #: Every deterministic rule off, the scope gate on. Isolates this gate from the other five.

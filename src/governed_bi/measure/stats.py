@@ -81,7 +81,7 @@ def mcnemar(a: Population, b: Population, outcome: str) -> McNemarResult:
     n_pairs = len(a.units)
 
     if incomplete:
-        absent = Measured.unmeasured(
+        absent: Measured[float] = Measured.unmeasured(
             f"{len(incomplete)}/{n_pairs} pairs lack {outcome!r} on one or both sides; "
             "an absent outcome is not a negative one"
         )

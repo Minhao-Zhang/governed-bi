@@ -170,6 +170,15 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "path?"),
     _k("max_steiner_points", 5, Role.comparability, "exceed => decline"),
     _k("max_crossings", 2, Role.comparability, "cross-schema connects; exceed => decline"),
+    _k("max_resolve_additions", 400, Role.comparability,
+       "reference-closure additions; exceed => decline. **Not expand_hops** — that is ADR "
+       "0005 section 2.9's FK-neighbourhood expansion, a different mechanism, and closing it "
+       "by relabelling this would retire an open item that is still open. 400 from "
+       "measurement on the shipped corpus, not from taste: a realistic seed (route_top_n "
+       "schemas, table budget 8) adds median 52-69, p99 142-218, max 279, while every table "
+       "of the three largest schemas adds 1,480 — 11% of the corpus. So the bound sits ~45% "
+       "above anything observed and well under the shape it exists for. Counted on additions "
+       "because the fan-out is wide and shallow: few_shot reaches 181 assets at depth 1"),
     _k("negative_tau", UNSET, Role.comparability,
        "absolute threshold on the semantic score. The gate ships DISABLED: this "
        "cannot be calibrated on a benchmark whose questions are all answerable by "
@@ -200,6 +209,20 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     # `llm_temperature` was here and is gone (audit §10): zero readers, yet it entered the
     # config hash and recorded `None` for every run. Re-declare it when something forwards
     # a temperature to a model.
+    #
+    # **And there is no `seed` knob, which was decided rather than forgotten (2026-09-18).**
+    # Two runs of one arm with the configuration held fixed disagree on 12.7% of outcomes,
+    # and a seed is the reflex. It is undeliverable here: `model/proxy_gateway.py` hardcodes
+    # `"temperature": None` because "the default proxy model rejects sampling params", and
+    # `provider.chat_model` raises outright for the proxy, so nothing on the shipped path can
+    # forward either value. Declaring one would repeat this comment's own lesson — a knob
+    # with zero readers that enters the config hash and records `None` — and would break
+    # comparability with every artifact on disk to describe something nothing controls.
+    #
+    # The 12.7% is not closable by a knob. What closes it is replication: k runs per arm with
+    # the between-run variance reported, which costs model spend rather than code. Until then
+    # `README.md`'s caveat is the honest statement — a gap under about two points is not a
+    # result — and it is already published.
     _k("llm_reasoning_effort", None, Role.comparability,
        "two v1 ladders differed ONLY in this and compared as one experiment; it "
        "moved the baseline arm past that ladder's detection threshold (sizes retired)"),

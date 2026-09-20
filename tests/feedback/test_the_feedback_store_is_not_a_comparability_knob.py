@@ -17,6 +17,7 @@ may ever be pointed at the analytics warehouse. The failure is not a crash — a
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -74,3 +75,98 @@ def test_a_newer_schema_version_is_refused_rather_than_read(tmp_path: Path) -> N
         conn.commit()
     with pytest.raises(RuntimeError, match="schema version 99"):
         FeedbackStore(path)
+
+
+def test_an_older_store_is_upgraded_rather_than_opened_as_if_current(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The direction an upgrade actually produces, and the one that had no code.
+
+    ``_migrate`` handled the newer-store case above and was silent on this one, which is what
+    made the gap hard to see: a refusal on one side reads as "migrations are thought about
+    here". But ``executescript(SCHEMA)`` is all ``CREATE TABLE IF NOT EXISTS``, so on an
+    existing file it adds no column and rewrites no version. A store at 1 opened by code that
+    knows 2 reported itself up-to-date, started clean, and raised ``OperationalError: no such
+    column`` at the **first request that touched the new field** — in front of a user, not at
+    startup.
+
+    Driven through the real constructor with a real ``ALTER TABLE``, because the property is
+    that the column is *there afterwards*. Asserting only the version number would pass for a
+    ``_migrate`` that bumped it and applied nothing, which is the same outage one step later.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    import governed_bi.feedback.rows as rows_mod
+
+    path = tmp_path / "feedback.sqlite"
+    FeedbackStore(path)  # at 1
+
+    monkeypatch.setattr(rows_mod, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(
+        rows_mod,
+        "MIGRATIONS",
+        {2: ("ALTER TABLE observation ADD COLUMN brand_new TEXT NOT NULL DEFAULT ''",)},
+    )
+    FeedbackStore(path)
+
+    with closing(sqlite3.connect(path)) as conn:
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 2
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(observation)")}
+        assert "brand_new" in columns, "the version moved and the column did not"
+        assert conn.execute("SELECT brand_new FROM observation").fetchall() == []
+
+
+def test_a_version_bump_with_no_declared_step_is_refused_at_open(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Forgetting the step must fail loudly at startup, not quietly at the first query.
+
+    This is the guard that keeps the pair honest: with an upgrade path in place it becomes
+    possible to bump ``SCHEMA_VERSION`` and write no statements, which restores the original
+    defect exactly — a store that opens clean and is missing a column.
+    """
+    import governed_bi.feedback.rows as rows_mod
+
+    path = tmp_path / "feedback.sqlite"
+    FeedbackStore(path)
+
+    monkeypatch.setattr(rows_mod, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(rows_mod, "MIGRATIONS", {})
+    with pytest.raises(RuntimeError, match=r"MIGRATIONS has no step for \[2\]"):
+        FeedbackStore(path)
+
+
+def test_a_failed_step_leaves_the_version_where_it_was(tmp_path: Path, monkeypatch: Any) -> None:
+    """A half-applied upgrade the next process reads as finished is worse than a failed one.
+
+    The bump and the statements share one transaction, so a step that raises rolls the whole
+    thing back and the store still says 1 — which means the next open retries rather than
+    treating a partial schema as current.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    import governed_bi.feedback.rows as rows_mod
+
+    path = tmp_path / "feedback.sqlite"
+    FeedbackStore(path)
+
+    monkeypatch.setattr(rows_mod, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(
+        rows_mod,
+        "MIGRATIONS",
+        {
+            2: (
+                "ALTER TABLE observation ADD COLUMN half_applied TEXT",
+                "ALTER TABLE nonexistent_table ADD COLUMN boom TEXT",
+            )
+        },
+    )
+    with pytest.raises(sqlite3.OperationalError):
+        FeedbackStore(path)
+
+    with closing(sqlite3.connect(path)) as conn:
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 1
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(observation)")}
+        assert "half_applied" not in columns, "the first statement survived a rolled-back step"

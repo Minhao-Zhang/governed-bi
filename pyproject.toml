@@ -219,9 +219,9 @@ constraint-dependencies = [
 # --- Tooling (AUDIT T5) -------------------------------------------------------
 # Config lands here so local runs and CI share one source of truth. `ruff check` is
 # green on the whole tree and CI gates it. `mypy` is installed and configured but
-# gated only over the governance-critical modules (see [tool.mypy] below) — a clean
-# pass over all ~32k LOC is a separate effort, and a gate nobody can keep green is
-# worse than an honest narrow one. Coverage is available via pytest-cov, not gated.
+# gated over the governance-critical modules (see [tool.mypy] below) — a clean pass
+# over all ~32k LOC is a separate effort, and a gate nobody can keep green is worse
+# than an honest narrow one. Coverage is available via pytest-cov, not gated.
 
 [tool.pytest.ini_options]
 # --strict-markers: a typo'd mark (e.g. skipiff) fails loudly instead of no-op.
@@ -248,12 +248,18 @@ select = ["E", "F", "I"]
 
 [tool.mypy]
 python_version = "3.13"
-# `uv run mypy src` checks the whole tree (~89 findings, mostly Optional narrowing) —
-# useful locally. CI gates a named subset: the governance spine (what decides whether
-# a query executes) plus the eval register/harness/split-gap modules (what decides
-# whether a number is comparable and quotable). The file list lives in
-# .github/workflows/ci.yml so widening it is a visible, reviewable change.
-packages = ["governed_bi"]
+# `uv run mypy` checks the whole tree (41 findings as of 2026-09-18, mostly Optional
+# narrowing in `serve/`) — useful locally, not gated. CI gates a named subset: the
+# governance spine (what decides whether a query executes) plus the register, measure
+# and harness modules (what decides whether a number is comparable and quotable). That
+# subset is **clean**, and the file list is the `Types (governance spine)` step in
+# .github/workflows/ci.yml, so widening it is a visible, reviewable change.
+#
+# Until 2026-09-18 this comment claimed the list already lived there. It did not — CI
+# ran no mypy step at all, and `packages = ["governed_bi"]` made the bare `uv run mypy`
+# resolve the *installed* distribution and exit on a missing `py.typed` rather than
+# check anything. Both halves of a two-part claim were false and neither could fail.
+files = ["src"]
 warn_return_any = false
 warn_unused_configs = true
 ignore_missing_imports = true

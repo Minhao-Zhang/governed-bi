@@ -588,7 +588,9 @@ def build_tools(
         # the entry, the check above admits exactly one, and nothing between the two lines
         # ``await``s, so no other frame can have taken it.
         pending_clarification.remove(clarification_id)
-        text, resolution, fail_closed = parse_resume(answer, why=why_text)
+        text, resolution, fail_closed = parse_resume(
+            answer, why=why_text, expected_id=clarification_id
+        )
         emit(
             kind="tool",
             step="ask_user",

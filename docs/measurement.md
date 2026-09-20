@@ -13,7 +13,22 @@ That is the same `build_graph` topology the server runs, and it is **not** the
 server's graph: `api/graph_app.build_serve_graph` wraps the same nodes with
 `accept` in front of `guard` and `record` after `stamp`, which is the trust
 boundary a client crosses and an eval question does not. Every stage from
-`guard` to `stamp` — the whole measured path — is shared.
+`guard` to `stamp` is shared — *the stages*, which is a narrower claim than this
+paragraph used to make.
+
+**The same stages do not run the same policy.** The driver builds
+`GovernancePolicy(guard_rules_enabled={})` and `api/graph_app.py` builds one with
+all six rules on, so `guard` is a node both graphs have and only one of them
+asks anything. `hard_block_suspect` runs the other way — `True` here, `False`
+served, deliberately and argued in `graph_app.py`, and worth one turn on the
+whole v4 arm (`COLUMNS/r_column_suspect`: 1 attempt).
+
+That gap is not closed by turning the guard on, and closing it that way would
+cost more than it buys: a turn the guard refuses is a turn whose answer nobody
+ever sees, so an enforced arm can report what governance cost in **coverage**
+and never what it cost in **right answers**. The arm stays permissive and the
+gates are replayed over the finished artifact — see
+[the prod projection](#the-prod-projection) below.
 
 Findings produced this way live in [failure modes](failure-modes.md); what they
 imply is in [open work](open-work.md).
@@ -49,8 +64,29 @@ imply is in [open work](open-work.md).
 The corpus is the treatment identity of every number: `corpus_content_hash`
 digests the tree, so quote the corpus commit alongside any figure.
 
-Two things exist for this step and are **not** called by the driver — you invoke
-them, or they do nothing:
+Four things that decide whether the run you are about to pay for is quotable.
+Each was measured on a smoke on 2026-09-20 rather than reasoned about:
+
+- **`--embed`, or the arm cannot pass its own gates.** `expected_channel_state`
+  declares `ran` for every facet's semantic channel and takes no account of
+  whether a deployment has an embedder, so a lexical run reports five
+  `unconfigured` anomalies and `facet_channels` fails. Three-row smokes both
+  ways: lexical → 2 gates fail; `--embed` → `ALL GATES PASS`. The lexical arm is
+  the reproducible baseline, as the flag table below says; it is not a quotable
+  one.
+- **Commit first, and do not touch the tree while it runs.** `git_sha`,
+  `diff_sha256` and `working_tree_dirty` are resume-drift keys, so an edit
+  between a run and its resume puts two configurations in one arm and
+  `knobs_resolved` fails. A docs edit is enough.
+- **Do not change `--limit`, `--timeout` or `--max-retries` across a resume.**
+  They are comparability knobs and the guard refuses, correctly. `--limit` moves
+  `question_subset`, which is the same refusal one field over.
+- **Run [`tools/bi_scope_probe.py`](../tools/bi_scope_probe.py) first**, so the
+  projection can price the one gate that is not replayable. It needs no database
+  and no corpus, so it can run while you are still deciding.
+
+Two more things exist for this step and are **not** called by the driver — you
+invoke them, or they do nothing:
 
 - [`eval/power.py`](../src/governed_bi/eval/power.py)'s `require_power(n,
   discordant, hypothesised_effect)` raises unless the sample could detect the
@@ -171,6 +207,12 @@ and drops every row whose `outcome` is `crashed` — requeueing those questions.
 A crashed row is not a measurement, so keeping it would bake a hole into the
 artifact and compute the final score over a denominator that silently included
 it.
+
+Until 2026-09-20 it refused every artifact ever written, on `asset_budgets`
+alone, and told the reader to start a new one. See
+[open work §6.11](open-work.md#611---resume-was-refused-on-every-arm-that-has-ever-been-written--fixed-2026-09-20)
+— the guard is sound and was comparing an in-memory value against a JSON
+round-trip of itself.
 
 If `--resume` finds no artifact but does find siblings named for the same
 model, the driver lists them and exits rather than starting over. A changed tag
@@ -535,3 +577,62 @@ across all 21 pairs of the seven `proxy_*` arms on disk it never falls below
 2026-08-12). It believed it asked "did the treatment change" and measured "is
 there retrieval noise", to which the answer is always yes. The judgement now
 reads declared knobs instead of inferring from a hash.
+
+## The prod projection
+
+The arm measures an engine with the input guard off. What the *served* configuration
+would have done to that arm is a separate pass over the finished artifact:
+
+```bash
+uv run --frozen python tools/shadow_replay.py runs/eval/<arm>.jsonl \
+  --scope-verdicts runs/eval/bi_scope_<model>.jsonl
+```
+
+Replay rather than enforcement, for the reason at the top of this page: enforcing a
+gate during the run destroys the counterfactual the projection needs. This is the
+general form of something the instrument already does for one gate —
+`computed_fingerprint` / `computed_correct` exist only to reconstruct what enforcing
+abstention would have hidden.
+
+It costs nothing and runs against arms already on disk, because every gate but one is
+a pure function of fields the row carries. Three tiers, and
+[`eval/shadow.py`](../src/governed_bi/eval/shadow.py) carries the argument for each:
+
+| Tier | Gates | What the number is |
+|---|---|---|
+| `replay` | the five deterministic guard rules; the ADR 0013 abstention policy | **Exact.** Inputs are fixed before the model acts and are on the row |
+| `probe` | `g_bi_scope` | Exact, from a separate pass that read only the question |
+| `bound` | a restrictive `access_grant`, `denied_columns` | The refusals are countable; the cost in right answers is **not** projectable, because the gate changes what the model sees |
+
+A gate whose inputs are missing makes the tool **refuse** rather than report zero
+refusals. A gate the arm actually enforced is refused too — there is nothing left to
+shadow.
+
+The trade is reported as a count of right answers lost and never as a p-value:
+`measure/selective.py::NestedPolicies` explains why a projection cannot be tested
+(it only removes turns, so the discordant cell one way is zero by construction).
+
+### `g_bi_scope` needs its own pass, and needs it *before* the arm
+
+Five of the six rules replay for free. The sixth asks a model, so it is not
+recoverable from a row:
+
+```bash
+uv run --frozen python tools/bi_scope_probe.py --out runs/eval/bi_scope_<model>.jsonl
+```
+
+No database, no corpus, no agent model, ~136 tokens a call. Run it first, because it
+is the one prod gate whose behaviour on benign traffic was never measured and it is
+cheap enough to be an afterthought only until you see the number. **Measured
+2026-09-20 on `gpt-5.6-luna` over all 1,351 questions: 180 refused, 1,171
+cleared, none failed open.** Projected onto the v4 arm's own rows that is 128
+right answers lost — 913 against 785. See
+[open work §6.10](open-work.md#610-the-scope-gate-refuses-about-one-benign-question-in-ten-and-prod-has-it-on).
+
+### What the projection cannot tell you
+
+It measures what governance **costs**, never what it **buys**. BIRD carries no attack
+traffic, so a gate that fires zero times here is cheap and not thereby useless — its
+value is measured against the 16 `[[guard_case]]` tables that
+`govern/adversarial_run.py` drives. Two instruments; a report that prints them in one
+table will be read as one.

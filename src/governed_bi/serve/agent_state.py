@@ -26,6 +26,7 @@ __all__ = [
     "GovernedAgentState",
     "merge_by_call",
     "keep_newest",
+    "any_fail_closed",
     "AttemptBook",
     "CAP_LEDGER_KEY",
 ]
@@ -63,6 +64,31 @@ def keep_newest(left: Any, right: Any) -> Any:
     return right if right is not None else left
 
 
+def any_fail_closed(left: Any, right: Any) -> bool:
+    """``True`` if either write says the turn must end. Order-independent, unlike a last-write.
+
+    **This is :func:`keep_newest`'s defect one channel over, and it cost more.**
+    ``clarification_requested`` was the only channel on this state with no reducer, so
+    LangGraph backed it with a LastValue channel that raises ``InvalidUpdateError`` on a
+    second write in one super-step. Two ``ask_user`` calls in one assistant message reach
+    that: the first pauses, and because ``interrupt()`` ends the super-step the second's
+    ``Send`` never ran and so never got the "only one outstanding" refusal — so on resume
+    both re-run, both pause in turn, and both answers commit together.
+
+    What that produced was worse than a crash. ``agent_core``'s ``_run`` swallows the error
+    into ``path_kind="crashed"``, so **both human answers were discarded**, ``clarifications``
+    came back empty, and ``_sealed`` wrote each of the two tool calls the reply *"Not executed:
+    the turn ended before this tool ran"* — when both had run and a person had answered both.
+
+    ``or`` rather than :func:`keep_newest`: within a super-step "later" is tool-call order,
+    which that function's own docstring admits is arbitrary with respect to which candidate is
+    right. Here there is a right answer and it does not depend on order — a fail-closed
+    decline is a decision to end the turn, and one of them ending it is the whole meaning of
+    the flag. Two ``False``s stay ``False``; a ``True`` anywhere wins.
+    """
+    return bool(left) or bool(right)
+
+
 class GovernedAgentState(AgentState):
     """``AgentState`` plus channels a governed turn must not lose on resume."""
 
@@ -80,7 +106,9 @@ class GovernedAgentState(AgentState):
 
     #: Set by ``ask_user`` on a fail-closed decline/cancel so the inner loop can end
     #: and ``agent_core`` can lift it onto ``ServeState`` for ``classify_outcome``.
-    clarification_requested: bool
+    #: Reduced with :func:`any_fail_closed` — see it for why the bare ``bool`` was
+    #: :func:`keep_newest`'s defect one channel over.
+    clarification_requested: Annotated[bool, any_fail_closed]
 
 
 def _chargeable(committed: Mapping[str, Any] | None) -> set[str]:

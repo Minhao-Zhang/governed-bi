@@ -76,28 +76,49 @@ class Signal:
     read: Callable[[TurnRow], float | None]
 
 
+def _mappings(row: TurnRow, key: str) -> tuple[Mapping[str, object], ...]:
+    """The ``Mapping`` entries of ``row[key]``; empty when it is absent or not a sequence.
+
+    ``TurnRow`` is ``Mapping[str, object]``, so every list-valued field arrives as ``object``
+    and cannot be iterated until it is narrowed. The three readers below each did the same
+    two steps inline — is it a sequence, and is each entry a mapping — and two of them skipped
+    the first, which is why they were type errors nothing ran.
+
+    Absent and empty are **not** distinguished here. A caller that needs to tell them apart
+    (``_failed_attempts`` does: no ledger is unmeasured, an empty ledger is zero failures)
+    must check ``row.get(key) is None`` itself.
+    """
+    value = row.get(key)
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(e for e in value if isinstance(e, Mapping))
+
+
 def _agent_usage(row: TurnRow, key: str) -> float | None:
     """One counter off the ``agent_core`` usage entry.
 
     Per ``docs/measurement.md``, ``agent_core`` aggregates a whole tool loop into one
     entry, so this is the agent's total for the turn and not its first call.
     """
-    for entry in row.get("usage") or ():
-        if isinstance(entry, Mapping) and entry.get("stage") == "agent_core":
+    for entry in _mappings(row, "usage"):
+        if entry.get("stage") == "agent_core":
             value = entry.get(key)
-            return None if value is None else float(value)
+            return None if value is None else float(value)  # type: ignore[arg-type]
     return None
 
 
 def _total_usage(row: TurnRow, key: str) -> float | None:
     """The same counter summed over every stage, or ``None`` if any stage lacks it."""
-    entries = [e for e in (row.get("usage") or ()) if isinstance(e, Mapping)]
+    entries = _mappings(row, "usage")
     if not entries:
         return None
-    values = [e.get(key) for e in entries]
-    if any(v is None for v in values):
-        return None
-    return float(sum(float(v) for v in values if v is not None))
+    total = 0.0
+    for entry in entries:
+        value = entry.get(key)
+        if value is None:
+            return None
+        total += float(value)  # type: ignore[arg-type]
+    return total
 
 
 def _sql_length(row: TurnRow) -> float | None:
@@ -121,10 +142,11 @@ def _size(row: TurnRow, field: str) -> float | None:
 
 
 def _failed_attempts(row: TurnRow) -> float | None:
-    ledger = row.get("attempts")
-    if ledger is None:
+    # ``is None`` first, on its own: no ledger is unmeasured, an empty ledger is zero failures,
+    # and ``_mappings`` returns ``()`` for both.
+    if row.get("attempts") is None:
         return None
-    return float(sum(1 for a in ledger if isinstance(a, Mapping) and not a.get("passed")))
+    return float(sum(1 for a in _mappings(row, "attempts") if not a.get("passed")))
 
 
 #: Ordinal encoding of the reflector's verdict, worst first, so ``higher_first`` means

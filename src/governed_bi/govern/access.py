@@ -251,6 +251,31 @@ class StaticRoleAccessPolicy:
 
 
 def _require_keys(raw: Any, *, parts: tuple[int, ...], where: str) -> frozenset[str]:
+    """Every key, checked for depth at load. Fully qualified only — see below.
+
+    **The short forms were accepted until 2026-09-18 and were a trap.** ``tables`` took one
+    part or two and ``denied_columns`` took two or three, on the reading that the missing
+    leading component would be supplied by ``resolve_grant``'s ``default_schema``. It is —
+    when there *is* one. ``govern/check.py`` threads the caller's; ``serve/delivery.py``'s
+    ``grant_for_turn`` passes ``None``, deliberately and with ADR 0006 B5's argument for it,
+    because that is what ``serve/fetch.py`` gives ``prepare()``.
+
+    So a short key did not simply fail. It made the two halves of the seam **disagree**: with
+    ``default_schema="public"``, ``tables = ["orders"]`` folds to ``public.orders`` and
+    ``check()`` authorizes the table, while ``ToolBounds`` — folding the same grant with
+    ``None`` — holds ``orders`` and hides it from ``inspect_schema`` and ``sample_rows``. One
+    spelling, two answers, and which one you got depended on which tool the model reached for.
+
+    ``denied_columns`` was the dangerous half of that, because its asymmetry runs the other
+    way. A ``tables`` entry that matches nothing authorizes nothing, so an operator sees the
+    refusals immediately. A ``denied_columns`` entry that matches nothing **denies nothing**:
+    the file parses, the server starts, no warning is issued, and ``SELECT salary FROM
+    public.employees`` is approved by the COLUMNS layer *and* the column is still rendered
+    into the model's context and returned by ``inspect_schema``. Fails open, silently, from a
+    typo whose only tell is a missing schema.
+
+    Requiring the full spelling costs an operator a prefix and buys one answer per key.
+    """
     if raw is None:
         return frozenset()
     if not isinstance(raw, list) or not all(isinstance(k, str) for k in raw):
@@ -316,7 +341,7 @@ def _parse_roles(data: Mapping[str, Any], filename: str) -> dict[str, Grant]:
         if not isinstance(body, Mapping):
             raise ValueError(f"{where} is not a table")
         reach = Reach(body.get("reach", Reach.listed.value))
-        tables = _require_keys(body.get("tables"), parts=(1, 2), where=f"{where}.tables")
+        tables = _require_keys(body.get("tables"), parts=(2,), where=f"{where}.tables")
         if reach is Reach.every_table and tables:
             raise ValueError(
                 f"{where} sets reach = \"every_table\" and also lists tables; one of the two "
@@ -326,7 +351,7 @@ def _parse_roles(data: Mapping[str, Any], filename: str) -> dict[str, Grant]:
             reach=reach,
             tables=tables,
             denied_columns=_require_keys(
-                body.get("denied_columns"), parts=(2, 3), where=f"{where}.denied_columns"
+                body.get("denied_columns"), parts=(3,), where=f"{where}.denied_columns"
             ),
             row_predicates=_parse_predicates(body.get("row_predicate"), where),
         )

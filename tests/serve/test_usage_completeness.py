@@ -28,8 +28,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
-from governed_bi.govern.guard import BI_SCOPE_RULE_ID
-from governed_bi.govern.policy import GovernancePolicy
+from governed_bi.govern.policy import BI_SCOPE_RULE_ID, GovernancePolicy
 from governed_bi.register.facets import FACET_EXTRACTS
 from governed_bi.register.stages import Stage
 from governed_bi.serve.nodes.facets import _run_facet

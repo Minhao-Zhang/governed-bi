@@ -31,24 +31,48 @@ from governed_bi.serve.events import (
 __all__ = ["wrap_node"]
 
 
-def _without_cleared_clock(update: Mapping[str, Any]) -> dict[str, Any]:
-    """``update`` with a null ``turn_started_at`` dropped, so the wrapper's stamp survives it.
+def _turn_clock(
+    state: Mapping[str, Any], update: Mapping[str, Any], entered_at: float
+) -> dict[str, Any]:
+    """The whole turn-clock decision, in the one place that claims to own it.
 
-    This wrapper is the declared single owner of the turn clock — "so ``turn_started_at`` has one
-    answer rather than one per node". It was not: ``Session.turn`` spreads ``PER_TURN_RESET``,
-    which carries ``turn_started_at: None``, and ``accept`` returns that dict, so the merge
-    ``{**began, **update}`` let the reset win over the stamp taken microseconds earlier. The clock
-    then restarted at whichever node ran next, and ``latency_sec`` measured a served turn from
-    after ``accept`` — a turn taking 0.266 s of wall clock recorded 0.010 s.
+    ``entered_at`` is taken **before** the node body runs, so the clock measures from before
+    the work rather than after it.
 
-    Dropping the key rather than reordering the merge, because a node writing ``None`` here is
-    always ``PER_TURN_RESET`` boilerplate and never a deliberate act, while a node writing a real
-    timestamp should still win. Only served turns were affected: ``eval/harness.py`` has no
-    ``accept`` node, so no measured arm moves.
+    Three cases, in order:
+
+    1. The update carries a real timestamp — a node said so deliberately, and it wins. No node
+       does today; the case exists so that the wrapper's ownership is a default and not a
+       seizure.
+    2. The update carries ``turn_started_at: None``. That is ``PER_TURN_RESET``, and it means
+       **a turn is starting at this node**. Stamp ``entered_at``.
+    3. Otherwise, stamp only if the channel is empty, i.e. the first node of the first turn.
+
+    **Case 2 is the fix, and it replaces a function that did the opposite.** Until 2026-09-18
+    this was ``_without_cleared_clock``, which *dropped* the null and let an earlier stamp
+    survive. That closed a real defect — the reset used to win over the stamp taken
+    microseconds earlier, so a 0.266 s turn recorded 0.010 s — and opened a larger one, because
+    the reset was the only thing that ever cleared the channel. With it dropped, case 3 could
+    never fire again after turn one: the incoming state always held turn one's stamp, so
+    the stamp branch returned ``{}`` and the channel kept its first value for the life of the
+    thread. Turn *n* reported the whole conversation's wall clock, and
+    ``serve/nodes/stamp.py``'s ``latency_sec`` — which the audit list projects — grew without
+    bound. The two halves each cited the other: this docstring said the stamp must survive the
+    reset, and the stamp helper's said the reset was what stopped turn two inheriting
+    turn one's clock. Both could not be true.
+
+    Only served turns were affected either way: ``eval/harness.py`` builds no ``accept`` node,
+    so ``PER_TURN_RESET`` reaches its graph through the input channel rather than a node update
+    and never passes through here. No measured arm moves.
     """
-    if "turn_started_at" in update and update["turn_started_at"] is None:
-        return {k: v for k, v in update.items() if k != "turn_started_at"}
-    return dict(update)
+    if "turn_started_at" in update:
+        # Present-and-null and absent are different signals, so membership is tested before
+        # the value. A sentinel would do it too and would collide with `eval/report.py`'s
+        # `_ABSENT`, which `tools/check_one_implementation.py` refuses and is right to.
+        return {} if update["turn_started_at"] is not None else {"turn_started_at": entered_at}
+    if state.get("turn_started_at") is None:
+        return {"turn_started_at": entered_at}
+    return {}
 
 
 def wrap_node(
@@ -108,20 +132,18 @@ def wrap_node(
             "path_kind": "crashed",
         }
 
-    def _started(state: Mapping[str, Any]) -> dict[str, Any]:
-        """``{"turn_started_at": <epoch>}`` from the first node of the turn to run, else ``{}``.
+    def _entered_at() -> float:
+        """When this node began, for :func:`_turn_clock` to use if it decides to stamp.
 
-        See :func:`_without_cleared_clock` for why the stamp must be defended from the update it
-        is merged with.
+        Taken unconditionally and before the body, because the decision needs a timestamp
+        from *before* the work and cannot be made until the update is in hand.
 
         Wall clock rather than ``perf_counter``: a clarification suspends the turn on a
-        ``GraphInterrupt`` and, with a durable checkpointer, can resume later. Written only
-        when absent, so it is the *turn's* start; and in ``PER_TURN_RESET``, so turn two does
-        not inherit turn one's clock. (`/chat`'s ``InMemorySaver`` does not survive restart.)
+        ``GraphInterrupt`` and, with a durable checkpointer, can resume later — so the two
+        ends of a turn can be in different processes, where a monotonic counter means nothing.
+        (`/chat`'s ``InMemorySaver`` does not survive restart; the harness saver does.)
         """
-        if state.get("turn_started_at") is not None:
-            return {}
-        return {"turn_started_at": time.time()}
+        return time.time()
 
     is_async = inspect.iscoroutinefunction(fn)
 
@@ -186,7 +208,7 @@ def wrap_node(
             state: Mapping[str, Any], config: RunnableConfig
         ) -> dict[str, Any]:
             live = _start(state)
-            began = _started(state)
+            entered_at = _entered_at()
             try:
                 update = await _body(state, config)
             except GraphInterrupt:
@@ -199,13 +221,13 @@ def wrap_node(
                 _end(state, update)
             # The clock rides the update even on a crash: `latency_sec` on a crashed turn is
             # how long the user waited to be told nothing.
-            return {**began, **_without_cleared_clock(update)}
+            return {**update, **_turn_clock(state, update, entered_at)}
 
         return inner
 
     async def inner_state_only(state: Mapping[str, Any]) -> dict[str, Any]:
         live = _start(state)
-        began = _started(state)
+        entered_at = _entered_at()
         try:
             update = await _body(state, None)
         except GraphInterrupt:
@@ -214,6 +236,6 @@ def wrap_node(
             update = _crashed(e)
         if live:
             _end(state, update)
-        return {**began, **_without_cleared_clock(update)}
+        return {**update, **_turn_clock(state, update, entered_at)}
 
     return inner_state_only

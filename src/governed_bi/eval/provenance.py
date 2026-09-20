@@ -25,6 +25,7 @@ cannot have a register default. Every name written here is declared there, and
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path
@@ -372,7 +373,10 @@ def _knob_problem(
     across one artifact and the run about to extend it.
 
     ``repr`` rather than ``==``, for the reason the within-arm gate gives: ``3`` and ``"3"`` are
-    two configurations, and a comparison that coerced them would report drift as agreement.
+    two configurations, and a comparison that coerced them would report drift as agreement. It
+    is the repr of the value **as the artifact would hold it** and not as this process holds
+    it — see :func:`_as_recorded`, without which this function refused every resume there has
+    ever been.
 
     A key absent from every row **and** from this run is skipped — both sides declined to say.
     No live run is in that state: ``session._resolved_knobs`` starts from ``knobs.defaults()``
@@ -399,7 +403,7 @@ def _knob_problem(
             if not isinstance(recorded, Mapping) or key not in recorded:
                 absent += 1
                 continue
-            seen.add(repr(recorded[key]))
+            seen.add(_as_recorded(recorded[key]))
         declared = key in knobs_resolved
         if not seen and not declared:
             continue
@@ -417,13 +421,44 @@ def _knob_problem(
                 f"{absent} resumed row(s) carry no {key!r}, so they cannot be shown to have "
                 "run under this run's value"
             )
-        if seen != {repr(want)}:
+        if seen != {_as_recorded(want)}:
             refusals.append(
                 f"  the artifact ran under a different {key}:\n"
-                f"    this run: {want!r}\n"
+                f"    this run: {_as_recorded(want)}\n"
                 f"    on disk : {', '.join(sorted(seen))}"
             )
     return refusals, warnings
+
+
+def _as_recorded(value: Any) -> str:
+    """``repr`` of ``value`` **as an artifact would hold it**, not as this process holds it.
+
+    The comparison in :func:`_knob_problem` has one side in memory and the other side read
+    back from JSON, and bare ``repr`` compared the two representations rather than the two
+    configurations. ``asset_budgets`` ships as a ``tuple`` of ``tuple``\\ s and comes back from
+    the artifact as a ``list`` of ``list``\\ s, so ``repr`` disagreed with itself on **every
+    resume of every arm that has ever been written** — 1 of the 62 ``resume_drift_keys``, and
+    the one on every row. The refusal that produced said "Two treatments in one artifact is not
+    an arm. Rename the artifact and start a new one", over hours of paid model calls, for a
+    value that had not changed. It was found by resuming a 3-row smoke; a full arm takes hours
+    and ``docs/measurement.md`` tells the reader to expect to interrupt and resume it, so this
+    sat directly in front of the next run.
+
+    Round-tripping through the writer's own encoding rather than special-casing ``tuple``:
+    the question this comparison asks is "would this run record what the artifact recorded",
+    and the only honest way to answer it is to encode the way the writer encodes. ``default=str``
+    matches the drivers' ``json.dump(..., default=str)``.
+
+    **It does not weaken the distinction the docstring above defends.** ``3`` encodes to ``3``
+    and ``"3"`` to ``"3"`` (quoted), so they decode to an ``int`` and a ``str`` and still compare
+    unequal. What it collapses is exactly the set of differences no artifact can express.
+    """
+    try:
+        return repr(json.loads(json.dumps(value, default=str)))
+    except (TypeError, ValueError):
+        # Not encodable, so no artifact holds it either; the in-memory repr is the best
+        # available answer and comparing two of them is still sound.
+        return repr(value)
 
 
 def resume_identity_problem(
@@ -708,9 +743,9 @@ def reconciliation_lines(rows: Sequence[Mapping[str, Any]], profile: Any) -> lis
         for problem in reconcile(profile, row):
             counts[problem] = counts.get(problem, 0) + 1
     derived_problem, derived_note = _question_set_from_the_ids(rows, profile)
+    notes = [note for note in (derived_note, _pinned_routing_note(rows)) if note]
     if not counts and derived_problem is None:
-        lines = [f"arm {profile.name}: every row agrees with the profile in arms.toml"]
-        return lines + [derived_note] if derived_note else lines
+        return [f"arm {profile.name}: every row agrees with the profile in arms.toml", *notes]
     total = sum(counts.values())
     # The header counts rows, and the derived finding is not about a row — it is about the
     # artifact as a whole. Saying "0 row(s) contradict" above a real contradiction is the
@@ -725,4 +760,29 @@ def reconciliation_lines(rows: Sequence[Mapping[str, Any]], profile: Any) -> lis
     ]
     if derived_problem is not None:
         lines.append(derived_problem)
-    return lines
+    return lines + notes
+
+
+def _pinned_routing_note(rows: Sequence[Mapping[str, Any]]) -> str | None:
+    """How many of an artifact's turns replayed another arm's shortlist, or ``None``.
+
+    **Not a contradiction, and that is why it is a note.** ``arms.toml`` does not claim an arm
+    routed for itself, so a pinned run disagrees with nothing declared. It is on the
+    provenance line because a reader cannot see it any other way and it changes what the
+    arm's numbers are *about*: ``eval/replay.py`` writes ``pinned_schemas``,
+    ``serve/nodes/route_retrieve.py`` honours it by **replacing** the score-ranked shortlist
+    outright, and the arm then measures generation against a router that did not run.
+
+    The justification for pinning is real — four of the five facet nodes are model calls, so
+    two runs of one question hand ``route`` different hits, and an A/B that lets the shortlist
+    move cannot attribute its own delta. What was missing is that the reader was never told.
+    v4, v4_reflect and v5 each carry it on 1,345 of 1,351 rows, and ``README.md``'s three
+    caveats do not mention it.
+    """
+    pinned = sum(1 for row in rows if row.get("routing_pinned"))
+    if not pinned:
+        return None
+    return (
+        f"  {pinned} of {len(rows)} turns replayed a pinned shortlist (`routing_pinned`), so "
+        "routing on those turns is the arm's it was pinned from, not this one's"
+    )

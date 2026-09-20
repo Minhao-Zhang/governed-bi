@@ -85,6 +85,16 @@ EXPECTED_MAX_CHARS = 200
 #: ``question``, ``generated_sql``, ``licensed`` and ``missing_tables`` are here deliberately: they
 #: are what makes a queue row reviewable at all, and ``/audit/turns/{id}/trace`` already discloses a
 #: turn's SQL to the same caller. That position predates this surface and is unchanged.
+#: How deep ``/clarifications/pending`` will paginate a two-store union.
+#:
+#: Bounded because the union is merged in this process: a correct slice of the *merged* order
+#: needs ``offset + limit`` rows from **both** halves, so an unbounded offset is an unbounded
+#: read of two stores. 1,000 is well past any real operator workflow — this queue is open
+#: questions and untriaged notes, not an archive — and ``meta.truncated`` already reports that
+#: there is more. A cursor keyed on ``asked_at`` is what removes the bound; it needs both
+#: stores to agree on a tiebreak for equal timestamps first.
+MAX_UNION_OFFSET = 1_000
+
 PUBLIC_OBSERVATION_FIELDS: frozenset[str] = frozenset(
     {
         "observation_id",
@@ -309,7 +319,7 @@ def make_feedback_router(
     @router.get("/clarifications/pending")
     def pending_clarifications(
         limit: int = Query(50, ge=1, le=500),
-        offset: int = Query(0, ge=0),
+        offset: int = Query(0, ge=0, le=MAX_UNION_OFFSET),
     ) -> dict[str, Any]:
         """Open questions and untriaged observations, oldest first.
 
@@ -318,20 +328,36 @@ def make_feedback_router(
         composes them. That seam is also what deleted the 40-round-trip walk: the note half is one
         indexed query.
 
+        **Both halves are read from zero and the slice is taken after the merge.** Paginating a
+        union means paginating the *merged* order, and neither store knows the other's rows, so
+        pushing ``offset`` into one of them cannot be right. Until 2026-09-18 it was pushed into
+        exactly one: ``pending.pending`` got the caller's offset and ``store.queue`` got a
+        hard-coded ``0``. With 60 of each at ``limit=50``, page two re-served the same fifty
+        notes page one had, and every row in the middle of the merged order was unreachable —
+        while ``meta.offset`` echoed the requested value, so nothing on the wire said so.
+
+        The cost of doing it correctly is that both halves read ``offset + limit`` rows, which
+        is why ``offset`` is bounded here and not merely non-negative. A cursor keyed on
+        ``asked_at`` would remove the bound; it would also need both stores to agree on a
+        tiebreak for equal timestamps, which is a larger change than this queue is worth.
+        ``truncated`` already says "there is more" and the UI reads it.
+
         Answering a paused question from here is still refused (ADR 0006 B9). The link the UI grows
         instead routes an operator's answer into the semantic layer as an observation, which is the
         provenance gate this whole design is.
         """
-        page = pending.pending(limit=limit, offset=offset)
+        window = offset + limit
+        page = pending.pending(limit=window, offset=0)
         interrupt_rows = [dict(row) for row in page.rows]
-        stored = store.queue(states=[ObservationState.open], limit=limit, offset=0)
+        stored = store.queue(states=[ObservationState.open], limit=window, offset=0)
         note_rows = [_as_pending_row(obs) for obs in stored.rows]
         rows = sorted(interrupt_rows + note_rows, key=lambda r: str(r.get("asked_at") or ""))
+        visible = rows[offset : offset + limit]
         return {
-            "rows": rows[:limit],
+            "rows": visible,
             "meta": {
-                "n": len(rows[:limit]),
-                "truncated": bool(page.truncated) or stored.truncated or len(rows) > limit,
+                "n": len(visible),
+                "truncated": bool(page.truncated) or stored.truncated or len(rows) > window,
                 "threads_scanned": int(page.threads_scanned),
                 "limit": limit,
                 "offset": offset,

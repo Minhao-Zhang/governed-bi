@@ -16,13 +16,12 @@ from typing import Callable, Literal, Mapping, TypedDict
 
 from ..register.knobs import Unset
 from .check import GovernanceUsageError
-from .policy import GovernancePolicy
+from .policy import BI_SCOPE_RULE_ID, GUARD_RULE_IDS, GovernancePolicy
 
 __all__ = [
     "GuardVerdict",
     "GUARD_RULES",
     "GUARD_PUBLIC_MESSAGE",
-    "BI_SCOPE_RULE_ID",
     "guard",
     "has_control_characters",
 ]
@@ -158,17 +157,42 @@ GUARD_RULES: Mapping[str, Callable[[str, GovernancePolicy], str | None]] = {
     "g_tool_forgery": _rule_tool_forgery,
 }
 
-#: The one guard rule that is **not** in :data:`GUARD_RULES`: it asks a model whether the
-#: question is a BI task at all, and ``govern/`` must stay importable with no model, no
-#: settings and no I/O. The check therefore runs in ``serve/nodes/guard.py``; only the id
-#: lives here, because it is closed vocabulary that ``guard_rules_enabled``,
-#: ``GuardVerdict.rule_id`` and the record all read.
-#:
-#: **Enabled with no model configured is ``error_failed_open``, not ``clear``** — a rule
-#: switched on that could not run must not be indistinguishable from one never wired up.
-BI_SCOPE_RULE_ID = "g_bi_scope"
+# `BI_SCOPE_RULE_ID` used to be defined here. It moved to `policy.py` on 2026-09-18, with
+# `GUARD_RULE_IDS`, so `GovernancePolicy.__post_init__` can refuse a `guard_rules_enabled` key
+# that names no rule — which is what this comment had called "closed vocabulary" for as long as
+# nothing enforced it, while the served surface ran none of the five rules below.
+#
+# Imported above rather than re-exported: `tools/check_one_implementation.py` refuses one name
+# with two definitions, and it is right to. A re-export is a second home for a name, and the
+# four call sites that read it now say where it lives.
 
 _WARNED: set[str] = set()
+
+
+def _assert_the_predicates_match_the_vocabulary() -> None:
+    """Import-time: ``guard.py``'s predicates and ``policy.py``'s ids are the same five.
+
+    The two halves are deliberately apart — the names are what a policy may legally enable,
+    the predicates are code — and apart is where they can drift. A rule added here and not
+    there would be dispatched by :func:`guard` and rejected by
+    :meth:`~governed_bi.govern.policy.GovernancePolicy.__post_init__`, so no policy could
+    enable it; a name added there and not here would be accepted by a policy and dispatch
+    nothing, which is the original defect with a new spelling.
+    """
+    if set(GUARD_RULES) != GUARD_RULE_IDS:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"guard.GUARD_RULES dispatches {sorted(GUARD_RULES)} but policy.GUARD_RULE_IDS "
+            f"declares {sorted(GUARD_RULE_IDS)}. A name on one side only is a rule that can "
+            "be enabled and never runs, or runs and can never be enabled."
+        )
+    if BI_SCOPE_RULE_ID in GUARD_RULES:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"{BI_SCOPE_RULE_ID!r} is in GUARD_RULES. It is the model-backed rule and runs in "
+            "serve/nodes/guard.py; dispatching it here would need a model inside govern/."
+        )
+
+
+_assert_the_predicates_match_the_vocabulary()
 
 
 def guard(question: str, knobs: GovernancePolicy) -> GuardVerdict:

@@ -54,8 +54,8 @@ from governed_bi.feedback.lifecycle import (
     transition_for,
 )
 from governed_bi.feedback.rows import (
-    SCHEMA,
     SCHEMA_VERSION,
+    migrate,
     observation_from,
     observation_row,
     patch_from,
@@ -75,9 +75,10 @@ __all__ = [
     "utc_now",
 ]
 
-#: Bumped when a migration is added. There is one version and no migration yet; the column exists
-#: so the first one has somewhere to read from, which is cheaper than adding it later to a file
-#: that already has rows.
+# `SCHEMA_VERSION`'s own note moved to `rows.py`, beside `MIGRATIONS`. It was orphaned here —
+# attached to nothing after the import moved — and said "no migration yet", which was true of
+# the data and not of the code: the upgrade path did not exist either, and `_migrate` fell
+# through an older store as up-to-date.
 
 
 class Rejected(ValueError):
@@ -163,19 +164,18 @@ class FeedbackStore:
             conn.execute("COMMIT")
 
     def _migrate(self) -> None:
+        """Bring the file to :data:`SCHEMA_VERSION`. The version arithmetic is in ``rows.py``.
+
+        There, and not here, because that module owns ``SCHEMA``, ``SCHEMA_VERSION`` and
+        ``MIGRATIONS`` — which is this seam's whole thesis, and what
+        ``tests/feedback/test_the_storage_spelling_is_its_own_module.py`` holds it to. It
+        caught the first draft of this fix landing the arithmetic in this file: 909 lines
+        against a 900-line warn tier, with the message "the cut bought no room".
+        """
         with self._conn() as conn:
             # WAL outside the transaction: it is a database-level property, not a change.
             conn.execute("PRAGMA journal_mode = WAL")
-            conn.executescript(SCHEMA)
-            row = conn.execute("SELECT version FROM schema_version").fetchone()
-            if row is None:
-                conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-            elif row["version"] > SCHEMA_VERSION:
-                raise RuntimeError(
-                    f"{self.path} is at schema version {row['version']} and this code knows "
-                    f"{SCHEMA_VERSION}. A newer store read by older code is how a column nobody "
-                    "here writes gets silently dropped; refusing instead."
-                )
+            migrate(conn, what=str(self.path))
 
     # ── writes ────────────────────────────────────────────────────────────────
 

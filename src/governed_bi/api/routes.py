@@ -65,7 +65,7 @@ import os
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import make_router
@@ -199,13 +199,28 @@ def _build_app(
     # Audit surface under `/audit` (avoids colliding with LangGraph Server's `/runs`).
 
     @app.get("/audit/turns")
-    def audit_turns(limit: int = 50, thread_id: str | None = None) -> dict[str, Any]:
+    def audit_turns(
+        limit: int = Query(50, ge=1, le=500),
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
         """Served turns, newest first. ``incomplete_fields`` is judged against today's register.
 
         ``thread_id`` narrows to one conversation, which is what a transcript needs. It used to be
         needed because the *store* was global — one time-ordered log of every thread — and it is
         still needed now the source is thread state, because a transcript asks for one thread and
         the reader would otherwise page through every other one to find it.
+
+        **``limit`` is bounded**, matching the four feedback routes that already were. Until
+        2026-09-18 it was a bare ``int = 50``: ``thread_turns`` does ``max(1, int(limit))``, a
+        floor and no ceiling, and then pages threads until it has that many turns — capped only
+        by ``_MAX_THREADS = 1000``, materialising every turn envelope it walks past. So one
+        request could walk every thread in the deployment, and the UI already asks for 500
+        with no ``thread_id``. That this route is *also* unauthenticated is a separate and
+        deliberate decision (see this module's header, "A7 is open again, knowingly"); the
+        unbounded walk behind it was not decided anywhere.
+
+        Refused rather than clamped, like ``limit`` on ``/clarifications/pending``: a clamp
+        answers a different question than the one asked and does not say so.
         """
         return turns_page(turn_log, limit=limit, thread_id=thread_id)
 

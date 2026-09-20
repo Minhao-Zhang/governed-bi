@@ -101,6 +101,10 @@ def why_it_proves_nothing(mutation: Mutation) -> str:
     if not target.is_file():
         return f"{mutation.path} is not a file, so there is nothing to mutate"
 
+    # Universal newlines, matching how `_apply` normalises before it searches. The two
+    # readers have to agree or this reports an anchor as present that the run cannot find,
+    # which is exactly what a raw read here would have hidden: a mutation that "applied"
+    # nothing and was scored `SURVIVED`.
     count = target.read_text(encoding="utf-8").count(mutation.anchor)
     if count != 1:
         return (
@@ -163,14 +167,38 @@ def _apply(mutation: Mutation) -> tuple[bool, str]:
         return True, vacuous
 
     target = REPO / mutation.path
-    original = target.read_text(encoding="utf-8")
+    # **Bytes to restore, universal-newline text to match**, and they have to be the two
+    # different things they are.
+    #
+    # Restoring from text was lossy on Windows: `read_text` collapses CRLF to LF and
+    # `write_text` expands LF back to `os.linesep`, so a file that was LF on disk came back
+    # rewritten line by line. Worse, the guard could not see it — both sides of the old
+    # comparison were universal-newline-decoded, so it compared LF to LF and passed while
+    # `.github/workflows/ci.yml` said the restore was "verified byte-for-byte". Masked today
+    # by `autocrlf=true` making `src/` CRLF already; a `.gitattributes`, `core.autocrlf=input`
+    # or a WSL-origin checkout re-arms it.
+    #
+    # Matching has the opposite requirement. An anchor is committed data in
+    # `mutation_catalogue_data_*.py`, written with `\n` because a catalogue that carried a
+    # platform's line endings would match on one machine and not another. Reading raw to fix
+    # the restore therefore broke every multi-line anchor on this checkout — found the same
+    # hour, by two mutations that went from `caught` to `SURVIVED` with nothing else changed.
+    original = target.read_bytes()
+    text = original.decode("utf-8").replace("\r\n", "\n")
 
     try:
-        target.write_text(original.replace(mutation.anchor, mutation.replacement, 1), encoding="utf-8")
+        # `newline=""` so the mutant is written exactly as `replace` produced it. Its line
+        # endings do not matter — Python does not care and the file is transient — but a
+        # translation here would be one more thing between the anchor and the test.
+        target.write_text(
+            text.replace(mutation.anchor, mutation.replacement, 1),
+            encoding="utf-8",
+            newline="",
+        )
         caught, tail = _run_tests(mutation.tests)
     finally:
-        target.write_text(original, encoding="utf-8")
-        if target.read_text(encoding="utf-8") != original:  # pragma: no cover - paranoia
+        target.write_bytes(original)
+        if target.read_bytes() != original:  # pragma: no cover - paranoia
             raise SystemExit(f"FATAL: could not restore {mutation.path}; fix before continuing")
 
     return (not caught), tail

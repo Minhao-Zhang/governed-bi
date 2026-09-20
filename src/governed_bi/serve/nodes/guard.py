@@ -74,7 +74,8 @@ async def guard_node(state: dict, config: RunnableConfig) -> dict:
     ``KeyError`` on a missing policy is deliberate — ``guard_rules_enabled`` ships ``UNSET`` and
     "no policy" must not become "no guard".
     """
-    from governed_bi.govern.guard import BI_SCOPE_RULE_ID, guard
+    from governed_bi.govern.guard import guard
+    from governed_bi.govern.policy import BI_SCOPE_RULE_ID
 
     cfg = configurable(config)
     policy = cfg["policy"]
@@ -125,7 +126,8 @@ async def _bi_scope(
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    from governed_bi.govern.guard import BI_SCOPE_RULE_ID, GuardVerdict
+    from governed_bi.govern.guard import GuardVerdict
+    from governed_bi.govern.policy import BI_SCOPE_RULE_ID
     from governed_bi.register.prompts import prompt_text
     from governed_bi.serve.usage import usage_row
 

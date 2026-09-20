@@ -448,6 +448,24 @@ expression = "region_id = 9"
             "part(s)",
             id="bare_column_name",
         ),
+        # The two short forms the loader used to accept. Both were unmatchable against the
+        # 2-part asset ids the serve path folds with `default_schema=None`, and they failed
+        # in opposite directions: an unmatched `tables` entry authorizes nothing and is
+        # noticed on the first query, an unmatched `denied_columns` entry **denies nothing**
+        # and is noticed never. The `denied_columns` one is the fail-open half and is why
+        # both are refused now — see `_require_keys`.
+        pytest.param(
+            'denied_columns = ["sales.customers.email"]',
+            'denied_columns = ["customers.email"]',
+            "part(s)",
+            id="two_part_column_needs_its_schema",
+        ),
+        pytest.param(
+            'tables = ["sales.orders"]',
+            'tables = ["orders"]',
+            "part(s)",
+            id="bare_table_name_needs_its_schema",
+        ),
         pytest.param(
             'enforcement = "database_role"', 'enforcement = "inject"', "not one of", id="inject"
         ),
@@ -462,12 +480,18 @@ expression = "region_id = 9"
 def test_the_policy_file_fails_at_load_not_at_query_time(
     tmp_path: Path, find: str, replace: str, expect: str
 ) -> None:
-    """Five shapes, five load failures. A policy file is read once and enforced thousands of
-    times, so a key that only fails on the query that touches it fails in production.
+    """Seven shapes, seven load failures. A policy file is read once and enforced thousands
+    of times, so a key that only fails on the query that touches it fails in production.
 
     ``inject`` is the one that matters most: there is no such enforcement, ADR 0012 rejects
     rewriting a checked statement, and a vocabulary that cannot spell the dangerous option is
     how that stays rejected.
+
+    The two schema-less keys were added on 2026-09-18 and are the only ones here that *used
+    to load*. A short key is not a key that fails; it is a key that folds differently on the
+    two halves of the seam — ``check()`` threads the caller's ``default_schema`` and
+    ``ToolBounds`` passes ``None`` — so one spelling gave two answers depending on which
+    tool the model reached for, and the ``denied_columns`` half of that gave "not denied".
     """
     broken = POLICY_FILE.replace(find, replace, 1)
     assert broken != POLICY_FILE, "the parametrised break did not match the fixture"

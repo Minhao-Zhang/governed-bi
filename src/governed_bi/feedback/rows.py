@@ -45,6 +45,23 @@ from governed_bi.register.assets import AssetType
 #: Bumped when the DDL changes in a way an existing file cannot be read with.
 SCHEMA_VERSION = 1
 
+#: ``version -> the statements that take a store from ``version - 1`` to ``version``.
+#:
+#: Empty because :data:`SCHEMA_VERSION` is still 1 and there is nothing before 1 to come from.
+#: It exists now rather than when it is first needed because the *absence* of an upgrade path
+#: was invisible: ``_migrate`` handled a store newer than the code and refused it, which reads
+#: as "migrations are thought about here", while the older-store case — the only one an
+#: upgrade ever produces — fell through as up-to-date. A bump with no entry here is now
+#: refused at open, so the failure is a startup error naming the missing step rather than an
+#: ``OperationalError: no such column`` on the first request that touches it.
+#:
+#: **Adding a step.** Bump :data:`SCHEMA_VERSION`, add the matching key, and put the
+#: ``ALTER TABLE`` / backfill statements in the order they must run. They execute inside the
+#: same transaction as the version bump, so a half-applied upgrade rolls back rather than
+#: leaving a store the next process reads as finished. ``ADD COLUMN`` needs a default or a
+#: nullable type — SQLite cannot add a ``NOT NULL`` column without one to an existing table.
+MIGRATIONS: Mapping[int, tuple[str, ...]] = {}
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -274,3 +291,62 @@ def replace_row(row: _Row, **changes: Any) -> _Row:
     current = {f.name: getattr(row, f.name) for f in dataclass_fields(row)}
     current.update(changes)
     return type(row)(**current)
+
+
+def migrate(conn: sqlite3.Connection, *, what: str) -> None:
+    """Create or upgrade the schema in ``conn`` to :data:`SCHEMA_VERSION`.
+
+    Three cases, and until 2026-09-18 the **only one an upgrade ever produces** was the one
+    missing. ``executescript(SCHEMA)`` is all ``CREATE TABLE IF NOT EXISTS``, so on an
+    existing file it is a no-op: no column is added and the version row is not rewritten. A
+    store at 1 opened by code that knows 2 therefore reported itself up-to-date, started
+    clean, and raised ``OperationalError: no such column`` at the first read or write that
+    touched the new field — at request time, in front of a user, rather than at startup.
+
+    The *other* direction was handled, and tested: a store newer than the code refuses. That
+    asymmetry is what made the gap hard to see, because a guard that exists reads as
+    "migrations are thought about here".
+
+    A bump with no entry in :data:`MIGRATIONS` is refused at open rather than deferred to the
+    first query, on the same argument ``govern/access.py::_require_keys`` makes about a policy
+    file: read once, enforced thousands of times.
+
+    ``what`` names the file in errors. Passed in rather than read off the connection so this
+    stays a pure function of ``conn`` and the module's own constants — it is called by
+    ``FeedbackStore`` and is directly testable without one.
+    """
+    conn.executescript(SCHEMA)
+    row = conn.execute("SELECT version FROM schema_version").fetchone()
+    if row is None:
+        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+        return
+    found = int(row["version"])
+    if found > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"{what} is at schema version {found} and this code knows {SCHEMA_VERSION}. A "
+            "newer store read by older code is how a column nobody here writes gets silently "
+            "dropped; refusing instead."
+        )
+    if found == SCHEMA_VERSION:
+        return
+    steps = range(found + 1, SCHEMA_VERSION + 1)
+    missing = [v for v in steps if v not in MIGRATIONS]
+    if missing:
+        raise RuntimeError(
+            f"{what} is at schema version {found} and this code knows {SCHEMA_VERSION}, but "
+            f"MIGRATIONS has no step for {missing}. Bumping SCHEMA_VERSION without writing "
+            "the step is how an upgrade becomes an OperationalError on the first request that "
+            "touches the new column; refusing at open instead."
+        )
+    # One transaction over every step and the bump: a half-applied upgrade the next process
+    # reads as finished is worse than one that failed.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for version in steps:
+            for statement in MIGRATIONS[version]:
+                conn.execute(statement)
+        conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")

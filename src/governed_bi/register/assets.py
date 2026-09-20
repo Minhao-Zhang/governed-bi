@@ -28,7 +28,12 @@ class AssetType(str, Enum):
     schema = "schema"
     table = "table"
     column = "column"
-    join = "join"
+    # ``type: ignore`` and not a rename: the member name collides with ``str.join``, which mypy
+    # reads as a member shadowing a base-class method. The value is the ``asset_type``
+    # discriminator on the wire and in every corpus file, so it cannot move, and the name is
+    # read by 20 call sites. The collision is inert at runtime — ``AssetType.join`` resolves to
+    # the member, and nothing calls ``.join`` on an ``AssetType``.
+    join = "join"  # type: ignore[assignment]
     metric = "metric"
     term = "term"
     few_shot = "few_shot"

@@ -299,8 +299,14 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
         id="a4-handler-not-registered",
         what="the decorator is removed, so run creation is fail-open and silent",
         path="src/governed_bi/api/auth.py",
-        anchor="@auth.on.threads.create_run\n",
+        anchor="@auth.on.threads.create_run  # type: ignore[arg-type]\n",
         replacement="",
+        # Re-anchored 2026-09-18: the decorator line gained a `type: ignore[arg-type]` when the
+        # governance spine went under a CI mypy gate (the SDK's `_ActionHandler` protocol types
+        # `value` as `RunsCreate`, which is not the shape the runtime passes — see the comment
+        # above the decorator). The staleness gate caught the anchor the same hour, which is the
+        # second time it has paid for itself on this one entry.
+        #
         # Re-pointed 2026-08-25. This named
         # `test_the_handler_is_actually_registered_for_run_creation`, which was renamed to
         # `test_both_handlers_are_actually_registered` when the second action was added, and the
@@ -312,6 +318,235 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
         ),
         finding="`_get_handler` returns None on no match and `handle_event` treats that as allow; "
                 "deleting this one line left the original A4 test green",
+    ),
+    Mutation(
+        id="access-policy-with-no-reachable-role-starts-anyway",
+        what="a policy whose roles nobody holds loads, and every query then refuses silently",
+        path="src/governed_bi/api/graph_app.py",
+        anchor="    if declared and not (set(declared) & set(principal.roles)):",
+        replacement="    if False:",
+        tests=(
+            "tests/conformance/test_a_declared_mechanism_is_reachable_from_the_shipped_config"
+            ".py::test_an_access_policy_no_principal_can_hold_is_refused_at_startup",
+        ),
+        finding="`StaticRoleAccessPolicy.grant_for` returns `Grant()` — reach=listed, no "
+                "tables — for a principal holding none of the declared roles, and "
+                "`authenticated_principal` returns one constant with one role. So an "
+                "operator who writes `[role.analyst]` gets a server that starts, looks "
+                "configured, and refuses every query with nothing anywhere naming the "
+                "mismatch. Fail-closed and silent, which is the pair that wastes a day.",
+    ),
+    Mutation(
+        id="report-a-non-quotable-delta-reads-as-a-result",
+        what="the rendered comparison drops its quotability, so a copied line loses the gate",
+        path="src/governed_bi/eval/report.py",
+        anchor='    return line if quotable else f"{line}  [NOT QUOTABLE: a gate did not pass]"',
+        replacement="    return line",
+        tests=(
+            "tests/eval/test_a_non_quotable_delta_says_so_in_the_line.py::"
+            "test_a_non_quotable_delta_carries_the_verdict_in_the_string",
+        ),
+        finding="Every real pair in runs/eval/ is non-quotable — `knobs_comparable` returns "
+                "`cannot_evaluate` because ~50 of the 51 comparability knobs are absent from "
+                "those rows — so every line this has ever rendered was a diagnostic that read "
+                "exactly like a result. `quotable` sits one key away in the same dict and does "
+                "not travel with a copied line.",
+    ),
+    Mutation(
+        id="provenance-hides-a-pinned-shortlist",
+        what="an arm that replayed another arm's routing stops saying so",
+        path="src/governed_bi/eval/provenance.py",
+        anchor='    pinned = sum(1 for row in rows if row.get("routing_pinned"))',
+        replacement="    pinned = 0",
+        tests=(
+            "tests/eval/test_the_measured_graph_and_the_served_graph.py",
+        ),
+        finding="`eval/replay.py` writes `pinned_schemas` and `route_retrieve.py` honours it "
+                "by replacing the score-ranked shortlist outright, so a pinned arm measures "
+                "generation against a router that did not run. v4, v4_reflect and v5 each "
+                "carry it on 1,345 of 1,351 rows and README's three caveats do not mention "
+                "it. Not a contradiction of arms.toml, which is why it is a note and not a "
+                "problem — and why nothing reported it before.",
+    ),
+    Mutation(
+        id="resolve-closure-unbounded-again",
+        what="the reference closure loses its ceiling, so a corpus edge widens `licensed` freely",
+        path="src/governed_bi/serve/nodes/route_retrieve.py",
+        anchor="    if len(added) > max_added:",
+        replacement="    if False:",
+        tests=(
+            "tests/serve/test_the_reference_closure_is_bounded.py::"
+            "test_a_closure_past_the_bound_declines_rather_than_truncating",
+        ),
+        finding="Every table the closure reaches enters `licensed`, which is what the TABLES "
+                "layer accepts, so one `references` edge widened what SQL the guard approves "
+                "with no access-policy change. Measured on the shipped corpus before a bound "
+                "was chosen: a realistic seed adds median 52-69 and max 279, but every table "
+                "of the three largest schemas adds 1,480 — 11% of the corpus. The only thing "
+                "in front of that today is the `table` budget of 8, whose placement "
+                "`govern/bounds.py` already records as costing a wrong refusal.",
+    ),
+    Mutation(
+        id="clarification-flag-goes-back-to-last-write",
+        what="the fail-closed flag loses its reducer, so two answers abort the turn",
+        path="src/governed_bi/serve/agent_state.py",
+        anchor="    clarification_requested: Annotated[bool, any_fail_closed]",
+        replacement="    clarification_requested: bool",
+        tests=(
+            "tests/serve/test_two_clarifications_do_not_destroy_the_turn.py::"
+            "test_two_writers_in_one_super_step_commit_instead_of_aborting",
+        ),
+        finding="The only channel on GovernedAgentState without a reducer, and `keep_newest`'s "
+                "docstring three declarations above already recorded what that costs for "
+                "`result_table`. Two `ask_user` calls in one assistant message reach it on "
+                "resume; `agent_core._run` swallows the InvalidUpdateError into "
+                "`path_kind=crashed`, so both human answers are discarded and `_sealed` tells "
+                "each call 'Not executed: the turn ended before this tool ran' when both ran "
+                "and a person answered both.",
+    ),
+    Mutation(
+        id="resume-unreadable-payload-becomes-an-answer",
+        what="a payload parse_resume cannot read is reported as the analyst's answer again",
+        path="src/governed_bi/serve/clarification.py",
+        anchor=(
+            "    if isinstance(resume, str) and resume.strip():\n"
+            "        return resume, RESOLUTION_ANSWERED, False\n"
+            "    return MALFORMED_CLOSED_TEXT, RESOLUTION_MALFORMED, True"
+        ),
+        replacement="    return str(resume), RESOLUTION_ANSWERED, False",
+        tests=(
+            "tests/serve/test_an_unreadable_resume_does_not_become_an_answer.py",
+        ),
+        finding="`{}` told the model the answer was the empty string, `None` told it the "
+                "answer was the literal 'None', and each was stamped resolution='answered' in "
+                "the record beside the real ones — then the turn went on to run_query on the "
+                "strength of a reply nobody gave. The `declined` branch in the same function "
+                "was already fail-closed, so the two halves disagreed about what an "
+                "uninterpretable payload means.",
+    ),
+    Mutation(
+        id="feedback-store-opens-an-older-file-as-current",
+        what="the upgrade path is skipped, so an older store opens clean and is missing columns",
+        path="src/governed_bi/feedback/rows.py",
+        anchor="    steps = range(found + 1, SCHEMA_VERSION + 1)",
+        replacement="    return\n    steps = range(found + 1, SCHEMA_VERSION + 1)",
+        tests=(
+            "tests/feedback/test_the_feedback_store_is_not_a_comparability_knob.py::"
+            "test_an_older_store_is_upgraded_rather_than_opened_as_if_current",
+        ),
+        finding="The shipped state until 2026-09-18. `executescript(SCHEMA)` is all CREATE "
+                "TABLE IF NOT EXISTS, so on an existing file it adds no column and rewrites "
+                "no version — a store at 1 opened by code that knows 2 reported itself "
+                "up-to-date and raised OperationalError at the first request touching the new "
+                "field. The newer-store direction *was* handled and tested, which is what made "
+                "the gap hard to see.",
+    ),
+    Mutation(
+        id="corpus-writes-platform-line-endings",
+        what="the corpus hash goes back to depending on which OS wrote the file",
+        path="src/governed_bi/corpus/store.py",
+        anchor='        encoding="utf-8",\n        newline="\\n",\n    )\n    return target',
+        replacement='        encoding="utf-8",\n    )\n    return target',
+        tests=(
+            "tests/corpus/test_the_hash_does_not_depend_on_the_operating_system.py",
+        ),
+        finding="`corpus/hash.py` digests read_bytes(), so a `write_text` with no `newline=` "
+                "makes `corpus_content_hash` OS-dependent — and every arm digest in "
+                "`register/arms.toml` is keyed on it. `../BIRD-corpus/.gitattributes` defends "
+                "the checkout against exactly this with a nine-line header about it; this line "
+                "defeated that defence from the write side. Passes on Linux CI either way, "
+                "which is why the test asserts on bytes rather than on os.linesep.",
+    ),
+    Mutation(
+        id="pending-union-pages-one-half-only",
+        what="the merged slice goes back to taking the head, so page two repeats page one",
+        path="src/governed_bi/api/feedback_routes.py",
+        # The *slice*, not the one-sided read. Reverting only `store.queue`'s `limit` leaves
+        # the merge correct and the mutation survives — which is worth knowing: the defect
+        # needed both halves, and the slice is the half that produces the duplication.
+        anchor="        visible = rows[offset : offset + limit]",
+        replacement="        visible = rows[:limit]",
+        tests=(
+            "tests/api/test_the_pending_queue_unions_two_stores.py::"
+            "test_the_second_page_does_not_repeat_the_first",
+        ),
+        finding="The shipped state until 2026-09-18, and the union had no test at all — the "
+                "sibling file's comment pointed at a `test_the_pending_queue_unions_two_stores"
+                ".py` that did not exist. `offset` was pushed into one of two stores, which "
+                "cannot be a partial fix because neither store knows the other's rows. "
+                "Measured on 60+60 interleaved rows at limit=50: three pages served 150 rows "
+                "for 120, 50 duplicated and 45 unreachable, while `meta.offset` echoed the "
+                "request so nothing on the wire said so.",
+    ),
+    Mutation(
+        id="wrap-the-turn-clock-never-restarts",
+        what="the per-turn reset is dropped again, so turn two keeps turn one's clock",
+        path="src/governed_bi/serve/wrap.py",
+        anchor=(
+            '        return {} if update["turn_started_at"] is not None '
+            'else {"turn_started_at": entered_at}'
+        ),
+        replacement="        return {}",
+        tests=(
+            "tests/serve/test_the_turn_clock_restarts_every_turn.py::"
+            "test_a_second_turn_does_not_inherit_the_first_turns_clock",
+        ),
+        finding="The shipped state until 2026-09-18, and invisible to the whole suite: "
+                "`test_state_channels.py` asserted `turn_started_at` is in `PER_TURN_RESET` "
+                "and explained in a comment why it must be, while `_without_cleared_clock` "
+                "stripped that exact key out of every node update. Membership of a dict is "
+                "not the dict reaching the channel. Turn n reported the conversation's wall "
+                "clock, and `_LIST_VIEW_KEYS` projects `latency_sec` to the audit list, so "
+                "the number was served as well as stored. The eval graph has no `accept` "
+                "node, so no measured arm could observe it.",
+    ),
+    Mutation(
+        id="access-denied-columns-accepts-a-schemaless-key",
+        what="a two-part denied_columns key loads again, and denies nothing",
+        path="src/governed_bi/govern/access.py",
+        anchor='                body.get("denied_columns"), parts=(3,), where=f"{where}.denied_columns"',
+        replacement='                body.get("denied_columns"), parts=(2, 3), where=f"{where}.denied_columns"',
+        tests=(
+            "tests/govern/test_access_seam.py::"
+            "test_the_policy_file_fails_at_load_not_at_query_time",
+        ),
+        finding="The shipped state until 2026-09-18. `resolve_grant` folds with "
+                "`default_schema=None` on the serve path, so `denied_columns = "
+                "['orders.salary']` never matched the 3-part key `denies_column` is asked "
+                "about: the file parsed, the server started, no warning was issued, and the "
+                "column was neither refused by COLUMNS nor withheld from the prompt. The "
+                "sibling `tables` typo fails closed and is noticed on the first query; this "
+                "one fails open and is noticed never.",
+    ),
+    Mutation(
+        id="guard-served-policy-runs-no-rule",
+        what="the served policy goes back to enabling the scope gate and nothing else",
+        path="src/governed_bi/api/graph_app.py",
+        anchor="        guard_rules_enabled={rule_id: True for rule_id in sorted(KNOWN_GUARD_RULE_IDS)},",
+        replacement='        guard_rules_enabled={"g_bi_scope": True},',
+        tests=(
+            "tests/api/test_the_served_surface_is_not_the_benchmark_arm.py::"
+            "test_the_served_policy_blocks_a_textbook_prompt_injection",
+        ),
+        finding="This was the shipped state until 2026-09-18 and nothing failed. `g_bi_scope` is "
+                "not in `GUARD_RULES`, `guard()` iterates that mapping, and an absent id is "
+                "silently False — so the served surface ran zero deterministic predicates while "
+                "all five were 100% line-covered by a fixture that built its own all-on policy. "
+                "The one test that read the shipped mapping pinned it with `==`, so it failed on "
+                "the fix and passed on the regression. Named here against the *behavioural* test, "
+                "not the configuration one: comparing a dict to a dict is what missed it.",
+    ),
+    Mutation(
+        id="guard-policy-accepts-an-unknown-rule-id",
+        what="the key-space check is removed, so a typo'd rule id is silently disabled again",
+        path="src/governed_bi/govern/policy.py",
+        anchor="        unknown = sorted(set(self.guard_rules_enabled) - KNOWN_GUARD_RULE_IDS)",
+        replacement="        unknown: list[str] = []",
+        tests=("tests/govern/test_guard_pipeline_ledger.py",),
+        finding="The root cause rather than the instance: one mapping consumed by two modules "
+                "over two disjoint namespaces, with `.get(rule_id, False)` turning every "
+                "unrecognised key into a silent off. Without this check the next `g_bi_scope` "
+                "— a retired id, a typo, a rule renamed on one side — is the same outage.",
     ),
     Mutation(
         id="a4-resume-refused-too",

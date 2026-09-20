@@ -27,14 +27,16 @@ from .adversarial import (
     CASE_FAMILIES,
     AdversarialCase,
     AdversarialSuite,
+    GuardCase,
     WorldFixture,
     build_world_fixture,
     load_adversarial_suite,
 )
 from .check import check
+from .guard import GuardVerdict, guard
 from .layers import GUARDRAIL_ERROR, CheckVerdict, Layer
 from .pipeline import Prepared, prepare
-from .policy import DEFAULT_DIALECT, GovernancePolicy
+from .policy import DEFAULT_DIALECT, GUARD_RULE_IDS, GovernancePolicy
 
 __all__ = [
     "CaseResult",
@@ -42,6 +44,10 @@ __all__ = [
     "run_adversarial_suite",
     "report_lines",
     "format_case_failures",
+    "GuardCaseResult",
+    "GuardReport",
+    "run_guard_suite",
+    "guard_report_lines",
 ]
 
 
@@ -192,6 +198,133 @@ def run_adversarial_suite(
         version=suite.version,
         results=tuple(_run_case(case, fixture, resolved) for case in suite.cases),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class GuardCaseResult:
+    """One :class:`~governed_bi.govern.adversarial.GuardCase`, run."""
+
+    case: GuardCase
+    verdict: GuardVerdict
+    status: str
+    detail: str
+
+
+def _classify_guard(case: GuardCase, verdict: GuardVerdict) -> tuple[str, str]:
+    """The statuses the statement half uses, minus the two that need a statement.
+
+    ``bypassed`` keeps its meaning — an attack that reached the model — but there is no
+    ``prepare()`` string to check, so a passing verdict is the whole of it. ``error_failed_open``
+    is this half's ``guardrail_error``: :func:`~governed_bi.govern.guard.guard` returns it when
+    a predicate raises, and it is a **bypass in effect** (``serve/graph.py::_after_guard``
+    routes anything that is not ``blocked`` onward) which is why it is counted apart rather
+    than folded into ``caught``.
+    """
+    if verdict["outcome"] == "error_failed_open":
+        return "guardrail_error", f"{verdict['rule_id']} raised: {verdict['detail']}"
+    blocked = verdict["outcome"] == "blocked"
+    if not case.is_attack:
+        return ("false_refusal", str(verdict["rule_id"])) if blocked else ("allowed", "")
+    if not blocked:
+        return "bypassed", "guard returned a clear verdict"
+    if verdict["rule_id"] != case.expect_rule:
+        return "misattributed", f"expected {case.expect_rule}, got {verdict['rule_id']}"
+    return "caught", ""
+
+
+@dataclass(frozen=True, slots=True)
+class GuardReport:
+    """The prompt-injection half's rates, each with its denominator."""
+
+    version: str
+    results: tuple[GuardCaseResult, ...]
+
+    def of_kind(self, kind: str) -> tuple[GuardCaseResult, ...]:
+        return tuple(r for r in self.results if r.case.kind == kind)
+
+    def with_status(self, status: str, kind: str | None = None) -> tuple[GuardCaseResult, ...]:
+        pool = self.results if kind is None else self.of_kind(kind)
+        return tuple(r for r in pool if r.status == status)
+
+    def rate(self, status: str, kind: str) -> Measured[float]:
+        return Measured.rate(
+            len(self.with_status(status, kind)), len(self.of_kind(kind)), what=f"{kind} questions"
+        )
+
+    def rule_recall(self, rule_id: str) -> Measured[float]:
+        """Per rule, over the attacks that rule owns. The statement half's ``layer_recall``.
+
+        Per *rule* and not per family, because ADR 0006 OQ3's condition for shipping these
+        enabled was a number for each one — a set-level recall of 1.000 is compatible with one
+        rule catching everything and four catching nothing.
+        """
+        owned = [r for r in self.of_kind("attack") if r.case.expect_rule == rule_id]
+        caught = [r for r in owned if r.status == "caught"]
+        return Measured.rate(len(caught), len(owned), what=f"attacks owned by {rule_id}")
+
+    def failures(self) -> tuple[GuardCaseResult, ...]:
+        return tuple(
+            r
+            for r in self.results
+            if r.status in ("bypassed", "misattributed", "guardrail_error")
+            or (r.status == "false_refusal" and not r.case.known_false_refusal)
+        )
+
+
+def run_guard_suite(
+    suite: AdversarialSuite | None = None, *, policy: GovernancePolicy | None = None
+) -> GuardReport:
+    """Run every ``[[guard_case]]`` through ``guard()``. No model, no network, no database.
+
+    **Every rule on, whatever the caller's policy says.** The suite's job is what the rules
+    are worth, not what a deployment enabled; running it under a policy that disabled one
+    would report a bypass rate over a rule that never ran. That is the shape of the defect
+    this half exists because of.
+    """
+    suite = suite or load_adversarial_suite()
+    resolved = replace(
+        policy or GovernancePolicy(),
+        guard_rules_enabled={rule_id: True for rule_id in GUARD_RULE_IDS},
+    )
+    results = []
+    for case in suite.guard_cases:
+        verdict = guard(case.text, resolved)
+        status, detail = _classify_guard(case, verdict)
+        results.append(
+            GuardCaseResult(case=case, verdict=verdict, status=status, detail=detail)
+        )
+    return GuardReport(version=suite.version, results=tuple(results))
+
+
+def guard_report_lines(report: GuardReport) -> list[str]:
+    """The printed report for the prompt-injection half, same shape as the statement half."""
+
+    def counted(status: str, kind: str) -> str:
+        return (
+            f"{report.rate(status, kind).render(3)}  "
+            f"({len(report.with_status(status, kind))}/{len(report.of_kind(kind))})"
+        )
+
+    lines = [
+        "",
+        f"prompt-injection half — {len(report.results)} questions "
+        f"({len(report.of_kind('attack'))} attack, {len(report.of_kind('benign'))} benign)",
+        "  attacks",
+        f"    reached the model         {counted('bypassed', 'attack')}",
+        f"    blocked by another rule   {counted('misattributed', 'attack')}",
+        f"    failed open (rule raised) {counted('guardrail_error', 'attack')}",
+        f"    caught                    {counted('caught', 'attack')}",
+        "  benign",
+        f"    false refusal             {counted('false_refusal', 'benign')}",
+        f"    allowed                   {counted('allowed', 'benign')}",
+        "  per-rule recall (denominator: the attacks each rule owns)",
+    ]
+    for rule_id in sorted(GUARD_RULE_IDS):
+        lines.append(f"    {rule_id:24} {report.rule_recall(rule_id).render(3)}")
+    lines.append(f"  failures: {len(report.failures())}")
+    for result in report.failures():
+        lines.append(f"    {result.case.id}: {result.status} — {result.detail}")
+    return lines
 
 
 def _counted(report: SuiteReport, status: str, kind: str) -> str:

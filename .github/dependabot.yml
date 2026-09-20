@@ -1,0 +1,36 @@
+# Dependency updates, because nothing else in this repository will ever tell you a CVE landed.
+#
+# The gap this closes: `ui/package.json` pinned `next` to an exact `16.3.0`, and the fix for
+# GHSA-2xp9-vwfh-vxw4 (unauthenticated RCE in the Image Optimization API) shipped in 16.3.5 —
+# *outside* the stated range, so `npm ci` reinstalled the vulnerable build on every clean
+# checkout and every CI run. `npm audit` was not wired into CI, so the only thing that would
+# have surfaced it was somebody running it by hand.
+#
+# Exact pins stay. `next` and `eslint-config-next` are pinned together on purpose (the lint
+# config tracks the framework minor), and Dependabot raises a PR that moves both rather than
+# a human noticing the pair. The point is the notification, not the automatic merge.
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/ui"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the framework pair, so a bump that needs both cannot land half done.
+      next:
+        patterns:
+          - "next"
+          - "eslint-config-next"
+
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"

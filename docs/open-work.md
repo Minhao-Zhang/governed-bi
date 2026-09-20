@@ -11,8 +11,16 @@ could not be re-verified were dropped, not demoted.
 
 `30872d3` is the treatment identity and not that sibling's current tip. Its HEAD is `74ff80c4` as
 of 2026-08-22, and the two commits in between add only `LICENSE` and `README.md` — no asset
-changed, so the hash is still the right name for the content and the corpus items below still read
-on the tip. What this tree *loads* is BIRD, and has since 2026-08-23: `.env` sets
+changed, so the corpus items below still read on the tip.
+
+**The hash does move across those two commits, and this paragraph used to say it does not.**
+`corpus_content_hash` with no manifest counts every file in the tree, and `_is_tooling` excludes
+tool *directories* and deliberately not a root `README.md` — its own docstring says so. So the tip
+hashes `6e5c7b4b…` where `30872d3` hashes `86ed1db…`, and until 2026-09-20 `--arm v4` against the
+checkout `.env` points at would have exited 5 before the first paid question. What is unchanged is
+the *content*, and that is now measurable rather than asserted: with the 57 schema subtrees given
+as the manifest, **both commits hash `5a556b3c7936ddc3…`**. `register/arms.toml`'s `luna_v4_embed`
+carries the tip's digest and that equivalence. What this tree *loads* is BIRD, and has since 2026-08-23: `.env` sets
 `GOVERNED_BI_CORPUS_DIR=../BIRD-corpus` and leaves `GOVERNED_BI_PG_DSN` unset, so
 `credentials.PG_DSN_NAMES` falls through to `PG_RENAME_DECOY_DSN` on port 5435 — the obfuscated
 lake. The facilities pair (`../MS Fabric Facilities/corpus`, the 5432 warehouse) is commented out
@@ -924,10 +932,27 @@ failed, and ADR 0007 forbids a trust field on the answer card. **It thresholds n
 `lexical_coverage` is on the evidence and no rule branches on it, for `negative_tau`'s reason.
 And **it ships off**, so every number on this page still stands and v4 is still the control.
 
-What is owed is the number: the policy has never run on a real arm, so how many turns it
-withholds and what share of those would have been right are both unknown. That is one paired arm
-(`tools/run_datalake_eval.py --abstain`), and until it exists the honest claim about ADR 0013 is
-that the engine can now *say* why it withheld, not that it withholds better.
+**The number is in, and it did not cost an arm.** This entry used to say the policy "has never
+run on a real arm ... that is one paired arm (`tools/run_datalake_eval.py --abstain`)". It is not
+one paired arm. Every rule is a deterministic predicate over facts the row already carries, which
+the module's own docstring says outright, so the policy replays over a finished artifact for
+nothing: `tools/shadow_replay.py`, 2026-09-20, over `proxy_v4_corpus30872d3.jsonl`.
+
+**On the v4 arm the declared policy would withhold zero turns.** Not "few" — zero. Three of the
+four rules provably cannot fire on that arm, and the replay reproduces two independent
+measurements already on this page in the course of showing it: `facet_channels` records
+17,511 `ran` and 2,694 `not_configured` and **no** `failed`, so `retrieval_channel_failed` is
+dead; `context_evicted` is present on 18 rows and every one is `bodies_dropped` only (§3.3's
+figure, arrived at separately), so `licensed_table_evicted` is dead; no row's `context_hash` is
+the digest of `EMPTY_CONTEXT`, so `empty_context` is dead. That leaves `nothing_licensed`, which
+matches exactly the four zero-licensed clarifications — and those four ended *before* the abstain
+node (their `abstention` is null, §3.6a), so the policy would never have run on them either.
+
+So `--abstain` must not be run as a paid arm: it would buy four turns the engine had already
+given up on. What is owed is a policy whose rules catch something the engine does not already
+catch, which is free to iterate against the artifact and cheap to re-check after each edit. The
+honest claim about ADR 0013 is unchanged and now measured: the engine can *say* why it withheld,
+and the declared policy withholds nothing it was not already withholding.
 
 What would still be worth building is the *other* contrast: the same engine with Layer 6
 relaxed to the whole routed schema instead of the licensed 8 tables (§4.2), so the comparison
@@ -1287,3 +1312,206 @@ gate reads it. `check_citations.py`'s `STRICT_ROOTS` is `("src", "tools", "docs"
 its `SEARCH_SUFFIXES` does not include `.ts` or `.tsx`, so every citation above is still
 unchecked by anything. Whether to extend the gate over `ui/` is the open call, and it is now a
 one-tree question rather than a cross-repository one.
+
+---
+
+## 6. Operability, and what the outside review left open
+
+From the 2026-09-18 review ([the write-up](reviews/2026-09-outside-review.md); eight defects
+found and fixed there, four findings retired as wrong). These are the items that were **not**
+fixed. Everything below was re-verified against the current tree, as this page requires.
+
+### 6.1 There is no logging, and one blind except drops an audit row silently
+
+`grep -c "print(" src/` is **39**; the number of modules that import `logging` is **zero**.
+Twenty-six of those prints are `serve/__main__.py`, which is a CLI and fine. The rest are not:
+`api/graph_app.py` has two, `govern/ledger.py` one, `eval/` ten.
+
+Compounded with 54 blind excepts (37 carrying `# noqa: BLE001`, 17 not), the operational
+failure mode is "stdout, unstructured, or silence". The sharpest instance is
+`api/graph_app.py`'s `record_node`, which ends `except Exception: return {}` — an audit row is
+dropped and **nothing anywhere records that it happened**. For a system whose claim is
+auditability, that is the wrong place to be quiet.
+
+What makes this a decision rather than an oversight to correct in passing: adding `logging`
+means choosing a sink, a format and a severity vocabulary, and the turn record already exists
+as the structured thing this system writes down. The open question is which of the 17
+unsuppressed blind excepts deserve a record and where that record goes — not whether to add a
+logger.
+
+### 6.2 Every persistent store grows and nothing prunes
+
+Zero pruning primitives in `src/`: no `DELETE FROM`, no `VACUUM`, no retention pass. The
+unbounded stores are `GOVERNED_BI_FEEDBACK_DB`, `GOVERNED_BI_CONVERSATION_DB`,
+`GOVERNED_BI_HARNESS_DB`, the lancedb vector tables and the run-log artifacts. The local
+`runs/` tree is 351 MB.
+
+`langgraph.json` advertises a 90-day `checkpointer.ttl`, and `[tool.uv]`'s constraint block
+already records that it is **inert** on the runtime this deploys — `langgraph-runtime-inmem`'s
+`Threads.sweep_ttl` returns `(0, 0)`. So the retention this deployment configures cannot fire,
+which `README.md` also says. §4.4 carries the durability half of the same question; this is the
+growth half, and the repair is the same retention decision nobody has taken.
+
+### 6.3 `_TRUSTED` pins the constants and not the three knobs a client can move
+
+`serve/runtime.py::configurable` returns `{**raw, **_TRUSTED}`, so a process constant beats a
+per-run value — a good control, and correctly scoped for one memoised session. But `_TRUSTED`
+holds only what `Session.configurable()` emits, and three keys the graph reads are not in it:
+
+* `prompt_variants` — a registered variant swaps the analyst system prompt for that run, while
+  `state["prompt_set_hash"]` and `knobs_resolved["prompt_set"]` still report the *session's*
+  defaults. The audit record then attests a prompt set that did not run. This one is genuinely
+  per-run — it is the A/B arm lever — which is why it is unpinned and why it is a question.
+* `context_budget_chars` — third source in `assemble._budget_chars`; `200` starves the context
+  and `10_000_000` inflates cost.
+* `query_vector` — read at `route_retrieve.py` and `facets.py`, and **vestigial on the served
+  path**, where `accept` writes the vector into state rather than config. Droppable outright.
+
+Not reachable as a privilege escalation: `api/auth.py` refuses `command.update`/`goto`, and
+`ServeInput` is one key wide. The exposure is to the *record*, not to the data.
+
+### 6.4 Execution match has no float tolerance and coerces types
+
+`eval/grade.py::_coerce_cell` does `float(value)` and then exact equality. Measured:
+
+    1/3 vs 0.33333333333333337     -> not equal   (AVG under a different plan)
+    0.1+0.1+0.1 vs 0.3             -> not equal
+    text '00123' vs int 123        -> equal       (false positive)
+    bool True vs int 1             -> equal
+    '  5 ' vs 5                    -> equal
+
+NULLs, row order, empty-vs-error and multiset cardinality are all handled correctly; it is the
+numeric comparison that is not. The false negatives make EX a form-sensitive lower bound for
+every arm, which `README.md` already prices at roughly four points. The reason it matters more
+than that framing suggests: a prompt A/B of ~1pp is measured with an instrument that penalises
+aggregation *form*, and form is exactly the channel a prompt change moves.
+
+### 6.5 `ports.Connector` is a protocol nothing conforms to
+
+`ports.Connector`, `TableInfo`, `ColumnInfo` and `Row` are **imported by nothing**. The five
+mentions outside `ports.py` are all prose — two comments in `datasource/`, one in
+`govern/pipeline.py`, one in `govern/policy.py` and one inside a knob's `why` string — so the
+port is cited five times and conformed to zero times.
+
+The concept is redefined incompatibly one layer up: `ports.TableInfo` has `name`/`columns`,
+`corpus/introspect.IntrospectedTable` has `physical_name`/`columns`. `isinstance` passes anyway,
+because `runtime_checkable` checks method *names* and not signatures. Ten call sites annotate
+the connector `Any` and then call `.execute()` on it. And `list_tables()` takes no argument in
+the protocol, `schema="public"` in `datasource/postgres.py` and none in `datasource/sqlite.py`:
+the two shipped connectors are **not interchangeable** and nothing says so.
+
+This is §3.10's shape with a port instead of a knob, and it is the reason a third connector has
+nothing to conform to. It is not in the declared-but-unconsumed count because that checker reads
+knobs, record fields and state channels, not ports.
+
+### 6.6 `main` has no branch protection, so none of the gates gates anything
+
+`gh api repos/:owner/:repo/branches/main/protection` returns 404. CI triggers on push and pull
+request, so every check *reports* and none *blocks*; a direct push to `main` runs CI after the
+commit has landed. The mypy step and the `npm audit` step added on 2026-09-18 are in the same
+position as the gates that preceded them.
+
+This is a repository setting and a change to how work lands here, not a code change, which is
+why it is written down rather than done.
+
+### 6.7 234 tests are one near-tautological assertion, replicated
+
+`tests/serve/test_stream_events.py::test_every_step_status_pair_builds` is parametrized
+26 x 9 = 234 ways — 10.5% of the whole suite by count, and the largest parametrize group in the
+tree by a factor of eleven. `VALID_STATUSES` is defined in the test file; no production module
+carries that vocabulary; `emit` copies `status` verbatim. So the test draws a value from a
+test-local set, hands it to a passthrough, and asserts it is in that set. The `step` axis is
+never asserted on at all — replacing the emitted `step` with a constant leaves all 234 green.
+
+Two other tests in the same file do catch that, so the coverage is not lost; what the 234 buy
+over a handful of cases is nothing, and they are 10.5% of every run's wall clock.
+
+### 6.8 No readiness endpoint, and startup validation depends on the entry point
+
+`/livez` returns `{"ok": true}` without touching the session. There is no `/readyz`, and no
+FastAPI `lifespan` or `on_event` anywhere in the tree. `/capabilities` is the de-facto readiness
+probe — the UI blocks on it — but it is unlisted as one and 500s rather than answering
+not-ready.
+
+Under `langgraph dev` the adapter validates eagerly and well: missing DSN, missing
+schema/corpus, model-without-credential and a bad access-policy path all raise at startup.
+Under a bare `uvicorn governed_bi.api.routes:app` the session is a thunk resolved on first
+attribute read, so a missing `GOVERNED_BI_PG_DSN` surfaces as a 500 on the first user request
+while `/livez` keeps answering `{"ok": true}`. A liveness probe will route traffic to a server
+that cannot serve.
+
+### 6.9 Two deferrals from the review's own repair work
+
+* **Unifying the measured graph with the served one.** The delta is now *declared* and pinned
+  by `tests/eval/test_the_measured_graph_and_the_served_graph.py` — two nodes, five edges — so
+  a **new** divergence fails. Closing it is deferred: the harness loses the four state keys it
+  injects, and `ServeOutput`'s two keys are not what `project_turn` reads, so it would have to
+  read the checkpoint instead of the return value. That is a redesign of the path every number
+  comes from, and it buys nothing until someone re-runs. §3.1 is the routing half of the same
+  question.
+* **Replication instead of a seed.** §3.12's 12.7% is not closable by a knob. A seed is
+  undeliverable on the shipped provider — `proxy_gateway` hardcodes a null temperature because
+  the default proxy model rejects sampling params, and `provider.chat_model` raises for the
+  proxy outright — so nothing on that path can forward one. `register/knobs.py` now records
+  that decision beside the deleted `llm_temperature`. What closes it is k runs per arm with the
+  between-run variance reported, which costs model spend rather than code.
+
+### 6.10 The scope gate refuses about one benign question in ten, and prod has it on
+
+Measured 2026-09-20, `tools/bi_scope_probe.py` on `gpt-5.6-luna`/`openai`, over the **whole**
+1,351-question set: **180 blocked, 1,171 cleared, 0 failed open — 13.3%**. A 200-question
+stride sample had put it at 19/200 and a 12-question prefix at 2/12 first, so the rate was
+stable long before the full pass; the full pass exists because a projection needs every id.
+
+And the cost is not an estimate either. `tools/shadow_replay.py` prices it against the v4 arm's
+own rows: 176 of the 180 land on turns the engine answered, so enforcing the served guard turns
+**913 right answers into 785 — 128 lost, EX 0.676 → 0.581.** That is a 9.5pp drop, four times
+this instrument's 2.3pp MDE (§3.12), and it is what the served configuration has been doing all
+along.
+
+`g_bi_scope` has been enabled on every served turn and on no measured one — `api/graph_app.py`
+shipped `{BI_SCOPE_RULE_ID: True}`, `tools/run_datalake_eval.py` ships `{}` — and it is invisible
+to the adversarial suite, because `govern/adversarial_run.py` enables `GUARD_RULE_IDS` and this
+rule is by construction not in that set. So the one guard rule that was genuinely live in
+production is the one nothing measured.
+
+The failure is diagnosable and is not the parser. Every refusal is a question that *reads* like
+general knowledge and is answerable from the corpus:
+
+> What is the name of the state with the most counties? · Which country has the highest GDP? ·
+> How many books did David Foster Wallace write? · Provide the director's name of Wreck-It Ralph.
+
+The prompt (`bi_scope` v1) lists "general knowledge" as out of scope and tells the judge nothing
+about what this deployment holds. Scope is a property of the corpus, and the prompt contains no
+corpus, so the model is being asked a question it has no way to answer — on
+`mondial_geo`, `movies_4` and `shakespeare` especially, where the right answer is
+indistinguishable from a quiz question without knowing there is a table for it.
+
+**Not fixed here, and the shape of the fix is a treatment.** Naming the served schemas in the
+prompt is the obvious direction and it would be a `bi_scope` v2 — a prompt variant moves
+`prompt_set_hash`, and a prompt whose text is assembled from the live corpus moves it on every
+corpus edit, which is a decision about what that digest means. What is cheap is the checking:
+the probe costs ~136 tokens a question, so a candidate variant can be scored against the same
+200 in a couple of minutes.
+
+Two things follow for the next arm, and neither blocks it. The arm runs permissive, so this rule
+does not touch its numbers; and `tools/shadow_replay.py --scope-verdicts` prices it exactly,
+against the same rows, at no extra model spend.
+
+### 6.11 `--resume` was refused on every arm that has ever been written — fixed 2026-09-20
+
+`eval/provenance.py::_knob_problem` compared `repr` of this run's knob value against `repr` of the
+artifact's, with one side in memory and the other read back from JSON. `asset_budgets` is a
+`tuple` of `tuple`s in the register and a `list` of `list`s after the round trip, so the guard
+reported a treatment change on a value that had not changed — on every resume, of every arm, for
+as long as the check has existed. What it printed was *"Two treatments in one artifact is not an
+arm. Rename the artifact and start a new one"*, over hours of paid model calls.
+
+One of the 62 `resume_drift_keys` is affected and it is on every row, so the resume path was
+dead. [measurement.md](measurement.md#resume) tells the reader a full arm takes hours and to
+expect to interrupt and resume it, which is how this sat unnoticed directly in front of the next
+run: nobody had resumed since the check landed.
+
+Found by resuming a three-row smoke. Fixed by comparing each side *as the artifact would hold
+it* — round-tripping through the writer's own encoding — which keeps `3` and `"3"` two
+configurations, the distinction the `repr` was there to defend.

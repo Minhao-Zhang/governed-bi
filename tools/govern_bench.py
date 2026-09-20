@@ -62,10 +62,13 @@ from governed_bi.govern.adversarial import (  # noqa: E402
 )
 from governed_bi.govern.adversarial_run import (  # noqa: E402
     SuiteReport,
+    guard_report_lines,
     report_lines,
     run_adversarial_suite,
+    run_guard_suite,
 )
 from governed_bi.govern.layers import Layer  # noqa: E402
+from governed_bi.govern.policy import GUARD_RULE_IDS  # noqa: E402
 
 PROBE_SURFACES: frozenset[str] = frozenset(
     {"context", "inspect_schema", "read_body", "may_sample"}
@@ -299,10 +302,64 @@ def main() -> int:
     args = parser.parse_args()
 
     report = run_adversarial_suite()
+    guard = run_guard_suite()
     probes = run_disclosure_probes()
 
     if args.json:
         payload = _json_payload(report)
+        # Its own block and not folded into `attack`/`benign` above: the statement half's
+        # denominators are statements and this half's are questions, and a combined bypass
+        # rate over both would be a number with two populations in it.
+        payload["prompt_injection"] = {
+            "questions": len(guard.results),
+            "attack": {
+                "bypassed": {
+                    "n": len(guard.with_status("bypassed", "attack")),
+                    "of": len(guard.of_kind("attack")),
+                },
+                "misattributed": {
+                    "n": len(guard.with_status("misattributed", "attack")),
+                    "of": len(guard.of_kind("attack")),
+                },
+                "guardrail_error": {
+                    "n": len(guard.with_status("guardrail_error", "attack")),
+                    "of": len(guard.of_kind("attack")),
+                },
+                "caught": {
+                    "n": len(guard.with_status("caught", "attack")),
+                    "of": len(guard.of_kind("attack")),
+                },
+            },
+            "benign": {
+                "false_refusal": {
+                    "n": len(guard.with_status("false_refusal", "benign")),
+                    "of": len(guard.of_kind("benign")),
+                },
+                "allowed": {
+                    "n": len(guard.with_status("allowed", "benign")),
+                    "of": len(guard.of_kind("benign")),
+                },
+            },
+            "rule_recall": {
+                rule_id: {
+                    "n": len(
+                        [
+                            r
+                            for r in guard.of_kind("attack")
+                            if r.case.expect_rule == rule_id and r.status == "caught"
+                        ]
+                    ),
+                    "of": len(
+                        [r for r in guard.of_kind("attack") if r.case.expect_rule == rule_id]
+                    ),
+                }
+                for rule_id in sorted(GUARD_RULE_IDS)
+            },
+            "failures": [
+                {"id": r.case.id, "status": r.status, "detail": r.detail}
+                for r in guard.failures()
+            ],
+        }
         payload["disclosure"] = {
             "probes": len(probes),
             "attack": {
@@ -321,6 +378,8 @@ def main() -> int:
     else:
         for line in report_lines(report):
             print(line)
+        for line in guard_report_lines(guard):
+            print(line)
         for line in probe_lines(probes):
             print(line)
         if args.cases:
@@ -331,10 +390,17 @@ def main() -> int:
                     f"  {result.status:<15} {result.case.kind:<7} "
                     f"{result.case.family:<10}{bypass:<5} {result.case.id}"
                 )
+            for result in guard.results:
+                print(
+                    f"  {result.status:<15} {result.case.kind:<7} "
+                    f"{str(result.case.expect_rule or '-'):<22} {result.case.id}"
+                )
             for probe in probes:
                 print(f"  {probe.status:<15} {probe.kind:<7} {probe.surface:<15} {probe.id}")
 
-    return 1 if report.failures() or any(r.failed for r in probes) else 0
+    # All three halves gate. A driver that printed a prompt-injection bypass and exited zero
+    # would be the same shape as the defect the half exists because of: a number nobody acts on.
+    return 1 if report.failures() or guard.failures() or any(r.failed for r in probes) else 0
 
 
 if __name__ == "__main__":

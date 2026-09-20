@@ -133,9 +133,12 @@ def main(argv: list[str] | None = None) -> int:
             touched = True
             grafted[entry] += 1
         if touched:
+            # An explicit LF: the corpus hash is taken over bytes, so the platform default
+            # makes the digest OS-dependent. See ``corpus/store.py::write``.
             path.write_text(
                 yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100),
                 encoding="utf-8",
+                newline="\n",
             )
 
     print(f"grafted into {dest.relative_to(REPO)}:")

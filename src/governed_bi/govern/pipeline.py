@@ -20,6 +20,7 @@ from typing import Mapping
 import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import OptimizeError, SqlglotError
+from sqlglot.optimizer.scope import Scope
 
 from ..corpus.analyst import AnalystCorpus
 from .check import GovernanceUsageError, check
@@ -85,7 +86,10 @@ def spellings_for(
     source of truth for a table's name in the file whose job is to agree with the corpus.
     """
     names: list[str] = []
-    by_table: dict[str, Mapping[str, str]] = {}
+    # ``| None`` is not slack: ``None`` is the *poison* value written below when a bare key is
+    # ambiguous, and the filter on the return drops it. Annotated without it until 2026-09-18,
+    # which made the one write this function exists for a type error nothing ran.
+    by_table: dict[str, Mapping[str, str] | None] = {}
     for table_id in sorted(licensed):
         table = corpus.get(table_id)
         if table is None:
@@ -177,7 +181,7 @@ def _handles_in_scope(view) -> dict[str, str | None]:
     return local
 
 
-def _column_sources(tree: exp.Expression) -> dict[int, str]:
+def _column_sources(tree: exp.Expr) -> dict[int, str]:
     """``{id(Column node) -> by_table key}``, resolved **per scope**.
 
     A handle means whatever the scope the reference sits in says it means, and nothing else in
@@ -238,7 +242,7 @@ def _column_sources(tree: exp.Expression) -> dict[int, str]:
                 continue
             # `binding.py::_lookup`'s walk: this scope, then its ancestors, because a correlated
             # reference resolves in a named ancestor scope.
-            scope = view.scope
+            scope: Scope | None = view.scope
             while scope is not None:
                 local = per_scope.get(id(scope))
                 if local is not None and handle in local:

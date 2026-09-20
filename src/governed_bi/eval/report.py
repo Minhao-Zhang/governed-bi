@@ -522,7 +522,11 @@ def summarise(
             "context_hash_gate": ctx.render(),
             "knobs_comparable_gate": knobs.render(),
             "treatment": sorted(declared),
-            "mcnemar": paired_ex(a_s, b_s).render() if ok or a_s.n else None,
+            # Rendered whatever `ok` says — computing it for diagnostics is this line's job,
+            # and the block below says so. But the *string* now carries the verdict too.
+            # `quotable` sits one key away in the same dict and a line copied out of a report
+            # leaves it behind, which is the whole distance between a diagnostic and a quote.
+            "mcnemar": _rendered_mcnemar(paired_ex(a_s, b_s), quotable=ok) if a_s.n else None,
             "gates_a": [g.render() for g in ga],
             "gates_b": [g.render() for g in gb],
         }
@@ -561,6 +565,25 @@ def _with_cross_arm_context(
     ctx: GateResult,
 ) -> tuple[GateResult, ...]:
     return tuple(ctx if r.field == "context_hash" else r for r in results)
+
+
+def _rendered_mcnemar(result: Any, *, quotable: bool) -> str:
+    """The paired line, with its own quotability in it.
+
+    ``McNemarResult.render`` stays a statement about the statistic and nothing else — it is
+    the auditable line, and a gate verdict is not part of the arithmetic. The annotation is
+    added here, where the gate's answer is known, for the same reason ``Measured`` renders
+    *unmeasured* rather than a number: a value that cannot be quoted must not read like one
+    in isolation.
+
+    The concrete loss this prevents: ``summary["comparison"]["quotable"]`` is one key away
+    and a reader copying the delta out of a report does not bring it. Every real pair in
+    ``runs/eval/`` is non-quotable today — ``knobs_comparable`` returns ``cannot_evaluate``
+    because ~50 of the 51 comparability knobs are absent from those rows — so every line this
+    renders is currently a diagnostic that looked exactly like a result.
+    """
+    line = result.render()
+    return line if quotable else f"{line}  [NOT QUOTABLE: a gate did not pass]"
 
 
 def _measured_dict(m: Measured[Any]) -> dict[str, Any]:

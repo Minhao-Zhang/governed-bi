@@ -252,8 +252,16 @@ def write(root: Path | str, asset: Asset, *, namespace: str | None = None) -> Pa
 
     target = Path(root) / directory / f"{asset.id}{SUFFIX}"
     target.parent.mkdir(parents=True, exist_ok=True)
+    # An explicit LF and not the platform default: ``corpus/hash.py`` digests ``read_bytes()``,
+    # so without it the same asset written on Windows and on Linux produces two different
+    # ``corpus_content_hash`` values for identical content. ``../BIRD-corpus/.gitattributes``
+    # already defends the *checkout* against exactly this (``* -text``, with a nine-line header
+    # about it); this line defeated that defence from the write side. Every arm digest in
+    # ``register/arms.toml`` is keyed on that hash.
     target.write_text(
-        yaml.safe_dump(to_mapping(asset), sort_keys=False, allow_unicode=True), encoding="utf-8"
+        yaml.safe_dump(to_mapping(asset), sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+        newline="\n",
     )
     return target
 

@@ -237,12 +237,22 @@ def test_the_loader_refuses_an_arm_that_declares_no_digest(tmp_path: Path) -> No
 
 def test_every_shipped_arm_can_actually_be_reconciled() -> None:
     """Not just v4 and v5. ``v3_fold`` is the arm the control is measured against, and it was
-    the one with no digest — so the check that mattered most was the one that ran on nothing."""
-    digest = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
+    the one with no digest — so the check that mattered most was the one that ran on nothing.
+
+    Each arm is reconciled against **its own** declared digest, not against one constant. The
+    constant was here until 2026-09-20 and it encoded an assumption the file had outgrown:
+    that every arm shares one corpus. ``luna_v4_embed`` is on the corpus *tip*, which is
+    ``30872d3``'s content plus a root ``LICENSE`` and ``README.md`` — an unchanged corpus with
+    a changed digest, because an unmanifested ``corpus_content_hash`` counts every file. A test
+    asserting one digest for all arms would have forced that arm to declare a hash no session
+    can produce, which is the failure mode this whole file exists to prevent, arrived at from
+    the other side.
+    """
     for name in load_arm_profiles():
         profile = arm_profile(name)
         assert profile.corpus_content_hash, f"[arm.{name}] cannot be reconciled"
-        assert reconcile(profile, {"corpus_content_hash": digest}) == ()
+        own = {"corpus_content_hash": profile.corpus_content_hash}
+        assert reconcile(profile, own) == (), f"[arm.{name}] rejects the corpus it declares"
         assert reconcile(profile, {"corpus_content_hash": "deadbeef"}), (
             f"[arm.{name}] accepts a corpus it did not run on"
         )

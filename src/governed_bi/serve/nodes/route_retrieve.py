@@ -170,6 +170,28 @@ def resolve_node(state: dict, config: RunnableConfig) -> dict:
     closure = resolve(hit_ids, references=structure.references)
     added = closure - hit_ids
 
+    # **The bound is here and not in ``resolve``**, which is total by contract —
+    # ``connect.py``'s docstring draws that line and both acceptance contracts assert it.
+    # ``connect`` searches, so stopping early means something and its bound is a parameter;
+    # this is a fixpoint walk where an early stop buys nothing, so the whole closure is
+    # computed and then judged. That costs a set walk over an in-memory graph (1,480
+    # additions in the corpus's worst shape) and buys a decline that can say how far over it
+    # was.
+    #
+    # A decline and not a truncation, for the reason ``connect`` gives: a silently cut
+    # closure drops a table from ``licensed``, and the TABLES layer then refuses the
+    # statement ``r_table_not_licensed`` — a retrieval-budget outcome recorded as a
+    # governance verdict, which ``govern/bounds.py`` already has one instance of.
+    max_added = int_knob(state, "max_resolve_additions")
+    if len(added) > max_added:
+        # ``crossings`` cleared as ``connect``'s decline clears it: the turn ends here and a
+        # partial crossing list reads as a finished one.
+        return {
+            "path_kind": "decline",
+            "terminal_reason": "over_resolve_bounds",
+            "crossings": [],
+        }
+
     pulled_in = dict(retrieved.get("pulled_in") or {})
     for asset_id in added:
         pulled_in.setdefault(str(asset_id), "resolve")

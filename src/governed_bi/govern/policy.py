@@ -31,6 +31,32 @@ __all__ = ["GovernancePolicy", "DEFAULT_DIALECT"]
 DEFAULT_DIALECT = "postgres"
 
 
+#: The five deterministic rule ids :mod:`.guard` dispatches, as **vocabulary**. The predicates
+#: live in ``guard.py``; only the names live here, because the set of legal keys for
+#: :attr:`GovernancePolicy.guard_rules_enabled` belongs with the field, and ``guard.py``
+#: already imports this module. ``guard.py`` asserts at import that its mapping's keys are
+#: exactly this set, so the two cannot drift.
+GUARD_RULE_IDS: frozenset[str] = frozenset({
+    "g_encoding",
+    "g_length",
+    "g_instruction_override",
+    "g_role_injection",
+    "g_tool_forgery",
+})
+
+#: The sixth rule id, which is **not** in :data:`GUARD_RULE_IDS` because it is not a
+#: deterministic predicate: it asks a model whether the question is a BI task at all, and
+#: ``govern/`` must stay importable with no model, no settings and no I/O. The check runs in
+#: ``serve/nodes/guard.py``. Re-exported from ``guard.py``, where it used to live, so the
+#: eight call sites that import it from there keep working.
+BI_SCOPE_RULE_ID = "g_bi_scope"
+
+#: Every id ``guard_rules_enabled`` may name. Both consumers read one mapping over two
+#: disjoint namespaces — ``guard()`` iterates :data:`GUARD_RULE_IDS`, ``serve/nodes/guard.py``
+#: reads :data:`BI_SCOPE_RULE_ID` — and until 2026-09-18 nothing checked the union.
+KNOWN_GUARD_RULE_IDS: frozenset[str] = GUARD_RULE_IDS | {BI_SCOPE_RULE_ID}
+
+
 @dataclass(frozen=True, slots=True)
 class GovernancePolicy:
     """The security configuration of one turn. Immutable for the turn's duration."""
@@ -59,6 +85,39 @@ class GovernancePolicy:
     #: they did before the seam existed. **Not** ``None``-as-open: ADR 0006 G1's "absence is
     #: not permission" applies here too, so openness is a value with a name.
     access_grant: Grant = field(default_factory=lambda: OPEN_GRANT)
+
+    def __post_init__(self) -> None:
+        """Refuse a ``guard_rules_enabled`` key that names no rule.
+
+        **The defect this closes.** ``api/graph_app.py`` shipped
+        ``guard_rules_enabled={BI_SCOPE_RULE_ID: True}``, which reads as "the guard is on" and
+        means "five of the six rules are off": :func:`~governed_bi.govern.guard.guard` iterates
+        :data:`GUARD_RULE_IDS`, ``g_bi_scope`` is not a member, and
+        :meth:`guard_rule_enabled`'s ``.get(rule_id, False)`` turns every absent id into a
+        silent ``False``. So the served surface ran **zero** deterministic predicates from the
+        day the scope gate was added, and the only test that read the shipped mapping pinned it
+        with ``==`` — it would have failed on the fix and passed on the regression.
+
+        Validating *keys* and not *coverage*: an empty mapping stays legal, because
+        :func:`~governed_bi.govern.guard.guard` distinguishes "nothing enabled" from ``UNSET``
+        and 44 test sites say the former deliberately. What is refused is a key that dispatches
+        nothing — a typo, a retired id, or an id from the other namespace. Coverage is a
+        deployment decision and is asserted against the *shipped* policy in
+        ``tests/conformance/``, not here.
+
+        Raises at construction rather than at ``guard()``, so all 71 construction sites in the
+        tree — tests included — are checked, and a misconfiguration cannot wait for a turn.
+        """
+        if isinstance(self.guard_rules_enabled, Unset):
+            return
+        unknown = sorted(set(self.guard_rules_enabled) - KNOWN_GUARD_RULE_IDS)
+        if unknown:
+            raise ValueError(
+                f"guard_rules_enabled names {unknown}, which no rule dispatches. Known ids are "
+                f"{sorted(KNOWN_GUARD_RULE_IDS)}. A key that dispatches nothing is silently "
+                "false, which is how the served surface came to run none of the five "
+                "deterministic rules while reading as though the guard was on."
+            )
 
     def cost_layer_enabled(self) -> bool:
         """Whether the cost layer has a bound to compare against.

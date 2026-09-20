@@ -6,10 +6,11 @@
   (`serve/fetch.py::run_query`) and `sample` (`serve/fetch.py::sample_rows`). `graded`
   and `profile` have no writer, and graded delivery itself is declared but unwired —
   `govern/check.py::graded_delivery_eligible` has no caller in `src/` (§5). The red-team
-  corpus does not exist, so `guard`'s
-  deterministic injection rules ship disabled (`guard_rules_enabled` is `UNSET` until
-  OQ3's two numbers exist); the one rule enabled in the served app is `g_bi_scope`
-  (`api/graph_app.py`). §11's retention table is withdrawn, not deferred — see the note
+  corpus **now exists** — the `[[guard_case]]` half of `govern/adversarial.toml` — so **OQ3
+  closed on 2026-09-18** and `guard`'s five deterministic rules ship enabled in the served
+  app alongside `g_bi_scope` (`api/graph_app.py`). `guard_rules_enabled` stays `UNSET` as a
+  *default*, so an entry point still has to say what it wants, and every benchmark arm still
+  passes `{}`. §11's retention table is withdrawn, not deferred — see the note
   there. Amended by [ADR 0012](0012-access-seam-principal-and-authorization.md) in **three**
   places, per its own header: **§1** (`check()` reads authorization from `GovernancePolicy`),
   **§8** (the licensed set is now two sets with two meanings) and **§12's Consequences**
@@ -1000,10 +1001,22 @@ sets.
 `govern/identifiers.py`, `govern/bounds.py`, `datasource/postgres.py` and
 `datasource/sqlite.py`. Three have not, and each for a different reason.
 
-- **Step 7 is half done.** The five deterministic rules are `govern/guard.py::GUARD_RULES`
-  and the sixth is `serve/nodes/guard.py::_bi_scope`, but the red-team corpus does not
-  exist, so `guard_rules_enabled` is `UNSET` and the served app enables `g_bi_scope` only.
-  OQ3 is the blocker, and it is a corpus, not code.
+- **Step 7 landed on 2026-09-18.** The five deterministic rules are
+  `govern/guard.py::GUARD_RULES` and the sixth is `serve/nodes/guard.py::_bi_scope`. OQ3's
+  blocker was the red-team corpus, and it was a corpus, not code: it is now the sixteen
+  `[[guard_case]]` tables in `govern/adversarial.toml` (ten attacks, at least one per rule,
+  each caught by the rule it was written for) plus the benign rate, which is measured over
+  the arm's own 1,351 questions by
+  `tests/conformance/test_the_guard_does_not_refuse_the_benchmark.py` and is **zero**.
+
+  What that delay cost, since the shape is worth recording: for as long as the corpus did
+  not exist, the served app passed `guard_rules_enabled={g_bi_scope: True}`. That reads as
+  "the guard is on"; `g_bi_scope` is not a member of `GUARD_RULES`, `guard()` iterates that
+  mapping, and `.get(rule_id, False)` turns an absent id into a silent `False` — so the
+  served surface ran **none** of the five, and a textbook `Ignore all previous instructions`
+  came back `clear`. All five were 100% line-covered the whole time, by a fixture that built
+  its own all-on policy. `GovernancePolicy.__post_init__` now refuses a key that dispatches
+  nothing, which turns the *next* version of that mistake into a construction-time error.
 - **Step 8 is declared and unwired.** `graded_delivery_eligible` has no caller in `src/`,
   and neither `terminal="graded"` nor `path="graded"` is ever written (§5, §7).
 - **Step 9's redactor is withdrawn, not pending** — §11's superseding note.

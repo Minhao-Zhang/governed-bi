@@ -193,8 +193,13 @@ def main(argv: list[str] | None = None) -> int:
             unchanged.append(str(path.relative_to(dest).as_posix()))
             continue
         doc["summary"] = new
+        # An explicit LF: this rewrites ~687 summaries per run and the corpus hash is taken
+        # over bytes, so the platform default makes the digest OS-dependent. See
+        # ``corpus/store.py::write``.
         path.write_text(
-            yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100), encoding="utf-8"
+            yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100),
+            encoding="utf-8",
+            newline="\n",
         )
         changed += 1
 

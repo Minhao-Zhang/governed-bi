@@ -186,7 +186,24 @@ def serve_policy(root: Path) -> Any:
     Named and separate from ``_session`` so the one line below that differs from every other
     entry point is assertable, rather than a keyword buried in a dict literal.
 
-    ``guard_rules_enabled``: injection rules stay off (ADR 0006 OQ3), scope gate on.
+    **``guard_rules_enabled``: all six on — the five deterministic rules and the scope gate.**
+    Until 2026-09-18 this passed ``{BI_SCOPE_RULE_ID: True}`` and the docstring here said
+    "injection rules stay off (ADR 0006 OQ3), scope gate on". The first half was true and the
+    second was the *only* half anyone read: ``g_bi_scope`` is not a member of ``GUARD_RULES``,
+    :func:`~governed_bi.govern.guard.guard` iterates that mapping, and every id absent from
+    ``guard_rules_enabled`` is silently ``False``. So the served surface evaluated **zero**
+    deterministic predicates, and a textbook ``Ignore all previous instructions`` came back
+    ``clear``. The mapping now names every id explicitly rather than relying on a default,
+    and ``GovernancePolicy.__post_init__`` refuses one that dispatches nothing.
+
+    **OQ3's blocker was the red-team corpus, and it exists now.** ADR 0006 OQ3 held the rules
+    off until each had two numbers — adversarial recall and benign firing rate. The
+    ``prompt_injection`` family in ``govern/adversarial.toml`` is the first; the second is
+    measured on the benchmark's own 1,351 questions, where all five rules together fire on
+    **zero** (question text and question+evidence alike; the longest question is 200
+    characters against a ``g_length_max_chars`` of 8,000). That is a false-refusal rate on
+    the exact population every published number in this repository describes, which is why
+    turning these on does not move a single one of them.
 
     **``hard_block_suspect=False``, which is the knob's own production value.** Its ``why``
     reads "True in development and on the benchmark, False in production, where a suspect
@@ -210,11 +227,13 @@ def serve_policy(root: Path) -> Any:
     ``tools/`` drivers construct their own ``GovernancePolicy`` and are the benchmark, where
     a suspect column must refuse so a measured number cannot rest on one.
     """
-    from governed_bi.govern.guard import BI_SCOPE_RULE_ID
-    from governed_bi.govern.policy import GovernancePolicy
+    from governed_bi.govern.policy import KNOWN_GUARD_RULE_IDS, GovernancePolicy
 
     return GovernancePolicy(
-        guard_rules_enabled={BI_SCOPE_RULE_ID: True},
+        # Built from the vocabulary rather than written out, so a sixth rule is on here the
+        # day it exists. Enabling by omission is what went wrong before; there is no omission
+        # left to make.
+        guard_rules_enabled={rule_id: True for rule_id in sorted(KNOWN_GUARD_RULE_IDS)},
         access_grant=resolve_access_grant(root),
         hard_block_suspect=False,
     )
@@ -261,10 +280,35 @@ def resolve_access_grant(root: Path) -> Any:
     port's own contract: a directory that is down is a wiring failure, and turning it into a
     grant — of any width — would either lock every analyst out or open the doors, with the
     ledger recording neither.
+
+    **A policy whose roles this principal cannot hold is refused here** (2026-09-18), for the
+    same argument ``govern/access.py::_require_keys`` makes about the file's keys: it is read
+    once and enforced thousands of times. ``StaticRoleAccessPolicy.grant_for`` returns
+    ``Grant()`` — ``reach=listed``, no tables — for a principal holding none of the declared
+    roles. That is fail-*closed*, and silently so: an operator who writes ``[role.analyst]``
+    gets a server that starts, looks configured, and refuses every query, with nothing
+    anywhere naming the mismatch. ``authenticated_principal`` returns one constant with one
+    role, so this is not a hypothetical shape — it is every role except that one.
+
+    Refused rather than warned because there is no working deployment on the other side of
+    the warning. A fork that gives ``authenticated_principal`` a real implementation is the
+    case this must not block, and it does not: the check reads whatever that function
+    returns.
     """
     from governed_bi.api.auth import authenticated_principal
 
-    return access_policy_from_environment(root).grant_for(authenticated_principal())
+    policy = access_policy_from_environment(root)
+    principal = authenticated_principal()
+    declared = getattr(policy, "roles", None)
+    if declared and not (set(declared) & set(principal.roles)):
+        raise RuntimeError(
+            f"the access policy declares roles {sorted(declared)} and the authenticated "
+            f"principal {principal.id!r} holds {sorted(principal.roles)}. No declared role is "
+            "reachable, so every grant resolves to 'no tables' and the server would start, "
+            "look configured, and refuse every query. Give the principal one of those roles, "
+            "or declare a role it holds."
+        )
+    return policy.grant_for(principal)
 
 
 def _utility_model(credentials: Any) -> Any:

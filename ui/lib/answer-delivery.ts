@@ -303,6 +303,12 @@ const REFUSED_BY_SENTENCE: Record<string, string> = {
     "Answering this needs two tables linked together, and no relationship between them is declared.",
   over_connect_bounds:
     "Answering this would need more tables joined than this engine will join at once.",
+  // Also Stage.connect, and deliberately not phrased as a join problem: nothing was joined.
+  // The reference closure around the tables that matched reached further than this engine
+  // will follow, which a reader can act on — it is a question about a very densely
+  // cross-referenced part of the semantic layer, not about a missing relationship.
+  over_resolve_bounds:
+    "The tables that matched this question are linked to more of the semantic layer than this engine will pull in at once.",
   // Stage.guard / Stage.negative_gate — refused before any retrieval.
   guard: "The question was stopped by an input check before anything was queried.",
   negative_example:

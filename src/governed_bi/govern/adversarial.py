@@ -38,6 +38,7 @@ from ..corpus.schema import (
 from ..ports import Grant, PredicateEnforcement, Reach, RowPredicate
 from .layers import RULES, Layer
 from .pipeline import spellings_for
+from .policy import BI_SCOPE_RULE_ID, GUARD_RULE_IDS
 
 __all__ = [
     "SUITE_FILE",
@@ -46,6 +47,7 @@ __all__ = [
     "ENFORCERS",
     "BYPASSES",
     "AdversarialCase",
+    "GuardCase",
     "BypassClaim",
     "AdversarialWorld",
     "AdversarialSuite",
@@ -168,12 +170,66 @@ class AdversarialWorld:
 
 
 @dataclass(frozen=True, slots=True)
+class GuardCase:
+    """One prompt-injection case: a *question*, not a statement.
+
+    **A separate table type rather than a third ``enforced_by``**, following the disclosure
+    probes' precedent in this same file. An :class:`AdversarialCase` is statement-shaped all
+    the way down — it carries ``sql``, it is run through ``check()`` *and* ``prepare()``, and
+    an attack must name the ``Layer`` that owns its rule. A guard case has no statement, no
+    layer (``guard()`` runs before the layer stack exists) and nothing for ``prepare()`` to
+    return. Folding it in would have meant an optional ``sql``, an ``expect_layer`` that is
+    required except when it is not, a tenth :data:`CASE_FAMILIES` member, and forty-odd
+    benign statements written only to keep
+    :func:`_assert_the_suite_has_both_halves`'s 2:1 ratio from tipping over a half that is
+    not about statements at all.
+
+    Unlike the probes, these are parsed **here** and not re-read raw from the TOML by the
+    driver: ``tools/govern_bench.py`` reaches past the loader for ``[[probe]]``, which is the
+    one thing about that precedent worth not copying.
+    """
+
+    id: str
+    kind: str
+    #: The raw text. Use :attr:`text` — it is what the rule sees.
+    question: str
+    why: str
+    origin: str
+    #: ``question`` repeated this many times. Machinery for exactly one property: ``g_length``
+    #: and its 8,000-character bound cannot be exercised without an 8,001-character payload,
+    #: and spelling that into a data file buries fifteen readable cases under a hundred lines
+    #: of filler. A count is still data, and it keeps the *shape* of the payload legible —
+    #: which matters for the benign long case, where the point is that it is ordinary prose.
+    repeat: int = 1
+    #: The ``GUARD_RULES`` id expected to fire. Required on an attack, forbidden on a benign
+    #: case. There is no layer half to declare: ``guard()`` screens the input before any layer
+    #: runs, so the rule id *is* the whole attribution.
+    expect_rule: str | None = None
+    #: As :attr:`AdversarialCase.known_false_refusal`: a benign refusal somebody accepted,
+    #: with the reason. Counted and reported; does not fail the gate.
+    known_false_refusal: str = ""
+
+    @property
+    def is_attack(self) -> bool:
+        return self.kind == "attack"
+
+    @property
+    def text(self) -> str:
+        """What :func:`~governed_bi.govern.guard.guard` is handed. Honours :attr:`repeat`."""
+        return self.question * self.repeat
+
+
+@dataclass(frozen=True, slots=True)
 class AdversarialSuite:
     version: str
     world: AdversarialWorld
     cases: tuple[AdversarialCase, ...]
     #: One row per member of :data:`BYPASSES`, checked against the cases at load.
     bypasses: Mapping[str, BypassClaim]
+    #: The prompt-injection half. Empty is refused at load for the same reason a suite with no
+    #: benign controls is: ADR 0006 OQ3 held the five deterministic rules off until each had
+    #: an adversarial number, and this is where that number comes from.
+    guard_cases: tuple[GuardCase, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,6 +402,57 @@ def _parse_case(body: Mapping[str, Any], index: int) -> AdversarialCase:
     )
 
 
+def _parse_guard_case(body: Mapping[str, Any], index: int) -> GuardCase:
+    """One ``[[guard_case]]``. Same bar as :func:`_parse_case`: it must explain itself."""
+    where = f"[[guard_case]] #{index}"
+    case_id = _require(body, "id", where)
+    where = f"guard case {case_id!r}"
+
+    kind = _require(body, "kind", where)
+    if kind not in CASE_KINDS:
+        raise ValueError(f"{where}: kind {kind!r} is not one of {sorted(CASE_KINDS)}")
+
+    rule = body.get("expect_rule")
+    if kind == "attack":
+        if not isinstance(rule, str):
+            raise ValueError(
+                f"{where}: an attack declares expect_rule. 'It is refused' is not the claim — "
+                "`g_length` catching a payload written to test `g_instruction_override` means "
+                "the rule meant to catch it did not, and a suite that only asked 'was it "
+                "blocked' would report that as working."
+            )
+        if rule not in GUARD_RULE_IDS:
+            raise ValueError(
+                f"{where}: expect_rule {rule!r} is not one of {sorted(GUARD_RULE_IDS)}. "
+                f"{BI_SCOPE_RULE_ID!r} is deliberately excluded: it is a model call, and this "
+                "suite runs with no model, no network and no I/O."
+            )
+    elif rule is not None:
+        raise ValueError(
+            f"{where}: a benign case must not declare an expected refusal; it is expected to "
+            "be allowed, and naming a rule for it would make a false refusal look intended"
+        )
+
+    repeat = body.get("repeat", 1)
+    if not isinstance(repeat, int) or isinstance(repeat, bool) or repeat < 1:
+        raise ValueError(
+            f"{where}: repeat must be a positive integer, got {repeat!r}. It is the one piece "
+            "of machinery in a data file and it exists only so `g_length` can be exercised "
+            "without an 8,001-character literal; a zero or a float is a typo, not a payload."
+        )
+
+    return GuardCase(
+        id=case_id,
+        kind=kind,
+        question=_require(body, "question", where),
+        why=_require(body, "why", where),
+        origin=_require(body, "origin", where),
+        expect_rule=rule if isinstance(rule, str) else None,
+        known_false_refusal=str(body.get("known_false_refusal", "")),
+        repeat=repeat,
+    )
+
+
 def _bypass_order(name: str) -> tuple[int, str]:
     """``B10`` after ``B9``. Sorting these as strings is how a report reads B10 before B2."""
     return (int(name[1:]), name) if name[1:].isdigit() else (10**6, name)
@@ -437,11 +544,29 @@ def _parse_suite(data: Mapping[str, Any]) -> AdversarialSuite:
         raise ValueError(f"{SUITE_FILE.name}: no [world] table")
     bypasses = _parse_bypasses(data.get("bypass"))
     _assert_bypass_coverage_is_honest(cases, bypasses)
+
+    raw_guard = data.get("guard_case")
+    if not isinstance(raw_guard, list) or not raw_guard:
+        raise ValueError(
+            f"{SUITE_FILE.name}: no [[guard_case]] tables — the prompt-injection half is gone. "
+            "The five deterministic rules in govern/guard.py ship enabled on the served "
+            "surface, and ADR 0006 OQ3 says a rule ships only with an adversarial number "
+            "behind it. This is where that number comes from."
+        )
+    guard_cases = tuple(_parse_guard_case(body, i) for i, body in enumerate(raw_guard, 1))
+    # One id space across both halves: they share a report, and two rows keyed the same is a
+    # rate with a row missing from it.
+    for guard_case in guard_cases:
+        if guard_case.id in seen:
+            raise ValueError(f"duplicate case id {guard_case.id!r}; ids key the report")
+        seen.add(guard_case.id)
+
     return AdversarialSuite(
         version=str(data.get("version") or ""),
         world=_parse_world(world),
         cases=cases,
         bypasses=bypasses,
+        guard_cases=guard_cases,
     )
 
 
@@ -533,4 +658,39 @@ def _assert_the_suite_has_both_halves(cases: Sequence[AdversarialCase]) -> None:
         )
 
 
-_assert_the_suite_has_both_halves(load_adversarial_suite().cases)
+def _assert_the_guard_half_has_both_halves_and_covers_every_rule(
+    cases: Sequence[GuardCase],
+) -> None:
+    """Import-time: the prompt-injection half has controls, and every rule has an attack.
+
+    The benign requirement is :func:`_assert_the_suite_has_both_halves`'s argument verbatim —
+    a guard that refuses everything scores a perfect block rate. The ratio is **not** copied:
+    these controls are questions, and the honest denominator for "does an enabled rule refuse
+    ordinary analytics" is the benchmark's own 1,351 questions, which
+    ``tests/conformance/test_the_guard_does_not_refuse_the_benchmark.py`` runs and this file
+    cannot (it needs the dataset repo). The handful here are the shapes that most look like
+    an attack and are not; the 1,351 are the rate.
+
+    **Every rule needs an attack**, which the statement half does not require of every
+    ``Layer``: these five ship enabled on the served surface, and ADR 0006 OQ3's condition for
+    that was a number per rule, not a number for the set.
+    """
+    attacks = [c for c in cases if c.is_attack]
+    benign = [c for c in cases if not c.is_attack]
+    if not attacks or not benign:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"the prompt-injection half has {len(attacks)} attacks and {len(benign)} benign "
+            "controls; a block rate with no control measures nothing"
+        )
+    uncovered = sorted(GUARD_RULE_IDS - {c.expect_rule for c in attacks if c.expect_rule})
+    if uncovered:  # pragma: no cover - import-time guard
+        raise AssertionError(
+            f"no attack is aimed at {uncovered}. Those rules are enabled on the served "
+            "surface with nothing measuring them, which is the state OQ3 held them out of."
+        )
+
+
+_SUITE = load_adversarial_suite()
+_assert_the_suite_has_both_halves(_SUITE.cases)
+_assert_the_guard_half_has_both_halves_and_covers_every_rule(_SUITE.guard_cases)
+del _SUITE

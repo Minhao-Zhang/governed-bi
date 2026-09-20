@@ -148,14 +148,20 @@ _ALNUM = re.compile(r"[^a-z0-9]")
 _WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
 
 
-def _closed() -> None:
-    """Import-time: every asset type has a cap and a body decision."""
-    missing = [t.value for t in AssetType if t not in SUMMARY_CAP]
-    if missing:  # pragma: no cover - import-time guard
-        raise AssertionError(f"SUMMARY_CAP is missing {missing}; a new type needs a decision")
-
-
-
+# `_closed()` was here and is deleted (2026-09-18). It read:
+#
+#     missing = [t.value for t in AssetType if t not in SUMMARY_CAP]
+#
+# and `SUMMARY_CAP` two screens up is `{t: ... for t in AssetType}` — a comprehension over the
+# same enum — so the list was always empty and the guard could not fail. It was also never
+# called, despite a docstring beginning "Import-time:"; every other guard of its kind in this
+# tree is invoked at the foot of its module. And it checked only `SUMMARY_CAP`, while claiming
+# "a cap **and a body decision**" — `BODY_CAP` it never touched.
+#
+# Deleted rather than wired up: there is nothing for it to check. `SUMMARY_CAP`'s closure is a
+# property of how it is built, and `BODY_CAP`'s `"*"` fallback means every type has a body
+# decision by construction. A guard that cannot fail is the shape `tools/mutate.py`'s
+# `why_it_proves_nothing` exists to refuse, one layer down.
 
 
 def _norm(value: str) -> str:

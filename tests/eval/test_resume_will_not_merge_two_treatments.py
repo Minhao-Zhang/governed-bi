@@ -17,6 +17,7 @@ the resume decision that needs no corpus, no dataset, no database and no model.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -280,3 +281,48 @@ def test_an_unpinned_run_refuses_an_artifact_whose_routing_was_replayed() -> Non
 
     ok, _ = check(_rows(4, routing_pinned=True), replay_routing=True)
     assert ok == ""
+
+
+def test_a_knob_the_writer_reshapes_is_not_a_second_treatment() -> None:
+    r"""The defect that refused **every** resume of every arm ever written.
+
+    ``asset_budgets`` is a ``tuple`` of ``tuple``\ s in the register and a ``list`` of
+    ``list``\ s once it has been through ``json.dump``. The guard compared ``repr`` of the
+    in-memory value against ``repr`` of the read-back one, so it reported a treatment change
+    on a value that had not changed -- and the refusal it printed tells the reader to "Rename
+    the artifact and start a new one", discarding hours of paid model calls.
+
+    Found by resuming a three-row smoke on 2026-09-20. One of the 62 ``resume_drift_keys``
+    is affected and it is on every row, so the resume path was dead for every arm.
+    """
+    from governed_bi.register.knobs import defaults, resume_drift_keys
+
+    assert "asset_budgets" in resume_drift_keys()
+    shipped = defaults()["asset_budgets"]
+    assert isinstance(shipped, tuple), "fixture assumes the register ships a tuple"
+
+    as_written = json.loads(json.dumps(shipped))
+    assert repr(as_written) != repr(shipped), "the round trip must actually reshape it"
+
+    refusal, warnings = check(
+        _rows(3, knobs={"asset_budgets": as_written}),
+        knobs_resolved={"asset_budgets": shipped},
+        comparability=frozenset({"asset_budgets"}),
+    )
+    assert refusal == "", refusal
+    assert warnings == []
+
+
+def test_a_string_and_the_number_it_spells_are_still_two_treatments() -> None:
+    """The distinction :func:`_as_recorded` must not collapse while fixing the one above.
+
+    ``3`` and ``"3"`` survive the writer's encoding as an ``int`` and a ``str``, so they still
+    refuse. A fix that compared decoded values loosely -- or stringified both sides -- would
+    buy the resume back by reporting drift as agreement.
+    """
+    refusal, _ = check(
+        _rows(3, knobs={"route_top_n": "3"}),
+        knobs_resolved={"route_top_n": 3},
+        comparability=frozenset({"route_top_n"}),
+    )
+    assert "route_top_n" in refusal

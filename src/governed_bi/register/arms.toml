@@ -162,3 +162,52 @@ corpus = "30872d3"
 corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
 dataset = "22fe2a6"
 question_subset = "1351:423a3f4b65fb"
+
+# ── the first arm measured on this engine rather than on the 2026-08 one ──────
+#
+# Everything above was Claude-Opus-4.8 through `proxy`. This one is the configuration `.env`
+# ships and `tools/run_datalake_eval.py` defaults to, so it is a new baseline and not a
+# comparison: `treatment` is empty and there is no `compare_to`, for `v3_fold`'s reason. The
+# model moved, the gateway moved, and open-work §3.4 already records that the `run_query` tool
+# reply changed under an unchanged `prompt_set_hash` on 2026-08-20 — three reasons no pairing
+# with the arms above is sound, any one of which would be enough.
+#
+# **It is also the first arm that can ever reach `knobs_comparable`.** All seven `proxy_*`
+# artifacts are missing `cost_budget`, `negative_tau`, `semantic_scale_ceiling` and
+# `sqlglot_version`, so the gate returns `cannot_evaluate` at the absence branch and never
+# reaches its judgement (open-work §3.13). `session._resolved_knobs` omits no key now. The pair
+# this arm makes possible is with the arm *after* it, not with anything already on disk.
+#
+# `corpus_content_hash` is the tip's, and the tip is `86ed1db`'s content plus two files.
+# `30872d3b..74ff80c4` adds `LICENSE` and `README.md` at the corpus root and touches no asset;
+# `corpus_content_hash` counts every file in the selected subtrees, deliberately (a root
+# `README.md` is corpus content when no manifest is given), so the digest moved and the content
+# did not. Measured 2026-09-20 with the manifest supplied, which restricts the digest to the 57
+# schema subtrees and `_shared`: **both commits hash `5a556b3c7936ddc3e6e9e1a902f38adc745a62ce`
+# `9fac0cd44bb49d14b05f6c42`**, identical. So an arm measured here is on the same corpus as v4
+# in every sense except the one this field can express, and nobody has to take that on trust.
+#
+# The alternative — checking the corpus out at `30872d3b` so the digest matches the arms above —
+# was rejected: it pins the loop to a detached head to make one string compare equal, and the
+# thing that would actually make these digests stable across corpus-repo housekeeping is
+# passing the manifest, which is a change to what `corpus_content_hash` means for every arm and
+# is not made on the way to a run.
+[arm.luna_v4_embed]
+description = "ANALYST v4 on gpt-5.6-luna/openai, xhigh, semantic channel on. The first arm on this engine."
+treatment = []
+corpus = "74ff80c4"
+corpus_content_hash = "6e5c7b4be83d56828bab66183eec03bbdcf486d7454d34acd066530010ebed85"
+dataset = "dacf037"
+question_subset = "1351:423a3f4b65fb"
+# `dacf037` and not `22fe2a6`: the ref moved and the question set did not. The only commit
+# between them edits `docs/hf-dataset-card.md`, so `question_subset` is byte-identical to the
+# three arms above and reconciles against the same value. Verified 2026-09-20 by recomputing
+# `eval/provenance.py::scope_identity` over the working tree: `1351:423a3f4b65fb`.
+notes = """\
+Runs with --embed. A lexical arm cannot pass the facet_channels gate: expected_channel_state \
+declares `ran` for every facet's semantic channel with no reference to whether a deployment \
+has an embedder, so a lexical run reports five `unconfigured` anomalies and the gate fails. \
+Measured 2026-09-20 on a 3-row smoke each way -- lexical: 2 gates fail; --embed: ALL GATES \
+PASS. docs/measurement.md calls the lexical arm "the reproducible baseline", which is true of \
+reproducibility and not of quotability.\
+"""

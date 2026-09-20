@@ -66,6 +66,26 @@ jobs:
       - name: Lint
         run: uv run --frozen ruff check .
 
+      # The list `[tool.mypy]` in pyproject.toml points at. Named files and not the whole tree:
+      # `serve/` and `eval/projection.py` carry 41 findings that are mostly Optional narrowing,
+      # and a gate nobody can keep green is worse than an honest narrow one. What is in the list
+      # is what decides whether a query executes (`govern/`, `api/auth.py`) and whether a number
+      # is comparable and quotable (`register/`, `measure/`, `eval/harness.py`).
+      #
+      # **This step did not exist until 2026-09-18**, while the pyproject comment said "the file
+      # list lives in .github/workflows/ci.yml". It did not live here or anywhere; CI ran no
+      # mypy at all, and the spine carried 10 errors including 3 in `govern/pipeline.py` and 2
+      # in `api/auth.py`. The subset is clean as of that commit — keep it that way or move a
+      # file out of the list deliberately, with a reason.
+      - name: Types (governance spine)
+        run: >
+          uv run --frozen mypy
+          src/governed_bi/govern/
+          src/governed_bi/api/auth.py
+          src/governed_bi/register/
+          src/governed_bi/measure/
+          src/governed_bi/eval/harness.py
+
       # The five gates ADR 0005 §6 declares. Run explicitly as well as through the
       # conformance suite: the suite asserts they *exit zero on a clean tree*, and running
       # them directly is what makes their output visible in the log when they do not.
@@ -163,6 +183,20 @@ jobs:
       # `npm install` would have papered over by rewriting the lockfile inside CI.
       - name: Install (frozen)
         run: npm ci
+
+      # A gate, and the only thing in this repository that will ever say a CVE landed. It is
+      # here rather than in a scheduled job because the exact pin is what made the last one
+      # permanent: `next` was pinned to `16.3.0`, the fix for GHSA-2xp9-vwfh-vxw4 (an
+      # unauthenticated RCE in the Image Optimization API) shipped in `16.3.5` — *outside* the
+      # stated range — so `npm ci` reinstalled the vulnerable build on every run above, and
+      # nothing looked. `.github/dependabot.yml` raises the bump; this step is what fails if
+      # nobody merges it.
+      #
+      # `--audit-level=high` and not `moderate`: the tree carries transitive moderates that come
+      # and go with no fix available, and a gate that is red for a week nobody can act on is a
+      # gate people learn to ignore. Raise the level when the moderates have somewhere to go.
+      - name: Audit
+        run: npm audit --audit-level=high
 
       - name: Lint
         run: npm run lint

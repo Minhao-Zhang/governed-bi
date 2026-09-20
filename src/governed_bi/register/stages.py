@@ -205,6 +205,9 @@ REFUSED_BY_TO_STAGE: Mapping[str, Stage] = {
     "guard": Stage.guard,
     "negative_example": Stage.negative_gate,
     "no_schema_matched": Stage.route,
+    # `resolve` runs inside the connect parcel and has no stage of its own; its decline is
+    # attributed where the closure it refused would have been used.
+    "over_resolve_bounds": Stage.connect,
     "missing_join_path": Stage.connect,
     "over_connect_bounds": Stage.connect,
     "guardrail": Stage.check,

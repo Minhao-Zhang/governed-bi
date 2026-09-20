@@ -66,6 +66,38 @@ def test_an_explicitly_empty_rule_set_is_not_a_missing_one(policy) -> None:
     assert guard("how many customers?", policy(guard_rules_enabled={}))["outcome"] == "clear"
 
 
+def test_a_rule_id_that_dispatches_nothing_is_refused_at_construction(policy) -> None:
+    """The defect that shipped: one mapping, two namespaces, and no check on the keys.
+
+    ``api/graph_app.py`` passed ``{g_bi_scope: True}`` for months. It reads as "the guard is
+    on"; ``g_bi_scope`` is not a member of ``GUARD_RULES``, :func:`guard` iterates that
+    mapping, and ``guard_rule_enabled``'s ``.get(rule_id, False)`` turns every absent id into
+    a silent ``False`` — so the served surface evaluated zero deterministic predicates. A
+    typo, a retired id, or a rename on one side only is the same outage with a new spelling.
+
+    At construction and not at ``guard()``: every construction site in the tree is checked,
+    tests included, and a misconfiguration cannot wait for a turn to surface.
+    """
+    with pytest.raises(ValueError, match="which no rule dispatches"):
+        policy(guard_rules_enabled={"g_instructionoverride": True})
+
+    with pytest.raises(ValueError, match="g_nonexistent"):
+        policy(guard_rules_enabled={"g_encoding": True, "g_nonexistent": False})
+
+
+def test_both_namespaces_are_legal_keys(policy) -> None:
+    """The other half: the check must not refuse the ids that *do* dispatch.
+
+    ``g_bi_scope`` is read by ``serve/nodes/guard.py`` and not by :func:`guard`, so a
+    validator built from ``GUARD_RULES`` alone would refuse the one key the served policy has
+    always carried — trading a silent failure for a loud one at startup.
+    """
+    from governed_bi.govern.policy import KNOWN_GUARD_RULE_IDS
+
+    every = policy(guard_rules_enabled={rule: True for rule in KNOWN_GUARD_RULE_IDS})
+    assert all(every.guard_rule_enabled(rule) for rule in KNOWN_GUARD_RULE_IDS)
+
+
 @pytest.mark.parametrize(
     ("question", "rule"),
     [
