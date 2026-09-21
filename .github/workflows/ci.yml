@@ -425,8 +425,16 @@ jobs:
   # each job gets its own workspace, so the two jobs above cannot; on a self-hosted runner
   # sharing one, they could. The concurrency group below is what stops two of these overlapping,
   # and the `if` is what keeps it off pushes.
+  #
+  # **Dispatchable as well as scheduled, since 2026-09-21, and that is a fix rather than a
+  # convenience.** `corpus-writes-platform-line-endings` survived on this runner for three days
+  # while being caught on the Windows machine that declared it, and the person who repaired it
+  # had no way to ask whether the repair worked here: the only trigger was 07:00 UTC. A job you
+  # cannot run on demand is a job nobody can verify after fixing it, which is this repository's
+  # own argument about gates with no caller, one layer up. Still off pushes, which is what the
+  # sentence above is about.
   mutate:
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
