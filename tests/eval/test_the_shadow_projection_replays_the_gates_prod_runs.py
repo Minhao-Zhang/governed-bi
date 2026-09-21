@@ -170,10 +170,9 @@ def test_error_failed_open_is_not_a_refusal_and_not_hidden() -> None:
 
 def test_every_gate_id_is_distinct_and_names_its_rule() -> None:
     """One spelling per rule. Two spellings of one id is the 2026-09-18 review's §1.1."""
+    from governed_bi.eval.shadow import BI_SCOPE_GATE
     from governed_bi.govern.policy import BI_SCOPE_RULE_ID
     from governed_bi.serve.abstention import ABSTENTION_POLICY
-
-    from governed_bi.eval.shadow import BI_SCOPE_GATE
 
     assert BI_SCOPE_GATE.endswith(BI_SCOPE_RULE_ID)
     assert ABSTENTION.endswith(ABSTENTION_POLICY)

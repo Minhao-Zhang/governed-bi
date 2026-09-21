@@ -77,3 +77,45 @@ def test_the_same_asset_hashes_the_same_whatever_wrote_the_bytes() -> None:
     assert corpus_content_hash(engine_root) == corpus_content_hash(second_root), (
         "two runs of the engine's own writer disagree, which is the defect this covers"
     )
+
+
+def test_the_writer_does_not_rely_on_the_platform_newline(monkeypatch) -> None:
+    r"""The same property, on a platform whose default is CRLF — including Linux CI.
+
+    **The two tests above cannot fail on the CI that runs them.** ``Path.write_text`` with no
+    ``newline=`` translates to ``os.linesep``, which on Linux *is* ``\n``, so dropping the
+    ``newline="\n"`` argument changes no byte there. The mutation catalogue's
+    ``corpus-writes-platform-line-endings`` entry said so in its own finding text — "Passes on
+    Linux CI either way" — and then declared the mutation unconditionally, so it survived every
+    CI run and the job was red for a defect that was fixed. A declared mutation that cannot be
+    caught on the machine that checks it is §3.9's "test that could not fail" wearing the
+    catalogue's clothes.
+
+    So the platform is simulated rather than required: the shim below translates on exactly the
+    call the defect made — ``write_text`` *without* an explicit ``newline`` — and writes
+    verbatim when the writer names one. On Linux it turns the default into CRLF; on Windows it
+    reproduces what the platform would have done anyway, and forces ``newline="\n"`` on the real
+    call so the emulated bytes are not translated a second time.
+
+    The assertion stays on **bytes**, which is the whole discipline of this file: PyYAML
+    normalises ``\r\n`` inside quoted scalars, so a load-and-compare passes on a CRLF file and
+    says nothing.
+    """
+    real_write_text = pathlib.Path.write_text
+
+    def as_if_windows(self, data, encoding=None, errors=None, newline=None):
+        if newline is None:
+            data = data.replace("\n", "\r\n")
+        return real_write_text(self, data, encoding=encoding, errors=errors, newline="\n")
+
+    monkeypatch.setattr(pathlib.Path, "write_text", as_if_windows)
+
+    root = pathlib.Path(tempfile.mkdtemp(prefix="corpus-asif-"))
+    raw = write(root, _asset()).read_bytes()
+
+    assert raw.count(b"\n") > 1, "nothing was written, so the assertion below proves nothing"
+    assert b"\r" not in raw, (
+        "corpus/store.py::write let the platform choose the line ending. On a CRLF host the "
+        "same corpus then hashes differently, and every arm digest in register/arms.toml is "
+        "keyed on corpus_content_hash"
+    )

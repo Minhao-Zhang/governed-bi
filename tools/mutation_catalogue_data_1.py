@@ -454,8 +454,14 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
                 "makes `corpus_content_hash` OS-dependent — and every arm digest in "
                 "`register/arms.toml` is keyed on it. `../BIRD-corpus/.gitattributes` defends "
                 "the checkout against exactly this with a nine-line header about it; this line "
-                "defeated that defence from the write side. Passes on Linux CI either way, "
-                "which is why the test asserts on bytes rather than on os.linesep.",
+                "defeated that defence from the write side. This entry SURVIVED every CI run "
+                "from 2026-09-18 to 2026-09-21 and the job was red for a defect that was "
+                "already fixed: the two original tests assert on bytes, and on Linux "
+                "`write_text` with no `newline=` writes the same bytes either way, so there "
+                "was nothing for them to see. A declared mutation that cannot be caught on "
+                "the machine that checks it is open-work 3.9's test-that-cannot-fail wearing "
+                "this catalogue's clothes. Caught now by a third test that simulates a "
+                "CRLF-default platform instead of requiring one.",
     ),
     Mutation(
         id="pending-union-pages-one-half-only",
