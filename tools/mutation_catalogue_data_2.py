@@ -341,6 +341,22 @@ MUTATIONS_DATA_2: tuple[Mutation, ...] = (
                 "resume across an uncommitted edit blended two harness versions silently",
     ),
     Mutation(
+        id="writer-waits-on-the-slowest-question",
+        what="on_row fires in input order again, so one hung request holds back every finished row",
+        path="src/governed_bi/eval/harness.py",
+        anchor="            for future in as_completed(futures):",
+        replacement="            for future in futures:",
+        tests=("tests/eval/test_a_slow_question_does_not_stall_the_writer.py",),
+        finding="a downstream fork hit this as an apparent dead run and shipped a supervisor "
+                "script rather than a fix. Declared 2026-09-21, when the test was repaired: it "
+                "ordered the work with one event and left the *observation* order to whichever "
+                "futures `as_completed` found already done, so it failed about 1 run in 5 and "
+                "took a CI run on main with it. A second event now closes the loop causally -- "
+                "the slow item cannot return until on_row has seen the fast row. Declaring the "
+                "mutation is what stops the repair being undone by the next person who reads "
+                "`for future in futures` as the simpler spelling.",
+    ),
+    Mutation(
         id="i4-coverage-counts-function-words",
         what="coverage credits the corpus for holding the word `the`",
         path="src/governed_bi/retrieve/lexical.py",

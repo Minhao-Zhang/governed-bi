@@ -18,14 +18,30 @@ def test_a_later_question_reaches_on_row_before_an_earlier_slow_one(
 ) -> None:
     """Pins the ``as_completed`` fix. Under ``pool.map``, ``on_row`` fires in *input* order, so
     the slow question's row (index 0) reaches the writer before the fast question's row (index
-    1) even though the fast one finishes first. A ``threading.Event`` makes the finish order
-    deterministic instead of a ``time.sleep`` guess: the fast item sets the event, the slow item
-    waits on it, so the slow item cannot finish first under any scheduler. ``workers=2`` is
-    required -- with a single worker the slow item would wait on an event only the
-    never-started fast item can set, and the test would hang forever without the timeout."""
+    1) even though the fast one finishes first.
+
+    **Two events, and the second one is why this test is not flaky.** Ordering the *work* is
+    not enough: ``fast_ready`` only guarantees the slow item returns after the fast item has,
+    and by the time the main thread starts consuming, both futures can already be done --
+    ``as_completed`` then yields them in whatever order it finds them, so ``seen`` came out
+    ``["slow", "fast"]`` on a green tree. Measured at roughly 1 run in 5 locally and seen on CI
+    on 2026-09-21.
+
+    So ``fast_written`` closes the loop causally: the slow item does not return until
+    ``on_row`` has *already been called* for the fast row. There is no window left in which
+    the writer can see them the other way round.
+
+    It still fails against the defect it pins, and fails saying so: under ``pool.map`` nothing
+    is written until every item returns, so the slow item waits out its timeout and the
+    assertion below names the reason. A slow failure, rather than an intermittent one.
+
+    ``workers=2`` is required -- with a single worker the slow item would wait on an event only
+    the never-started fast item can set, and the test would hang forever without the timeout."""
     from governed_bi.eval import harness
 
+    seen: list[str] = []
     fast_ready = threading.Event()
+    fast_written = threading.Event()
     questions = [{"question_id": "slow"}, {"question_id": "fast"}]
 
     def fake_run_one(question, **_):
@@ -33,7 +49,17 @@ def test_a_later_question_reaches_on_row_before_an_earlier_slow_one(
             fast_ready.set()
         else:
             assert fast_ready.wait(timeout=5), "fast question never signalled -- test is broken"
+            assert fast_written.wait(timeout=5), (
+                "the fast row never reached on_row while the slow question was still running, "
+                "which is the defect: the writer is waiting for question 1 to finish before it "
+                "writes question 2's finished row"
+            )
         return {"question_id": question["question_id"]}
+
+    def record(_index, row):
+        seen.append(row["question_id"])
+        if row["question_id"] == "fast":
+            fast_written.set()
 
     # `run_index` calls `worker_state()`, which calls `compile_durable()` (renamed from
     # `compile_graph` by ADR 0014, which gave the harness a durable checkpointer), before it
@@ -41,7 +67,6 @@ def test_a_later_question_reaches_on_row_before_an_earlier_slow_one(
     monkeypatch.setattr(harness, "compile_durable", lambda *_a, **_k: object())
     monkeypatch.setattr(harness, "_run_one", fake_run_one)
 
-    seen: list[str] = []
     rows = harness._run_concurrently(
         questions,
         arm=type("A", (), {"name": "a"})(),
@@ -51,7 +76,7 @@ def test_a_later_question_reaches_on_row_before_an_earlier_slow_one(
         order_sensitive_qids=frozenset(),
         workers=2,
         connector_factory=lambda: None,
-        on_row=lambda _i, row: seen.append(row["question_id"]),
+        on_row=record,
     )
 
     assert seen == ["fast", "slow"], "the writer waited on the slow question"
