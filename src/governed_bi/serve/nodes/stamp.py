@@ -18,7 +18,6 @@ from typing import Any
 
 from governed_bi.govern.guard import GUARD_PUBLIC_MESSAGE
 from governed_bi.govern.layers import GUARDRAIL_ERROR, GUARDRAIL_REFUSED_BY
-from governed_bi.govern.ledger import ExecutionRecord
 from governed_bi.measure.degradation import facets_degraded
 from governed_bi.register.quantity import Measured
 from governed_bi.register.record import project
@@ -30,14 +29,14 @@ from governed_bi.serve.outcome import OutcomeInputs, TurnOutcome, normalised
 __all__ = ["classify_turn", "stamp"]
 
 
-def _usage_for_turn(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _usage_for_turn(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     """Project usage for the current turn only (``operator.add`` accumulates)."""
     turn_index = state.get("turn_index", 1)
     raw = state.get("usage") or []
     return [u for u in raw if isinstance(u, Mapping) and u.get("turn_index") == turn_index]
 
 
-def _cache_total(usage: list[dict[str, Any]], field: str) -> int | Measured[int]:
+def _cache_total(usage: list[Mapping[str, Any]], field: str) -> int | Measured[int]:
     """Sum one cache-token field across this turn's usage rows, or *unmeasured*.
 
     Unmeasured when **no** row reported the field: a provider that reports no cache activity
@@ -200,8 +199,8 @@ def _path_signals(
 def _extract_factory(
     *,
     outcome: Outcome,
-    execution: ExecutionRecord,
-    usage: list[dict[str, Any]],
+    execution: Mapping[str, Any],
+    usage: list[Mapping[str, Any]],
     latency: float | Measured[float],
     failed_stage: str | None,
     error_type: str | None,

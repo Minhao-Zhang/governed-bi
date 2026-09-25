@@ -352,7 +352,7 @@ def _question_message(state: dict, history: list[Any]) -> HumanMessage | None:
     return HumanMessage(content=f"Question: {question}")
 
 
-def _context_middleware(state: dict, model: Any = None) -> list[AgentMiddleware]:
+def _context_middleware(state: dict, model: Any = None) -> list[AgentMiddleware[Any, Any, Any]]:
     """Deliver ``delivery.context_block`` on every model call, without it entering ``messages``.
 
     Empty list when the turn rendered no block, so a turn with nothing to deliver builds exactly

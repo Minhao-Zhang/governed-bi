@@ -77,7 +77,7 @@ def _turn_clock(
 
 def wrap_node(
     stage: str,
-    fn: Callable[..., dict[str, Any]],
+    fn: Callable[..., Any],
     *,
     stream: bool = True,
     timeout: float | None = None,
@@ -116,7 +116,7 @@ def wrap_node(
         )
         return True
 
-    def _end(state: Mapping[str, Any], update: dict[str, Any]) -> None:
+    def _end(state: Mapping[str, Any], update: Mapping[str, Any]) -> None:
         status, detail = rail_observation(stage, update)
         emit(
             kind="rail",
@@ -156,7 +156,7 @@ def wrap_node(
             "than a fact. Make the node `async def` first."
         )
 
-    async def _body(state: Mapping[str, Any], config: RunnableConfig | None) -> dict[str, Any]:
+    async def _body(state: Mapping[str, Any], config: RunnableConfig | None) -> Mapping[str, Any]:
         """Run the node, off the event loop if it is still synchronous.
 
         ``to_thread`` rather than a direct call: LangGraph runs a sync node in a threadpool, so
@@ -182,7 +182,7 @@ def wrap_node(
             # that. Left alone it surfaces four frames away as ``'coroutine' object has no
             # attribute 'get'`` inside ``rail_observation``, naming nothing.
             if inspect.isawaitable(update):
-                update.close()
+                update.close()  # type: ignore[attr-defined]  # assumes a coroutine; isawaitable admits others
                 raise TypeError(
                     f"node {stage!r} is a sync function that returned an awaitable. It is "
                     "probably wrapping an async node without awaiting it; make the wrapper "

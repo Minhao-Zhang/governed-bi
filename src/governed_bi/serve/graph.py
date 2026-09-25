@@ -5,6 +5,7 @@ loaded by file path keeps raw parameter annotations inspectable.
 """
 
 import asyncio
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -52,7 +53,7 @@ def _after_accept(state: ServeState) -> Literal["guard", "stamp"]:
 def _after_guard(state: ServeState) -> Literal["refuse", "rewrite", "stamp"]:
     if state.get("path_kind") == "crashed":
         return "stamp"
-    guard = state.get("guard") or {}
+    guard: Mapping[str, Any] = state.get("guard") or {}
     if guard.get("outcome") == "blocked":
         return "refuse"
     return "rewrite"
@@ -68,7 +69,7 @@ def _after_rewrite(state: ServeState) -> Literal["negative_gate", "stamp"]:
 def _after_negative(state: ServeState) -> Literal["decline", "fanout", "stamp"]:
     if state.get("path_kind") == "crashed":
         return "stamp"
-    negative = state.get("negative") or {}
+    negative: Mapping[str, Any] = state.get("negative") or {}
     if negative.get("outcome") == "hit":
         return "decline"
     return "fanout"
@@ -219,7 +220,7 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     rail("refuse", refuse_node)
     rail("decline", decline_node)
     # Unwrapped: nothing after stamp can record a wrap crash.
-    graph.add_node("stamp", stamp)
+    graph.add_node("stamp", stamp)  # type: ignore[type-var]  # langgraph bounds node input to TypedDict-likes
     # There is deliberately no unattached write node here. One existed —
     # ``raise_note``, whose only purpose was to be an ``aupdate_state(as_node=...)``
     # target for reader-filed notes — and ADR 0015 §2 deleted it with the channel it
