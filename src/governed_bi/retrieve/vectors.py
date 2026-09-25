@@ -466,7 +466,7 @@ class VectorStore:
             wanted = {str(k) for k in keys}
             if not wanted:
                 return []
-        # `search` is typed as the base builder; a vector query returns the vector one.
+        # `search` is typed as the base builder; a vector query returns the vector one.
         builder = cast(
             LanceVectorQueryBuilder,
             self._table.search(list(query), vector_column_name=_VECTOR_COLUMN),
