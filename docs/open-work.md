@@ -1498,21 +1498,43 @@ Two things follow for the next arm, and neither blocks it. The arm runs permissi
 does not touch its numbers; and `tools/shadow_replay.py --scope-verdicts` prices it exactly,
 against the same rows, at no extra model spend.
 
-**`bi_scope` v2 exists and is not the default yet** (`m1/scope-gate`). It lists the served
-schemas (`serve/nodes/guard.py::scope_catalogue`). Probe results, sampled only, because a full
-pass was deferred:
+**`bi_scope` v2 exists on `m1/scope-gate` and is not the default.** It lists the served schemas
+(`serve/nodes/guard.py::scope_catalogue`). Every figure below names its artifact under
+`runs/eval/` (not in git). Rows written since the probe gained its stamp carry `variant`, `model`
+and `prompt_sha256` (v1 `475f720baa0e4c7a`, v2 `89e74cf879332634` over the BIRD corpus). Older
+rows carry no stamp, and their prompt is known only from the time they were written.
 
-| Judge | Variant | 1,351 benign | 200 stride | 60 out-of-scope |
-|---|---|---|---|---|
-| gpt-5.6-luna | v1 | 180 blocked (13.3%) | 19 | 59 blocked |
-| gpt-5.6-luna | v2 | not run | 2 blocked | 60 blocked |
-| gpt-6-luna | v1 | 199 blocked (14.7%) | not run | 59 blocked |
-| gpt-6-luna | v2 | not run | 3 blocked of 151 judged, 49 rate-limited | 60 blocked |
+| Judge | Variant | Set | Blocked | Artifact | Stamped |
+|---|---|---|---|---|---|
+| gpt-5.6-luna | v1 | 1,351 benign | 180 (13.3%) | `bi_scope_gpt-5.6-luna.jsonl` | no |
+| gpt-5.6-luna | v2 | 200 stride | 2 | `scratch/v2c_stride200.jsonl` | no |
+| gpt-6-luna | v1 | 1,351 benign | 199 (14.7%) | `m1/full_v1_gpt-6-luna.jsonl` | no |
+| gpt-6-luna | v2 | 200 stride | 8 (4.0%) | `m1/stride200_v2_stamped_gpt-6-luna.jsonl` | yes |
+| gpt-6-luna | v1 | 60 easy out-of-scope | 59 | `m1/oos_v1_gpt-6-luna.jsonl` | no |
+| gpt-6-luna | v2 | 60 easy out-of-scope | 60 | `m1/oos_v2_gpt-6-luna.jsonl` | no |
+| gpt-6-luna | v1 | 60 hard out-of-scope | 28 | `m1/oos_hard_v1_gpt-6-luna.jsonl` | yes |
+| gpt-6-luna | v2 | 60 hard out-of-scope | 59 | `m1/oos_hard_v2_gpt-6-luna.jsonl` | yes |
 
-To close M1: the full 1,351 on v2, then `tools/shadow_replay.py --scope-verdicts`, then flip
-`BI_SCOPE.default`. Run it at `--concurrency 1`. The org's gpt-6-luna limit is 200k tokens a minute
-and a v2 call is about 3.6k, so the gate fails open above roughly 55 turns a minute. That limit
-applies to the served gate as well as to the probe.
+The easy set (`tests/govern/data/bi_scope_out_of_scope/`) cannot separate the variants. The hard
+set (`.../bi_scope_out_of_scope_hard/`) is 50 data-shaped questions on subjects no served schema
+covers and 10 data-flavoured requests that are not questions; nobody but its author has read it.
+On gpt-6-luna, v2 misses the M1 target of under 3% false refusals on the sample (4.0%), and
+reaching it is the recall trade-off the milestone leaves to the plan owner. Four of the eight are
+questions whose subject a schema summary does not name (songs in `disney`, illness investigations
+in `food_inspection`).
+
+A full v2 pass on gpt-6-luna ran by accident when a stopped background job's child process kept
+going; 984 of its 1,351 rows are rate-limited fail-opens, so it is kept only as
+`scratch/full_v2_gpt-6-luna_INVALID_73pct_rate_limited.jsonl` and is not a measurement.
+
+Cost: the v2 system prompt is 14,466 characters against v1's 543, about 3,600 tokens per scope call
+against 136. That is the guard call only; a turn's agent loop is not measured here. The org's
+gpt-6-luna limit is 200k tokens a minute, so the served gate would fail open above about 55 turns
+a minute. The probe's `--max-retries` sets the OpenAI client's own retries, which back off
+exponentially; at concurrency 2 they were not enough and 49 of 200 rows still failed open.
+
+To close M1: the full 1,351 on v2 at `--concurrency 1`, `tools/shadow_replay.py --scope-verdicts`,
+a decision on the 3% target, then flipping `BI_SCOPE.default` with a served-path test.
 
 ### 6.11 `--resume` was refused on every arm that has ever been written — fixed 2026-09-20
 
