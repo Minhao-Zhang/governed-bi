@@ -19,14 +19,14 @@ should not cost a model call to refuse.
 """
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
 from governed_bi.serve.runtime import configurable, prompt_variants
 
-__all__ = ["guard_node"]
+__all__ = ["guard_node", "scope_catalogue"]
 
 #: The one token that clears the scope gate. Keying on the negative instead would make any
 #: unexpected reply read as "in scope", failing **open** exactly when the model was confused.
@@ -35,6 +35,27 @@ _IN_SCOPE = "yes"
 #: Named so a reply that says *both* can be rejected. It is not a clearing token and nothing
 #: keys on it alone.
 _OUT_OF_SCOPE = "no"
+
+
+#: Where a ``bi_scope`` variant wants the served schemas. A variant without it ignores the corpus.
+_SCHEMAS_SLOT = "{schemas}"
+
+
+def scope_catalogue(assets: Iterable[Any]) -> str:
+    """One line per schema asset, ``- name: summary``, sorted by name.
+
+    The scope gate's picture of the deployment. Schema assets rather than tables because there
+    is one per namespace with a written summary, which keeps the prompt near 45 tokens a schema
+    instead of growing with the table count.
+    """
+    lines = []
+    for asset in assets:
+        kind = getattr(getattr(asset, "asset_type", None), "value", None)
+        if kind != "schema":
+            continue
+        summary = " ".join(str(getattr(asset, "summary", "") or "").split())
+        lines.append(f"- {asset.name}: {summary}" if summary else f"- {asset.name}")
+    return "\n".join(sorted(lines))
 
 
 def _words(text: str) -> list[str]:
@@ -95,7 +116,11 @@ async def guard_node(state: dict, config: RunnableConfig) -> dict:
     # `agent_model` gets `error_failed_open`, which is what that sentinel is for.
     model = cfg.get("utility_model")
     verdict, usage = await _bi_scope(
-        state["question"], model, state.get("turn_index", 1), prompt_variants(config)
+        state["question"],
+        model,
+        state.get("turn_index", 1),
+        prompt_variants(config),
+        scope_catalogue((cfg.get("assets_by_id") or {}).values()),
     )
     update: dict = {"guard": verdict}
     if usage is not None:
@@ -104,7 +129,11 @@ async def guard_node(state: dict, config: RunnableConfig) -> dict:
 
 
 async def _bi_scope(
-    question: str, model: Any, turn_index: Any, variants: Mapping[str, str] | None = None
+    question: str,
+    model: Any,
+    turn_index: Any,
+    variants: Mapping[str, str] | None = None,
+    catalogue: str = "",
 ) -> tuple[Any, dict | None]:
     """Ask a model whether the question is in scope. Returns ``(GuardVerdict, usage row)``.
 
@@ -123,6 +152,10 @@ async def _bi_scope(
     (``negative``) *is* gated, which is what the wording here used to claim for this one. Inert
     while every eval arm passes ``guard_rules_enabled={}``; a trap for the first arm that does
     not. See ``tests/serve/test_guard_bi_scope.py``.
+
+    ``catalogue`` fills a variant's ``{schemas}`` slot. A variant that has the slot and a corpus
+    with no schema asset is ``error_failed_open``: a judge shown an empty list refuses every
+    question, which would turn a missing corpus into a gate that blocks all traffic.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -145,9 +178,22 @@ async def _bi_scope(
             None,
         )
 
+    system = prompt_text("bi_scope", variants)
+    if _SCHEMAS_SLOT in system:
+        if not catalogue:
+            return (
+                GuardVerdict(
+                    outcome="error_failed_open",
+                    rule_id=BI_SCOPE_RULE_ID,
+                    detail="the bi_scope variant lists the served schemas and the corpus has none",
+                ),
+                None,
+            )
+        system = system.replace(_SCHEMAS_SLOT, catalogue)
+
     try:
         reply = await model.ainvoke(
-            [SystemMessage(prompt_text("bi_scope", variants)), HumanMessage(question)],
+            [SystemMessage(system), HumanMessage(question)],
             # Named, because a turn makes eight model calls and LangChain names every one after
             # the client class. The name is the *registered prompt's*, so the trace and
             # ``register/prompts.py`` cannot drift apart.

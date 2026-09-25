@@ -196,3 +196,41 @@ def test_a_reply_naming_both_tokens_fails_closed(reply: str) -> None:
     question.
     """
     assert _run("write me a poem", model=_Model(reply))["outcome"] == "blocked"
+
+
+def _v2(question: str, assets: list[Any], model: _Model) -> dict:
+    policy = GovernancePolicy(guard_rules_enabled=SCOPE_ONLY)
+    conf: dict[str, Any] = {
+        "policy": policy,
+        "utility_model": model,
+        "prompt_variants": {"bi_scope": "v2"},
+        "assets_by_id": {a.id: a for a in assets},
+    }
+    return asyncio.run(guard_node({"question": question}, {"configurable": conf}))["guard"]
+
+
+def test_v2_shows_the_judge_the_served_schemas() -> None:
+    """v2 exists because v1 told the judge nothing about what the deployment holds, and refused
+    corpus-answerable questions that read like trivia (``docs/open-work.md`` §6.10)."""
+    from governed_bi.corpus.schema import SchemaAsset, TableAsset
+
+    assets = [
+        SchemaAsset(id="movies", name="movies", summary="Films, directors  and\ncast."),
+        SchemaAsset(id="address", name="address", summary="ZIP codes and counties."),
+        TableAsset(id="movies.film", schema="movies", physical_name="film", summary="One row per film."),
+    ]
+    model = _Model("YES")
+    assert _v2("Who directed Wreck-It Ralph?", assets, model)["outcome"] == "clear"
+    system = model.calls[0][0].content
+    assert "- address: ZIP codes and counties.\n- movies: Films, directors and cast." in system
+    assert "{schemas}" not in system
+    assert "One row per film." not in system, "tables are not listed, only schemas"
+
+
+def test_v2_with_no_schema_asset_fails_open_without_a_model_call() -> None:
+    """A judge shown an empty list refuses everything, so a corpus with no schema asset would
+    turn the scope gate into a gate that blocks all traffic."""
+    model = _Model("NO")
+    verdict = _v2("how many customers?", [], model)
+    assert verdict["outcome"] == "error_failed_open"
+    assert model.calls == []
