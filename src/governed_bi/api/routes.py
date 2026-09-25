@@ -66,6 +66,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
 
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import make_router
@@ -127,8 +128,10 @@ def app_from_environment() -> FastAPI:
     this runs at import — and ``session_from_environment`` builds a Postgres connector and seeds
     a corpus. Resolving it here would make importing this module require a database.
     """
-    from governed_bi.api.graph_app import session_from_environment
+    from governed_bi.api.graph_app import configure_logging, session_from_environment
     from governed_bi.api.thread_turns import PendingClarifications, ThreadTurnLog
+
+    configure_logging()
 
     # `ThreadTurnLog`: the audit surface reads a turn's record out of thread state now that
     # `ServeState.turns` accumulates it, so there is no second store of the same thing. Its
@@ -159,6 +162,27 @@ def _build_app(
     def livez() -> dict[str, Any]:
         """Liveness only — does not touch the session."""
         return {"ok": True}
+
+    @app.get("/readyz", response_model=None)
+    def readyz() -> dict[str, Any] | JSONResponse:
+        """Ready when the session resolves with an agent model and no fatal problem; 503 if not.
+
+        Resolving the session is the check: under bare ``uvicorn`` it is lazy, and a missing DSN,
+        corpus or model credential raises there. The reason carries our own ``RuntimeError``
+        text, which names variables, and only the type of anything else, which may hold a DSN.
+        """
+        try:
+            session = get_session()
+        except RuntimeError as err:
+            return _not_ready(str(err))
+        except Exception as err:  # noqa: BLE001 — any failure to build the session is not-ready
+            return _not_ready(type(err).__name__)
+        if getattr(session, "agent_model", None) is None:
+            return _not_ready("no agent model is configured, so no question can be answered")
+        fatal = getattr(session, "fatal_problems", ())
+        if fatal:
+            return _not_ready(f"{len(fatal)} fatal corpus problem(s)")
+        return {"ready": True}
 
     @app.get("/capabilities")
     def capabilities() -> dict[str, Any]:
@@ -415,6 +439,10 @@ def served_graph_declared() -> bool:
     declared = str((config.get("graphs") or {}).get("serve") or "")
     module, _, factory = declared.rpartition(":")
     return bool(module and factory) and (REPO_ROOT / module).is_file()
+
+
+def _not_ready(reason: str) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"ready": False, "reason": reason})
 
 
 def capabilities_for(session: Any) -> dict[str, Any]:
