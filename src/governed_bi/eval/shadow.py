@@ -46,10 +46,10 @@ will be read as one.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from governed_bi.govern.guard import guard
 from governed_bi.govern.policy import GUARD_RULE_IDS, GovernancePolicy
@@ -161,10 +161,10 @@ def abstention_gate(rows: Sequence[TurnRow]) -> ShadowGate:
     """
     enforced = sorted(
         {
-            str(row["abstention"]["outcome"])
+            str(abstention["outcome"])
             for row in rows
-            if isinstance(row.get("abstention"), Mapping)
-            and row["abstention"].get("outcome") in ("answer", "withhold")
+            if isinstance(abstention := row.get("abstention"), Mapping)
+            and abstention.get("outcome") in ("answer", "withhold")
         }
     )
     if enforced:
@@ -425,13 +425,13 @@ def _as_state(row: TurnRow, empty_digests: frozenset[str] | set[str]) -> dict[st
         else {}
     )
     return {
-        "licensed": list(row.get("licensed") or ()),
+        "licensed": list(cast("Iterable[str]", row.get("licensed") or ())),
         "delivery": {
             "context_block": "" if row.get("context_hash") in empty_digests else _NON_EMPTY,
             "evicted": row.get("context_evicted") or {},
         },
         "facets": facets,
-        "schemas": list(row.get("schemas") or ()),
+        "schemas": list(cast("Iterable[str]", row.get("schemas") or ())),
         "retrieved": {"lexical_coverage": row.get("lexical_coverage")},
         "abstention_policy_enabled": True,
     }
