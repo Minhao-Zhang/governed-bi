@@ -1518,8 +1518,11 @@ rows carry no stamp, and their prompt is known only from the time they were writ
 The easy set (`tests/govern/data/bi_scope_out_of_scope/`) cannot separate the variants. The hard
 set (`.../bi_scope_out_of_scope_hard/`) is 50 data-shaped questions on subjects no served schema
 covers and 10 data-flavoured requests that are not questions; nobody but its author has read it.
-On gpt-6-luna, v2 misses the M1 target of under 3% false refusals on the sample (4.0%), and
-reaching it is the recall trade-off the milestone leaves to the plan owner. Four of the eight are
+On gpt-6-luna, v2 misses the M1 target of under 3% false refusals on the sample (4.0%, against
+23 of the same 200 for v1), and reaching it is the recall trade-off the milestone leaves to the
+plan owner. **4.0% is a development figure, not an estimate:** three v2 wordings (`scratch/v2a_*`,
+`v2b_*`, `v2c_*`) were tried on the same 200 questions before the committed one, so the prompt is
+fitted to this sample. Only the full 1,351 can give the rate. Four of the eight are
 questions whose subject a schema summary does not name (songs in `disney`, illness investigations
 in `food_inspection`).
 
@@ -1527,14 +1530,18 @@ A full v2 pass on gpt-6-luna ran by accident when a stopped background job's chi
 going; 984 of its 1,351 rows are rate-limited fail-opens, so it is kept only as
 `scratch/full_v2_gpt-6-luna_INVALID_73pct_rate_limited.jsonl` and is not a measurement.
 
-Cost: the v2 system prompt is 14,466 characters against v1's 543, about 3,600 tokens per scope call
-against 136. That is the guard call only; a turn's agent loop is not measured here. The org's
+Cost: the v2 system prompt is 14,466 characters against v1's 543, about 3,600 input tokens per
+scope call against 136, roughly 26 times as much. The served gate makes that call on every turn, so
+v2 adds about 3,500 input tokens to each one; how large that is beside the agent loop is not
+measured here. The org's
 gpt-6-luna limit is 200k tokens a minute, so the served gate would fail open above about 55 turns
 a minute. The probe's `--max-retries` sets the OpenAI client's own retries, which back off
 exponentially; at concurrency 2 they were not enough and 49 of 200 rows still failed open.
 
 To close M1: the full 1,351 on v2 at `--concurrency 1`, `tools/shadow_replay.py --scope-verdicts`,
-a decision on the 3% target, then flipping `BI_SCOPE.default` with a served-path test.
+a reviewer reading the hard set, a decision on the 3% target, and a decision on the gate failing
+open under rate limits, then flipping `BI_SCOPE.default` with a served-path test. The probe's
+`--schema` gives the catalogue a single-schema deployment would show.
 
 ### 6.11 `--resume` was refused on every arm that has ever been written — fixed 2026-09-20
 

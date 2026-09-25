@@ -24,7 +24,7 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
-from governed_bi.serve.runtime import configurable, prompt_variants
+from governed_bi.serve.runtime import assets_by_id, configurable, prompt_variants
 
 __all__ = ["guard_node", "scope_catalogue", "scope_system_prompt"]
 
@@ -131,7 +131,7 @@ async def guard_node(state: dict, config: RunnableConfig) -> dict:
         model,
         state.get("turn_index", 1),
         prompt_variants(config),
-        scope_catalogue((cfg.get("assets_by_id") or {}).values()),
+        scope_catalogue(assets_by_id(cfg).values()),
     )
     update: dict = {"guard": verdict}
     if usage is not None:

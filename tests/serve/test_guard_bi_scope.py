@@ -234,3 +234,21 @@ def test_v2_with_no_schema_asset_fails_open_without_a_model_call() -> None:
     verdict = _v2("how many customers?", [], model)
     assert verdict["outcome"] == "error_failed_open"
     assert model.calls == []
+
+
+def test_v2_reads_the_schemas_from_the_corpus_when_no_asset_map_is_passed() -> None:
+    """``runtime.assets_by_id`` builds the map from ``corpus`` when a caller passes only that, so
+    the gate does not fail open on a config every other node accepts."""
+    from governed_bi.corpus.schema import SchemaAsset
+
+    policy = GovernancePolicy(guard_rules_enabled=SCOPE_ONLY)
+    model = _Model("YES")
+    conf: dict[str, Any] = {
+        "policy": policy,
+        "utility_model": model,
+        "prompt_variants": {"bi_scope": "v2"},
+        "corpus": [SchemaAsset(id="movies", name="movies", summary="Films.")],
+    }
+    verdict = asyncio.run(guard_node({"question": "who directed it?"}, {"configurable": conf}))["guard"]
+    assert verdict["outcome"] == "clear"
+    assert "- movies: Films." in model.calls[0][0].content

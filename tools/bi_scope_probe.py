@@ -20,8 +20,9 @@ false refusal here is a lost answer in production, and nothing in this tree know
 **Its own pass, not part of an arm**, because it reads only the question: no database, no
 index, no agent model. ``--variant v2`` also reads the corpus, because that variant lists the
 served schemas; ``--corpus-dir`` names it and is required for any variant with that slot.
-About 136 tokens a call on the utility surface for v1 and about 3,000 for v2 over the 57 BIRD
-schemas, so the whole 1,351-question set is a rounding error against an arm — which is the point of running it
+About 136 input tokens a call on the utility surface for v1 and about 3,600 for v2 over the 57
+BIRD schemas. The served gate makes that call on every turn, so v2 adds about 3,500 tokens to each
+one. The whole 1,351-question set is still small against an arm, which is the point of running it
 *before* one.
 
 The verdict vocabulary is ``GuardVerdict``'s, unreduced: ``clear``, ``blocked`` and
@@ -156,6 +157,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--variant", default=None, help="bi_scope variant; the registered default if unset")
     parser.add_argument("--corpus-dir", type=Path, default=None, help="corpus whose schemas fill {schemas}")
+    parser.add_argument(
+        "--schema",
+        action="append",
+        default=None,
+        help="serve only this schema, as GOVERNED_BI_SCHEMA does; repeatable. Unset is the whole tree",
+    )
     args = parser.parse_args(argv)
 
     import hashlib
@@ -170,9 +177,12 @@ def main(argv: list[str] | None = None) -> int:
             print("this bi_scope variant lists the served schemas: pass --corpus-dir", file=sys.stderr)
             return 2
         from governed_bi.corpus.store import load
+        from governed_bi.serve.session import visible_assets
 
-        assets, _problems = load(args.corpus_dir)
-        catalogue = scope_catalogue(assets)
+        # The same load and filter the session applies, so the catalogue is the one a
+        # deployment with this manifest would show its gate.
+        assets, _problems = load(args.corpus_dir, schemas=args.schema)
+        catalogue = scope_catalogue(visible_assets(assets))
 
     model_id = args.model or credentials.secret("GOVERNED_BI_UTILITY_MODEL")
     provider = args.provider or credentials.secret("GOVERNED_BI_UTILITY_PROVIDER") or "openai"

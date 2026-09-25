@@ -648,7 +648,7 @@ class PendingClarifications:
     and ``serve/resume.py::authorise_resume`` refuses that by design (ADR 0006 B9). The owner's
     2026-08-19 decision was that an operator's answer feeds the semantic layer instead, and that
     path is gated on a provenance check this repository does not have -- ``session.py``'s
-    ``_visible`` filters ``governance.excluded`` alone, so a ``proposed`` asset already reaches
+    ``visible_assets`` filters ``governance.excluded`` alone, so a ``proposed`` asset already reaches
     the model's context. Until that gate exists, this surface only shows.
     """
 
