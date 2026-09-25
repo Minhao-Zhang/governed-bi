@@ -265,7 +265,7 @@ def _paused_before_stamp(row: TurnRow) -> bool:
 def _corpus_content_hash_gate(arm: Population) -> GateResult:
     """One corpus per arm, and it is named. D7.
 
-    The register calls the corpus the treatment identity of every
+    ADR 0007 calls the corpus the treatment identity of every
     measurement, and until 2026-08-10 no gate read it. Two consequences were live at once: an arm
     whose rows carry no corpus hash passed every gate (both runs of the designated null replicate
     are in that state, 1351/1351 null), and two arms measured over *different* corpora also

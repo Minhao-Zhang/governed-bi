@@ -4,8 +4,8 @@
 :func:`~governed_bi.serve.events.emit` swallows every exception on purpose — an observability
 layer that can fail a turn is worse than one that can go quiet — and the cost of that choice is
 that a broken emitter is invisible in production. These tests are what pays the cost: they
-assert the payload builder over every stage and every status, so a payload that would have
-raised inside the ``try`` is caught here instead of never being emitted at all.
+build payloads for steps and statuses spread across both vocabularies and assert each field
+arrives, so a payload that would have raised inside the ``try`` is caught here instead.
 
 The second reason is the vocabulary. ``register/stages.py`` is the authority for ``step``, and a
 step name emitted from ``serve/`` that is not a ``Stage`` member is precisely the "second,

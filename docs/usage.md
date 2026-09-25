@@ -149,8 +149,8 @@ gate step.
 | Gate | Protects | Runs | Catch found |
 |---|---|---|---|
 | `check_file_length` | the 400/1000-line tiers | per push | none found |
-| `check_one_implementation` | one definition per top-level name | per push | yes: a second `make_router` (`29068aa`), two `_session` definitions (`05c0f9d`), and `_log` during M5 |
-| `check_measurement_locality` | number formatting only through `Measured.render` | per push | yes: a `round()` in `eval/datalake.py` during M2 |
+| `check_one_implementation` | one definition per top-level name | per push | yes: a second `make_router` (`29068aa`), two `_session` definitions (`05c0f9d`) |
+| `check_measurement_locality` | number formatting only through `Measured.render` | per push | none found |
 | `check_imports` | layering in `governed_bi/__init__.py` | per push | none found |
 | `check_citations` | retired figures not reappearing | per push | none found |
 | `check_no_benchmark_discriminators` | hand-written sibling discriminators staying out of the tree | per push | none found |

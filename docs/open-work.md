@@ -1414,10 +1414,11 @@ position as the gates that preceded them.
 This is a repository setting and a change to how work lands here, not a code change, which is
 why it is written down rather than done.
 
-### 6.7 234 tests are one near-tautological assertion, replicated — closed
+### 6.7 234 tests are one near-tautological assertion, replicated
 
-Closed on `m9/cleanup`: replaced by three cases that assert the emitted `step` and `status`, and
-all three fail when `emit` writes a constant `step`. The original finding:
+**Fix on `m9/cleanup`, open until merged.** The grid is replaced by three cases that assert the
+emitted `step` and `status`, and all three fail when `emit` writes a constant `step`. The original
+finding:
 
 `tests/serve/test_stream_events.py::test_every_step_status_pair_builds` is parametrized
 26 x 9 = 234 ways — 10.5% of the whole suite by count, and the largest parametrize group in the
