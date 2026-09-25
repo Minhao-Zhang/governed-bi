@@ -22,6 +22,7 @@ import json
 import math
 import numbers
 from collections.abc import Sequence
+from decimal import Decimal
 from typing import Any
 
 __all__ = [
@@ -33,8 +34,9 @@ __all__ = [
     "REL_TOL",
 ]
 
-#: Relative tolerance for numeric cells. ``1/3`` computed by two plans differs in the 17th
-#: significant digit; a real difference in an aggregate is far above one part in a million.
+#: Relative tolerance when either cell is a binary float. ``1/3`` computed by two plans differs in
+#: the 17th significant digit. Integers and decimals compare exactly: a tolerance on them would
+#: grade a count of 1,000,001 correct against 1,000,000.
 REL_TOL = 1e-6
 
 
@@ -211,7 +213,8 @@ def results_match(
 ) -> bool:
     """Whether two result sets hold the same rows, as a multiset unless ``order_sensitive``.
 
-    Cells compare by :func:`_typed_cell`: numbers within :data:`REL_TOL`, text folded as BIRD
+    Cells compare by :func:`_typed_cell`: exact numbers exactly, a float within :data:`REL_TOL`
+    of any number, text folded as BIRD
     folds it, and never a number against text or a boolean. Unordered sets are sorted by
     :func:`_typed_key` and paired row by row; two gold values within the tolerance of each other
     in one column can pair crosswise, and that errs toward ``False``.
@@ -227,8 +230,11 @@ def results_match(
         if len(p_row) != len(g_row):
             return False
         for p, g in zip(p_row, g_row):
-            if isinstance(p, float) and isinstance(g, float):
-                if not math.isclose(p, g, rel_tol=REL_TOL):
+            if isinstance(p, (float, Decimal)) and isinstance(g, (float, Decimal)):
+                if isinstance(p, float) or isinstance(g, float):
+                    if not math.isclose(float(p), float(g), rel_tol=REL_TOL):
+                        return False
+                elif p != g:
                     return False
             elif type(p) is not type(g) or p != g:
                 return False
@@ -240,19 +246,28 @@ class _Text(str):
 
 
 def _typed_cell(value: Any) -> Any:
-    """``None``, ``bool``, ``float`` for any other number, or folded :class:`_Text`.
+    """``None``, ``bool``, exact ``Decimal``, ``float`` for any other number, or folded :class:`_Text`.
 
-    ``bool`` is kept apart because ``True == 1.0`` in Python and a flag is not a count.
-    NaN and infinities become text markers, since ``math.isclose`` never equates NaN.
+    ``bool`` is kept apart because ``True == 1.0`` in Python and a flag is not a count. Integers
+    become ``Decimal`` so they compare exactly with Postgres ``numeric``. NaN and infinities
+    become text markers, since ``math.isclose`` never equates NaN.
     """
     if value is None or isinstance(value, bool):
         return value
+    if isinstance(value, (int, Decimal)):
+        exact = Decimal(value)
+        return exact if exact.is_finite() else _non_finite(float(exact))
     if isinstance(value, numbers.Number):
         number = float(value)  # type: ignore[arg-type]
         if math.isnan(number) or math.isinf(number):
-            return _Text(f"\x00{number}")
+            return _non_finite(number)
         return number
     return _Text(str(value).strip().lower())
+
+
+def _non_finite(number: float) -> _Text:
+    """One marker per non-finite value, whether it arrived as a float or a ``Decimal``."""
+    return _Text("\x00nan" if math.isnan(number) else "\x00inf" if number > 0 else "\x00-inf")
 
 
 def _typed_key(value: Any) -> tuple[int, float, str]:
@@ -261,8 +276,8 @@ def _typed_key(value: Any) -> tuple[int, float, str]:
         return (0, 0.0, "")
     if isinstance(value, bool):
         return (1, float(value), "")
-    if isinstance(value, float):
-        return (2, value, "")
+    if isinstance(value, (float, Decimal)):
+        return (2, float(value), "")
     return (3, 0.0, str(value))
 
 

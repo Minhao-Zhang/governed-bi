@@ -31,6 +31,10 @@ def _correct(pred: object, gold: object) -> bool:
         ("  5 ", 5, False),
         (Decimal("100.00"), 100.0, True),  # Postgres numeric against a float
         (100.0, 100.001, False),  # a real difference stays one
+        (1000000, 1000001, False),  # integers are exact: a count off by one is wrong
+        (Decimal("1000000"), Decimal("1000001"), False),
+        (Decimal("100.00"), 100, True),  # numeric against an integer, exactly
+        (Decimal("NaN"), float("nan"), True),  # one marker for NaN however it arrived
         (" Paris ", "paris", True),  # text folds as BIRD folds it
         (None, None, True),
         (None, 0, False),
@@ -74,3 +78,43 @@ def test_a_turn_with_only_a_digest_falls_back_to_it() -> None:
     digest = result_fingerprint(["a"], [[1 / 3]])
     verdict = grade_turn(outcome="answered", pred_columns=["a"], pred_rows=[[1 / 3]], gold_fingerprint=digest)
     assert verdict["correct"] is True
+
+
+class _Connector:
+    """Returns canned rows per statement, and records which statements ran."""
+
+    def __init__(self, results: dict[str, list[list[object]]]) -> None:
+        self.results = results
+        self.ran: list[str] = []
+
+    def execute(self, sql: str) -> tuple[list[str], list[list[object]], bool]:
+        self.ran.append(sql)
+        return ["a"], self.results[sql], False
+
+
+def test_the_harness_executes_gold_beside_a_digest_so_the_tolerance_applies() -> None:
+    """The published digest is BIRD's exact-float hash, so a prediction differing in the 17th
+    digit mismatches it. Only the executed gold rows let :func:`results_match` decide."""
+    from governed_bi.eval.harness import project_turn
+
+    connector = _Connector({"SELECT pred": [[1 / 3]], "SELECT gold": [[0.33333333333333337]]})
+    record = {
+        "outcome": "answered",
+        "terminal_reason": None,
+        "execution": {"attempts": []},
+        "usage": [],
+        "corpus_content_hash": "c",
+        "prompt_set_hash": "p",
+        "generated_sql": "SELECT pred",
+    }
+    state = {"answer": {"answer_text": "x", "outcome": "answered", "record": record}, "licensed": [], "schemas": []}
+    question = {
+        "question_id": "q1",
+        "db_id": "s",
+        "question": "what share?",
+        "gold_sql": "SELECT gold",
+        "gold_fingerprint": result_fingerprint(["a"], [[0.33333333333333337]]),
+    }
+    row = project_turn(state, question=question, arm="t", connector=connector)
+    assert connector.ran == ["SELECT pred", "SELECT gold"]
+    assert row["correct"] is True
