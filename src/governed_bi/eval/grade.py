@@ -34,9 +34,9 @@ __all__ = [
     "REL_TOL",
 ]
 
-#: Relative tolerance when either cell is a binary float. ``1/3`` computed by two plans differs in
-#: the 17th significant digit. Integers and decimals compare exactly: a tolerance on them would
-#: grade a count of 1,000,001 correct against 1,000,000.
+#: Relative tolerance when either cell is a fractional float. ``1/3`` computed by two plans differs
+#: in the 17th significant digit. Integers, decimals and whole-number floats compare exactly: a
+#: tolerance on them would grade a count of 1,000,001 correct against 1,000,000.
 REL_TOL = 1e-6
 
 
@@ -249,8 +249,8 @@ def _typed_cell(value: Any) -> Any:
     """``None``, ``bool``, exact ``Decimal``, ``float`` for any other number, or folded :class:`_Text`.
 
     ``bool`` is kept apart because ``True == 1.0`` in Python and a flag is not a count. Integers
-    become ``Decimal`` so they compare exactly with Postgres ``numeric``. NaN and infinities
-    become text markers, since ``math.isclose`` never equates NaN.
+    and whole-number floats become ``Decimal`` so they compare exactly with Postgres ``numeric``.
+    NaN and infinities become :class:`_NonFinite`, since ``math.isclose`` never equates NaN.
     """
     if value is None or isinstance(value, bool):
         return value
@@ -261,13 +261,26 @@ def _typed_cell(value: Any) -> Any:
         number = float(value)  # type: ignore[arg-type]
         if math.isnan(number) or math.isinf(number):
             return _non_finite(number)
+        if number.is_integer() and abs(number) < _EXACT_FLOAT_LIMIT:
+            # A whole-number float (`SUM`, `COUNT` cast by a driver) is a count, and the tolerance
+            # would accept 1,000,001.0 against 1,000,000. Below 2**53 the float is that integer.
+            return Decimal(int(number))
         return number
     return _Text(str(value).strip().lower())
 
 
-def _non_finite(number: float) -> _Text:
+#: Every integer up to this magnitude is exactly one float, so a whole-number float below it can be
+#: compared as that integer. Above it, adjacent floats are more than 1 apart and the tolerance holds.
+_EXACT_FLOAT_LIMIT = 2**53
+
+
+class _NonFinite(str):
+    """NaN or an infinity. Its own type, so no text cell can spell one."""
+
+
+def _non_finite(number: float) -> _NonFinite:
     """One marker per non-finite value, whether it arrived as a float or a ``Decimal``."""
-    return _Text("\x00nan" if math.isnan(number) else "\x00inf" if number > 0 else "\x00-inf")
+    return _NonFinite("nan" if math.isnan(number) else "inf" if number > 0 else "-inf")
 
 
 def _typed_key(value: Any) -> tuple[int, float, str]:

@@ -35,6 +35,13 @@ def _correct(pred: object, gold: object) -> bool:
         (Decimal("1000000"), Decimal("1000001"), False),
         (Decimal("100.00"), 100, True),  # numeric against an integer, exactly
         (Decimal("NaN"), float("nan"), True),  # one marker for NaN however it arrived
+        (1000000, 1000001.0, False),  # a whole-number float is a count, compared exactly
+        (1000000.0, 1000001.0, False),
+        (1000000, 1000000.0, True),
+        (3.0000000000000004, 3, True),  # a fractional float keeps the tolerance
+        (2.0**60, 2.0**60 + 256, True),  # above 2**53 adjacent floats are far apart
+        (float("nan"), "\x00nan", False),  # no text spells a non-finite value
+        (float("nan"), "nan", False),
         (" Paris ", "paris", True),  # text folds as BIRD folds it
         (None, None, True),
         (None, 0, False),
