@@ -458,6 +458,7 @@ field it writes:
 | Field | Meaning |
 |---|---|
 | `usage` | A list of per-call token rows. See below |
+| `input_tokens`, `output_tokens` | `usage` summed over the turn, or `null` when any call went uncounted. The report prints tokens per question from these |
 | `latency_sec` | Wall clock for the turn, or `null`. The drivers serialise with `default=str`, so a `Measured` absence must never reach this field — it would land as a string that then sorts like a value |
 
 The harness adds `run_id` to the row after projection.

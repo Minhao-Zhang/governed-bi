@@ -335,7 +335,8 @@ to *repeat* calls specifically is an average, not a measurement.
 
 ### 3.5 Cost per arm is not in the artifact
 
-`usage` carries tokens. Price is the provider's number and `measure/price.py` is deleted, so an
+Tokens closed on `m2/baseline`: each row carries `input_tokens` and `output_tokens`, and
+`tools/datalake_report.py` prints tokens per question. Money is still open: `usage` carries tokens. Price is the provider's number and `measure/price.py` is deleted, so an
 arm's cost is not recoverable from the artifact alone.
 
 ### 3.6 What `--resume` still cannot tell apart

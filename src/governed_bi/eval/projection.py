@@ -156,6 +156,20 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+def _row_tokens(usage: Any) -> dict[str, int | None]:
+    """``input_tokens`` and ``output_tokens`` summed over the turn's usage rows."""
+    totals: dict[str, int | None] = {"input_tokens": 0, "output_tokens": 0}
+    for entry in usage:
+        for key in totals:
+            value = entry.get(key) if isinstance(entry, Mapping) else None
+            current = totals[key]
+            if current is None or not isinstance(value, int) or isinstance(value, bool):
+                totals[key] = None
+            else:
+                totals[key] = current + value
+    return totals
+
+
 def _row_latency_sec(record: Mapping[str, Any]) -> float | None:
     """Wall clock for the turn, in seconds.
 
@@ -596,6 +610,9 @@ def project_turn(
         # batch reports no calls at all, reading as a free run rather than an unmeasured one.
         # Tokens only — `measure/price.py` is deleted, so cost is the provider's number.
         "usage": list(record.get("usage") or ()),
+        # The totals a reader compares between arms, so cost sits next to EX without replaying
+        # `usage`. `None` when any call went uncounted: a partial sum would read as a cheap turn.
+        **_row_tokens(record.get("usage") or ()),
         # The other half of cost, and the half no artifact has ever had: `usage` is tokens
         # only. See `_row_latency_sec` for why a `Measured` absence must not be serialised here.
         "latency_sec": _row_latency_sec(record),

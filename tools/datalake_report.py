@@ -309,7 +309,14 @@ def print_report(
         f"clarification: {clar_reach}/{len(reach)} when reachable, "
         f"{sum(1 for r in unreach if r.get('outcome') == 'clarification')}/{len(unreach)} when not"
     )
-    print("tokens:", json.dumps(observed_tokens(every), indent=2, default=str))
+    spent = observed_tokens(every)
+    print("tokens:", json.dumps(spent, indent=2, default=str))
+    if spent["rows"]:
+        # The figure reported beside EX. A lower bound when a call went uncounted.
+        print(
+            f"tokens per question: {spent['input_tokens'] / spent['rows']:,.0f} in, "
+            f"{spent['output_tokens'] / spent['rows']:,.0f} out"
+        )
 
 
 def _gold_sql_by_qid(dataset: pathlib.Path) -> dict[str, str]:
