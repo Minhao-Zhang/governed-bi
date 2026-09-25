@@ -335,8 +335,11 @@ to *repeat* calls specifically is an average, not a measurement.
 
 ### 3.5 Cost per arm is not in the artifact
 
-Tokens closed on `m2/baseline`: each row carries `input_tokens` and `output_tokens`, and
-`tools/datalake_report.py` prints tokens per question. Money is still open: `usage` carries tokens. Price is the provider's number and `measure/price.py` is deleted, so an
+**Tokens: fix on `m2/baseline`, open until merged and a run has written the fields.** Each row
+carries `input_tokens` and `output_tokens`, and `tools/datalake_report.py` prints tokens per
+question.
+
+`usage` carries tokens. Price is the provider's number and `measure/price.py` is deleted, so an
 arm's cost is not recoverable from the artifact alone.
 
 ### 3.6 What `--resume` still cannot tell apart
@@ -1371,11 +1374,13 @@ holds only what `Session.configurable()` emits, and three keys the graph reads a
 Not reachable as a privilege escalation: `api/auth.py` refuses `command.update`/`goto`, and
 `ServeInput` is one key wide. The exposure is to the *record*, not to the data.
 
-### 6.4 Execution match has no float tolerance and coerces types — closed
+### 6.4 Execution match has no float tolerance and coerces types
 
-Closed on `m2/baseline`: `eval/grade.py::results_match` decides `correct` on rows, numbers within a
-relative 1e-6 and text never equal to a number or a boolean; the harness executes gold whenever
-there is a prediction, and the BIRD fingerprint is still recorded. Each case below is a test in
+**Fix on `m2/baseline`, open until merged and the seven arms are regraded.** On that branch
+`eval/grade.py::results_match` decides `correct` on rows: integers and decimals exactly, a float
+within a relative 1e-6, and text never equal to a number or a boolean. The harness executes gold
+whenever there is a prediction, and the BIRD fingerprint is still recorded. The regrade needs the
+benchmark Postgres and has not run. Each case below is a test in
 `tests/eval/test_the_grader_compares_numbers_by_value_and_text_by_type.py`. The original finding:
 
 `eval/grade.py::_coerce_cell` does `float(value)` and then exact equality. Measured:
