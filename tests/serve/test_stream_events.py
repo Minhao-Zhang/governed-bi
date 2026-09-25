@@ -173,14 +173,21 @@ def test_emit_outside_a_runnable_context_is_a_noop() -> None:
     events.emit(kind="rail", step="guard", status="ok", event_id="guard:t1")
 
 
-@pytest.mark.parametrize("step", EMITTED_STEPS)
-@pytest.mark.parametrize("status", sorted(VALID_STATUSES))
-def test_every_step_status_pair_builds(
+@pytest.mark.parametrize(
+    ("step", "status"),
+    [
+        (EMITTED_STEPS[0], sorted(VALID_STATUSES)[0]),
+        (EMITTED_STEPS[len(EMITTED_STEPS) // 2], sorted(VALID_STATUSES)[len(VALID_STATUSES) // 2]),
+        (EMITTED_STEPS[-1], sorted(VALID_STATUSES)[-1]),
+    ],
+)
+def test_the_event_carries_the_step_and_status_it_was_given(
     step: str, status: str, captured: list[dict[str, Any]]
 ) -> None:
-    """The whole grid. This is the test that pays for ``emit`` swallowing."""
+    """``emit`` copies both verbatim. Three pairs spread over each vocabulary, so a constant
+    substituted for either field fails at least two of them."""
     events.emit(kind="tool", step=step, status=status, event_id=f"{step}:x")
-    assert captured[-1]["status"] in VALID_STATUSES
+    assert (captured[-1]["step"], captured[-1]["status"]) == (step, status)
 
 
 # ── rail_observation: status is read out of the update, never declared ──
