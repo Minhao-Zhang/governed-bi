@@ -26,7 +26,7 @@ from langchain_core.runnables import RunnableConfig
 
 from governed_bi.serve.runtime import configurable, prompt_variants
 
-__all__ = ["guard_node", "scope_catalogue"]
+__all__ = ["guard_node", "scope_catalogue", "scope_system_prompt"]
 
 #: The one token that clears the scope gate. Keying on the negative instead would make any
 #: unexpected reply read as "in scope", failing **open** exactly when the model was confused.
@@ -56,6 +56,17 @@ def scope_catalogue(assets: Iterable[Any]) -> str:
         summary = " ".join(str(getattr(asset, "summary", "") or "").split())
         lines.append(f"- {asset.name}: {summary}" if summary else f"- {asset.name}")
     return "\n".join(sorted(lines))
+
+
+def scope_system_prompt(variants: Mapping[str, str] | None, catalogue: str) -> str | None:
+    """The exact system text the scope gate sends, or ``None`` when the variant needs schemas
+    and ``catalogue`` is empty. The probe hashes this, so a row names the prompt it measured."""
+    from governed_bi.register.prompts import prompt_text
+
+    system = prompt_text("bi_scope", variants)
+    if _SCHEMAS_SLOT not in system:
+        return system
+    return system.replace(_SCHEMAS_SLOT, catalogue) if catalogue else None
 
 
 def _words(text: str) -> list[str]:
@@ -161,7 +172,6 @@ async def _bi_scope(
 
     from governed_bi.govern.guard import GuardVerdict
     from governed_bi.govern.policy import BI_SCOPE_RULE_ID
-    from governed_bi.register.prompts import prompt_text
     from governed_bi.serve.usage import usage_row
 
     if model is None:
@@ -178,18 +188,16 @@ async def _bi_scope(
             None,
         )
 
-    system = prompt_text("bi_scope", variants)
-    if _SCHEMAS_SLOT in system:
-        if not catalogue:
-            return (
-                GuardVerdict(
-                    outcome="error_failed_open",
-                    rule_id=BI_SCOPE_RULE_ID,
-                    detail="the bi_scope variant lists the served schemas and the corpus has none",
-                ),
-                None,
-            )
-        system = system.replace(_SCHEMAS_SLOT, catalogue)
+    system = scope_system_prompt(variants, catalogue)
+    if system is None:
+        return (
+            GuardVerdict(
+                outcome="error_failed_open",
+                rule_id=BI_SCOPE_RULE_ID,
+                detail="the bi_scope variant lists the served schemas and the corpus has none",
+            ),
+            None,
+        )
 
     try:
         reply = await model.ainvoke(

@@ -70,6 +70,7 @@ async def _probe(
     concurrency: int,
     variants: dict[str, str] | None = None,
     catalogue: str = "",
+    stamp: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     """Screen each question and append its verdict. Returns the outcome histogram.
 
@@ -81,6 +82,9 @@ async def _probe(
     Concurrent, and the rows land in completion order rather than file order. That is safe
     because every consumer joins on ``question_id`` — and it is *stated* because an artifact
     whose order looks like the dataset's invites a reader to zip the two.
+
+    ``stamp`` goes on every row: the variant, the model and a hash of the exact system text, so an
+    artifact says which prompt produced it rather than leaving that to its filename.
     """
     from governed_bi.serve.nodes.guard import _bi_scope
 
@@ -109,6 +113,7 @@ async def _probe(
                         # model that misread the format. Dropped from the turn record for
                         # rule-probing reasons that do not apply to an offline probe.
                         "detail": verdict.get("detail"),
+                        **(stamp or {}),
                     }
                 )
                 + "\n"
@@ -153,8 +158,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--corpus-dir", type=Path, default=None, help="corpus whose schemas fill {schemas}")
     args = parser.parse_args(argv)
 
-    from governed_bi.register.prompts import prompt_text
-    from governed_bi.serve.nodes.guard import scope_catalogue
+    import hashlib
+
+    from governed_bi.register.prompts import prompt_text, select
+    from governed_bi.serve.nodes.guard import scope_catalogue, scope_system_prompt
 
     variants = {"bi_scope": args.variant} if args.variant else None
     catalogue = ""
@@ -197,9 +204,20 @@ def main(argv: list[str] | None = None) -> int:
         model_id, surface="utility", provider=provider, effort=effort, max_retries=args.max_retries
     )
     questions = _questions(args.dataset, args.limit, args.stride)
-    variant = args.variant or "default"
+    variant = select(variants)["bi_scope"]
+    system = scope_system_prompt(variants, catalogue) or ""
+    stamp = {
+        "variant": variant,
+        "model": model_id,
+        "provider": provider,
+        "effort": effort,
+        "prompt_sha256": hashlib.sha256(system.encode("utf-8")).hexdigest()[:16],
+    }
     print(f"g_bi_scope {variant} over {len(questions)} question(s): {model_id} on {provider}", flush=True)
-    counts = asyncio.run(_probe(questions, model, args.out, args.concurrency, variants, catalogue))
+    print(f"prompt_sha256 {stamp['prompt_sha256']}", flush=True)
+    counts = asyncio.run(
+        _probe(questions, model, args.out, args.concurrency, variants, catalogue, stamp)
+    )
     print(f"wrote {args.out}")
     print(f"outcomes: {counts}")
     blocked = counts.get("blocked", 0)
