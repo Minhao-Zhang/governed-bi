@@ -128,7 +128,8 @@ The standard library's `logging`, one `_log = logging.getLogger(__name__)` per m
 configured once by `api/graph_app.py::configure_logging` at both API entry points. The turn record
 stays the structured account of a turn; logs are for what the record cannot hold, such as a
 dropped audit row or a node's traceback. `/livez` means the process is up; `/readyz` means the
-session resolved with an agent model and no fatal corpus problem, and answers 503 otherwise.
+session resolved with no fatal corpus problem, and answers 503 otherwise; serving with no model is
+a supported mode and is ready.
 
 ## What the turn is stamped with
 

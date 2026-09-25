@@ -165,11 +165,14 @@ def _build_app(
 
     @app.get("/readyz", response_model=None)
     def readyz() -> dict[str, Any] | JSONResponse:
-        """Ready when the session resolves with an agent model and no fatal problem; 503 if not.
+        """Ready when the session resolves with no fatal corpus problem; 503 if not.
 
         Resolving the session is the check: under bare ``uvicorn`` it is lazy, and a missing DSN,
-        corpus or model credential raises there. The reason carries our own ``RuntimeError``
-        text, which names variables, and only the type of anything else, which may hold a DSN.
+        a missing corpus, or a model set without its credential raises there. No model at all is
+        a supported mode (``has_live_model: false``), so it is ready. The reason carries our own
+        ``RuntimeError`` text, which names variables, and only the type of anything else, which
+        may hold a DSN. Under ``langgraph dev`` the platform loads ``graph_app.py`` by path, so
+        the served graph holds its own session and this one is built from the same environment.
         """
         try:
             session = get_session()
@@ -177,8 +180,6 @@ def _build_app(
             return _not_ready(str(err))
         except Exception as err:  # noqa: BLE001 — any failure to build the session is not-ready
             return _not_ready(type(err).__name__)
-        if getattr(session, "agent_model", None) is None:
-            return _not_ready("no agent model is configured, so no question can be answered")
         fatal = getattr(session, "fatal_problems", ())
         if fatal:
             return _not_ready(f"{len(fatal)} fatal corpus problem(s)")

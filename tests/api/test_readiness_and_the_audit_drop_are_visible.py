@@ -51,9 +51,32 @@ def test_readyz_names_only_the_type_of_an_unexpected_error() -> None:
     assert response.json()["reason"] == "ValueError"
 
 
-def test_readyz_is_503_without_an_agent_model() -> None:
+def test_readyz_is_ready_without_a_model_because_that_mode_is_supported() -> None:
     session = SimpleNamespace(agent_model=None, fatal_problems=())
+    assert _client(lambda: session).get("/readyz").status_code == 200
+
+
+def test_readyz_is_503_on_a_fatal_corpus_problem() -> None:
+    session = SimpleNamespace(agent_model=object(), fatal_problems=(object(),))
     assert _client(lambda: session).get("/readyz").status_code == 503
+
+
+def test_a_model_without_its_credential_is_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real environment adapter: DSN and corpus present, model named, no credential."""
+    from governed_bi import credentials
+    from governed_bi.api import graph_app
+    from governed_bi.model import provider
+
+    monkeypatch.setattr(graph_app, "_SESSION", None)
+    monkeypatch.setattr(credentials, "load_into_environ", lambda *a, **k: None)
+    monkeypatch.setattr(credentials, "secret", lambda *names: "host=127.0.0.1 dbname=x")
+    monkeypatch.setattr(graph_app, "_resolve_corpus_dir", lambda *a: "corpus")
+    monkeypatch.setenv(graph_app.MODEL_VAR, "some-model")
+    monkeypatch.setattr(provider, "credentials_present", lambda name: False)
+
+    response = _client(graph_app.session_from_environment).get("/readyz")
+    assert response.status_code == 503
+    assert "no credential" in response.json()["reason"]
 
 
 def test_readyz_is_200_when_configured() -> None:

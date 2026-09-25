@@ -1321,12 +1321,13 @@ From the 2026-09-18 review ([the write-up](reviews/2026-09-outside-review.md); e
 found and fixed there, four findings retired as wrong). These are the items that were **not**
 fixed. Everything below was re-verified against the current tree, as this page requires.
 
-### 6.1 There is no logging, and one blind except drops an audit row silently — closed
+### 6.1 There is no logging, and one blind except drops an audit row silently
 
-Closed on `m5/operability`: stdlib logging per `docs/architecture.md`, the `record` node logs a
-dropped row at ERROR with its thread and turn, a crashed node logs its traceback, and every blind
-except in `src/` now logs, is narrowed, or carries a `noqa: BLE001` with its reason
-(`ruff check --select BLE001 src` is clean). The original finding:
+**Fix on `m5/operability`, open until merged.** Stdlib logging per `docs/architecture.md`; the
+`record` node logs a dropped row at ERROR with its thread and turn. Of the 13 blind excepts ruff
+reported, 2 now log (`serve/wrap.py`, a node's traceback), 1 is narrowed (`model/proxy_gateway.py`)
+and 10 carry a `noqa: BLE001` with a reason, because each already reports or re-raises the
+failure. `ruff check --select BLE001 src` is clean on that branch. The original finding:
 
 `grep -c "print(" src/` is **39**; the number of modules that import `logging` is **zero**.
 Twenty-six of those prints are `serve/__main__.py`, which is a CLI and fine. The rest are not:
@@ -1431,10 +1432,13 @@ never asserted on at all — replacing the emitted `step` with a constant leaves
 Two other tests in the same file do catch that, so the coverage is not lost; what the 234 buy
 over a handful of cases is nothing, and they are 10.5% of every run's wall clock.
 
-### 6.8 No readiness endpoint, and startup validation depends on the entry point — closed
+### 6.8 No readiness endpoint, and startup validation depends on the entry point
 
-Closed on `m5/operability`: `/readyz` resolves the session and answers 503 when it cannot, when
-there is no agent model, or when the corpus has a fatal problem. `/livez` is unchanged. The
+**Fix on `m5/operability`, open until merged.** `/readyz` resolves the session and answers 503
+when it cannot or when the corpus has a fatal problem; no model is a supported mode and is ready.
+Tested under bare `uvicorn`'s adapter, not under `langgraph dev`, where the platform loads
+`graph_app.py` by path (`src__governed_bi__api__graph_app`), so the served graph and `/readyz`
+each hold a session built from the same environment. `/capabilities` has the same split. The
 original finding:
 
 `/livez` returns `{"ok": true}` without touching the session. There is no `/readyz`, and no
