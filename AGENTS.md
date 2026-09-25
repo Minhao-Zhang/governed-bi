@@ -2,7 +2,12 @@
 
 **NEVER MODIFY THIS FILE WITHOUT EXPLICIT CONSENT BY USER.**
 
-**THIS IS A GREENFIELD PROJECT. THERE IS ZERO USER. BE BOLD AND CHANGE THINGS.**
+**THIS IS A GREENFIELD PROJECT WITH NO EXTERNAL USERS. BE BOLD AND CHANGE THINGS, AND PREFER DELETING TO ADDING.**
+
+## Current priorities
+
+Until 2026-11-20 all work follows `docs/reviews/2026-09-improvement-milestones.md`. Read its
+"Rules for every milestone" before starting any change, and name the milestone the change serves.
 
 ## Repo Structure
 
@@ -19,12 +24,14 @@
 
 ## Documentation Guidelines
 
-- **Docstrings and comments in this repo are the design record. Read them, and keep them.** They
-  carry the reasoning, the measurement and the rejected alternative that `docs/` has no room for,
-  and several are load-bearing:
-  `tests/feedback/test_the_store_keeps_the_promises_in_its_docstrings.py` exists because nine
-  deliberate mutations survived the whole suite and *"every one of those is a sentence in a
-  docstring"*, and 22 CLIs under `tools/` use `__doc__` as their `--help` text. Do not strip them.
+- **Comments record decisions; git records history.** A comment or docstring states the *decision*:
+  the reason, the constraint or measurement behind it, and the rejected alternative when a reader
+  would otherwise re-propose it. The 2026-09-18 outside review, run on a comment-stripped mirror,
+  re-filed four settled decisions as defects, so this layer is load-bearing. The story of how the
+  code got here (dates, audit IDs, "used to", "until", earlier wrong versions) goes in the commit
+  message. Write one to three sentences per decision; when you edit a longer one, trim it to its
+  decision in the same commit. `tools/` CLIs use `__doc__` as `--help` text, so keep those
+  complete.
 - **Trust them, and verify the ones you rely on.** They are prose, so they can drift. When one is
   load-bearing for what you are about to change, check it against the code and *fix the prose in
   the same commit* — a comment that contradicts the code beside it is worse than no comment.
