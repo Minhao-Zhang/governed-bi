@@ -579,6 +579,23 @@ across all 21 pairs of the seven `proxy_*` arms on disk it never falls below
 there retrieval noise", to which the answer is always yes. The judgement now
 reads declared knobs instead of inferring from a hash.
 
+## Development and held-out halves
+
+`docs/data/db-split.csv` assigns each of the 57 databases to `dev` (28 databases, 609 questions)
+or `holdout` (29, 742). It is `random.Random(20260925).shuffle` of the sorted ids, first 28 to
+`dev`, and `tests/eval/test_the_db_split_is_the_seeded_shuffle.py` fails if a row moves. The split
+is by database so a treatment cannot learn a schema on one half and be scored on it on the other.
+Anything designed from failures (the M3 taxonomy, M4 treatments) reads `dev` only; a keep decision
+reads `holdout` only.
+
+## BIRD dev
+
+Not built now. A corpus for BIRD dev's 11 databases would make EX comparable with published work,
+and costs a curation pass this repository cannot do in-tree (the curated corpus was built outside
+it) plus a full arm. Until the shipped configuration has a measured baseline and the grader change
+has been regraded across the existing arms, a BIRD dev figure would be a second unreconciled
+number. Revisit at the 2026-11-20 retrospective.
+
 ## The prod projection
 
 The arm measures an engine with the input guard off. What the *served* configuration
