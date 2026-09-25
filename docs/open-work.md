@@ -1498,6 +1498,22 @@ Two things follow for the next arm, and neither blocks it. The arm runs permissi
 does not touch its numbers; and `tools/shadow_replay.py --scope-verdicts` prices it exactly,
 against the same rows, at no extra model spend.
 
+**`bi_scope` v2 exists and is not the default yet** (`m1/scope-gate`). It lists the served
+schemas (`serve/nodes/guard.py::scope_catalogue`). Probe results, sampled only, because a full
+pass was deferred:
+
+| Judge | Variant | 1,351 benign | 200 stride | 60 out-of-scope |
+|---|---|---|---|---|
+| gpt-5.6-luna | v1 | 180 blocked (13.3%) | 19 | 59 blocked |
+| gpt-5.6-luna | v2 | not run | 2 blocked | 60 blocked |
+| gpt-6-luna | v1 | 199 blocked (14.7%) | not run | 59 blocked |
+| gpt-6-luna | v2 | not run | 3 blocked of 151 judged, 49 rate-limited | 60 blocked |
+
+To close M1: the full 1,351 on v2, then `tools/shadow_replay.py --scope-verdicts`, then flip
+`BI_SCOPE.default`. Run it at `--concurrency 1`. The org's gpt-6-luna limit is 200k tokens a minute
+and a v2 call is about 3.6k, so the gate fails open above roughly 55 turns a minute. That limit
+applies to the served gate as well as to the probe.
+
 ### 6.11 `--resume` was refused on every arm that has ever been written — fixed 2026-09-20
 
 `eval/provenance.py::_knob_problem` compared `repr` of this run's knob value against `repr` of the

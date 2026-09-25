@@ -142,6 +142,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None, help="a PREFIX, which is one schema")
     parser.add_argument("--stride", type=int, default=None, help="sample N evenly across the file")
     parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=8,
+        help="client retries with backoff; a 429 that exhausts them is recorded as "
+        "error_failed_open, which measures the rate limit rather than the prompt",
+    )
     parser.add_argument("--variant", default=None, help="bi_scope variant; the registered default if unset")
     parser.add_argument("--corpus-dir", type=Path, default=None, help="corpus whose schemas fill {schemas}")
     args = parser.parse_args(argv)
@@ -186,7 +193,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
-    model = provider_mod.chat_model(model_id, surface="utility", provider=provider, effort=effort)
+    model = provider_mod.chat_model(
+        model_id, surface="utility", provider=provider, effort=effort, max_retries=args.max_retries
+    )
     questions = _questions(args.dataset, args.limit, args.stride)
     variant = args.variant or "default"
     print(f"g_bi_scope {variant} over {len(questions)} question(s): {model_id} on {provider}", flush=True)
