@@ -1,5 +1,8 @@
 """The access seam: principals, grants, and the two adapters (ADR 0012).
 
+:class:`StaticRoleAccessPolicy` and every principal beyond the local one are parked until the
+2026-11-20 retrospective (improvement plan M9): kept working, not extended.
+
 ``ports`` declares the vocabulary — :class:`~governed_bi.ports.Principal`,
 :class:`~governed_bi.ports.Grant`, :class:`~governed_bi.ports.AccessPolicy` — because a
 Protocol cannot name a type from a later layer. Everything that *decides* anything lives
