@@ -96,7 +96,7 @@ class PostgresConnector:
     def __del__(self) -> None:  # pragma: no cover - GC path
         try:
             self.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 — a finaliser must not raise during garbage collection
             pass
 
     @property
@@ -121,7 +121,7 @@ class PostgresConnector:
             from psycopg.conninfo import conninfo_to_dict  # noqa: PLC0415 (lazy: heavy import)
 
             parsed = conninfo_to_dict(self._dsn)
-        except Exception:
+        except Exception:  # noqa: BLE001 — a page describing the target must not raise on it
             return {}
         out: dict[str, Any] = {}
         for wire, key in (("host", "host"), ("port", "port"), ("dbname", "database")):
@@ -160,7 +160,7 @@ class PostgresConnector:
             # raises on the placeholder. The value is an int by construction one frame up.
             if self._statement_timeout_ms > 0:
                 conn.execute(f"SET statement_timeout = {self._statement_timeout_ms}")
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 — classified and re-raised
             self._raise_classified(err, connecting=True)
         self._conn = conn
         return conn
@@ -252,7 +252,7 @@ class PostgresConnector:
             rows = cur.fetchmany(cap + 1)
         except (QueryError, ConnectionError):
             raise
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 — classified and re-raised
             self._raise_classified(err)
         truncated = len(rows) > cap
         if truncated:
@@ -320,7 +320,7 @@ class PostgresConnector:
             )
         except (QueryError, ConnectionError):
             raise
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 — classified and re-raised
             self._raise_classified(err)
 
         grouped: dict[str, list[tuple[str, str, str, str]]] = {}

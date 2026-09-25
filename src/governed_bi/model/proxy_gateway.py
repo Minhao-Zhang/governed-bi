@@ -399,7 +399,7 @@ def _http_clients(auth, *, verify: Any = None, timeout_s: float | None = None):
             import urllib3  # noqa: PLC0415
 
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        except Exception:  # pragma: no cover - urllib3 always present via requests
+        except (ImportError, AttributeError):  # pragma: no cover - urllib3 always present via requests
             pass
     # connect is quick or it never happens; read is the phase that hangs on this proxy.
     timeout = None if timeout_s is None else httpx.Timeout(timeout_s, connect=min(30.0, timeout_s))
@@ -477,7 +477,7 @@ def _clip_to_tokens(text: str, max_tokens: int) -> str:
         if len(toks) <= max_tokens:
             return text
         return enc.decode(toks[:max_tokens])
-    except Exception:
+    except Exception:  # noqa: BLE001 — any tokenizer failure falls back to a cap that errs short
         return text[: max_tokens * 2]
 
 
