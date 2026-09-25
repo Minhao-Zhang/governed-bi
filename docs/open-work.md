@@ -1412,7 +1412,9 @@ commit has landed. The mypy step and the `npm audit` step added on 2026-09-18 ar
 position as the gates that preceded them.
 
 This is a repository setting and a change to how work lands here, not a code change, which is
-why it is written down rather than done.
+why it is written down rather than done. **Declined by the plan owner at M0** of the 2026-09
+plan: the repository has one collaborator, so a required approving review would block every
+merge. Revisit when a second reviewer exists.
 
 ### 6.7 234 tests are one near-tautological assertion, replicated
 

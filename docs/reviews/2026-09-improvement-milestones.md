@@ -611,10 +611,12 @@ Filled in by M0.
 
 | Metric | Value |
 |---|---|
-| Commit | |
-| Tests | |
-| mypy errors | |
-| Env vars read in `src` | |
-| Prose share of `src` | |
-| Gates (total / per push) | |
-| Scope-gate false refusals | |
+| Commit | `b16e911` |
+| Tests | 2,242 passed, 31 skipped, 10 xfailed, 0 failed (3m30s locally) |
+| mypy errors | 45 in 16 files (151 checked) |
+| Env vars read in `src` | 31 |
+| Prose share of `src` | 35.6% (15,141 of 42,539 lines are comments or docstrings) |
+| Gates (total / per push) | 12 / 6 (`file_length`, `one_implementation`, `measurement_locality`, `imports`, `citations`, `no_benchmark_discriminators`); `corpus_delta` nightly; 5 manual |
+| Scope-gate false refusals | 180 of 1,351 blocked (13.3%) |
+
+Branch protection (M0 task 3) was declined by the plan owner; see `open-work.md` §6.6.
