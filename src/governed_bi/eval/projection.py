@@ -372,7 +372,10 @@ def project_turn(
     gold_fp = question.get("gold_fingerprint")
     gold_columns = question.get("gold_columns")
     gold_rows = question.get("gold_rows")
-    if gold_fp is None and connector is not None and question.get("gold_sql"):
+    # Executed even when a published digest exists, whenever there is a prediction to compare:
+    # the verdict is `grade.results_match` on rows, which a digest cannot feed.
+    wants_gold_rows = gold_fp is None or pred_rows is not None
+    if gold_rows is None and wants_gold_rows and connector is not None and question.get("gold_sql"):
         try:
             gcols, grows, _ = connector.execute(str(question["gold_sql"]))
             gold_columns = list(gcols)

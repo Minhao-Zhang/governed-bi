@@ -1370,7 +1370,12 @@ holds only what `Session.configurable()` emits, and three keys the graph reads a
 Not reachable as a privilege escalation: `api/auth.py` refuses `command.update`/`goto`, and
 `ServeInput` is one key wide. The exposure is to the *record*, not to the data.
 
-### 6.4 Execution match has no float tolerance and coerces types
+### 6.4 Execution match has no float tolerance and coerces types — closed
+
+Closed on `m2/baseline`: `eval/grade.py::results_match` decides `correct` on rows, numbers within a
+relative 1e-6 and text never equal to a number or a boolean; the harness executes gold whenever
+there is a prediction, and the BIRD fingerprint is still recorded. Each case below is a test in
+`tests/eval/test_the_grader_compares_numbers_by_value_and_text_by_type.py`. The original finding:
 
 `eval/grade.py::_coerce_cell` does `float(value)` and then exact equality. Measured:
 
