@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus-dir", default=DEFAULT_CORPUS)
     parser.add_argument("--dataset", type=pathlib.Path, default=DEFAULT_DATASET)
-    parser.add_argument("--model", default="gpt-5.6-luna")
+    parser.add_argument("--model", default="gpt-6-luna")
     parser.add_argument(
         "--effort",
         default="xhigh",
