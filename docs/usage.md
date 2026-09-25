@@ -99,6 +99,68 @@ three are read in
 (`PROXY_SECRET_NAME_VAR`, `PROXY_REGION_VAR`, `PROXY_CA_BUNDLE_VAR`). Check them
 there rather than against this table.
 
+### Configuration audit (M9, 2026-09)
+
+Documentation only; M10 decides removals. Classes: **secret** (a credential or the name of one),
+**location** (where something is), **model selection**, **operational** (a bound or switch an
+operator tunes), **unmeasured** (a knob override no arm has ever varied). "Read in" is relative to
+`src/governed_bi/`.
+
+| Variable | Read in | Class | Recommendation |
+|---|---|---|---|
+| `GOVERNED_BI_PG_DSN` | `credentials.py` | secret | keep |
+| `GOVERNED_BI_PROXY_SECRET` | `model/provider.py`, `model/proxy_gateway.py` | secret | keep while the proxy gateway is used; remove with it |
+| `GOVERNED_BI_API_KEY` | nothing; docstrings in `api/auth.py`, `api/routes.py` | none | remove the mentions |
+| `GOVERNED_BI_CORPUS_DIR` | `api/graph_app.py`, `feedback/__init__.py` | location | keep |
+| `GOVERNED_BI_SCHEMA` | `api/graph_app.py` | location | keep |
+| `GOVERNED_BI_SEED_DIR` | `api/graph_app.py` | location | remove: the default under `runs/seeded-corpus/` has no known override |
+| `GOVERNED_BI_ACCESS_POLICY` | `api/graph_app.py`, `api/visibility.py` | location | keep |
+| `GOVERNED_BI_CONVERSATION_DB` | `serve/checkpointer.py` | location | keep |
+| `GOVERNED_BI_HARNESS_DB` | `serve/checkpointer.py` | location | keep |
+| `GOVERNED_BI_FEEDBACK_DB` | `api/routes.py` | location | keep |
+| `GOVERNED_BI_VECTOR_CACHE` | `retrieve/vector_cache.py` | location | keep |
+| `GOVERNED_BI_AWS_REGION` | `model/provider.py` | location | keep |
+| `GOVERNED_BI_PROXY_REGION` | `model/proxy_gateway.py` | location | remove with the proxy gateway |
+| `GOVERNED_BI_PROXY_CA_BUNDLE` | `model/proxy_gateway.py` | location | remove with the proxy gateway |
+| `GOVERNED_BI_PROVIDER` | `model/provider.py`, `serve/__main__.py` | model selection | keep |
+| `GOVERNED_BI_MODEL_PROVIDER` | `model/provider.py` | model selection | merge into `GOVERNED_BI_PROVIDER` unless a split deployment is planned |
+| `GOVERNED_BI_UTILITY_PROVIDER` | `model/provider.py` | model selection | same as above |
+| `GOVERNED_BI_EMBEDDING_PROVIDER` | `model/provider.py` | model selection | keep: the embedder can need a different gateway |
+| `GOVERNED_BI_MODEL` | `api/graph_app.py`, `model/provider.py` | model selection | keep |
+| `GOVERNED_BI_MODEL_EFFORT` | `api/graph_app.py` | model selection | keep |
+| `GOVERNED_BI_UTILITY_MODEL` | `api/graph_app.py`, `model/provider.py` | model selection | keep |
+| `GOVERNED_BI_UTILITY_MODEL_EFFORT` | `api/graph_app.py` | model selection | keep |
+| `GOVERNED_BI_EMBEDDING_MODEL` | `model/provider.py` | model selection | keep |
+| `GOVERNED_BI_LLM_MAX_RETRIES` | `api/graph_app.py` | operational | keep |
+| `GOVERNED_BI_LLM_TIMEOUT_S` | `api/graph_app.py` | operational | keep |
+| `GOVERNED_BI_UTILITY_TIMEOUT_S` | `api/graph_app.py` | operational | keep |
+| `GOVERNED_BI_FEEDBACK_ADMIN` | `api/feedback_routes.py`, `api/routes.py`, `feedback/events.py` | operational | keep: it opts a deployment into new authority |
+| `GOVERNED_BI_CORPUS_RELEASE` | `register/knobs.py` | operational | keep for arms; consider moving to `register/arms.toml` |
+| `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` | `register/knobs.py`, `serve/nodes/agent_core.py` | unmeasured | keep as the one wall clock on a turn |
+| `GOVERNED_BI_AGENT_RECURSION_LIMIT` | `register/knobs.py`, `serve/nodes/agent_core.py` | unmeasured | remove: the knob default is the only value ever run |
+| `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | `register/knobs.py`, `serve/graph.py` | unmeasured | remove: the knob default is the only value ever run |
+
+### Gate audit (M9, 2026-09)
+
+Documentation only; M10 decides moves and deletions. "Catch" is a commit or CI log recording the
+gate refusing real work. CI's last 100 failed runs failed on lint, tests or mutation, never on a
+gate step.
+
+| Gate | Protects | Runs | Catch found |
+|---|---|---|---|
+| `check_file_length` | the 400/1000-line tiers | per push | none found |
+| `check_one_implementation` | one definition per top-level name | per push | yes: a second `make_router` (`29068aa`), two `_session` definitions (`05c0f9d`), and `_log` during M5 |
+| `check_measurement_locality` | number formatting only through `Measured.render` | per push | yes: a `round()` in `eval/datalake.py` during M2 |
+| `check_imports` | layering in `governed_bi/__init__.py` | per push | none found |
+| `check_citations` | retired figures not reappearing | per push | none found |
+| `check_no_benchmark_discriminators` | hand-written sibling discriminators staying out of the tree | per push | none found |
+| `check_declared_is_consumed` | declared machinery having a reader | per push through pytest, as a ratchet on five known findings | none found |
+| `check_corpus_delta` | the corpus adding no conformance finding | nightly | none found |
+| `check_corpus_conformance` | a corpus tree obeying ADR 0005's field spec | manual | none found |
+| `check_ratchet` | conformance findings only shrinking | manual | none found |
+| `check_landed` | whether an exported patch landed | manual | none found |
+| `check_train_only` | held-out question text staying out of a corpus | manual | none found |
+
 ## A stack that will actually answer
 
 Every variable above can be set correctly and the engine still answer nothing, because three of the
