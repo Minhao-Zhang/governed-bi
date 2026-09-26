@@ -39,7 +39,7 @@ sys.path.insert(0, str(REPO / "src"))
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset"
 
 #: What a regraded row's ``grader`` field names. Bumped when ``eval/grade.py``'s verdict changes.
-GRADER = "rows-v2"
+GRADER = "rows-v3"
 
 
 class RegradeAborted(RuntimeError):

@@ -34,10 +34,15 @@ __all__ = [
     "REL_TOL",
 ]
 
-#: Relative tolerance when either cell is a fractional float. ``1/3`` computed by two plans differs
-#: in the 17th significant digit. Integers, decimals and whole-number floats compare exactly: a
-#: tolerance on them would grade a count of 1,000,001 correct against 1,000,000.
-REL_TOL = 1e-6
+#: Relative tolerance when either cell is fractional, float or ``numeric``. Two plans computing
+#: ``1/3`` differ around the 16th significant digit, and Postgres ``numeric`` division keeps 16 to
+#: 20 digits depending on its inputs, so 1e-9 absorbs both while ``1234.568`` against ``1234.567``
+#: (8e-7 apart) stays wrong. Whole numbers on both sides compare exactly: any tolerance would
+#: grade a count of 1,000,001 correct against 1,000,000.
+REL_TOL = Decimal("1e-9")
+#: Floor for values near zero, where a relative tolerance shrinks to nothing: ``0.1+0.2-0.3`` is
+#: 5.5e-17, not 0.
+ABS_TOL = Decimal("1e-12")
 
 
 class GradeResult(dict):
@@ -213,9 +218,9 @@ def results_match(
 ) -> bool:
     """Whether two result sets hold the same rows, as a multiset unless ``order_sensitive``.
 
-    Cells compare by :func:`_typed_cell`: exact numbers exactly, a float within :data:`REL_TOL`
-    of any number, text folded as BIRD
-    folds it, and never a number against text or a boolean. Unordered sets are sorted by
+    Cells compare by :func:`_typed_cell` and :func:`_numbers_match`: two whole numbers exactly,
+    any fractional number within :data:`REL_TOL`, text folded as BIRD folds it, and never a
+    number against text or a boolean. Unordered sets are sorted by
     :func:`_typed_key` and paired row by row; two gold values within the tolerance of each other
     in one column can pair crosswise, and that errs toward ``False``.
     """
@@ -231,14 +236,29 @@ def results_match(
             return False
         for p, g in zip(p_row, g_row):
             if isinstance(p, (float, Decimal)) and isinstance(g, (float, Decimal)):
-                if isinstance(p, float) or isinstance(g, float):
-                    if not math.isclose(float(p), float(g), rel_tol=REL_TOL):
-                        return False
-                elif p != g:
+                if not _numbers_match(p, g):
                     return False
             elif type(p) is not type(g) or p != g:
                 return False
     return True
+
+
+def _numbers_match(p: float | Decimal, g: float | Decimal) -> bool:
+    """Exact when both are whole numbers held exactly, otherwise within the tolerance.
+
+    Compared in ``Decimal``, which holds every finite float exactly, so a ``numeric`` against a
+    ``numeric`` gets the same tolerance as one against a float. A float that :func:`_typed_cell`
+    left as a float is either fractional or above 2**53, where it is not an exact count, so it
+    always takes the tolerance.
+    """
+    dp, dg = Decimal(p), Decimal(g)
+    if isinstance(p, Decimal) and isinstance(g, Decimal) and _is_whole(dp) and _is_whole(dg):
+        return dp == dg
+    return abs(dp - dg) <= max(REL_TOL * max(abs(dp), abs(dg)), ABS_TOL)
+
+
+def _is_whole(value: Decimal) -> bool:
+    return value == value.to_integral_value()
 
 
 class _Text(str):

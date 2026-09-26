@@ -107,7 +107,7 @@ def test_statements_run_on_the_guarded_connector_with_the_register_bounds(world)
     assert rows["q2"]["correct"] is rows["q2"]["correct_digest_rule"] is True
     assert rows["q3"]["correct"] is rows["q3"]["correct_digest_rule"] is False
     stamp = rows["q1"]["regrade"]
-    assert stamp["grader"] == "rows-v2"
+    assert stamp["grader"] == "rows-v3"
     assert stamp["statement_timeout_ms"] == 120_000
     assert stamp["correct_before"] is False
     assert "git_sha" in stamp and "working_tree_dirty" in stamp

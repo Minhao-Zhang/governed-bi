@@ -40,6 +40,20 @@ def _correct(pred: object, gold: object) -> bool:
         (1000000, 1000000.0, True),
         (3.0000000000000004, 3, True),  # a fractional float keeps the tolerance
         (2.0**60, 2.0**60 + 256, True),  # above 2**53 adjacent floats are far apart
+        # Two fractional numerics take the tolerance, as a numeric against a float does: AVG and
+        # division return `numeric`, and two plans keep different numbers of digits.
+        (Decimal("3.3333333333333333"), Decimal("3.333333333333333333"), True),
+        (Decimal("3.3333333333333333"), 10 / 3, True),
+        (Decimal("2.50"), Decimal("2.5"), True),
+        (Decimal("0.33"), Decimal("0.3333"), False),  # a rounded answer is a different answer
+        # The tolerance is for representation noise, not for a digit that differs.
+        (1234.568, 1234.567, False),
+        (99999.99, 100000, False),
+        (1000000.5, 1000000, False),
+        (1000000.5, 1000001, False),
+        (2.9999999999999996, 3, True),
+        (0.1 + 0.2 - 0.3, 0, True),  # near zero the absolute floor applies
+        (1e-9, 0, False),
         (float("nan"), "\x00nan", False),  # no text spells a non-finite value
         (float("nan"), "nan", False),
         (" Paris ", "paris", True),  # text folds as BIRD folds it

@@ -1377,9 +1377,11 @@ Not reachable as a privilege escalation: `api/auth.py` refuses `command.update`/
 ### 6.4 Execution match has no float tolerance and coerces types
 
 **Fix on `m2/baseline`, open until merged and the seven arms are regraded.** On that branch
-`eval/grade.py::results_match` decides `correct` on rows: integers and decimals exactly, a float
-within a relative 1e-6, and text never equal to a number or a boolean. The harness executes gold
-whenever there is a prediction, and the BIRD fingerprint is still recorded. The regrade needs the
+`eval/grade.py::results_match` decides `correct` on rows: two whole numbers exactly, any
+fractional number (float or `numeric`) within a relative 1e-9 with a 1e-12 floor near zero, and
+text never equal to a number or a boolean. The harness executes gold whenever there is a
+prediction, and the BIRD fingerprint is still recorded. `tools/regrade.py` records both verdicts
+per row, so its report separates re-execution drift from the grader change. The regrade needs the
 benchmark Postgres and has not run. Each case below is a test in
 `tests/eval/test_the_grader_compares_numbers_by_value_and_text_by_type.py`. The original finding:
 
