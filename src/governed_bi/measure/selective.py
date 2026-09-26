@@ -19,8 +19,8 @@ Three rules the caller cannot opt out of, each from a defect already shipped her
   reports the order the driver happened to write them in. Every point inside a tie
   group is the expectation under uniform tie-breaking, and
   :meth:`RiskCoverage.policy_at_most` will not realise a set that splits one.
-* **Two things are only compared through** :func:`~.stats.mcnemar`. ``AGENTS.md``
-  forbids subtracting two rates and calling it a result, and
+* **Two things are only compared through** :func:`~.stats.mcnemar`. Subtracting two rates
+  is not a result, and
   E1-E3 are three tools that did it anyway.
 * **Declines are priced in** :mod:`.abstention`, **not here.** The two questions --
   how well a ranking separates right from wrong, and what the engine's own declines

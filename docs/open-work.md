@@ -1439,6 +1439,11 @@ merge. Revisit when a second reviewer exists.
 
 ### 6.7 234 tests are one near-tautological assertion, replicated
 
+**Fix on `m9/cleanup`, open until merged.** The grid is replaced by three cases that assert the
+emitted `step` and `status`. When `emit` writes a constant `step`, at least two of the three fail,
+and all three unless the constant is one of the sampled steps. The original
+finding:
+
 `tests/serve/test_stream_events.py::test_every_step_status_pair_builds` is parametrized
 26 x 9 = 234 ways — 10.5% of the whole suite by count, and the largest parametrize group in the
 tree by a factor of eleven. `VALID_STATUSES` is defined in the test file; no production module

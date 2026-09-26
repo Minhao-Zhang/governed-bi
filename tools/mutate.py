@@ -1,6 +1,6 @@
 """Mutation testing for the invariants this repository cannot afford to lose.
 
-**Why this exists.** ``AGENTS.md`` requires that a test guarding a defect be *mutation-verified* —
+**Why this exists.** A test guarding a defect should be *mutation-verified* —
 break the behaviour, watch the test fail, restore — and until 2026-08-10 that was a habit rather
 than a mechanism. The habit failed: ``tests/govern`` (1,705 lines then, 3,006 today; owner of the
 layer stack, carrying ADR 0006's B1–B10 bypass contract) could not detect a **total governance
@@ -39,8 +39,8 @@ Usage::
 
 **Safety.** The target file is read into memory, written, and restored in a ``finally``, and the
 restore is verified byte-for-byte before the next mutation runs. It does not use
-``git checkout --``: ``AGENTS.md`` records that doing so has silently discarded uncommitted work
-in the same file more than once, and this tool must be safe to run on a dirty tree.
+``git checkout --``, which discards uncommitted work in the same file, and this tool must be safe
+to run on a dirty tree.
 """
 
 from __future__ import annotations

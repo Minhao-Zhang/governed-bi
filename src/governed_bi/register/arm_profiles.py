@@ -1,7 +1,7 @@
 """Arm profiles: the committed declaration of what each measured arm changed.
 
 **This module does not set knobs and must not learn to.** ``register/knobs.py`` is the one home
-for a knob's value; a second place deciding that is the defect AGENTS.md names and this
+for a knob's value; a second place deciding that is a defect this
 repository has already paid for. What lives here is the *claim* — "arm v4's treatment was the
 prompt" — which had no committed home at all. An arm's identity lived in a gitignored ``.env``
 on one machine while ``runs/eval/`` named the arm, so nothing a reader could fetch said what the
@@ -240,7 +240,7 @@ def _parse_profiles(data: Mapping[str, Any], *, source: str) -> dict[str, ArmPro
             )
         hypothesised_effect, readout = _hypothesis(body, arm=name, source=source)
         # Explicit, one key per field, because `**body` would take a knob's value from a file --
-        # the second home for a knob that AGENTS.md names -- and would silently accept whatever a
+        # a second home for a knob, which `register/knobs.py` refuses -- and would silently accept whatever a
         # future TOML key is called. What makes the explicit list safe is the coverage check
         # below: this call passed nine keys against twelve fields for a fortnight, and the three
         # it dropped were the three a gate reads.

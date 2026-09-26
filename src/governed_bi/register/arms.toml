@@ -11,8 +11,8 @@
 # otherwise rather than silently ignoring a typo.
 #
 # This file does NOT set knobs. It declares what an arm's treatment *was*, so a recorded run can
-# be checked against it. Adding a second place that decides a knob's value is the defect
-# AGENTS.md names; the knob register stays the one home.
+# be checked against it. A second place that decides a knob's value is a defect; the knob
+# register stays the one home.
 #
 # `corpus` and `corpus_content_hash` are two different identifiers and both are here on purpose.
 # `corpus` is the ref a human checks out in `../BIRD-corpus`; `corpus_content_hash` is the digest

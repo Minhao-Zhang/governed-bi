@@ -11,8 +11,8 @@
  * (`serve/runtime.py::model_id`).
  *
  * It is read-only on purpose. `register/knobs.py` is the one home for a knob's value and `.env`
- * is how an operator sets one; a form here would be a second place deciding a knob, which is the
- * defect AGENTS.md names. So this reports, and says where to change it.
+ * is how an operator sets one; a form here would be a second place deciding a knob. So this
+ * reports, and says where to change it.
  */
 
 import { Boxes, Braces, Cpu, Database, Ruler } from "lucide-react";

@@ -263,12 +263,12 @@ corpora/
 _generated/
 
 # Firecrawl CLI scrape cache. The CLI writes it into the repo root, and AGENTS.md
-# says the top level holds only README.md and configuration files.
+# keeps the root to README.md, AGENTS.md, CLAUDE.md and LICENSE.
 .firecrawl/
 
 # Vendored agent skills, fetched not authored. `skills-lock.json` pins each one by hash
 # and IS committed — the same split as a package lock: the manifest is the source of
-# truth, the tree beside it is the install. AGENTS.md names both.
+# truth, the tree beside it is the install.
 .claude/skills/
 .agents/
 
