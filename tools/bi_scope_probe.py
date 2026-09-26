@@ -147,7 +147,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--effort", default=None)
     parser.add_argument("--limit", type=int, default=None, help="a PREFIX, which is one schema")
     parser.add_argument("--stride", type=int, default=None, help="sample N evenly across the file")
-    parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="calls in flight. v2 is ~3,600 tokens a call; above 1 a 200k TPM limit fails "
+        "rows open, which is a measurement of the limit",
+    )
     parser.add_argument(
         "--max-retries",
         type=int,
@@ -236,6 +242,14 @@ def main(argv: list[str] | None = None) -> int:
             f"{blocked} question(s) refused by the scope gate. On a benign set every one is an "
             "answer production does not give; on an out-of-scope set it is the gate's recall."
         )
+    failed_open = counts.get("error_failed_open", 0)
+    if failed_open:
+        print(
+            f"{failed_open} verdict(s) failed open, so this file is not a measurement of the "
+            "prompt. Lower --concurrency and re-run to a new --out.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

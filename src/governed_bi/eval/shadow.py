@@ -129,6 +129,10 @@ class ShadowGate:
     #: projection; counting the second as the first certifies a configuration nothing observed.
     #: Rendered, never silent.
     not_reached: frozenset[str] = frozenset()
+    #: Turns whose model-backed verdict failed open (a rate limit or provider error). Counted as
+    #: not firing, as the served path treats them, and rendered: a probe that failed open on many
+    #: rows under-reports refusals and so over-states the served EX.
+    failed_open: frozenset[str] = frozenset()
 
 
 def abstention_gate(rows: Sequence[TurnRow]) -> ShadowGate:
@@ -301,7 +305,12 @@ def bi_scope_gate(rows: Sequence[TurnRow], verdicts: Mapping[str, str]) -> Shado
             ),
         )
     fires = frozenset(row for row in map(_unit, rows) if verdicts[row] == "blocked")
-    return ShadowGate(BI_SCOPE_GATE, Counterfactual.probe, fires, _BI_SCOPE_WHY)
+    failed_open = frozenset(
+        row for row in map(_unit, rows) if verdicts[row] == "error_failed_open"
+    )
+    return ShadowGate(
+        BI_SCOPE_GATE, Counterfactual.probe, fires, _BI_SCOPE_WHY, failed_open=failed_open
+    )
 
 
 _BI_SCOPE_WHY = (
@@ -347,9 +356,14 @@ class ShadowProjection:
                 if gate.not_reached
                 else ""
             )
+            failed_open = (
+                f"  ({len(gate.failed_open)} verdict(s) failed open, counted as not firing)"
+                if gate.failed_open
+                else ""
+            )
             lines.append(
                 f"  [{gate.tier.value:6}] {gate.gate_id:38} would refuse "
-                f"{len(gate.fires)}{unreached}"
+                f"{len(gate.fires)}{unreached}{failed_open}"
             )
         lines.append(f"  {self.nested.render()}")
         for gate in self.bounds_only:

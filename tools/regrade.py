@@ -209,9 +209,10 @@ def regrade_rows(
         row["regraded"] = True
         row["regrade"] = {**stamp, "correct_before": was}
         flips[
-            "wrong -> correct" if now and not was
-            else "correct -> wrong" if was and not now
-            else "unchanged"
+            "now unmeasured" if now is None and was is not None
+            else "unchanged" if now == was
+            else "wrong -> correct" if now
+            else "correct -> wrong"
         ] += 1
         out.append(row)
     return out, flips

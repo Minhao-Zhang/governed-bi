@@ -38,6 +38,10 @@ def _correct(pred: object, gold: object) -> bool:
         (1000000, 1000001.0, False),  # a whole-number float is a count, compared exactly
         (1000000.0, 1000001.0, False),
         (1000000, 1000000.0, True),
+        # Above 1e9 a relative 1e-9 spans one whole unit, so only the exact branch keeps a count
+        # off by one wrong.
+        (10_000_000_001, 10_000_000_000, False),
+        (Decimal("10000000001"), 10_000_000_000.0, False),
         (3.0000000000000004, 3, True),  # a fractional float keeps the tolerance
         (2.0**60, 2.0**60 + 256, True),  # above 2**53 adjacent floats are far apart
         # Two fractional numerics take the tolerance, as a numeric against a float does: AVG and

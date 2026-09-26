@@ -37,8 +37,8 @@ __all__ = [
 #: Relative tolerance when either cell is fractional, float or ``numeric``. Two plans computing
 #: ``1/3`` differ around the 16th significant digit, and Postgres ``numeric`` division keeps 16 to
 #: 20 digits depending on its inputs, so 1e-9 absorbs both while ``1234.568`` against ``1234.567``
-#: (8e-7 apart) stays wrong. Whole numbers on both sides compare exactly: any tolerance would
-#: grade a count of 1,000,001 correct against 1,000,000.
+#: (8e-7 apart) stays wrong. Whole numbers on both sides compare exactly: 1e-9 would still grade
+#: a count of 10,000,000,001 correct against 10,000,000,000.
 REL_TOL = Decimal("1e-9")
 #: Floor for values near zero, where a relative tolerance shrinks to nothing: ``0.1+0.2-0.3`` is
 #: 5.5e-17, not 0.

@@ -93,6 +93,14 @@ def main(argv: list[str] | None = None) -> int:
     print("\n".join(projection.render()))
     for gate in projection.gates:
         print(f"  {gate.gate_id}: {gate.why}")
+    failed_open = sum(len(gate.failed_open) for gate in projection.gates)
+    if failed_open:
+        print(
+            f"{failed_open} scope verdict(s) failed open, so the refusals above are a lower bound "
+            "and the served EX an upper one. Re-run the probe before quoting this projection.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
