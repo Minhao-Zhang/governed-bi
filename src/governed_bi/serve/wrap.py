@@ -182,7 +182,10 @@ def wrap_node(
             # that. Left alone it surfaces four frames away as ``'coroutine' object has no
             # attribute 'get'`` inside ``rail_observation``, naming nothing.
             if inspect.isawaitable(update):
-                update.close()
+                # Only a coroutine has `close`; closing it avoids a never-awaited warning.
+                close = getattr(update, "close", None)
+                if callable(close):
+                    close()
                 raise TypeError(
                     f"node {stage!r} is a sync function that returned an awaitable. It is "
                     "probably wrapping an async node without awaiting it; make the wrapper "
