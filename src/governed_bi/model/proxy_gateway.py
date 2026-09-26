@@ -19,6 +19,7 @@ construction would go stale after an hour and every later request would 401 with
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -27,6 +28,8 @@ from typing import Any, Callable, Mapping
 # Ported from the proxy fork branch's llm/proxy_gateway.py. v2 has no ModelConfig, so the
 # builders take plain kwargs; the token flow, extra_body and embedding sanitising are as they
 # ran. Untracked on a server until 2026-08-07 — the 2026-08-07 BIRD run needs this file.
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "PROXY_CA_BUNDLE_VAR",
@@ -399,7 +402,7 @@ def _http_clients(auth, *, verify: Any = None, timeout_s: float | None = None):
             import urllib3  # noqa: PLC0415
 
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        except Exception:  # pragma: no cover - urllib3 always present via requests
+        except (ImportError, AttributeError):  # pragma: no cover - urllib3 always present via requests
             pass
     # connect is quick or it never happens; read is the phase that hangs on this proxy.
     timeout = None if timeout_s is None else httpx.Timeout(timeout_s, connect=min(30.0, timeout_s))
@@ -477,7 +480,8 @@ def _clip_to_tokens(text: str, max_tokens: int) -> str:
         if len(toks) <= max_tokens:
             return text
         return enc.decode(toks[:max_tokens])
-    except Exception:
+    except Exception as err:  # noqa: BLE001 — any tokenizer failure falls back to a cap that errs short
+        _log.warning("tokenizer unavailable (%s); truncating by characters", type(err).__name__)
         return text[: max_tokens * 2]
 
 

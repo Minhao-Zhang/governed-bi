@@ -13,6 +13,7 @@ paths, and a stamp in each would be two clocks that drift).
 
 import asyncio
 import inspect
+import logging
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -29,6 +30,15 @@ from governed_bi.serve.events import (
 )
 
 __all__ = ["wrap_node"]
+
+_log = logging.getLogger(__name__)
+
+
+def _log_crash(stage: str, state: Mapping[str, Any]) -> None:
+    """The traceback, for the operator. The turn record keeps only the exception's type."""
+    _log.exception(
+        "node %s crashed (thread %s, turn %s)", stage, state.get("thread_id"), state.get("turn_id")
+    )
 
 
 def _turn_clock(
@@ -218,7 +228,8 @@ def wrap_node(
                 # No resolve event: the node is suspended, not ended, so the row stays
                 # `running`. `ask_user` emits its own pair around the pause.
                 raise
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — becomes the turn's crashed stamp
+                _log_crash(stage, state)
                 update = _crashed(e)
             if live:
                 _end(state, update)
@@ -235,7 +246,8 @@ def wrap_node(
             update = await _body(state, None)
         except GraphInterrupt:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — becomes the turn's crashed stamp
+            _log_crash(stage, state)
             update = _crashed(e)
         if live:
             _end(state, update)

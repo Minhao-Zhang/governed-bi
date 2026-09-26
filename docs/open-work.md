@@ -1323,6 +1323,14 @@ fixed. Everything below was re-verified against the current tree, as this page r
 
 ### 6.1 There is no logging, and one blind except drops an audit row silently
 
+**Fix on `m5/operability`, open until merged.** Stdlib logging per `docs/architecture.md`; the
+`record` node logs a dropped row at ERROR with its thread and turn, even when the state it failed
+on cannot be read. Of the 13 blind excepts ruff reported, 4 now log (a node's traceback twice in
+`serve/wrap.py`, an unparseable DSN, a missing tokenizer), 1 is narrowed and 8 carry a
+`noqa: BLE001` with a reason: 3 re-raise after classifying, 4 turn the failure into a reported
+corpus problem, and 1 is a finaliser. `ruff check --select BLE001 src` is clean on that branch.
+The original finding:
+
 `grep -c "print(" src/` is **39**; the number of modules that import `logging` is **zero**.
 Twenty-six of those prints are `serve/__main__.py`, which is a CLI and fine. The rest are not:
 `api/graph_app.py` has two, `govern/ledger.py` one, `eval/` ten.
@@ -1429,6 +1437,15 @@ Two other tests in the same file do catch that, so the coverage is not lost; wha
 over a handful of cases is nothing, and they are 10.5% of every run's wall clock.
 
 ### 6.8 No readiness endpoint, and startup validation depends on the entry point
+
+**Fix on `m5/operability`, open until merged.** `/readyz` resolves the session and answers 503
+when it cannot or when the corpus has a fatal problem; no model is a supported mode and is ready.
+The build is locked so concurrent first requests load the corpus once, and `docs/openapi.json`
+declares both bodies.
+Tested under bare `uvicorn`'s adapter, not under `langgraph dev`, where the platform loads
+`graph_app.py` by path (`src__governed_bi__api__graph_app`), so the served graph and `/readyz`
+each hold a session built from the same environment. `/capabilities` has the same split. The
+original finding:
 
 `/livez` returns `{"ok": true}` without touching the session. There is no `/readyz`, and no
 FastAPI `lifespan` or `on_event` anywhere in the tree. `/capabilities` is the de-facto readiness

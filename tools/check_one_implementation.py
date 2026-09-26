@@ -25,6 +25,8 @@ KNOWN_DUPLICATES: dict[str, str] = {
     #: Exempts the name only. Both current sites are `__main__.py` modules sharing no body; a
     #: `main` in a module that is not an entry point is a different case this must not permit.
     "main": "the `python -m` entry-point protocol; one per program, name fixed by the runtime",
+    #: `logging.getLogger(__name__)`, one per module that logs (`docs/architecture.md`).
+    "_log": "the module logger; each binds its own module's name, so recurrence is the convention",
 }
 
 

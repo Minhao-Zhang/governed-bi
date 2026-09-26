@@ -47,7 +47,7 @@ def load_assets(path: Path) -> list[tuple[str, dict[str, Any], Path]]:
     """``(asset_type, mapping, file)`` for one YAML file, columns unpacked from their table."""
     try:
         doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001 — any read or parse failure is reported as a finding
         return [("<unparseable>", {"_error": str(err)}, path)]
     if not isinstance(doc, dict):
         return [("<unparseable>", {"_error": "top level is not a mapping"}, path)]

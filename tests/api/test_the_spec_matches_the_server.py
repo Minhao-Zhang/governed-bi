@@ -405,7 +405,7 @@ def wire() -> dict[str, Any]:
 CASES: list[tuple[str, str, str]] = [
     ("GET", p, u)
     for p, u in (
-        ("/livez", ""), ("/capabilities", ""),
+        ("/livez", ""), ("/readyz", ""), ("/capabilities", ""),
         ("/corpus/assets", ""), ("/corpus/assets", "/corpus/assets?type=table"),
         ("/corpus/fields", ""), ("/corpus/fields", "/corpus/fields?type=table"),
         ("/corpus/rows", "/corpus/rows?type=table"),
@@ -803,6 +803,22 @@ class _NoPending:
         from governed_bi.api.thread_turns import PendingPage
 
         return PendingPage(rows=[], truncated=False, threads_scanned=0)
+
+
+def test_the_spec_declares_the_not_ready_body(wire: dict[str, Any]) -> None:
+    """``/readyz``'s 503, driven by a session that cannot be built."""
+    from fastapi.testclient import TestClient
+
+    from governed_bi.api.routes import _build_app
+
+    def missing_dsn() -> Any:
+        raise RuntimeError("no database: set one of GOVERNED_BI_PG_DSN / PG_RENAME_DECOY_DSN")
+
+    response = TestClient(_build_app(missing_dsn, object(), object(), wire["store"])).get("/readyz")
+    assert response.status_code == 503
+    schema = _declared(wire["spec"], "GET", "/readyz", "503")
+    problems = _violations(response.json(), schema, wire["spec"], "GET /readyz $")
+    assert not problems, "\n".join(problems)
 
 
 def test_every_operation_in_the_spec_is_exercised_here() -> None:

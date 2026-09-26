@@ -116,7 +116,7 @@ def load_file(path: Path, *, where: str | None = None) -> tuple[list[Asset], lis
     try:
         text = path.read_text(encoding="utf-8-sig")
         document = yaml.load(text, Loader=_LOADER)  # noqa: S506 - _LOADER derives from SafeLoader
-    except Exception as err:  # UnicodeDecodeError is a ValueError; YAML errors are their own
+    except Exception as err:  # noqa: BLE001 — every read failure becomes a per-file Problem
         return [], [Problem(label, f"could not be read as YAML: {type(err).__name__}: {err}")]
 
     if document is None:
@@ -154,7 +154,7 @@ def _one(raw: Any, *, where: str) -> tuple[list[Asset], list[str]]:
         if reasons:
             return [], reasons
         built = [from_mapping(item) for item in [parent, *columns]]
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001 — a malformed asset is a reported reason, not a crash
         return [], [f"{type(err).__name__}: {err}"]
 
     broken = [reason for asset in built for reason in problems_with(asset)]
@@ -163,7 +163,7 @@ def _one(raw: Any, *, where: str) -> tuple[list[Asset], list[str]]:
     for asset in built:
         try:
             validate_asset_id(asset.id)
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 — a bad id is a reported reason, not a crash
             return [], [str(err)]
     return built, []
 
