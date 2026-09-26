@@ -1,0 +1,60 @@
+{"question_id": "oos_001", "category": "general_knowledge", "question": "What is the boiling point of water at sea level in Fahrenheit?"}
+{"question_id": "oos_002", "category": "general_knowledge", "question": "Who painted the Mona Lisa?"}
+{"question_id": "oos_003", "category": "general_knowledge", "question": "How many bones are in the adult human body?"}
+{"question_id": "oos_004", "category": "general_knowledge", "question": "What is the speed of light in a vacuum?"}
+{"question_id": "oos_005", "category": "general_knowledge", "question": "In what year did the Western Roman Empire fall?"}
+{"question_id": "oos_006", "category": "general_knowledge", "question": "Who composed The Four Seasons?"}
+{"question_id": "oos_007", "category": "general_knowledge", "question": "What is the tallest building in Dubai?"}
+{"question_id": "oos_008", "category": "general_knowledge", "question": "How far is the Moon from the Earth?"}
+{"question_id": "oos_009", "category": "general_knowledge", "question": "What does the abbreviation DNA stand for?"}
+{"question_id": "oos_010", "category": "general_knowledge", "question": "Who is credited with inventing the telephone?"}
+{"question_id": "oos_011", "category": "general_knowledge", "question": "In what year did the Titanic sink?"}
+{"question_id": "oos_012", "category": "general_knowledge", "question": "What causes the northern lights?"}
+{"question_id": "oos_013", "category": "general_knowledge", "question": "How many planets are in our solar system?"}
+{"question_id": "oos_014", "category": "general_knowledge", "question": "What is the half-life of carbon-14?"}
+{"question_id": "oos_015", "category": "general_knowledge", "question": "Who won the Nobel Peace Prize in 2009?"}
+{"question_id": "oos_016", "category": "code_or_prose", "question": "Write a Python function that reverses a linked list."}
+{"question_id": "oos_017", "category": "code_or_prose", "question": "Write a haiku about autumn leaves."}
+{"question_id": "oos_018", "category": "code_or_prose", "question": "Draft a cover letter for a junior marketing position."}
+{"question_id": "oos_019", "category": "code_or_prose", "question": "Translate 'good morning, how did you sleep?' into Japanese."}
+{"question_id": "oos_020", "category": "code_or_prose", "question": "Write a regular expression that validates an email address."}
+{"question_id": "oos_021", "category": "code_or_prose", "question": "Explain how the quicksort algorithm works."}
+{"question_id": "oos_022", "category": "code_or_prose", "question": "Write a bash script that renames every .txt file in a folder to .md."}
+{"question_id": "oos_023", "category": "code_or_prose", "question": "Write a short story about a dragon who is afraid of fire."}
+{"question_id": "oos_024", "category": "code_or_prose", "question": "Compose a heartfelt birthday message for my grandmother."}
+{"question_id": "oos_025", "category": "code_or_prose", "question": "Write a React component for a login form with validation."}
+{"question_id": "oos_026", "category": "code_or_prose", "question": "Proofread this sentence: their going to the store tomorrow."}
+{"question_id": "oos_027", "category": "code_or_prose", "question": "Give me a four-week workout plan for building muscle."}
+{"question_id": "oos_028", "category": "code_or_prose", "question": "Write a limerick about a cat who loves lasagna."}
+{"question_id": "oos_029", "category": "code_or_prose", "question": "Explain recursion to a ten-year-old."}
+{"question_id": "oos_030", "category": "code_or_prose", "question": "Write a wedding toast for my best friend."}
+{"question_id": "oos_031", "category": "chit_chat", "question": "Hi, how are you doing today?"}
+{"question_id": "oos_032", "category": "chit_chat", "question": "Tell me a joke."}
+{"question_id": "oos_033", "category": "chit_chat", "question": "What's your favorite color?"}
+{"question_id": "oos_034", "category": "chit_chat", "question": "Thanks, that's all I needed for now."}
+{"question_id": "oos_035", "category": "chit_chat", "question": "Are you a robot or a person?"}
+{"question_id": "oos_036", "category": "chit_chat", "question": "What should I have for dinner tonight?"}
+{"question_id": "oos_037", "category": "chit_chat", "question": "I'm bored. Any ideas for something fun to do?"}
+{"question_id": "oos_038", "category": "chit_chat", "question": "Do you ever dream?"}
+{"question_id": "oos_039", "category": "chit_chat", "question": "Good night, talk to you tomorrow!"}
+{"question_id": "oos_040", "category": "chit_chat", "question": "Can you be my friend?"}
+{"question_id": "oos_041", "category": "chit_chat", "question": "What is the meaning of life?"}
+{"question_id": "oos_042", "category": "chit_chat", "question": "Who made you?"}
+{"question_id": "oos_043", "category": "chit_chat", "question": "Do you like music?"}
+{"question_id": "oos_044", "category": "chit_chat", "question": "I had a really rough day at work."}
+{"question_id": "oos_045", "category": "chit_chat", "question": "Is it going to be a good day today?"}
+{"question_id": "oos_046", "category": "other_systems", "question": "What's the weather forecast for Boston tomorrow?"}
+{"question_id": "oos_047", "category": "other_systems", "question": "Reset my email password."}
+{"question_id": "oos_048", "category": "other_systems", "question": "What is the current price of Bitcoin?"}
+{"question_id": "oos_049", "category": "other_systems", "question": "Check my unread Slack messages."}
+{"question_id": "oos_050", "category": "other_systems", "question": "Schedule a meeting with the finance team next Tuesday at 10am."}
+{"question_id": "oos_051", "category": "other_systems", "question": "Send an email to my manager saying I'll be late."}
+{"question_id": "oos_052", "category": "other_systems", "question": "What's Apple's stock price right now?"}
+{"question_id": "oos_053", "category": "other_systems", "question": "Order a large pepperoni pizza for delivery."}
+{"question_id": "oos_054", "category": "other_systems", "question": "Turn on the living room lights."}
+{"question_id": "oos_055", "category": "other_systems", "question": "How do I connect my printer to the office Wi-Fi?"}
+{"question_id": "oos_056", "category": "other_systems", "question": "Cancel my Netflix subscription."}
+{"question_id": "oos_057", "category": "other_systems", "question": "Open a support ticket with IT because my laptop won't boot."}
+{"question_id": "oos_058", "category": "other_systems", "question": "What's on my calendar for tomorrow?"}
+{"question_id": "oos_059", "category": "other_systems", "question": "How do I install Microsoft Office on a Mac?"}
+{"question_id": "oos_060", "category": "other_systems", "question": "What is today's top news headline?"}

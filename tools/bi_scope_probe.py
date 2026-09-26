@@ -4,6 +4,9 @@
         --dataset ../BIRD-Data-Obfuscation/eval_dataset \
         --out runs/eval/bi_scope_gpt-5.6-luna.jsonl
 
+    uv run --frozen python tools/bi_scope_probe.py --variant v2 --corpus-dir ../BIRD-corpus \
+        --stride 200 --out runs/eval/bi_scope_v2_stride200.jsonl
+
 Five of the six rules the served app enables are deterministic predicates over the question, so
 ``tools/shadow_replay.py`` replays them off a finished artifact for nothing. The sixth asks a
 model whether the question is a BI task at all, and a model call is not recoverable from a row.
@@ -15,8 +18,11 @@ measured. ``api/graph_app.py`` shipped ``{BI_SCOPE_RULE_ID: True}`` and the eval
 false refusal here is a lost answer in production, and nothing in this tree knows the rate.
 
 **Its own pass, not part of an arm**, because it reads only the question: no database, no
-corpus, no index, no agent model. ~136 tokens a call on the utility surface, so the whole
-1,351-question set is a rounding error against an arm — which is the point of running it
+index, no agent model. ``--variant v2`` also reads the corpus, because that variant lists the
+served schemas; ``--corpus-dir`` names it and is required for any variant with that slot.
+About 136 input tokens a call on the utility surface for v1 and about 3,600 for v2 over the 57
+BIRD schemas. The served gate makes that call on every turn, so v2 adds about 3,500 tokens to each
+one. The whole 1,351-question set is still small against an arm, which is the point of running it
 *before* one.
 
 The verdict vocabulary is ``GuardVerdict``'s, unreduced: ``clear``, ``blocked`` and
@@ -59,7 +65,13 @@ def _questions(dataset: Path, limit: int | None, stride: int | None) -> list[dic
 
 
 async def _probe(
-    questions: list[dict[str, Any]], model: Any, out: Path, concurrency: int
+    questions: list[dict[str, Any]],
+    model: Any,
+    out: Path,
+    concurrency: int,
+    variants: dict[str, str] | None = None,
+    catalogue: str = "",
+    stamp: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     """Screen each question and append its verdict. Returns the outcome histogram.
 
@@ -71,6 +83,9 @@ async def _probe(
     Concurrent, and the rows land in completion order rather than file order. That is safe
     because every consumer joins on ``question_id`` — and it is *stated* because an artifact
     whose order looks like the dataset's invites a reader to zip the two.
+
+    ``stamp`` goes on every row: the variant, the model and a hash of the exact system text, so an
+    artifact says which prompt produced it rather than leaving that to its filename.
     """
     from governed_bi.serve.nodes.guard import _bi_scope
 
@@ -83,7 +98,9 @@ async def _probe(
         async def one(question: dict[str, Any]) -> None:
             nonlocal done
             async with limiter:
-                verdict, _usage = await _bi_scope(str(question.get("question") or ""), model, 1)
+                verdict, _usage = await _bi_scope(
+                    str(question.get("question") or ""), model, 1, variants, catalogue
+                )
             outcome = str(verdict["outcome"])
             counts[outcome] = counts.get(outcome, 0) + 1
             handle.write(
@@ -97,6 +114,7 @@ async def _probe(
                         # model that misread the format. Dropped from the turn record for
                         # rule-probing reasons that do not apply to an offline probe.
                         "detail": verdict.get("detail"),
+                        **(stamp or {}),
                     }
                 )
                 + "\n"
@@ -130,7 +148,41 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None, help="a PREFIX, which is one schema")
     parser.add_argument("--stride", type=int, default=None, help="sample N evenly across the file")
     parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=8,
+        help="client retries with backoff; a 429 that exhausts them is recorded as "
+        "error_failed_open, which measures the rate limit rather than the prompt",
+    )
+    parser.add_argument("--variant", default=None, help="bi_scope variant; the registered default if unset")
+    parser.add_argument("--corpus-dir", type=Path, default=None, help="corpus whose schemas fill {schemas}")
+    parser.add_argument(
+        "--schema",
+        action="append",
+        default=None,
+        help="serve only this schema, as GOVERNED_BI_SCHEMA does; repeatable. Unset is the whole tree",
+    )
     args = parser.parse_args(argv)
+
+    import hashlib
+
+    from governed_bi.register.prompts import prompt_text, select
+    from governed_bi.serve.nodes.guard import scope_catalogue, scope_system_prompt
+
+    variants = {"bi_scope": args.variant} if args.variant else None
+    catalogue = ""
+    if "{schemas}" in prompt_text("bi_scope", variants):
+        if args.corpus_dir is None:
+            print("this bi_scope variant lists the served schemas: pass --corpus-dir", file=sys.stderr)
+            return 2
+        from governed_bi.corpus.store import load
+        from governed_bi.serve.session import visible_assets
+
+        # The same load and filter the session applies, so the catalogue is the one a
+        # deployment with this manifest would show its gate.
+        assets, _problems = load(args.corpus_dir, schemas=args.schema)
+        catalogue = scope_catalogue(visible_assets(assets))
 
     model_id = args.model or credentials.secret("GOVERNED_BI_UTILITY_MODEL")
     provider = args.provider or credentials.secret("GOVERNED_BI_UTILITY_PROVIDER") or "openai"
@@ -158,17 +210,31 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
-    model = provider_mod.chat_model(model_id, surface="utility", provider=provider, effort=effort)
+    model = provider_mod.chat_model(
+        model_id, surface="utility", provider=provider, effort=effort, max_retries=args.max_retries
+    )
     questions = _questions(args.dataset, args.limit, args.stride)
-    print(f"g_bi_scope over {len(questions)} question(s): {model_id} on {provider}", flush=True)
-    counts = asyncio.run(_probe(questions, model, args.out, args.concurrency))
+    variant = select(variants)["bi_scope"]
+    system = scope_system_prompt(variants, catalogue) or ""
+    stamp = {
+        "variant": variant,
+        "model": model_id,
+        "provider": provider,
+        "effort": effort,
+        "prompt_sha256": hashlib.sha256(system.encode("utf-8")).hexdigest()[:16],
+    }
+    print(f"g_bi_scope {variant} over {len(questions)} question(s): {model_id} on {provider}", flush=True)
+    print(f"prompt_sha256 {stamp['prompt_sha256']}", flush=True)
+    counts = asyncio.run(
+        _probe(questions, model, args.out, args.concurrency, variants, catalogue, stamp)
+    )
     print(f"wrote {args.out}")
     print(f"outcomes: {counts}")
     blocked = counts.get("blocked", 0)
     if blocked:
         print(
-            f"{blocked} benign question(s) refused by the scope gate. Every one is an answer "
-            "production does not give, and the arm this projects onto never paid that cost."
+            f"{blocked} question(s) refused by the scope gate. On a benign set every one is an "
+            "answer production does not give; on an out-of-scope set it is the gate's recall."
         )
     return 0
 
