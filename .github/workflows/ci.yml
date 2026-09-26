@@ -193,6 +193,11 @@ jobs:
       - name: Types
         run: npx tsc --noEmit
 
+      # Component tests for the chat, answer-card and clarification surfaces a first user touches.
+      # They drive the real transport hook against a stubbed `useStream`, so they need no engine.
+      - name: Tests
+        run: npm test
+
       # A production build, which exercises what neither of the above does: the App Router's own
       # constraints. It needs no engine and no corpus — with `NEXT_PUBLIC_LANGGRAPH_URL` unset the
       # app renders from `lib/mock/fixtures.ts`, so the build is hermetic.
