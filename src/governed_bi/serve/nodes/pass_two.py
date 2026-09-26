@@ -161,10 +161,10 @@ def pass_two_retrieve(
         for hit in hits_of(facet_result):
             if _raw_schema_tag(hit) is not None:
                 continue
-            payload = _pass_one_payload(hit, name, pass_one_consulted, scale)
-            if payload is None:
+            carried = _pass_one_payload(hit, name, pass_one_consulted, scale)
+            if carried is None:
                 continue
-            _merge_within_facet(merged, payload)
+            _merge_within_facet(merged, carried)
 
         if merged:
             hits_by_facet[name] = list(merged.values())

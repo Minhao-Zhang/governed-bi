@@ -129,8 +129,8 @@ def _narrow_asset(asset: Any, withheld: frozenset[str]) -> Any:
         if kept != current:
             changes[name] = kept
     for name in _ID_SCALAR_FIELDS.get(kind, ()):
-        current = getattr(asset, name, None)
-        if current is not None and str(current) in withheld:
+        scalar = getattr(asset, name, None)
+        if scalar is not None and str(scalar) in withheld:
             changes[name] = None
     if not changes:
         return asset

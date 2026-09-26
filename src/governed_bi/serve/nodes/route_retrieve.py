@@ -12,7 +12,7 @@ empty edge set and an empty reference map, silently.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import AbstractSet, Any, Mapping
 
 from langchain_core.runnables import RunnableConfig
 
@@ -477,8 +477,8 @@ def _retrieved_for_schemas(
             at = asset_type if isinstance(asset_type, AssetType) else AssetType(str(asset_type))
         except ValueError:
             continue
-        prev = by_id.get(asset_id)
-        if prev is None or score > prev[2]:
+        kept = by_id.get(asset_id)
+        if kept is None or score > kept[2]:
             by_id[asset_id] = (asset_id, at, score)
 
     budgeted = apply_budgets(list(by_id.values()), pulled_in=[])
@@ -536,8 +536,8 @@ def _is_table(
 
 
 def _connect_decline_reason(
-    terminals: set[Any],
-    edges: set[tuple[Any, Any]],
+    terminals: AbstractSet[Any],
+    edges: AbstractSet[tuple[Any, Any]],
     max_points: int,
 ) -> str:
     """Distinguish disconnected terminals from an over-budget Steiner tree."""

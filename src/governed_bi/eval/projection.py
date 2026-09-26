@@ -15,7 +15,7 @@ to change. Everything else is a private, single-purpose helper it calls.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, SupportsInt
 
 from governed_bi.eval.attribution import attribute
 from governed_bi.eval.grade import grade_turn, result_fingerprint
@@ -294,7 +294,7 @@ def _guard_verdict(record: Mapping[str, Any], state: Mapping[str, Any]) -> dict[
     return {"outcome": guard.get("outcome"), "rule_id": guard.get("rule_id")}
 
 
-def _int_or_absent(value: object) -> int | None:
+def _int_or_absent(value: SupportsInt | str | None) -> int | None:
     """``int(value)``, or ``None`` when the field was never written.
 
     Not ``int(value or 0)``: for a count, ``0`` is both the clean measured value and the shape an
@@ -548,8 +548,8 @@ def project_turn(
         # non-declining turn, so "how often does connect cross, and what is accuracy on those
         # turns" costs nothing to make answerable.
         "crossings": (
-            list(record.get("crossings"))
-            if isinstance(record.get("crossings"), (list, tuple))
+            list(crossings)
+            if isinstance(crossings := record.get("crossings"), (list, tuple))
             else None
         ),
         "guard": _guard_verdict(record, state),

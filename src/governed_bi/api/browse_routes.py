@@ -169,7 +169,7 @@ def _table_summary(session: Any, table: Any) -> dict[str, Any]:
             "physical_name": getattr(c, "physical_name", ""),
             "physical_type": getattr(c, "physical_type", None) or "",
             "role": getattr(getattr(c, "role", None), "value", None),
-            "reliability": getattr(getattr(c, "reliability", None), "status", None).value
+            "reliability": getattr(getattr(getattr(c, "reliability", None), "status", None), "value")
             if getattr(getattr(c, "reliability", None), "status", None) is not None
             else "ok",
             "excluded": bool(getattr(getattr(c, "governance", None), "excluded", False)),
@@ -300,8 +300,8 @@ def related_to_column(session: Any, column_id: str) -> dict[str, Any]:
             "synonyms": list(getattr(asset, "synonyms", ()) or ()),
             "confidence": getattr(asset, "confidence", None),
             "provenance_status": getattr(
-                getattr(getattr(asset, "audit", None), "provenance", None), "status", None
-            ).value
+                getattr(getattr(getattr(asset, "audit", None), "provenance", None), "status", None), "value"
+            )
             if getattr(getattr(getattr(asset, "audit", None), "provenance", None), "status", None) is not None
             else None,
         }

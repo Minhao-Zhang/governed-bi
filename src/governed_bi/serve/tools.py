@@ -174,7 +174,7 @@ async def _fetch(
         status = "blocked"
     else:
         status = "error"
-    updates: dict[str, Any] = dict(_delivered(runtime, payload)) if delivered else {}
+    updates = dict(_delivered(runtime, payload)) if delivered else {}
     if attempt is not None:
         # The verdict rides **this** step's detail rather than emitting ``check`` / ``execute``
         # rows: those two are ``run_query``'s attempt numbering, and a sample verdict among

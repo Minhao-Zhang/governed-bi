@@ -12,18 +12,18 @@ from collections.abc import Iterable, Mapping
 from typing import Hashable
 
 
-def route(
-    hits: Iterable[tuple[Hashable, Hashable, float]],
+def route[F: Hashable, S: Hashable](
+    hits: Iterable[tuple[F, S, float]],
     *,
-    weights: Mapping[Hashable, float] | None = None,
-) -> list[tuple[Hashable, float]]:
+    weights: Mapping[F, float] | None = None,
+) -> list[tuple[S, float]]:
     """Aggregate ``(facet, schema, score)`` hits into per-schema totals.
 
     Per schema: sum over facets of that facet's max hit score. Returns
     ``(schema, score)`` pairs. ``weights`` multiplies a facet's vote (default 1.0).
     """
     # schema → facet → max score seen
-    by_schema: dict[Hashable, dict[Hashable, float]] = defaultdict(dict)
+    by_schema: dict[S, dict[F, float]] = defaultdict(dict)
     for facet, schema, score in hits:
         facet_scores = by_schema[schema]
         prev = facet_scores.get(facet)

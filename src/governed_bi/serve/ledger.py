@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from governed_bi.govern.layers import GUARDRAIL_ERROR
-from governed_bi.govern.ledger import AttemptRecord, ExecutorPath, execution_record
+from governed_bi.govern.ledger import AttemptRecord, ExecutionRecord, ExecutorPath, execution_record
 from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY
 
 __all__ = [
@@ -57,7 +57,7 @@ def answering_attempts(attempts: Sequence[Any]) -> list[Any]:
     return [a for a in attempts if attempt_field(a, "path") not in INTROSPECTION_PATHS]
 
 
-def execution_from_attempts(attempts: Sequence[Any]) -> dict[str, Any]:
+def execution_from_attempts(attempts: Sequence[Any]) -> ExecutionRecord:
     """The turn's :class:`ExecutionRecord`, with ``terminal`` read off the **ledger**.
 
     Not from whether a SQL string exists: ``has_sql`` came from the tool-call *arguments*, so a

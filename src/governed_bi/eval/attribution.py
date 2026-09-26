@@ -132,7 +132,7 @@ def attribute(row: Mapping[str, object]) -> FailureCause | None:
     return FailureCause.unattributed
 
 
-def _table_names(tree: exp.Expression) -> frozenset[str]:
+def _table_names(tree: exp.Expr) -> frozenset[str]:
     """Base table names, lowercased and unqualified, with CTE names removed.
 
     Unqualified because gold and prediction disagree on schema prefixes routinely and that
@@ -158,7 +158,7 @@ def _table_names(tree: exp.Expression) -> frozenset[str]:
     ) - {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
 
 
-def _arity(tree: exp.Expression) -> int:
+def _arity(tree: exp.Expr) -> int:
     """Output column count of the outermost SELECT.
 
     ``SELECT *`` is counted as ``-1`` so it never compares equal to an explicit list: a star
@@ -182,11 +182,11 @@ def _arity(tree: exp.Expression) -> int:
     return len(projections)
 
 
-def _has_aggregate(tree: exp.Expression) -> bool:
+def _has_aggregate(tree: exp.Expr) -> bool:
     return any(isinstance(node, exp.AggFunc) for node in tree.walk())
 
 
-def _filter_columns(tree: exp.Expression) -> frozenset[str]:
+def _filter_columns(tree: exp.Expr) -> frozenset[str]:
     """Columns named inside WHERE and HAVING, across every scope.
 
     Uses ``govern/scopes.py``'s walker rather than a bare ``find_all`` so a correlated
