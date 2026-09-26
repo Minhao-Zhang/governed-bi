@@ -126,3 +126,41 @@ def test_a_failing_record_node_logs_the_dropped_row(caplog: pytest.LogCaptureFix
     [entry] = [r for r in caplog.records if r.name == "governed_bi.api.graph_app"]
     assert entry.levelno == logging.ERROR
     assert "thread-42" in entry.getMessage() and "turn-7" in entry.getMessage()
+
+
+def test_the_drop_is_logged_even_when_the_state_cannot_be_read(caplog: pytest.LogCaptureFixture) -> None:
+    """The handler runs on a state that already broke once; reading its ids must not raise too."""
+    from governed_bi.api.graph_app import record_node
+
+    class _Hostile(dict):
+        def get(self, key: str, default: Any = None) -> Any:
+            raise RuntimeError("unreadable")
+
+    with caplog.at_level(logging.ERROR, logger="governed_bi.api.graph_app"):
+        assert record_node()(_Hostile()) == {}
+    [entry] = [r for r in caplog.records if r.name == "governed_bi.api.graph_app"]
+    assert "<unreadable>" in entry.getMessage()
+
+
+def test_concurrent_first_requests_build_the_session_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+
+    from governed_bi.api import graph_app
+
+    builds: list[int] = []
+
+    def slow_build() -> Any:
+        builds.append(1)
+        time.sleep(0.05)
+        graph_app._SESSION = SimpleNamespace(agent_model=None, fatal_problems=())
+        return graph_app._SESSION
+
+    monkeypatch.setattr(graph_app, "_SESSION", None)
+    monkeypatch.setattr(graph_app, "_build_session_from_environment", slow_build)
+    threads = [threading.Thread(target=graph_app.session_from_environment) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(builds) == 1

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -104,13 +105,25 @@ ACCESS_POLICY_VAR = "GOVERNED_BI_ACCESS_POLICY"
 
 
 _SESSION: Session | None = None
+_SESSION_LOCK = threading.Lock()
 
 
 def session_from_environment() -> Session:
-    """Build the run's session once from the environment and reuse it."""
-    global _SESSION
+    """Build the run's session once from the environment and reuse it.
+
+    Locked, because ``/readyz`` and the first requests can arrive together and each would
+    otherwise load and index the corpus. A failed build is not cached, so a probe retries it.
+    """
     if _SESSION is not None:
         return _SESSION
+    with _SESSION_LOCK:
+        if _SESSION is not None:
+            return _SESSION
+        return _build_session_from_environment()
+
+
+def _build_session_from_environment() -> Session:
+    global _SESSION
 
     root = REPO_ROOT
     from governed_bi import credentials
@@ -435,6 +448,19 @@ def _dropped_in_corpus(root: Path) -> str | None:
     return str(found[0])
 
 
+def _log_dropped_row(state: Any) -> None:
+    """ERROR with the thread and turn when they can be read, and without them when they cannot:
+    the handler runs on a state that already broke once, so reading it must not raise again."""
+    try:
+        raw_answer = state.get("answer")
+        raw_record = raw_answer.get("record") if isinstance(raw_answer, Mapping) else None
+        turn_id = raw_record.get("turn_id") if isinstance(raw_record, Mapping) else None
+        thread_id, turn_id = state.get("thread_id"), turn_id or state.get("turn_id")
+    except Exception:  # noqa: BLE001 — the ids are best effort; the log line is not
+        thread_id = turn_id = "<unreadable>"
+    _log.exception("record node dropped the audit row for thread %s turn %s", thread_id, turn_id)
+
+
 def record_node() -> Any:
     """The ``record`` node: put the finished turn onto ``ServeState.turns``. Never raises.
 
@@ -482,14 +508,7 @@ def record_node() -> Any:
         except Exception:  # noqa: BLE001 — a turn that answered is not a turn that failed
             # Nothing after this node can stamp the failure, so the log line is the only trace
             # that an audit row was lost.
-            raw_answer = state.get("answer")
-            raw_record = raw_answer.get("record") if isinstance(raw_answer, Mapping) else None
-            turn_id = raw_record.get("turn_id") if isinstance(raw_record, Mapping) else None
-            _log.exception(
-                "record node dropped the audit row for thread %s turn %s",
-                state.get("thread_id"),
-                turn_id or state.get("turn_id"),
-            )
+            _log_dropped_row(state)
             return {}
         return {"turns": [entry]}
 

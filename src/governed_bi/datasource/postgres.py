@@ -22,6 +22,7 @@ carries a SQLSTATE, so one without is a client-side or transport failure.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Sequence
 
 from ..corpus.introspect import (
@@ -34,6 +35,8 @@ from ..register.knobs import knob_default
 from .errors import ConnectionError, QueryError
 
 __all__ = ["PostgresConnector"]
+
+_log = logging.getLogger(__name__)
 
 _CONNECT_TIMEOUT_S = 5
 #: Driver gave no code on a connect-path failure (e.g. TCP timeout). Class 08.
@@ -121,7 +124,9 @@ class PostgresConnector:
             from psycopg.conninfo import conninfo_to_dict  # noqa: PLC0415 (lazy: heavy import)
 
             parsed = conninfo_to_dict(self._dsn)
-        except Exception:  # noqa: BLE001 — a page describing the target must not raise on it
+        except Exception as err:  # noqa: BLE001 — a page describing the target must not raise on it
+            # The type only: the message of a DSN parse error can quote the DSN.
+            _log.warning("could not parse the DSN to describe the target (%s)", type(err).__name__)
             return {}
         out: dict[str, Any] = {}
         for wire, key in (("host", "host"), ("port", "port"), ("dbname", "database")):

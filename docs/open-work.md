@@ -1324,10 +1324,12 @@ fixed. Everything below was re-verified against the current tree, as this page r
 ### 6.1 There is no logging, and one blind except drops an audit row silently
 
 **Fix on `m5/operability`, open until merged.** Stdlib logging per `docs/architecture.md`; the
-`record` node logs a dropped row at ERROR with its thread and turn. Of the 13 blind excepts ruff
-reported, 2 now log (`serve/wrap.py`, a node's traceback), 1 is narrowed (`model/proxy_gateway.py`)
-and 10 carry a `noqa: BLE001` with a reason, because each already reports or re-raises the
-failure. `ruff check --select BLE001 src` is clean on that branch. The original finding:
+`record` node logs a dropped row at ERROR with its thread and turn, even when the state it failed
+on cannot be read. Of the 13 blind excepts ruff reported, 4 now log (a node's traceback twice in
+`serve/wrap.py`, an unparseable DSN, a missing tokenizer), 1 is narrowed and 8 carry a
+`noqa: BLE001` with a reason: 3 re-raise after classifying, 4 turn the failure into a reported
+corpus problem, and 1 is a finaliser. `ruff check --select BLE001 src` is clean on that branch.
+The original finding:
 
 `grep -c "print(" src/` is **39**; the number of modules that import `logging` is **zero**.
 Twenty-six of those prints are `serve/__main__.py`, which is a CLI and fine. The rest are not:
@@ -1436,6 +1438,8 @@ over a handful of cases is nothing, and they are 10.5% of every run's wall clock
 
 **Fix on `m5/operability`, open until merged.** `/readyz` resolves the session and answers 503
 when it cannot or when the corpus has a fatal problem; no model is a supported mode and is ready.
+The build is locked so concurrent first requests load the corpus once, and `docs/openapi.json`
+declares both bodies.
 Tested under bare `uvicorn`'s adapter, not under `langgraph dev`, where the platform loads
 `graph_app.py` by path (`src__governed_bi__api__graph_app`), so the served graph and `/readyz`
 each hold a session built from the same environment. `/capabilities` has the same split. The
