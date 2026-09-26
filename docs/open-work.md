@@ -1417,7 +1417,8 @@ why it is written down rather than done.
 ### 6.7 234 tests are one near-tautological assertion, replicated
 
 **Fix on `m9/cleanup`, open until merged.** The grid is replaced by three cases that assert the
-emitted `step` and `status`, and all three fail when `emit` writes a constant `step`. The original
+emitted `step` and `status`. When `emit` writes a constant `step`, at least two of the three fail,
+and all three unless the constant is one of the sampled steps. The original
 finding:
 
 `tests/serve/test_stream_events.py::test_every_step_status_pair_builds` is parametrized

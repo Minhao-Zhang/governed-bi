@@ -143,8 +143,9 @@ operator tunes), **unmeasured** (a knob override no arm has ever varied). "Read 
 ### Gate audit (M9, 2026-09)
 
 Documentation only; M10 decides moves and deletions. "Catch" is a commit or CI log recording the
-gate refusing real work. CI's last 100 failed runs failed on lint, tests or mutation, never on a
-gate step.
+gate refusing real work. CI has 49 failed runs on record (`gh run list --status failure`, read
+2026-09-25). They failed on lint, tests, mutation testing, a dependency sync and a docs-generation
+check, and none on a gate step.
 
 | Gate | Protects | Runs | Catch found |
 |---|---|---|---|
