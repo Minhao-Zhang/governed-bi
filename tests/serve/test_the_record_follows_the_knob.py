@@ -135,8 +135,12 @@ def test_two_efforts_on_the_proxy_are_two_comparability_sets(proxy, two_schema_a
         "two arms carry one config hash and compare as one experiment"
     )
     # ...and the difference is *only* the effort, or the assertion above would pass for a
-    # resolver that made every session unique.
-    assert {k for k in high if high[k] != low.get(k)} == {"llm_reasoning_effort"}
+    # resolver that made every session unique. A lone agent model is also the utility model,
+    # so the utility surface's effort moves with it.
+    assert {k for k in high if high[k] != low.get(k)} == {
+        "llm_reasoning_effort",
+        "llm_utility_reasoning_effort",
+    }
 
 
 def test_an_effort_the_proxy_drops_is_recorded_as_dropped(proxy, two_schema_assets):
@@ -330,6 +334,30 @@ def test_the_two_model_knobs_cannot_disagree_about_one_client(two_schema_assets)
 
     knobs = _session(two_schema_assets, agent_model=Named(responses=[])).knobs_resolved
     assert knobs["chat_model"] == knobs["llm_utility_model"] == "gpt-5.6-luna"
+
+
+def test_the_utility_effort_is_recorded_apart_from_the_agents(two_schema_assets):
+    """The served config runs the utility surface at its own effort, and the row must say so.
+
+    With no field for it, an eval that reused the agent's effort and the served app that did
+    not recorded identical ``knobs_resolved``.
+    """
+    from governed_bi.serve.scripted_model import ScriptedChatModel
+
+    class Agent(ScriptedChatModel):
+        model_name: str = "gpt-6-luna"
+        reasoning_effort: str = "xhigh"
+
+    class Utility(ScriptedChatModel):
+        model_name: str = "gpt-6-luna"
+        reasoning_effort: str = "medium"
+
+    knobs = _session(
+        two_schema_assets, agent_model=Agent(responses=[]), utility_model=Utility(responses=[])
+    ).knobs_resolved
+    assert knobs["llm_reasoning_effort"] == "xhigh"
+    assert knobs["llm_utility_reasoning_effort"] == "medium"
+    assert "llm_utility_reasoning_effort" in comparability_keys()
 
 
 # ── 4. the three environment variables ────────────────────────────────────────

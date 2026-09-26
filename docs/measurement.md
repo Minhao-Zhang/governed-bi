@@ -144,8 +144,8 @@ A full arm takes hours. Expect to interrupt it and resume it.
 | `--model` | `gpt-5.6-luna` | The agent model id |
 | `--effort` | `xhigh` | Reasoning effort for the agent model. Pass `--effort ''` to send none |
 | `--provider` | `openai` | Gateway for every surface: `openai`, `bedrock`, or `proxy`. `bedrock` needs `uv sync --extra bedrock` and a region; `proxy` reads its credentials from AWS Secrets Manager |
-| `--utility-model` | `--model` | Separate model for the guard's scope gate and the facet rewriters |
-| `--utility-effort` | none | Reasoning effort for the utility model. Requires `--utility-model`; alone it would be accepted and dropped, so the driver refuses it |
+| `--utility-model` | `GOVERNED_BI_UTILITY_MODEL`, else `--model` | Separate model for the guard's scope gate and the facet rewriters. Unset, it follows the served config, as `api/graph_app.py` does, and the driver prints what it took |
+| `--utility-effort` | `GOVERNED_BI_UTILITY_MODEL_EFFORT` when the model came from it, else none | Reasoning effort for the utility model, recorded as `llm_utility_reasoning_effort`. Requires a utility model; alone it would be accepted and dropped, so the driver refuses it |
 | `--utility-provider` | `--provider` | Put the utility surface on a different gateway. Recorded as `llm_utility_provider` |
 | `--embedding-provider` | `--provider` | Put the embedder on a different gateway. Recorded as `embedding_provider` |
 | `--embedding-model` | the provider's default | Embedding model id. The default is not the same string across providers |
@@ -458,6 +458,7 @@ field it writes:
 | Field | Meaning |
 |---|---|
 | `usage` | A list of per-call token rows. See below |
+| `input_tokens`, `output_tokens` | `usage` summed over the turn, or `null` when any call went uncounted. The report prints tokens per question from these |
 | `latency_sec` | Wall clock for the turn, or `null`. The drivers serialise with `default=str`, so a `Measured` absence must never reach this field — it would land as a string that then sorts like a value |
 
 The harness adds `run_id` to the row after projection.
@@ -577,6 +578,23 @@ across all 21 pairs of the seven `proxy_*` arms on disk it never falls below
 2026-08-12). It believed it asked "did the treatment change" and measured "is
 there retrieval noise", to which the answer is always yes. The judgement now
 reads declared knobs instead of inferring from a hash.
+
+## Development and held-out halves
+
+`docs/data/db-split.csv` assigns each of the 57 databases to `dev` (28 databases, 609 questions)
+or `holdout` (29, 742). It is `random.Random(20260925).shuffle` of the sorted ids, first 28 to
+`dev`, and `tests/eval/test_the_db_split_is_the_seeded_shuffle.py` fails if a row moves. The split
+is by database so a treatment cannot learn a schema on one half and be scored on it on the other.
+Anything designed from failures (the M3 taxonomy, M4 treatments) reads `dev` only; a keep decision
+reads `holdout` only.
+
+## BIRD dev
+
+Not built now. A corpus for BIRD dev's 11 databases would make EX comparable with published work,
+and costs a curation pass this repository cannot do in-tree (the curated corpus was built outside
+it) plus a full arm. Until the shipped configuration has a measured baseline and the grader change
+has been regraded across the existing arms, a BIRD dev figure would be a second unreconciled
+number. Revisit at the 2026-11-20 retrospective.
 
 ## The prod projection
 

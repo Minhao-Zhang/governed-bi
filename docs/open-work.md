@@ -335,6 +335,10 @@ to *repeat* calls specifically is an average, not a measurement.
 
 ### 3.5 Cost per arm is not in the artifact
 
+**Tokens: fix on `m2/baseline`, open until merged and a run has written the fields.** Each row
+carries `input_tokens` and `output_tokens`, and `tools/datalake_report.py` prints tokens per
+question.
+
 `usage` carries tokens. Price is the provider's number and `measure/price.py` is deleted, so an
 arm's cost is not recoverable from the artifact alone.
 
@@ -1379,6 +1383,15 @@ Not reachable as a privilege escalation: `api/auth.py` refuses `command.update`/
 `ServeInput` is one key wide. The exposure is to the *record*, not to the data.
 
 ### 6.4 Execution match has no float tolerance and coerces types
+
+**Fix on `m2/baseline`, open until merged and the seven arms are regraded.** On that branch
+`eval/grade.py::results_match` decides `correct` on rows: two whole numbers exactly, any
+fractional number (float or `numeric`) within a relative 1e-9 with a 1e-12 floor near zero, and
+text never equal to a number or a boolean. The harness executes gold whenever there is a
+prediction, and the BIRD fingerprint is still recorded. `tools/regrade.py` records both verdicts
+per row, so its report separates re-execution drift from the grader change. The regrade needs the
+benchmark Postgres and has not run. Each case below is a test in
+`tests/eval/test_the_grader_compares_numbers_by_value_and_text_by_type.py`. The original finding:
 
 `eval/grade.py::_coerce_cell` does `float(value)` and then exact equality. Measured:
 

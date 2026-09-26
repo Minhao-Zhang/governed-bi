@@ -7,6 +7,12 @@ order-sensitive question ids keep row order.
 function, so a fingerprint produced here and one from ``pipeline/_db.py``'s
 ``hash_normalised_result`` are the same 64 hex characters for the same rows. Why it had to
 be transcribed rather than approximated is in :func:`_coerce_cell`.
+
+**The verdict is not the fingerprint.** A hash cannot carry a tolerance, and BIRD's normaliser
+reads ``'00123'`` as ``123`` and compares floats exactly. So ``correct`` comes from
+:func:`results_match` whenever both row sets are in hand: numbers compare with a relative
+tolerance of :data:`REL_TOL`, and a text cell never equals a number. The fingerprint is still
+recorded, and is the comparison only when the gold exists as a published digest alone.
 """
 
 from __future__ import annotations
@@ -14,7 +20,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import numbers
 from collections.abc import Sequence
+from decimal import Decimal
 from typing import Any
 
 __all__ = [
@@ -22,7 +30,19 @@ __all__ = [
     "result_fingerprint",
     "grade_results",
     "grade_turn",
+    "results_match",
+    "REL_TOL",
 ]
+
+#: Relative tolerance when either cell is fractional, float or ``numeric``. Two plans computing
+#: ``1/3`` differ around the 16th significant digit, and Postgres ``numeric`` division keeps 16 to
+#: 20 digits depending on its inputs, so 1e-9 absorbs both while ``1234.568`` against ``1234.567``
+#: (8e-7 apart) stays wrong. Whole numbers on both sides compare exactly: any tolerance would
+#: grade a count of 1,000,001 correct against 1,000,000.
+REL_TOL = Decimal("1e-9")
+#: Floor for values near zero, where a relative tolerance shrinks to nothing: ``0.1+0.2-0.3`` is
+#: 5.5e-17, not 0.
+ABS_TOL = Decimal("1e-12")
 
 
 class GradeResult(dict):
@@ -63,14 +83,15 @@ def grade_results(
     gold_rows: Sequence[Sequence[Any]],
     order_sensitive: bool = False,
 ) -> GradeResult:
-    """EX: fingerprints of predicted vs gold result sets match."""
+    """EX: the predicted rows match the gold rows under :func:`results_match`."""
     gold_fp = result_fingerprint(gold_columns, gold_rows, order_sensitive=order_sensitive)
     pred_fp = result_fingerprint(pred_columns, pred_rows, order_sensitive=order_sensitive)
+    same = results_match(pred_rows, gold_rows, order_sensitive=order_sensitive)
     return GradeResult(
-        correct=gold_fp == pred_fp,
+        correct=same,
         gold_fingerprint=gold_fp,
         pred_fingerprint=pred_fp,
-        detail="match" if gold_fp == pred_fp else "result_mismatch",
+        detail="match" if same else "result_mismatch",
     )
 
 
@@ -151,8 +172,9 @@ def grade_turn(
             detail=f"unanswered:{outcome}",
         )
 
+    have_gold_rows = gold_columns is not None and gold_rows is not None
     if gold_fingerprint is None:
-        if gold_columns is None or gold_rows is None:
+        if not have_gold_rows:
             # ``None``, not ``False``: no gold is the instrument failing, not the model. A gold
             # that will not execute (connection blip, moved schema) recorded as ``False`` is
             # indistinguishable in the artifact from a real mistake and deflates EX silently —
@@ -164,7 +186,7 @@ def grade_turn(
                 detail="missing_gold",
             )
         gold_fingerprint = result_fingerprint(
-            gold_columns, gold_rows, order_sensitive=order_sensitive
+            gold_columns, gold_rows, order_sensitive=order_sensitive  # type: ignore[arg-type]
         )
 
     if pred_columns is None or pred_rows is None:
@@ -176,12 +198,120 @@ def grade_turn(
         )
 
     pred_fp = result_fingerprint(pred_columns, pred_rows, order_sensitive=order_sensitive)
+    if have_gold_rows:
+        same = results_match(pred_rows, gold_rows, order_sensitive=order_sensitive)  # type: ignore[arg-type]
+    else:
+        same = pred_fp == gold_fingerprint
     return GradeResult(
-        correct=pred_fp == gold_fingerprint,
+        correct=same,
         gold_fingerprint=gold_fingerprint,
         pred_fingerprint=pred_fp,
-        detail="match" if pred_fp == gold_fingerprint else "result_mismatch",
+        detail="match" if same else "result_mismatch",
     )
+
+
+def results_match(
+    pred_rows: Sequence[Sequence[Any]],
+    gold_rows: Sequence[Sequence[Any]],
+    *,
+    order_sensitive: bool = False,
+) -> bool:
+    """Whether two result sets hold the same rows, as a multiset unless ``order_sensitive``.
+
+    Cells compare by :func:`_typed_cell` and :func:`_numbers_match`: two whole numbers exactly,
+    any fractional number within :data:`REL_TOL`, text folded as BIRD folds it, and never a
+    number against text or a boolean. Unordered sets are sorted by
+    :func:`_typed_key` and paired row by row; two gold values within the tolerance of each other
+    in one column can pair crosswise, and that errs toward ``False``.
+    """
+    if len(pred_rows) != len(gold_rows):
+        return False
+    pred = [[_typed_cell(v) for v in row] for row in pred_rows]
+    gold = [[_typed_cell(v) for v in row] for row in gold_rows]
+    if not order_sensitive:
+        pred.sort(key=lambda row: tuple(_typed_key(c) for c in row))
+        gold.sort(key=lambda row: tuple(_typed_key(c) for c in row))
+    for p_row, g_row in zip(pred, gold):
+        if len(p_row) != len(g_row):
+            return False
+        for p, g in zip(p_row, g_row):
+            if isinstance(p, (float, Decimal)) and isinstance(g, (float, Decimal)):
+                if not _numbers_match(p, g):
+                    return False
+            elif type(p) is not type(g) or p != g:
+                return False
+    return True
+
+
+def _numbers_match(p: float | Decimal, g: float | Decimal) -> bool:
+    """Exact when both are whole numbers held exactly, otherwise within the tolerance.
+
+    Compared in ``Decimal``, which holds every finite float exactly, so a ``numeric`` against a
+    ``numeric`` gets the same tolerance as one against a float. A float that :func:`_typed_cell`
+    left as a float is either fractional or above 2**53, where it is not an exact count, so it
+    always takes the tolerance.
+    """
+    dp, dg = Decimal(p), Decimal(g)
+    if isinstance(p, Decimal) and isinstance(g, Decimal) and _is_whole(dp) and _is_whole(dg):
+        return dp == dg
+    return abs(dp - dg) <= max(REL_TOL * max(abs(dp), abs(dg)), ABS_TOL)
+
+
+def _is_whole(value: Decimal) -> bool:
+    return value == value.to_integral_value()
+
+
+class _Text(str):
+    """A folded text cell, typed so it can never compare equal to a number's spelling."""
+
+
+def _typed_cell(value: Any) -> Any:
+    """``None``, ``bool``, exact ``Decimal``, ``float`` for any other number, or folded :class:`_Text`.
+
+    ``bool`` is kept apart because ``True == 1.0`` in Python and a flag is not a count. Integers
+    and whole-number floats become ``Decimal`` so they compare exactly with Postgres ``numeric``.
+    NaN and infinities become :class:`_NonFinite`, since ``math.isclose`` never equates NaN.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, Decimal)):
+        exact = Decimal(value)
+        return exact if exact.is_finite() else _non_finite(float(exact))
+    if isinstance(value, numbers.Number):
+        number = float(value)  # type: ignore[arg-type]
+        if math.isnan(number) or math.isinf(number):
+            return _non_finite(number)
+        if number.is_integer() and abs(number) < _EXACT_FLOAT_LIMIT:
+            # A whole-number float (`SUM`, `COUNT` cast by a driver) is a count, and the tolerance
+            # would accept 1,000,001.0 against 1,000,000. Below 2**53 the float is that integer.
+            return Decimal(int(number))
+        return number
+    return _Text(str(value).strip().lower())
+
+
+#: Every integer up to this magnitude is exactly one float, so a whole-number float below it can be
+#: compared as that integer. Above it, adjacent floats are more than 1 apart and the tolerance holds.
+_EXACT_FLOAT_LIMIT = 2**53
+
+
+class _NonFinite(str):
+    """NaN or an infinity. Its own type, so no text cell can spell one."""
+
+
+def _non_finite(number: float) -> _NonFinite:
+    """One marker per non-finite value, whether it arrived as a float or a ``Decimal``."""
+    return _NonFinite("nan" if math.isnan(number) else "inf" if number > 0 else "-inf")
+
+
+def _typed_key(value: Any) -> tuple[int, float, str]:
+    """A total order over typed cells: ``None``, bools, numbers, text."""
+    if value is None:
+        return (0, 0.0, "")
+    if isinstance(value, bool):
+        return (1, float(value), "")
+    if isinstance(value, (float, Decimal)):
+        return (2, float(value), "")
+    return (3, 0.0, str(value))
 
 
 def _normalise(
