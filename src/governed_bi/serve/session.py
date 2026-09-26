@@ -471,6 +471,9 @@ def from_assets(
         # proxy-served arms published the register default "openai" on this field while
         # `llm_provider` on the same row said "custom:007df842".
         knobs["llm_utility_provider"] = _provider_of(resolved_utility)
+        utility_effort = reasoning_effort_of(resolved_utility)
+        if utility_effort:
+            knobs["llm_utility_reasoning_effort"] = str(utility_effort)
         timeout = getattr(resolved_utility, "request_timeout", None)
         if timeout is not None:
             knobs["llm_utility_timeout_s"] = float(timeout)

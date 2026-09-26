@@ -233,6 +233,10 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "recall and everything downstream. Written even when it falls back to `chat_model`: "
        "'shared one model' and 'split them' are two treatments, and a blank makes them "
        "compare as one"),
+    _k("llm_utility_reasoning_effort", None, Role.comparability,
+       "reasoning effort of the utility model. The served config runs the utility surface at "
+       "its own effort while the driver used to reuse the agent's, and with no field for it "
+       "the two ran as one treatment on the row. Null when the client carries no effort"),
     _k("llm_provider", "openai", Role.comparability,
        "which gateway served the model. `chat_model` records only the id, and `model_id` "
        "reads it off the client -- so the same id behind two gateways resolves to one config "

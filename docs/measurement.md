@@ -144,8 +144,8 @@ A full arm takes hours. Expect to interrupt it and resume it.
 | `--model` | `gpt-5.6-luna` | The agent model id |
 | `--effort` | `xhigh` | Reasoning effort for the agent model. Pass `--effort ''` to send none |
 | `--provider` | `openai` | Gateway for every surface: `openai`, `bedrock`, or `proxy`. `bedrock` needs `uv sync --extra bedrock` and a region; `proxy` reads its credentials from AWS Secrets Manager |
-| `--utility-model` | `--model` | Separate model for the guard's scope gate and the facet rewriters |
-| `--utility-effort` | none | Reasoning effort for the utility model. Requires `--utility-model`; alone it would be accepted and dropped, so the driver refuses it |
+| `--utility-model` | `GOVERNED_BI_UTILITY_MODEL`, else `--model` | Separate model for the guard's scope gate and the facet rewriters. Unset, it follows the served config, as `api/graph_app.py` does, and the driver prints what it took |
+| `--utility-effort` | `GOVERNED_BI_UTILITY_MODEL_EFFORT` when the model came from it, else none | Reasoning effort for the utility model, recorded as `llm_utility_reasoning_effort`. Requires a utility model; alone it would be accepted and dropped, so the driver refuses it |
 | `--utility-provider` | `--provider` | Put the utility surface on a different gateway. Recorded as `llm_utility_provider` |
 | `--embedding-provider` | `--provider` | Put the embedder on a different gateway. Recorded as `embedding_provider` |
 | `--embedding-model` | the provider's default | Embedding model id. The default is not the same string across providers |
