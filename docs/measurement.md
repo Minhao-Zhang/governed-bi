@@ -35,12 +35,12 @@ imply is in [open work](open-work.md).
 
 > **Nothing measured is measured on the defaults this page documents.** Every arm in
 > `runs/eval/` was served by Claude-Opus-4.8 with Claude-Sonnet-5 on the utility surface,
-> through the `proxy` gateway. The flags below default to `--model gpt-5.6-luna` and
+> through the `proxy` gateway. The flags below default to `--model gpt-6-luna` and
 > `--provider openai`, and `model/provider.py` hard-codes no chat model at all —
 > `default_embedding_model` is the only model default in it, so the driver's flag *is* the
 > selection. The newest full 1,351-question arm on disk is
 > `runs/eval/proxy_v4_reflect_corpus30872d3.jsonl` (2026-08-10); the newest artifact of any
-> kind is a two-row aborted probe on today's default model,
+> kind is a two-row aborted probe on gpt-5.6-luna, the previous default,
 > `runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl` (2026-08-12). Also: there
 > is no `runs/index.jsonl` and no `stage_events.jsonl` anywhere in the tree, so the artifacts
 > themselves are the whole record — a run that is not in `runs/eval/` left no trace to read.
@@ -104,7 +104,7 @@ invoke them, or they do nothing:
 
 ```bash
 uv run --frozen python tools/run_datalake_eval.py \
-  --model gpt-5.6-luna \
+  --model gpt-6-luna \
   --effort xhigh \
   --workers 2 \
   --max-retries 8 \
@@ -113,7 +113,7 @@ uv run --frozen python tools/run_datalake_eval.py \
 ```
 
 That run writes
-`runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical_analystv4.jsonl`,
+`runs/eval/live_full_gpt-6-luna_xhigh_topdefault_lexical_analystv4.jsonl`,
 one JSON object per line, flushed as each question finishes. It prints progress
 every ten rows with a rate and an ETA, then prints the report described below.
 
@@ -141,7 +141,7 @@ A full arm takes hours. Expect to interrupt it and resume it.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--model` | `gpt-5.6-luna` | The agent model id |
+| `--model` | `gpt-6-luna` | The agent model id |
 | `--effort` | `xhigh` | Reasoning effort for the agent model. Pass `--effort ''` to send none |
 | `--provider` | `openai` | Gateway for every surface: `openai`, `bedrock`, or `proxy`. `bedrock` needs `uv sync --extra bedrock` and a region; `proxy` reads its credentials from AWS Secrets Manager |
 | `--utility-model` | `GOVERNED_BI_UTILITY_MODEL`, else `--model` | Separate model for the guard's scope gate and the facet rewriters. Unset, it follows the served config, as `api/graph_app.py` does, and the driver prints what it took |
@@ -262,7 +262,7 @@ measure it later is:
 
 ```bash
 uv run --frozen python tools/run_datalake_eval.py \
-  --model gpt-5.6-luna \
+  --model gpt-6-luna \
   --effort xhigh \
   --workers 2 \
   --max-retries 8 \

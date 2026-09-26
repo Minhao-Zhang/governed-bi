@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("artifacts", nargs="+", type=pathlib.Path,
                         help="eval row JSONL files, as written by tools/run_datalake_eval.py")
     parser.add_argument("--dataset", type=pathlib.Path, default=DEFAULT_DATASET)
-    parser.add_argument("--model", default="gpt-5.6-luna", help="the judge")
+    parser.add_argument("--model", default="gpt-6-luna", help="the judge")
     parser.add_argument("--effort", default="", help="reasoning effort; omit for the default")
     parser.add_argument("--limit", type=int, default=0, help="score at most N rows (0 = all)")
     parser.add_argument("--dry-run", action="store_true",
