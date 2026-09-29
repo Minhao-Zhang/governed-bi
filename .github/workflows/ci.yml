@@ -44,6 +44,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # A pull_request checkout is a shallow merge ref with no `main`, so provenance cannot
+      # resolve `git_main_sha` and the test asserting every operational knob is measured fails.
+      # One commit of `origin/main` is enough; faking the value in the test would hide the case
+      # the knob exists for.
+      - name: Fetch main for provenance
+        run: git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
