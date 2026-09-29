@@ -42,7 +42,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -168,7 +168,7 @@ jobs:
       run:
         working-directory: ui
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -328,14 +328,14 @@ jobs:
     # last night, instead of holding a runner for the default six hours.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # `fetch-depth: 0` is load-bearing, and only here. `check_corpus_delta.py` runs
       # `git worktree add --detach <baseline sha>` inside this checkout to read the base tree, and a
       # shallow clone does not have that commit — the tool would exit 2 with "does not resolve to a
       # commit in ...", which is honest but is not a gate. The engine and dataset checkouts need no
       # history and keep the default depth.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Minhao-Zhang/BIRD-corpus
           path: BIRD-corpus
@@ -347,7 +347,7 @@ jobs:
       # GitHub actually hosts. The path is passed explicitly below, so neither name is inferred —
       # and if either side is renamed, the manifests go missing and `--every-rule-must-run` turns
       # that into exit 2 rather than three rules quietly not running.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Minhao-Zhang/BIRD-Obfuscation
           path: BIRD-Data-Obfuscation
@@ -441,7 +441,7 @@ jobs:
       group: mutate-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
