@@ -44,6 +44,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A pull_request checkout is a shallow merge ref with no `main`, so provenance cannot
+      # resolve `git_main_sha` and the test asserting every operational knob is measured fails.
+      # One commit of `origin/main` is enough; faking the value in the test would hide the case
+      # the knob exists for.
+      - name: Fetch main for provenance
+        run: git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -192,11 +199,13 @@ jobs:
       # nothing looked. `.github/dependabot.yml` raises the bump; this step is what fails if
       # nobody merges it.
       #
-      # `--audit-level=high` and not `moderate`: the tree carries transitive moderates that come
-      # and go with no fix available, and a gate that is red for a week nobody can act on is a
-      # gate people learn to ignore. Raise the level when the moderates have somewhere to go.
+      # `--audit-level=high` and not `moderate`, and `--omit=dev`: a gate that is red for a week
+      # nobody can act on is a gate people learn to ignore. Moderates and dev-only tooling (the
+      # `shadcn` CLI, the eslint plugin) carry transitive advisories with no fixed version at
+      # all, e.g. `braces` (every version), and none of that code ships in the app. Keep
+      # `shadcn` in devDependencies for that reason: `globals.css` reads its CSS at build time.
       - name: Audit
-        run: npm audit --audit-level=high
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Lint
         run: npm run lint
