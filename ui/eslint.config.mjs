@@ -1,10 +1,18 @@
+import { fixupConfigRules } from "@eslint/compat";
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 
 const eslintConfig = defineConfig([
-  ...nextVitals,
-  ...nextTs,
+  // `fixupConfigRules` because ESLint 10 removed the deprecated `context.getFilename()` and
+  // friends, and `eslint-plugin-react` -- pulled in by `eslint-config-next`, still at 7.37.5 with
+  // `peerDependencies.eslint` capped at `^9.7`, including on next's 16.4 canary -- still calls
+  // them: unshimmed, lint dies loading `react/display-name` (observed on dependabot's eslint 10
+  // PR, 2026-10-05). The shim restores those methods per rule. `eslint-plugin-import` and
+  // `eslint-plugin-jsx-a11y` cap their peer at `^9` too; they load fine, the shim covers them
+  // anyway. Drop it once those plugins ship ESLint 10 support -- `npm ls eslint` reports the
+  // invalid peers until then. Same 3 warnings, 0 errors as ESLint 9 on the day of the bump.
+  ...fixupConfigRules([...nextVitals, ...nextTs]),
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:
