@@ -1195,6 +1195,33 @@ state survive, so a bug living in one of those passes there. Covering it means s
 a port — which is why the hand procedure above stays written down rather than automated. That,
 and nothing wider, is the residue.
 
+**The hand procedure was repeated on 2026-10-05, at `langgraph-api` 0.15.1, and the two halves
+disagreed.** On Windows, stopping `langgraph dev` is `TerminateProcess` — there is no SIGTERM, so
+`stop_pool`'s final flush never runs and the thread index is whatever the last ten-second flush
+caught. A turn was paused at `ask_user` and the server killed a few seconds later, inside that
+window. The checkpoint was durable; the pickle held the run as `running`. The fresh process loaded
+it as `running` with no worker behind it (`Queue stats … n_running=1` beside `Worker stats active=0`)
+and nothing reaps one. That alone strands one thread. What made it the whole server is
+`langgraph_runtime_inmem/ops.py::Runs.next`: it sorts pending runs oldest-first and, at
+`limit=1`, inspects **only the head**. The answer sent to the stranded thread queued behind the
+ghost, became the oldest pending run, was skipped for its thread having a running run, and every
+newer run on every other thread then waited behind it. A new question hung until timeout.
+
+**Not a regression of the bump.** `Runs.next`, `database.py` and `queue.py` are byte-identical
+between 0.32.3, 0.32.9 and 0.35.1, and `N_JOBS_PER_WORKER` defaults to 1 at 0.12.3 and 0.12.12
+alike; the 2026-08-19 observation above simply killed outside the window. Repeated once more
+waiting until the pickle's mtime passed the pause, then killing: the thread came back `interrupted`,
+the same `clarification_id` resumed to completion, nothing was left pending. So the disagreement this
+section warned about is real, it is timing, and its consequence is worse than "loses a paused
+clarification": it wedges the dev server.
+
+**No route can clear it.** `api/auth.py` refuses run cancellation over HTTP (A2/A3), so the
+recovery was by hand: stop every process, back up `.langgraph_api/`, and set the ghost and the runs
+queued behind it to `error` and the thread back to `interrupted` in `.langgraph_ops.pckl`. The
+paused question then resumed from the SQLite checkpoint, which is the part that was durable all
+along. Open: whether to wait out a flush before an intentional stop, reap `running` runs at startup
+from our side, or treat `langgraph dev` on Windows as not crash-safe and say so in the usage guide.
+
 **The store has no ceiling, and the risk runs the way round nobody expects.** `langgraph.json` sets
 `checkpointer.ttl` to `strategy: delete` at `default_ttl: 129600` — minutes, so 90 days — and that
 sweep **cannot fire on the runtime this deployment runs**: `langgraph-runtime-inmem`'s
@@ -1205,7 +1232,8 @@ been deleted, and the file grows monotonically with no operator-visible signal. 
 open item rather than a note is the inversion: `langgraph-runtime-inmem` was an undeclared
 transitive dependency until 2026-08-20, and a minor release that *implements* the sweep would
 silently start deleting 90-day-old threads — under a deployment that reads thread state as durable
-history. It is bounded `<0.33` in `[tool.uv] constraint-dependencies` now, which buys a deliberate
+history. It is bounded `<0.36` in `[tool.uv] constraint-dependencies` now (`<0.33` until 2026-10-05, when the bump
+re-read `sweep_ttl` at 0.35.1 and found it unchanged), which buys a deliberate
 upgrade rather than a fix. The repair is a retention decision somebody has to make: either prune on
 purpose, or say in the glossary that this store is append-only forever. `docs/glossary.md` and
 [ADR 0014 §4](adr/0014-one-conversation-store.md) carry the corrected account; neither picks.

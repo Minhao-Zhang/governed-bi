@@ -184,11 +184,13 @@ jobs:
       # nothing looked. `.github/dependabot.yml` raises the bump; this step is what fails if
       # nobody merges it.
       #
-      # `--audit-level=high` and not `moderate`: the tree carries transitive moderates that come
-      # and go with no fix available, and a gate that is red for a week nobody can act on is a
-      # gate people learn to ignore. Raise the level when the moderates have somewhere to go.
+      # `--audit-level=high` and not `moderate`, and `--omit=dev`: a gate that is red for a week
+      # nobody can act on is a gate people learn to ignore. Moderates and dev-only tooling (the
+      # `shadcn` CLI, the eslint plugin) carry transitive advisories with no fixed version at
+      # all, e.g. `braces` (every version), and none of that code ships in the app. Keep
+      # `shadcn` in devDependencies for that reason: `globals.css` reads its CSS at build time.
       - name: Audit
-        run: npm audit --audit-level=high
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Lint
         run: npm run lint
