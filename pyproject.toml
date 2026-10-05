@@ -190,9 +190,19 @@ packages = ["src/governed_bi"]
 # nested `create_agent` through config (which is what makes `ask_user` resumable and
 # `/threads` persist), and `http.app` mounting the custom routes. See
 # docs/adr/0007-http-surface-and-the-ui-contract.md.
+#
+# **Moved 0.12 -> 0.15 on 2026-10-05**, with `langgraph-runtime-inmem` 0.32 -> 0.35 beside it (the
+# only two packages the move needed; sdk stays 0.4.x, cli 0.4.x). The server announced `0.12.12 is
+# End of Life` — two minors behind. Same three behaviours, checked on a live server: a streamed turn
+# carried `custom` events from inside `agent_core` (namespaced) and `messages/partial` tokens, and
+# the UI drew the full stage timeline; an `ask_user` pause resumed through the configured
+# checkpointer, which was writing `runs/conversations.sqlite`; and `npm --prefix ui run check:api`
+# parsed 19/19 routes with the same five dropped fields as before. A pause also survived a hard kill
+# and a fresh process. `Threads.sweep_ttl` is still `return (0, 0)` at 0.35.1. The restart check
+# surfaced a pre-existing wedge, not a regression — see docs/open-work.md §4.4.
 [tool.uv]
 constraint-dependencies = [
-    "langgraph-api>=0.12,<0.13",
+    "langgraph-api>=0.15,<0.16",
     "langgraph-sdk>=0.4.2,<0.5",
     # **Added 2026-08-20.** Three more transitive packages this repository reaches into and
     # that nothing declared. Each is here for a named behaviour, not for tidiness:
@@ -211,7 +221,7 @@ constraint-dependencies = [
     #
     # `langgraph-prebuilt` arrives under `langgraph` and carries the agent scaffolding the
     # nested `create_agent` is built on.
-    "langgraph-runtime-inmem>=0.32,<0.33",
+    "langgraph-runtime-inmem>=0.35,<0.36",
     "langgraph-checkpoint>=4.1,<5",
     "langgraph-prebuilt>=1.1,<2",
 ]
