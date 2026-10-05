@@ -29,6 +29,38 @@
         }
       }
     },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "Readyz",
+        "description": "Readiness. Resolves the session, which under bare uvicorn is where a missing DSN, a missing corpus or a model named without its credential raises. 503 when the session cannot be built or the corpus has a fatal problem; serving with no model is a supported mode and is ready. The reason names environment variables and never carries a driver's message.",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyzResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyzNotReadyResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/capabilities": {
       "get": {
         "tags": [
@@ -5069,6 +5101,39 @@
           "addressed",
           "not_addressed"
         ]
+      },
+      "ReadyzResponse": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ready"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready"
+        ],
+        "title": "ReadyzResponse"
+      },
+      "ReadyzNotReadyResponse": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "const": false,
+            "title": "Ready"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready",
+          "reason"
+        ],
+        "title": "ReadyzNotReadyResponse"
       }
     }
   }

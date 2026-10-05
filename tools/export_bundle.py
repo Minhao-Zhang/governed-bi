@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 """Turn a drafted patch into a directory an engineer applies with ``git apply`` (ADR 0015 §4).
 
+Parked until the 2026-11-20 retrospective (improvement plan M9): kept working, not extended.
+
     uv run --frozen python tools/export_bundle.py --patch pat-... --dry-run
     uv run --frozen python tools/export_bundle.py --patch pat-... --out ./bundles
 

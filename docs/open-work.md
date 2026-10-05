@@ -335,6 +335,10 @@ to *repeat* calls specifically is an average, not a measurement.
 
 ### 3.5 Cost per arm is not in the artifact
 
+**Tokens: fix on `m2/baseline`, open until merged and a run has written the fields.** Each row
+carries `input_tokens` and `output_tokens`, and `tools/datalake_report.py` prints tokens per
+question.
+
 `usage` carries tokens. Price is the provider's number and `measure/price.py` is deleted, so an
 arm's cost is not recoverable from the artifact alone.
 
@@ -1351,6 +1355,14 @@ fixed. Everything below was re-verified against the current tree, as this page r
 
 ### 6.1 There is no logging, and one blind except drops an audit row silently
 
+**Fix on `m5/operability`, open until merged.** Stdlib logging per `docs/architecture.md`; the
+`record` node logs a dropped row at ERROR with its thread and turn, even when the state it failed
+on cannot be read. Of the 13 blind excepts ruff reported, 4 now log (a node's traceback twice in
+`serve/wrap.py`, an unparseable DSN, a missing tokenizer), 1 is narrowed and 8 carry a
+`noqa: BLE001` with a reason: 3 re-raise after classifying, 4 turn the failure into a reported
+corpus problem, and 1 is a finaliser. `ruff check --select BLE001 src` is clean on that branch.
+The original finding:
+
 `grep -c "print(" src/` is **39**; the number of modules that import `logging` is **zero**.
 Twenty-six of those prints are `serve/__main__.py`, which is a CLI and fine. The rest are not:
 `api/graph_app.py` has two, `govern/ledger.py` one, `eval/` ten.
@@ -1400,6 +1412,15 @@ Not reachable as a privilege escalation: `api/auth.py` refuses `command.update`/
 
 ### 6.4 Execution match has no float tolerance and coerces types
 
+**Fix on `m2/baseline`, open until merged and the seven arms are regraded.** On that branch
+`eval/grade.py::results_match` decides `correct` on rows: two whole numbers exactly, any
+fractional number (float or `numeric`) within a relative 1e-9 with a 1e-12 floor near zero, and
+text never equal to a number or a boolean. The harness executes gold whenever there is a
+prediction, and the BIRD fingerprint is still recorded. `tools/regrade.py` records both verdicts
+per row, so its report separates re-execution drift from the grader change. The regrade needs the
+benchmark Postgres and has not run. Each case below is a test in
+`tests/eval/test_the_grader_compares_numbers_by_value_and_text_by_type.py`. The original finding:
+
 `eval/grade.py::_coerce_cell` does `float(value)` and then exact equality. Measured:
 
     1/3 vs 0.33333333333333337     -> not equal   (AVG under a different plan)
@@ -1440,9 +1461,16 @@ commit has landed. The mypy step and the `npm audit` step added on 2026-09-18 ar
 position as the gates that preceded them.
 
 This is a repository setting and a change to how work lands here, not a code change, which is
-why it is written down rather than done.
+why it is written down rather than done. **Declined by the plan owner at M0** of the 2026-09
+plan: the repository has one collaborator, so a required approving review would block every
+merge. Revisit when a second reviewer exists.
 
 ### 6.7 234 tests are one near-tautological assertion, replicated
+
+**Fix on `m9/cleanup`, open until merged.** The grid is replaced by three cases that assert the
+emitted `step` and `status`. When `emit` writes a constant `step`, at least two of the three fail,
+and all three unless the constant is one of the sampled steps. The original
+finding:
 
 `tests/serve/test_stream_events.py::test_every_step_status_pair_builds` is parametrized
 26 x 9 = 234 ways — 10.5% of the whole suite by count, and the largest parametrize group in the
@@ -1455,6 +1483,15 @@ Two other tests in the same file do catch that, so the coverage is not lost; wha
 over a handful of cases is nothing, and they are 10.5% of every run's wall clock.
 
 ### 6.8 No readiness endpoint, and startup validation depends on the entry point
+
+**Fix on `m5/operability`, open until merged.** `/readyz` resolves the session and answers 503
+when it cannot or when the corpus has a fatal problem; no model is a supported mode and is ready.
+The build is locked so concurrent first requests load the corpus once, and `docs/openapi.json`
+declares both bodies.
+Tested under bare `uvicorn`'s adapter, not under `langgraph dev`, where the platform loads
+`graph_app.py` by path (`src__governed_bi__api__graph_app`), so the served graph and `/readyz`
+each hold a session built from the same environment. `/capabilities` has the same split. The
+original finding:
 
 `/livez` returns `{"ok": true}` without touching the session. There is no `/readyz`, and no
 FastAPI `lifespan` or `on_event` anywhere in the tree. `/capabilities` is the de-facto readiness
@@ -1525,6 +1562,51 @@ the probe costs ~136 tokens a question, so a candidate variant can be scored aga
 Two things follow for the next arm, and neither blocks it. The arm runs permissive, so this rule
 does not touch its numbers; and `tools/shadow_replay.py --scope-verdicts` prices it exactly,
 against the same rows, at no extra model spend.
+
+**`bi_scope` v2 exists on `m1/scope-gate` and is not the default.** It lists the served schemas
+(`serve/nodes/guard.py::scope_catalogue`). Every figure below names its artifact under
+`runs/eval/` (not in git). Rows written since the probe gained its stamp carry `variant`, `model`
+and `prompt_sha256` (v1 `475f720baa0e4c7a`, v2 `89e74cf879332634` over the BIRD corpus). Older
+rows carry no stamp, and their prompt is known only from the time they were written.
+
+| Judge | Variant | Set | Blocked | Artifact | Stamped |
+|---|---|---|---|---|---|
+| gpt-5.6-luna | v1 | 1,351 benign | 180 (13.3%) | `bi_scope_gpt-5.6-luna.jsonl` | no |
+| gpt-5.6-luna | v2 | 200 stride | 2 | `scratch/v2c_stride200.jsonl` | no |
+| gpt-6-luna | v1 | 1,351 benign | 199 (14.7%) | `m1/full_v1_gpt-6-luna.jsonl` | no |
+| gpt-6-luna | v2 | 200 stride | 8 (4.0%) | `m1/stride200_v2_stamped_gpt-6-luna.jsonl` | yes |
+| gpt-6-luna | v1 | 60 easy out-of-scope | 59 | `m1/oos_v1_gpt-6-luna.jsonl` | no |
+| gpt-6-luna | v2 | 60 easy out-of-scope | 60 | `m1/oos_v2_gpt-6-luna.jsonl` | no |
+| gpt-6-luna | v1 | 60 hard out-of-scope | 28 | `m1/oos_hard_v1_gpt-6-luna.jsonl` | yes |
+| gpt-6-luna | v2 | 60 hard out-of-scope | 59 | `m1/oos_hard_v2_gpt-6-luna.jsonl` | yes |
+
+The easy set (`tests/govern/data/bi_scope_out_of_scope/`) cannot separate the variants. The hard
+set (`.../bi_scope_out_of_scope_hard/`) is 50 data-shaped questions on subjects no served schema
+covers and 10 data-flavoured requests that are not questions; nobody but its author has read it.
+On gpt-6-luna, v2 misses the M1 target of under 3% false refusals on the sample (4.0%, against
+23 of the same 200 for v1), and reaching it is the recall trade-off the milestone leaves to the
+plan owner. **4.0% is a development figure, not an estimate:** three v2 wordings (`scratch/v2a_*`,
+`v2b_*`, `v2c_*`) were tried on the same 200 questions before the committed one, so the prompt is
+fitted to this sample. Only the full 1,351 can give the rate. Four of the eight are
+questions whose subject a schema summary does not name (songs in `disney`, illness investigations
+in `food_inspection`).
+
+A full v2 pass on gpt-6-luna ran by accident when a stopped background job's child process kept
+going; 984 of its 1,351 rows are rate-limited fail-opens, so it is kept only as
+`scratch/full_v2_gpt-6-luna_INVALID_73pct_rate_limited.jsonl` and is not a measurement.
+
+Cost: the v2 system prompt is 14,466 characters against v1's 543, about 3,600 input tokens per
+scope call against 136, roughly 26 times as much. The served gate makes that call on every turn, so
+v2 adds about 3,500 input tokens to each one; how large that is beside the agent loop is not
+measured here. The org's
+gpt-6-luna limit is 200k tokens a minute, so the served gate would fail open above about 55 turns
+a minute. The probe's `--max-retries` sets the OpenAI client's own retries, which back off
+exponentially; at concurrency 2 they were not enough and 49 of 200 rows still failed open.
+
+To close M1: the full 1,351 on v2 at `--concurrency 1`, `tools/shadow_replay.py --scope-verdicts`,
+a reviewer reading the hard set, a decision on the 3% target, and a decision on the gate failing
+open under rate limits, then flipping `BI_SCOPE.default` with a served-path test. The probe's
+`--schema` gives the catalogue a single-schema deployment would show.
 
 ### 6.11 `--resume` was refused on every arm that has ever been written — fixed 2026-09-20
 

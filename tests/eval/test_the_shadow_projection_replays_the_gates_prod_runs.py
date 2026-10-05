@@ -166,6 +166,9 @@ def test_error_failed_open_is_not_a_refusal_and_not_hidden() -> None:
     gate = bi_scope_gate(rows, {"q1": "error_failed_open"})
     assert gate.fires == frozenset()
     assert gate.unevaluable == ""
+    assert gate.failed_open == frozenset({"q1"})
+    rendered = "\n".join(prod_projection(Population.of("arm", rows), [gate]).render())
+    assert "1 verdict(s) failed open" in rendered, rendered
 
 
 def test_every_gate_id_is_distinct_and_names_its_rule() -> None:

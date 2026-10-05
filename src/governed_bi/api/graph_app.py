@@ -19,7 +19,9 @@ derives the turn server-side; client provenance fields are ignored.
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +35,10 @@ from governed_bi.serve.runtime import trust
 from governed_bi.serve.session import Session
 from governed_bi.serve.state import TurnEntry
 
+_log = logging.getLogger(__name__)
+
 __all__ = [
+    "configure_logging",
     "ACCESS_POLICY_VAR",
     "CORPORA_DIR",
     "CORPUS_DIR_VAR",
@@ -100,13 +105,25 @@ ACCESS_POLICY_VAR = "GOVERNED_BI_ACCESS_POLICY"
 
 
 _SESSION: Session | None = None
+_SESSION_LOCK = threading.Lock()
 
 
 def session_from_environment() -> Session:
-    """Build the run's session once from the environment and reuse it."""
-    global _SESSION
+    """Build the run's session once from the environment and reuse it.
+
+    Locked, because ``/readyz`` and the first requests can arrive together and each would
+    otherwise load and index the corpus. A failed build is not cached, so a probe retries it.
+    """
     if _SESSION is not None:
         return _SESSION
+    with _SESSION_LOCK:
+        if _SESSION is not None:
+            return _SESSION
+        return _build_session_from_environment()
+
+
+def _build_session_from_environment() -> Session:
+    global _SESSION
 
     root = REPO_ROOT
     from governed_bi import credentials
@@ -176,7 +193,7 @@ def session_from_environment() -> Session:
         _SESSION = session_mod.from_live_schema(str(schema), corpus_root=seed_dir, **kwargs)
     if cache is not None:
         state = "unchanged" if cache.written == 0 else f"wrote {cache.written}"
-        print(f"vector cache: {cache.opened_with} hit / {len(cache)} total, {state} — {cache.uri}")
+        _log.info("vector cache: %s hit / %s total, %s — %s", cache.opened_with, len(cache), state, cache.uri)
     return _SESSION
 
 
@@ -427,8 +444,21 @@ def _dropped_in_corpus(root: Path) -> str | None:
             f"set {CORPUS_DIR_VAR} to the one to serve. Choosing for you would make "
             "corpus_content_hash depend on directory order."
         )
-    print(f"serving the corpus in {found[0].as_posix()} (no {CORPUS_DIR_VAR} set)")
+    _log.info("serving the corpus in %s (no %s set)", found[0].as_posix(), CORPUS_DIR_VAR)
     return str(found[0])
+
+
+def _log_dropped_row(state: Any) -> None:
+    """ERROR with the thread and turn when they can be read, and without them when they cannot:
+    the handler runs on a state that already broke once, so reading it must not raise again."""
+    try:
+        raw_answer = state.get("answer")
+        raw_record = raw_answer.get("record") if isinstance(raw_answer, Mapping) else None
+        turn_id = raw_record.get("turn_id") if isinstance(raw_record, Mapping) else None
+        thread_id, turn_id = state.get("thread_id"), turn_id or state.get("turn_id")
+    except Exception:  # noqa: BLE001 — the ids are best effort; the log line is not
+        thread_id = turn_id = "<unreadable>"
+    _log.exception("record node dropped the audit row for thread %s turn %s", thread_id, turn_id)
 
 
 def record_node() -> Any:
@@ -476,6 +506,9 @@ def record_node() -> Any:
                 "record": dict(record_dict),
             }
         except Exception:  # noqa: BLE001 — a turn that answered is not a turn that failed
+            # Nothing after this node can stamp the failure, so the log line is the only trace
+            # that an audit row was lost.
+            _log_dropped_row(state)
             return {}
         return {"turns": [entry]}
 
@@ -511,8 +544,18 @@ def build_serve_graph(session: Session) -> Any:
     return build_graph(accept=accept_node(session), record=record_node()).compile()
 
 
+def configure_logging() -> None:
+    """Root logging for the API entry points, if the host has not configured it.
+
+    ``basicConfig`` does nothing when the root logger already has a handler, so a host that set
+    logging up (``langgraph dev``) keeps its own and bare ``uvicorn`` gets INFO on stderr.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+
 def make_graph() -> Any:
     """What ``langgraph.json``'s ``graphs.serve`` points at: the environment adapter."""
+    configure_logging()
     _warm_imports()
     return build_serve_graph(session_from_environment())
 

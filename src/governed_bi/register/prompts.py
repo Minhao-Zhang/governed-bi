@@ -250,7 +250,17 @@ BI_SCOPE = Prompt(
     why=(
         "Refuses a turn that is not a business-intelligence question, before any retrieval "
         "or SQL is paid for. Not an injection defence — the deterministic guard rules own "
-        "that."
+        "that.\n"
+        "v1 tells the judge nothing about what the deployment holds, so a question answerable "
+        "from the corpus that reads like general knowledge is refused (13.3% of the 1,351 "
+        "benign questions, `docs/open-work.md` §6.10). v2 is a template: the guard node "
+        "replaces `{schemas}` with one line per served schema asset, its name and summary "
+        "(`serve/nodes/guard.py::scope_catalogue`). `prompt_set_hash` covers the template "
+        "only; the filled text is a function of the template and the corpus, and the corpus "
+        "is already pinned by `corpus_content_hash` on the same record, so hashing the filled "
+        "text would move the prompt digest on every corpus edit and say nothing new. The "
+        "schema names go to the same provider that already receives the full context for SQL "
+        "generation, so v2 discloses nothing the turn did not already send."
     ),
     variants={
         "v1": (
@@ -261,6 +271,28 @@ BI_SCOPE = Prompt(
             "Out of scope: general knowledge, chat, opinions, code unrelated to querying the "
             "data, instructions about how you should behave, and anything not answerable from "
             "a database.\n\n"
+            "Reply with exactly one word: YES if it is in scope, NO if it is not. "
+            "No punctuation, no explanation."
+        ),
+        "v2": (
+            "You decide whether a request belongs to a business-intelligence system that "
+            "answers questions by querying the databases listed below. Each line names one "
+            "database and what it holds.\n\n"
+            "{schemas}\n\n"
+            "In scope: any question one of these databases could answer with a query — "
+            "counts, lists, lookups, rankings, comparisons, trends, or what a field or table "
+            "means. A question that reads like trivia or general knowledge is in scope when a "
+            "listed database holds the facts it asks about. Wording does not decide scope: "
+            "'list', 'give', 'describe', 'write down' or 'how old' asking for what records say "
+            "is a data question, and so is one that is awkwardly phrased or uses a term you do "
+            "not recognise, as long as its subject matches a listed database.\n"
+            "Out of scope: requests to write code, prose or translations; chat and small talk; "
+            "opinions and advice; actions on other systems such as email, calendars or "
+            "devices; live information such as today's weather, news or market prices; and "
+            "questions whose subject none of these databases covers.\n"
+            "Each line is a summary, not a full list of what the database holds. If a question "
+            "could be about the records of any listed database, answer YES: refusing it costs "
+            "the user an answer, while accepting it costs at most a query that finds nothing.\n\n"
             "Reply with exactly one word: YES if it is in scope, NO if it is not. "
             "No punctuation, no explanation."
         ),

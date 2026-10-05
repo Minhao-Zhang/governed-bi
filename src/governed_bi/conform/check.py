@@ -36,7 +36,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, TypeGuard
 
 from .findings import Finding, where_of
 from .rules_asset import check_local
@@ -250,7 +250,7 @@ def _report(assets: list[RawAsset], *, whole_tree: bool, manifests: Manifests) -
     )
 
 
-def _present(path: Path | None) -> bool:
+def _present(path: Path | None) -> TypeGuard[Path]:
     return path is not None and path.exists()
 
 

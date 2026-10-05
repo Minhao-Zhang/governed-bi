@@ -14,7 +14,7 @@ arm was unreachable for the same reason. ADR 0006 §5 says the cap **terminates 
 that a cap-terminated turn gets its own ``Outcome`` member; an earlier success does not undo
 the termination.
 
-Kept as a test because ``AGENTS.md`` reserves tests for problems actually hit, and this one was
+Kept as a test because ``AGENTS.md`` asks for one with every bug fix, and this bug was
 hit on a paid run — where the cost of the confusion is an EX credited to a turn that refused to
 state its own result.
 """

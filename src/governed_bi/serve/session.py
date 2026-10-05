@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     # callers that build no vectors at all — which is every test that builds a corpus.
     from ..retrieve.vector_cache import VectorCache
 
-__all__ = ["Session", "from_corpus_dir", "from_live_schema"]
+__all__ = ["Session", "from_corpus_dir", "from_live_schema", "visible_assets"]
 
 #: Asset types whose file needs an explicit namespace on write, because they declare no
 #: ``schema`` field of their own. ``store.write`` raises without one; the namespace is a fact
@@ -189,7 +189,7 @@ def _is_excluded(asset: Any) -> bool:
 #: Read against ``retrieve/structure.py``, not invented here: these are exactly the endpoints
 #: whose ``Problem`` takes the default ``fatal=True``. ``few_shot.sql`` is absent on purpose —
 #: :func:`~governed_bi.retrieve.structure._link_few_shot` passes ``fatal=False``, so a few-shot
-#: citing an excluded table degrades rather than stops (see :func:`_visible`).
+#: citing an excluded table degrades rather than stops (see :func:`visible_assets`).
 _REQUIRED_TABLE_REFS: Mapping[AssetType, tuple[str, ...]] = {
     AssetType.column: ("parent_table",),
     AssetType.join: ("left_table", "right_table"),
@@ -266,7 +266,7 @@ def _without_excluded_refs(asset: Asset, excluded: frozenset[str]) -> Asset:
     return asset
 
 
-def _visible(assets: Sequence[Asset]) -> list[Asset]:
+def visible_assets(assets: Sequence[Asset]) -> list[Asset]:
     """``assets`` minus everything ``governance.excluded`` reaches (D6).
 
     ``Governance.excluded`` is documented as removing an asset "from everything the analyst
@@ -413,9 +413,9 @@ def from_assets(
     prompt_variants: Mapping[str, str] | None = None,
 ) -> Session:
     """Session over an in-memory asset set. The other constructors funnel here."""
-    # `_visible` for the three views the analyst can reach; the full list for `for_analyst`,
+    # `visible_assets` for the three views the analyst can reach; the full list for `for_analyst`,
     # which turns the excluded columns into `check()` refusals rather than silent absences.
-    visible = _visible(assets)
+    visible = visible_assets(assets)
     structure, structure_problems = build_structure(visible)
     entries = _index_entries(visible, structure)
     index = build_index(entries, embedder=embedder, vector_cache=vector_cache)
@@ -471,6 +471,9 @@ def from_assets(
         # proxy-served arms published the register default "openai" on this field while
         # `llm_provider` on the same row said "custom:007df842".
         knobs["llm_utility_provider"] = _provider_of(resolved_utility)
+        utility_effort = reasoning_effort_of(resolved_utility)
+        if utility_effort:
+            knobs["llm_utility_reasoning_effort"] = str(utility_effort)
         timeout = getattr(resolved_utility, "request_timeout", None)
         if timeout is not None:
             knobs["llm_utility_timeout_s"] = float(timeout)

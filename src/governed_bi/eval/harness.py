@@ -162,9 +162,9 @@ def _run_one(
             turn_index=1,
             thread_id=thread_id,
             identity={"token": f"eval-{run_id}"},
-            # Passing evidence is one of the two conditions for EX being comparable to
-            # published BIRD (the other is the grader, `eval/grade._coerce_cell`). An arm
-            # that wants the harder no-hint condition omits the key from the question dict.
+            # Passing evidence is the BIRD condition for EX. The grader departs from BIRD on
+            # purpose (`eval/grade.results_match`: numeric tolerance, text never a number). An
+            # arm that wants the harder no-hint condition omits the key from the question dict.
             evidence=question.get("evidence"),
         )
         # ``Session.turn`` writes the session's own knobs, so a driver that set a per-question

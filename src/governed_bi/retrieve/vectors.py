@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from pathlib import Path
+from typing import cast
 
 import lancedb
 import pyarrow as pa
 from lancedb.expr import col
 from lancedb.index import BTree
+from lancedb.query import LanceVectorQueryBuilder
 
 from governed_bi.ports import Vector
 
@@ -464,7 +466,11 @@ class VectorStore:
             wanted = {str(k) for k in keys}
             if not wanted:
                 return []
-        builder = self._table.search(list(query), vector_column_name=_VECTOR_COLUMN)
+        # `search` is typed as the base builder; a vector query returns the vector one.
+        builder = cast(
+            LanceVectorQueryBuilder,
+            self._table.search(list(query), vector_column_name=_VECTOR_COLUMN),
+        )
         builder = builder.distance_type("cosine")
         if wanted is not None and len(wanted) < self._rows:
             # `col(...).isin(...)` and never an f-string: an id containing an apostrophe

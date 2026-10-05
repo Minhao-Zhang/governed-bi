@@ -1,0 +1,3 @@
+# Store and check out every text file with LF, whatever core.autocrlf says. A file with one stray CR
+# is "mixed", which autocrlf leaves alone, so CRLF reached a commit that way.
+* text=auto eol=lf

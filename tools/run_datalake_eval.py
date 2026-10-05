@@ -48,11 +48,35 @@ DEFAULT_CORPUS = REPO.parent / "BIRD-corpus"
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset"
 
 
+def apply_served_utility_default(args: argparse.Namespace) -> str | None:
+    """Fill ``--utility-model`` and ``--utility-effort`` from the served config when unset.
+
+    The served app builds its utility model from ``GOVERNED_BI_UTILITY_MODEL`` and
+    ``GOVERNED_BI_UTILITY_MODEL_EFFORT`` (``api/graph_app.py``); without this the driver reused
+    the agent model and effort for the scope gate and the facet rewriters, so an arm meant to
+    measure the shipped config measured a different one. An explicit flag always wins. Returns
+    the variable the model came from, or ``None`` when nothing was filled.
+    """
+    import os
+
+    from governed_bi.api.graph_app import UTILITY_MODEL_EFFORT_VAR, UTILITY_MODEL_VAR
+
+    if args.utility_model:
+        return None
+    served = os.environ.get(UTILITY_MODEL_VAR)
+    if not served:
+        return None
+    args.utility_model = served
+    if not args.utility_effort:
+        args.utility_effort = os.environ.get(UTILITY_MODEL_EFFORT_VAR) or None
+    return UTILITY_MODEL_VAR
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus-dir", default=DEFAULT_CORPUS)
     parser.add_argument("--dataset", type=pathlib.Path, default=DEFAULT_DATASET)
-    parser.add_argument("--model", default="gpt-5.6-luna")
+    parser.add_argument("--model", default="gpt-6-luna")
     parser.add_argument(
         "--effort",
         default="xhigh",
@@ -91,13 +115,16 @@ def main(argv: list[str] | None = None) -> int:
         "--utility-model",
         default=None,
         help="separate model id for the guard's scope gate and the facet rewriters. Defaults to "
-        "--model. Wired on every provider; pair it with --utility-provider to put it on a "
-        "different gateway than the agent.",
+        "GOVERNED_BI_UTILITY_MODEL, as the served app does, then to --model. Wired on every "
+        "provider; pair it with --utility-provider to put it on a different gateway than the "
+        "agent.",
     )
     parser.add_argument(
         "--utility-effort",
         default=None,
-        help="reasoning effort for the utility model. Needs --utility-model.",
+        help="reasoning effort for the utility model. Defaults to "
+        "GOVERNED_BI_UTILITY_MODEL_EFFORT when the utility model came from the served config. "
+        "Needs a utility model.",
     )
     parser.add_argument("--top-n", type=int, default=None, help="override route_top_n")
     parser.add_argument(
@@ -202,9 +229,6 @@ def main(argv: list[str] | None = None) -> int:
     # with no model to apply it to would be accepted and dropped, putting an unrecorded
     # treatment in the artifact — the shape of the incident `llm_utility_model` was declared
     # to prevent.
-    if args.utility_effort and not args.utility_model:
-        parser.error("--utility-effort needs --utility-model; alone it is accepted and ignored")
-
     # "Keep what was measured" and "throw it away" are opposite instructions, and the file is
     # the same one. Refused rather than resolved in either direction. The decision itself lives
     # in `provenance.flag_conflict`, where a test can reach it without starting the driver.
@@ -217,6 +241,11 @@ def main(argv: list[str] | None = None) -> int:
     from governed_bi import credentials
 
     credentials.load_into_environ()
+    source = apply_served_utility_default(args)
+    if source:
+        print(f"utility model {args.utility_model} (effort {args.utility_effort or 'none'}) from {source}")
+    if args.utility_effort and not args.utility_model:
+        parser.error("--utility-effort needs --utility-model; alone it is accepted and ignored")
     from governed_bi.model import provider as provider_mod
 
     # Asked per surface, because they no longer share a gateway. The proxy answers for itself

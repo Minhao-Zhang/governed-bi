@@ -46,10 +46,10 @@ will be read as one.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from governed_bi.govern.guard import guard
 from governed_bi.govern.policy import GUARD_RULE_IDS, GovernancePolicy
@@ -129,6 +129,10 @@ class ShadowGate:
     #: projection; counting the second as the first certifies a configuration nothing observed.
     #: Rendered, never silent.
     not_reached: frozenset[str] = frozenset()
+    #: Turns whose model-backed verdict failed open (a rate limit or provider error). Counted as
+    #: not firing, as the served path treats them, and rendered: a probe that failed open on many
+    #: rows under-reports refusals and so over-states the served EX.
+    failed_open: frozenset[str] = frozenset()
 
 
 def abstention_gate(rows: Sequence[TurnRow]) -> ShadowGate:
@@ -161,10 +165,10 @@ def abstention_gate(rows: Sequence[TurnRow]) -> ShadowGate:
     """
     enforced = sorted(
         {
-            str(row["abstention"]["outcome"])
+            str(abstention["outcome"])
             for row in rows
-            if isinstance(row.get("abstention"), Mapping)
-            and row["abstention"].get("outcome") in ("answer", "withhold")
+            if isinstance(abstention := row.get("abstention"), Mapping)
+            and abstention.get("outcome") in ("answer", "withhold")
         }
     )
     if enforced:
@@ -301,7 +305,12 @@ def bi_scope_gate(rows: Sequence[TurnRow], verdicts: Mapping[str, str]) -> Shado
             ),
         )
     fires = frozenset(row for row in map(_unit, rows) if verdicts[row] == "blocked")
-    return ShadowGate(BI_SCOPE_GATE, Counterfactual.probe, fires, _BI_SCOPE_WHY)
+    failed_open = frozenset(
+        row for row in map(_unit, rows) if verdicts[row] == "error_failed_open"
+    )
+    return ShadowGate(
+        BI_SCOPE_GATE, Counterfactual.probe, fires, _BI_SCOPE_WHY, failed_open=failed_open
+    )
 
 
 _BI_SCOPE_WHY = (
@@ -347,9 +356,14 @@ class ShadowProjection:
                 if gate.not_reached
                 else ""
             )
+            failed_open = (
+                f"  ({len(gate.failed_open)} verdict(s) failed open, counted as not firing)"
+                if gate.failed_open
+                else ""
+            )
             lines.append(
                 f"  [{gate.tier.value:6}] {gate.gate_id:38} would refuse "
-                f"{len(gate.fires)}{unreached}"
+                f"{len(gate.fires)}{unreached}{failed_open}"
             )
         lines.append(f"  {self.nested.render()}")
         for gate in self.bounds_only:
@@ -425,13 +439,13 @@ def _as_state(row: TurnRow, empty_digests: frozenset[str] | set[str]) -> dict[st
         else {}
     )
     return {
-        "licensed": list(row.get("licensed") or ()),
+        "licensed": list(cast("Iterable[str]", row.get("licensed") or ())),
         "delivery": {
             "context_block": "" if row.get("context_hash") in empty_digests else _NON_EMPTY,
             "evicted": row.get("context_evicted") or {},
         },
         "facets": facets,
-        "schemas": list(row.get("schemas") or ()),
+        "schemas": list(cast("Iterable[str]", row.get("schemas") or ())),
         "retrieved": {"lexical_coverage": row.get("lexical_coverage")},
         "abstention_policy_enabled": True,
     }

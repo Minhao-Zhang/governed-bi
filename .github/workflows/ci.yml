@@ -73,25 +73,10 @@ jobs:
       - name: Lint
         run: uv run --frozen ruff check .
 
-      # The list `[tool.mypy]` in pyproject.toml points at. Named files and not the whole tree:
-      # `serve/` and `eval/projection.py` carry 41 findings that are mostly Optional narrowing,
-      # and a gate nobody can keep green is worse than an honest narrow one. What is in the list
-      # is what decides whether a query executes (`govern/`, `api/auth.py`) and whether a number
-      # is comparable and quotable (`register/`, `measure/`, `eval/harness.py`).
-      #
-      # **This step did not exist until 2026-09-18**, while the pyproject comment said "the file
-      # list lives in .github/workflows/ci.yml". It did not live here or anywhere; CI ran no
-      # mypy at all, and the spine carried 10 errors including 3 in `govern/pipeline.py` and 2
-      # in `api/auth.py`. The subset is clean as of that commit — keep it that way or move a
-      # file out of the list deliberately, with a reason.
-      - name: Types (governance spine)
-        run: >
-          uv run --frozen mypy
-          src/governed_bi/govern/
-          src/governed_bi/api/auth.py
-          src/governed_bi/register/
-          src/governed_bi/measure/
-          src/governed_bi/eval/harness.py
+      # The whole package, kept at zero errors: a new finding fails the build rather than
+      # joining a backlog.
+      - name: Types
+        run: uv run --frozen mypy src/governed_bi
 
       # The five gates ADR 0005 §6 declares. Run explicitly as well as through the
       # conformance suite: the suite asserts they *exit zero on a clean tree*, and running
@@ -216,6 +201,11 @@ jobs:
       # needed — which is the whole reason it can run here and `check:api` cannot.
       - name: Types
         run: npx tsc --noEmit
+
+      # Component tests for the chat, answer-card and clarification surfaces a first user touches.
+      # They drive the real transport hook against a stubbed `useStream`, so they need no engine.
+      - name: Tests
+        run: npm test
 
       # A production build, which exercises what neither of the above does: the App Router's own
       # constraints. It needs no engine and no corpus — with `NEXT_PUBLIC_LANGGRAPH_URL` unset the

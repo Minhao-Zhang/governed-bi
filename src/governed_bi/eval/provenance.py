@@ -9,7 +9,7 @@ opens an artifact somebody else's run may have written.
 and ``--prompt-variant``; it carries no corpus, no dataset and no worker count, and an
 explicit ``--out`` bypasses it entirely. So ``git pull`` in ``../BIRD-corpus``, resume, and one
 artifact holds two corpora — with every quotability gate passing and the driver printing that
-the numbers are quotable as a single arm. The corpus is the treatment identity (AGENTS.md),
+the numbers are quotable as a single arm. The corpus is the treatment identity (ADR 0007 on ``corpus_content_hash``),
 which makes that the worst sentence the driver can print.
 
 Both treatment hashes were already on every row. The half that was missing is a reader, and

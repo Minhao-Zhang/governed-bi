@@ -93,9 +93,9 @@ def connect(
     return ConnectResult(path=tuple(unique), added=added, declined=False)
 
 
-def components(
-    nodes: Set[Hashable], *, edges: Set[tuple[Hashable, Hashable]]
-) -> tuple[frozenset[Hashable], ...]:
+def components[T: Hashable](
+    nodes: Set[T], *, edges: Set[tuple[T, T]]
+) -> tuple[frozenset[T], ...]:
     """Partition ``nodes`` by which connected component of ``edges`` each one sits in.
 
     The same graph walk as :func:`connect`, reported as a partition instead of a verdict.
@@ -108,11 +108,11 @@ def components(
     """
     adj = _adjacency(edges)
     remaining = set(nodes)
-    out: list[frozenset[Hashable]] = []
+    out: list[frozenset[T]] = []
     while remaining:
         seed = min(remaining, key=str)
         seen = {seed}
-        queue: deque[Hashable] = deque([seed])
+        queue: deque[T] = deque([seed])
         while queue:
             node = queue.popleft()
             for neighbour in adj.get(node, ()):
@@ -125,10 +125,10 @@ def components(
     return tuple(sorted(out, key=lambda g: min((str(n) for n in g), default="")))
 
 
-def _adjacency(
-    edges: Iterable[tuple[Hashable, Hashable]],
-) -> dict[Hashable, set[Hashable]]:
-    adj: dict[Hashable, set[Hashable]] = defaultdict(set)
+def _adjacency[T: Hashable](
+    edges: Iterable[tuple[T, T]],
+) -> dict[T, set[T]]:
+    adj: dict[T, set[T]] = defaultdict(set)
     for a, b in edges:
         adj[a].add(b)
         adj[b].add(a)

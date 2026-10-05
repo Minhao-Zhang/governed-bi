@@ -544,7 +544,7 @@ def withheld_by_grant(assets_by_id: Mapping[str, Any], grant: Any) -> frozenset[
       phrase. Terms whose target survives are rendered as before;
     * a **schema** and a **few_shot** are never withheld. The first names no asset. The second
       can *contain* one, in ``sql`` this repository does not parse — the same non-fatal
-      reference ``session._visible`` declines to prune, recorded here rather than silently
+      reference ``session.visible_assets`` declines to prune, recorded here rather than silently
       decided. A ``metric``'s ``expression`` is the same case for the same reason; what is
       matched is its ``base_table``.
 

@@ -1,5 +1,7 @@
 """Grouping observations that look like the same problem. Structural, never semantic.
 
+Parked until the 2026-11-20 retrospective (improvement plan M9): kept working, not extended.
+
 **The key is ``(category, schema)``, and the missing-table set is deliberately not in it.** Two
 earlier answers were both wrong and the measurement is why. The design keyed on the tables a turn
 *was allowed to read*, which for a coverage miss is exactly backwards — the defect is the table

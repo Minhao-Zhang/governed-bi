@@ -378,7 +378,7 @@ Asset = (
 
 #: ``asset_type`` -> class. Keyed on the enum, so a value that is not one of the
 #: eight cannot reach a class at all.
-ASSET_CLASSES: Mapping[AssetType, type] = {
+ASSET_CLASSES: Mapping[AssetType, type[Asset]] = {
     AssetType.schema: SchemaAsset,
     AssetType.table: TableAsset,
     AssetType.column: ColumnAsset,

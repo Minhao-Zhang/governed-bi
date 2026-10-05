@@ -15,7 +15,7 @@ to change. Everything else is a private, single-purpose helper it calls.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, SupportsInt
 
 from governed_bi.eval.attribution import attribute
 from governed_bi.eval.grade import grade_turn, result_fingerprint
@@ -156,6 +156,20 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+def _row_tokens(usage: Any) -> dict[str, int | None]:
+    """``input_tokens`` and ``output_tokens`` summed over the turn's usage rows."""
+    totals: dict[str, int | None] = {"input_tokens": 0, "output_tokens": 0}
+    for entry in usage:
+        for key in totals:
+            value = entry.get(key) if isinstance(entry, Mapping) else None
+            current = totals[key]
+            if current is None or not isinstance(value, int) or isinstance(value, bool):
+                totals[key] = None
+            else:
+                totals[key] = current + value
+    return totals
+
+
 def _row_latency_sec(record: Mapping[str, Any]) -> float | None:
     """Wall clock for the turn, in seconds.
 
@@ -294,7 +308,7 @@ def _guard_verdict(record: Mapping[str, Any], state: Mapping[str, Any]) -> dict[
     return {"outcome": guard.get("outcome"), "rule_id": guard.get("rule_id")}
 
 
-def _int_or_absent(value: object) -> int | None:
+def _int_or_absent(value: SupportsInt | str | None) -> int | None:
     """``int(value)``, or ``None`` when the field was never written.
 
     Not ``int(value or 0)``: for a count, ``0`` is both the clean measured value and the shape an
@@ -372,7 +386,10 @@ def project_turn(
     gold_fp = question.get("gold_fingerprint")
     gold_columns = question.get("gold_columns")
     gold_rows = question.get("gold_rows")
-    if gold_fp is None and connector is not None and question.get("gold_sql"):
+    # Executed even when a published digest exists, whenever there is a prediction to compare:
+    # the verdict is `grade.results_match` on rows, which a digest cannot feed.
+    wants_gold_rows = gold_fp is None or pred_rows is not None
+    if gold_rows is None and wants_gold_rows and connector is not None and question.get("gold_sql"):
         try:
             gcols, grows, _ = connector.execute(str(question["gold_sql"]))
             gold_columns = list(gcols)
@@ -548,8 +565,8 @@ def project_turn(
         # non-declining turn, so "how often does connect cross, and what is accuracy on those
         # turns" costs nothing to make answerable.
         "crossings": (
-            list(record.get("crossings"))
-            if isinstance(record.get("crossings"), (list, tuple))
+            list(crossings)
+            if isinstance(crossings := record.get("crossings"), (list, tuple))
             else None
         ),
         "guard": _guard_verdict(record, state),
@@ -593,6 +610,9 @@ def project_turn(
         # batch reports no calls at all, reading as a free run rather than an unmeasured one.
         # Tokens only — `measure/price.py` is deleted, so cost is the provider's number.
         "usage": list(record.get("usage") or ()),
+        # The totals a reader compares between arms, so cost sits next to EX without replaying
+        # `usage`. `None` when any call went uncounted: a partial sum would read as a cheap turn.
+        **_row_tokens(record.get("usage") or ()),
         # The other half of cost, and the half no artifact has ever had: `usage` is tokens
         # only. See `_row_latency_sec` for why a `Measured` absence must not be serialised here.
         "latency_sec": _row_latency_sec(record),

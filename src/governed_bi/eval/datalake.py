@@ -159,8 +159,9 @@ def attach_gold_fingerprints(
 
     The dataset ships a digest for every question, recorded against this database
     (``gold_result_hashes_rename_decoy.jsonl``, ``dsn_key="rename_decoy"``). It is what makes
-    the grader-ceiling arm measurable at all (:mod:`governed_bi.eval.oracle`), saves executing
-    1,351 gold statements, and stops gold depending on database state at run time.
+    the grader-ceiling arm measurable at all (:mod:`governed_bi.eval.oracle`) and is the gold of
+    record. The harness still executes the gold statement when there is a prediction to grade,
+    because the verdict compares rows with a numeric tolerance a digest cannot carry.
 
     Four guards, each because using the digest anyway would be wrong rather than unhelpful:
 
