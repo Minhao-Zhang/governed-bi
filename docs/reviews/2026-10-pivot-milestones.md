@@ -481,8 +481,11 @@ waiting for an answer still works from interrupts alone.
 
 **Tasks**
 1. List the requests the chat page makes today (open the browser network panel during a full
-   question, a clarification and a refusal) and record them in the PR. Expected: LangGraph's
-   thread and run endpoints, `/capabilities`, `/clarifications/pending`, `/livez`, `/readyz`.
+   question, a clarification and a refusal) and record them in the PR. Recorded on 2026-10-20
+   against the live app: `/capabilities`, LangGraph's `POST /threads`,
+   `POST /threads/{id}/runs/stream`, `GET /threads/{id}/state` and `threads.search`, and
+   `/corpus/assets`, which only the empty state's starter questions read. The chat page does not
+   call `/clarifications/pending`, `/livez` or `/readyz`.
 2. Delete `api/browse.py` and `api/browse_routes.py`, and from `api/routes.py` the routes
    `/corpus/assets`, `/graph`, `/knowledge-graph`, `/audit/corpus`, `/audit/turns` and
    `/audit/turns/{turn_id}/trace`, unless step 1 found the chat page calling one. Delete the
@@ -492,7 +495,10 @@ waiting for an answer still works from interrupts alone.
    `atLeast(mode, …)` branch (nine files read the display mode). The chat page shows what the
    analyst level shows today. Remove the dead "why" lines and "Schemas considered" from the answer
    card: `lib/answer-delivery.ts:226` reads `provenance.uncertainty_flags` and `:247` reads
-   `provenance.routed_schemas`, and nothing in `src/` writes either.
+   `provenance.routed_schemas`, and nothing in `src/` writes either. Delete the empty state's
+   "Try one of these" starters (`components/chat/conversation.tsx`, `EmptyState`), which fetch
+   all of `/corpus/assets` to show four few-shot questions. The owner chose on 2026-10-20 to drop
+   them here rather than keep the route; P14 brings them back from P12's `GET /examples`.
 4. Until P13 adds the sidebar, keep a plain list of recent conversations on the chat page, using
    `lib/threads.ts`, so no feature is lost between milestones.
 5. Regenerate `docs/openapi.json`. Rewrite ADR 0009 as a reversal record; trim 0007 to the routes
@@ -505,8 +511,9 @@ waiting for an answer still works from interrupts alone.
 - [ ] `ls ui/app` shows only `favicon.ico`, `globals.css`, `layout.tsx` and `page.tsx`.
 - [ ] `git grep -nE "browse_routes|api\.browse|display-mode|useDisplayMode|whyLines|routedSchemasLabel" -- src tests ui`
       returns nothing.
-- [ ] `docs/openapi.json` lists only the routes recorded in task 1, checked by
-      `test_the_spec_matches_the_server.py`.
+- [ ] `docs/openapi.json` lists only the routes recorded in task 1 that stay, checked by
+      `test_the_spec_matches_the_server.py`, and the chat page makes no request to
+      `/corpus/assets` (the network panel, a new conversation).
 - [ ] By hand: ask a question, get an answer with SQL and table; reload with `?thread=<id>` and
       see the same conversation; answer a clarification.
 
