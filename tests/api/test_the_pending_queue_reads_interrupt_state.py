@@ -8,14 +8,6 @@ platform's interrupt state. That makes the reader's correctness entirely a matte
 one would let a broken query pass. So :class:`_FakeThreads` below honours both, and one test asserts
 the query itself rather than only its result.
 
-**The queue is two walks and they ask opposite questions**, so the query tests come in pairs. Open
-``raised`` notes are filed on *finished* turns, which live under any thread status the platform has
-— ``idle``, ``error`` after a crashed run, ``busy`` while a later question runs — so the note walk
-sends **no** ``status`` at all, and a test that only ever fed the fake ``idle`` threads would not
-notice a filter creeping back in. That is the decision
-:func:`governed_bi.api.thread_turns._pending_async` records, and the tests under "coverage by
-status" are what hold it.
-
 The fixtures use the real id shape (``clar-{turn_id}-{digest}``, both hex) because
 ``turn_of_clarification`` is the join back to the turn and a test on a made-up shape would pin
 nothing.
@@ -23,7 +15,6 @@ nothing.
 
 from __future__ import annotations
 
-import tempfile
 from typing import Any
 
 import pytest
@@ -42,13 +33,19 @@ def _clar(turn_id: str, digest: str = "0123456789ab") -> str:
     return f"clar-{turn_id}-{digest}"
 
 
-def _interrupt(turn_id: str, question: str, why: str = "ambiguous", basis: str = "data_definition") -> dict[str, Any]:
+def _interrupt(
+    turn_id: str,
+    question: str,
+    why: str = "ambiguous",
+    basis: str = "data_definition",
+    digest: str = "0123456789ab",
+) -> dict[str, Any]:
     """One raised interrupt, in the shape ``_patch_interrupt`` yields: ``{"id", "value"}``."""
     return {
         "id": f"int-{turn_id}",
         "value": {
             "kind": "clarification",
-            "clarification_id": _clar(turn_id),
+            "clarification_id": _clar(turn_id, digest),
             "question": question,
             "why": why,
             "basis": basis,
@@ -63,8 +60,8 @@ def _thread(
     status: str = "interrupted",
 ) -> dict[str, Any]:
     # `turns` is present so a reader that forgot to project would be caught by the size of what it
-    # got back rather than by a missing key. There is no `raised` seed any more: ADR 0015 §2 deleted
-    # that channel, so this reader has one population and one walk.
+    # got back rather than by a missing key. There is no second population: the queue is
+    # interrupt state only.
     values: dict[str, Any] = {"turns": [{"question": "unrelated"}]}
     return {
         "thread_id": thread_id,
@@ -165,7 +162,7 @@ def test_the_queue_asks_for_interrupted_threads_and_selects_the_interrupts() -> 
     )
     assert not call["extract"], (
         "the paused walk projects no channel. It used to matter because a second walk read "
-        "`values.raised` off the same threads; that walk is gone with the channel (ADR 0015 §2), "
+        "`values.raised` off the same threads; that walk is gone with the channel, "
         "and what is left is that an unprojected thread carries the whole of `ServeState` -- "
         "2.42 MB for sixteen threads, measured -- so `select` is the whole read."
     )
@@ -388,13 +385,7 @@ def _app_client(threads: list[dict[str, Any]]) -> Any:
             return []
 
     queue, _ = _queue(threads)
-    # The store is the app's fourth dependency. Empty here on purpose: this file is about the
-    # interrupt half of the union, and `tests/api/test_the_pending_queue_unions_two_stores.py`
-    # is about the union itself.
-    from governed_bi.feedback.store import FeedbackStore
-
-    store = FeedbackStore(tempfile.mkdtemp(prefix="pending-") + "/feedback.sqlite")
-    return TestClient(make_app(object(), _TurnLog(), queue, store))
+    return TestClient(make_app(object(), _TurnLog(), queue))
 
 
 def test_the_route_serves_the_queue_with_its_columns() -> None:
@@ -471,19 +462,47 @@ def test_an_unanswered_definition_interrupt_stays_pending() -> None:
 # ── the declared row ─────────────────────────────────────────────────────────────────────────
 
 
-def test_every_declared_column_is_present_on_an_interrupt_row() -> None:
-    """A declared column is present and null where it does not apply, never absent.
+def test_the_route_returns_every_interrupt_once_when_they_exceed_one_page() -> None:
+    """More interrupted threads than one search page, paged on the HTTP route.
 
-    ``observation_id`` is declared and is null here, the way ``clarification_id`` and ``basis``
-    are null on the store's half of the union. A client forced to tell "no value" from "no such
-    key" ends up guessing which kind of row it holds.
+    ``_THREAD_PAGE`` is 50. Fifty-one threads forces a second search, and a limit of 20
+    forces several response pages. Each clarification id comes back once.
     """
+    n = 51
+    threads = [
+        _thread(
+            f"t-{i}",
+            f"2026-08-{(i // 24) + 1:02d}T{i % 24:02d}:00:00Z",
+            {"k": [_interrupt(TURN_A, f"q{i:02d}", digest=f"{i:012x}")]},
+        )
+        for i in range(n)
+    ]
+    client = _app_client(threads)
+    limit = 20
+    got: list[str] = []
+    offset = 0
+    for _ in range(10):
+        body = client.get("/clarifications/pending", params={"limit": limit, "offset": offset}).json()
+        rows = body["rows"]
+        got.extend(row["clarification_id"] for row in rows)
+        offset += limit
+        if len(rows) < limit:
+            assert body["meta"]["truncated"] is False
+            break
+        assert body["meta"]["truncated"] is True
+    else:
+        raise AssertionError("paging did not finish")
+    assert got == [f"clar-{TURN_A}-{i:012x}" for i in range(n)]
+    assert len(got) == len(set(got))
+
+
+def test_every_declared_column_is_present_on_an_interrupt_row() -> None:
+    """A declared column is present, never absent."""
     queue, _ = _queue([_thread("t-1", "2026-08-19T10:00:00Z", {"k": [_interrupt(TURN_A, "which?")]})])
     (row,) = queue.pending().rows
     assert set(PENDING_FIELDS) <= set(row), (
         f"absent: {sorted(set(PENDING_FIELDS) - set(row))}"
     )
-    assert row["observation_id"] is None, "an interrupt is not an observation"
     assert row["source"] == "interrupt"
     assert row["interrupt_id"] and row["task_id"], "a resume needs both, so both are carried"
 

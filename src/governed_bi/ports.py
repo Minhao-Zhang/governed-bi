@@ -146,24 +146,6 @@ class Connector(Protocol):
     # ``execute``.
 
 
-# There was a ``CorpusStore`` port, deleted 2026-08-25. Its stated reason was that the Protocol
-# "keeps ``eval/`` from importing the only reader of the corpus tree", and nothing ever typed
-# against it: ``corpus/store.py`` exposes ``load`` and ``write`` as free functions that
-# ``serve/session.py`` imports by name, and the digest was never in ``store.py`` at all — it is
-# ``corpus/hash.py::corpus_content_hash``, which ``eval/feedback_import.py`` also imports
-# directly, so the port's own signature had already drifted from the code it described.
-# One adapter and no reader is a declaration, not a seam, which is the defect
-# ``docs/open-work.md`` §3.10 names. Its three method docstrings were the only thing it carried,
-# and each rule was already stated on the function that enforces it — error isolation on
-# ``store.load``, path validation as a security control on ``store.write``, relative sorted paths
-# and named-but-unread files on ``corpus_content_hash`` — so the port was a second copy of prose
-# that would have drifted from the code the day one of them changed.
-#
-# There is no ``Sink`` port and no ``record/`` package. Records are written by
-# ``api/graph_app.record_node`` onto ``ServeState.turns``, verbatim and unredacted, and the
-# checkpointer persists it.
-#
-# There is no ``Responder`` port either. Clarification is ``langgraph.types.interrupt`` raised
-# in ``serve/tools.ask_user`` and resumed by ``serve/resume.resume_clarification`` — an
-# interrupt-resume protocol, not a callable. Its rules live where they are enforced:
-# ``serve/clarification.py::parse_resume`` for what a reply means and when it fails closed.
+# No port for the corpus store, the record sink or clarification: each has one implementation
+# and no second caller (``corpus/store.py``, ``record_node`` onto ``ServeState.turns``, and a
+# LangGraph interrupt resumed in ``serve/resume.py``), and a port with one adapter is not a seam.

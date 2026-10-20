@@ -98,7 +98,6 @@ Server entry: [`api/graph_app.py:make_graph`](../src/governed_bi/api/graph_app.p
 | `corpus` | Typed assets, load, validate |
 | `datasource` | Connectors |
 | `eval` | Measurement harness |
-| `feedback` | The return path: observations, patches, the derived lifecycle ([ADR 0015](adr/0015-the-return-path.md)). Nothing in it runs during a turn |
 | `govern` | The layer stack (six that run, `COST` declared and off), ledger, tool bounds |
 | `measure` | Population / stats helpers |
 | `model` | Chat and embedder adapters |

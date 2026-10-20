@@ -2,7 +2,7 @@
 
 Measured on ``../BIRD-corpus`` on 2026-08-23: with an untracked ``.conformance-pins.txt`` at the
 root the tree hashed ``8bb37531cff9155a…``; with that one file not counted it hashed
-``6e5c7b4be83d5682…``, the value ``docs/adr/0015-the-return-path.md`` records for the checked-out
+``6e5c7b4be83d5682…``, the value ``docs/corpus-format.md`` records for the checked-out
 tip. A lint's bookkeeping file had already moved the treatment identity every measured number is
 pinned to, merely by sitting in the directory.
 

@@ -31,11 +31,6 @@ LAYERS: tuple[tuple[str, ...], ...] = (
     ("register",),
     ("measure",),
     ("corpus",),
-    # The return path (ADR 0015). Here and not lower because a patch must be judged by
-    # `corpus/validate.py::problems_with` -- the same validator the loader uses -- rather than by a
-    # second copy of the rules. Here and not higher because nothing in it runs during a turn, and
-    # a store only an HTTP handler can reach is a store no script can audit.
-    ("feedback",),
     ("retrieve",),
     ("govern",),
     ("datasource",),
@@ -45,7 +40,7 @@ LAYERS: tuple[tuple[str, ...], ...] = (
     # of its rules reaches -- V16 measures a table with `serve/context.py`'s own renderer -- and no
     # lower, because the set would then have to split across `corpus`, `govern` and `serve`, which
     # is three rule tables and three reports for one question the ratchet keys as one. Above `serve`
-    # and not after `eval` for the reason `feedback` is where it is: the position claims only what
+    # and not after `eval`: the position claims only what
     # the rules import, and `eval` reporting a corpus's conformance beside a run's numbers is the
     # next thing anyone will want.
     ("conform",),

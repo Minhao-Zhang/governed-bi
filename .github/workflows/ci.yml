@@ -221,35 +221,6 @@ jobs:
       - name: Answer-delivery closure
         run: npm run check:answer-delivery
 
-      # The word diff a reviewer reads before deciding whether a change to the semantic layer is
-      # right. It is a *minimality* gate: a diff that marks a whole sentence changed when one word
-      # moved still renders and still looks like a diff, so the degradation is silent. Imports
-      # `lib/asset-diff.ts` and nothing else.
-      - name: Asset-diff minimality
-        run: npm run check:asset-diff
-
-      - name: Patch fields — the client refuses what the engine refuses
-        run: npm run check:patch-fields
-
-      # The client parses both shapes the engine can serve for an observation. Hermetic on
-      # purpose: it reads `docs/openapi.json` and the zod schemas and starts no engine, which is
-      # why it can run here while `check:api` cannot. It is the gate that was missing when
-      # `gold_sql` went out of the reader projection and the client kept requiring it — a 73-row
-      # queue rendered as "response did not match the expected schema" and no check could see it.
-      - name: Observation projections — reader mode parses too
-        run: npm run check:observation-projections
-
-      # Three things: every wire enum member has a reader-facing sentence, no string claims
-      # `automatically` or `will be fixed` outside a negation, and no accuracy figure appears on
-      # the review surfaces that `tools/reproduce_observation.py::CLAIM` does not carry. That last
-      # one is why this is a gate and not a review habit: the pair moved 0.7555 -> 0.7548 on
-      # 2026-08-24, `docs/open-work.md` recorded "all ten sites are updated", and the two that were
-      # missed were both here — one of them a module header sitting 196 lines above a string with
-      # the new figure. Review passed it twice. Hermetic: it imports the copy module and reads two
-      # repository files as text, so it needs no engine.
-      - name: Review copy — one figure, one source, and every state has a sentence
-        run: npm run check:review-copy
-
       # `npm run check:api` and `npm run check:stream-messages` are deliberately NOT here.
       # `check:api` needs a live engine and a loaded corpus (ADR 0009 says so in the section that
       # introduces it); `check:stream-messages` is pure and could run, but it is a red/green

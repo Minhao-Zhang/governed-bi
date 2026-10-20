@@ -221,12 +221,8 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     rail("decline", decline_node)
     # Unwrapped: nothing after stamp can record a wrap crash.
     graph.add_node("stamp", stamp)  # type: ignore[type-var]  # langgraph bounds node input to TypedDict-likes
-    # There is deliberately no unattached write node here. One existed —
-    # ``raise_note``, whose only purpose was to be an ``aupdate_state(as_node=...)``
-    # target for reader-filed notes — and ADR 0015 §2 deleted it with the channel it
-    # wrote. A node with no edge from START is a write path into checkpointed state
-    # that the graph's own topology does not describe, so the graph is easier to
-    # reason about without one and nothing needs it: feedback is its own store.
+    # No unattached write node. A node with no edge from START is a write path the
+    # graph's own topology does not describe.
 
     def _fanout_passthrough(state: ServeState) -> dict[str, Any]:
         return {}

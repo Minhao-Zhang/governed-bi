@@ -542,12 +542,8 @@ export const pendingClarificationSchema = z.object({
   clarification_id: z.string().nullable(),
   turn_id: z.string().nullable(),
   thread_id: z.string().nullable(),
-  source: z.enum(["interrupt", "from_refusal", "wrong_answer"]).optional(),
+  source: z.literal("interrupt").optional(),
   basis: z.enum(["data_definition", "ranking_ambiguity"]).nullable().optional(),
-  // `observation_id` since 2026-08-23, where it was `report_id`: that name was minted by the
-  // deleted `serve/raised.py`, and "report" would have been the third meaning of the word in
-  // one system. Null on an interrupt row, present on an observation row.
-  observation_id: z.string().nullable().optional(),
   /** What a resume would have to name. Carried, not used — this surface is read-only until the
    * corpus write path has a provenance gate. */
   interrupt_id: z.string().nullable().optional(),
@@ -627,11 +623,6 @@ export const auditTraceSchema = z.object({
   record: z.record(z.string(), z.unknown()).optional(),
   undeclared_keys: z.array(z.string()).optional().default([]),
   clarifications: z.array(z.record(z.string(), z.unknown())).optional().default([]),
-  // Observations filed about this turn, from `runs/feedback.sqlite`. Was `raised`, which read
-  // a checkpoint channel that no longer exists (ADR 0015). Left deliberately opaque, like its
-  // `clarifications` sibling: the server owns the row's shape and a client that pinned it
-  // would fail the parse for every row in the response the day a field is added.
-  observations: z.array(z.record(z.string(), z.unknown())).optional().default([]),
 });
 
 /** `GET /audit/corpus` — what the corpus is, and what is wrong with it.
@@ -703,182 +694,4 @@ export const corpusRowsSchema = z.object({
    * filtered-looking list that is not filtered. */
   unknown_where: z.array(z.string()),
   detail: z.string().nullable().optional(),
-});
-
-/* ── /observations (ADR 0015) ───────────────────────────────────────────────── */
-
-/**
- * One row of the return path's store.
- *
- * `open` is validated as its own boolean although it is derivable from `state`, because the server
- * computes it and a client that recomputed it would be a second answer able to disagree with the
- * first. `question_is_held_out` is carried rather than inferred from `source` for a sharper reason:
- * it is a **warning**, and a warning the client derives is a warning the client can get wrong.
- */
-export const observationSchema = z.object({
-  observation_id: z.string(),
-  filed_at: z.string(),
-  source: z.string(),
-  kind: z.string(),
-  category: z.string().nullable(),
-  state: z.string(),
-  open: z.boolean(),
-  note: z.string(),
-  decline_reason: z.string().nullable(),
-  duplicate_of: z.string().nullable(),
-  blocked_note: z.string(),
-  turn_id: z.string().nullable(),
-  thread_id: z.string().nullable(),
-  question: z.string(),
-  outcome: z.string().nullable(),
-  refused_by: z.string().nullable(),
-  generated_sql: z.string().nullable(),
-  licensed: z.array(z.string()),
-  schemas: z.array(z.string()),
-  missing_tables: z.array(z.string()),
-  /** **Absent and null mean different things, and the UI must not merge them.** These three are
-   * outside `PUBLIC_OBSERVATION_FIELDS`, so an engine started without `GOVERNED_BI_FEEDBACK_ADMIN`
-   * omits them entirely; `null` means the observation genuinely has no reference answer. They were
-   * `.nullable()` alone until 2026-08-25, which made every reader-mode response a hard parse
-   * failure reported as "response did not match the expected schema" -- 219 issues over these
-   * three fields on a 73-row queue, with nothing naming the deployment flag behind it.
-   * `docs/openapi.json` has always had them out of `required`; this schema was the half that
-   * disagreed with the contract. */
-  gold_sql: z.string().nullable().optional(),
-  gold_fingerprint: z.string().nullable().optional(),
-  pred_fingerprint: z.string().nullable().optional(),
-  quality_flags: z.array(z.string()),
-  arm: z.string().nullable(),
-  question_id: z.string().nullable(),
-  db_id: z.string().nullable(),
-  corpus_content_hash: z.string().nullable(),
-  question_is_held_out: z.boolean(),
-  /** Opaque on purpose: the patch shape is not settled, and pinning it here would fail the parse
-   * for every row in the response the day a field is added. */
-  patches: z.array(z.record(z.string(), z.unknown())).optional().default([]),
-  history: z.array(z.record(z.string(), z.unknown())).optional().default([]),
-});
-
-export const observationQueueMetaSchema = z.object({
-  n: z.number(),
-  total: z.number(),
-  /** Load-bearing (ADR 0009): a silently short list reads as "this is everything". */
-  truncated: z.boolean(),
-  limit: z.number(),
-  offset: z.number(),
-  grouped: z.number().optional(),
-});
-
-export const observationsSchema = z.object({
-  rows: z.array(observationSchema),
-  meta: observationQueueMetaSchema,
-});
-
-export const observationClusterSchema = z.object({
-  key: z.string(),
-  category: z.string().nullable(),
-  schema: z.string(),
-  n: z.number(),
-  /** Whether this is one person hitting a wall repeatedly or several questions blocked by one gap.
-   * The two want different amounts of attention and `n` alone cannot tell them apart. */
-  n_distinct_questions: z.number(),
-  /** The **intersection** across members, not the union: a union grows with the cluster and stops
-   * describing what its members share. Empty is a real answer. */
-  shared_missing_tables: z.array(z.string()),
-  oldest_filed_at: z.string(),
-  observations: z.array(observationSchema),
-});
-
-export const observationClustersSchema = z.object({
-  clusters: z.array(observationClusterSchema),
-  meta: observationQueueMetaSchema,
-});
-
-/**
- * One drafted patch.
- *
- * **`derived_state` is nullable and usually null**, which is the whole design showing through the
- * wire: whether a change landed is answered by reading the corpus, and no route that lacks a
- * loaded corpus may claim to know. A client that filled the null in with a guess would be the
- * second answer this shape exists to prevent.
- *
- * `field_path` is `summary` or `body` and typed as a plain string anyway — the editable set is
- * enforced in `corpus/patch.py`, and a client-side union would refuse a row the server accepted
- * the day the set grows.
- */
-export const patchSchema = z.object({
-  patch_id: z.string(),
-  created_at: z.string(),
-  author: z.string(),
-  intent: z.string(),
-  state: z.string(),
-  namespace: z.string(),
-  rationale: z.string(),
-  asset_type: z.string().nullable(),
-  asset_id: z.string().nullable(),
-  field_path: z.string().nullable(),
-  was: z.string().nullable(),
-  becomes: z.string().nullable(),
-  base_corpus_content_hash: z.string(),
-  expected_corpus_content_hash: z.string().nullable(),
-  /** Tier name to that tier's result. Open-ended: the decision bar renders whatever tiers ran. */
-  ladder: z.record(z.string(), z.unknown()).default({}),
-  withdrawn_reason: z.string(),
-  observations: z.array(z.string()).default([]),
-  derived_state: z.string().nullable().optional(),
-});
-
-export const patchEnvelopeSchema = z.object({
-  ok: z.boolean(),
-  patch: patchSchema,
-});
-
-/**
- * `POST /patches` only. The envelope plus what drafting did to the observations the patch answers.
- *
- * Drafting is the producer of `addressed` — nothing else sets it — and the move is declared only
- * from `triaged` and `blocked_on_a_person`. A steward's real sequence is *read the queue, draft*,
- * so a row that is still `open` attaches the patch and does not move. The server reports that
- * rather than refusing the draft, and this schema is why the report survives the client: parsed
- * through `patchEnvelopeSchema` the two fields were stripped, so the case arrived as silence.
- *
- * Its own schema and not two optional fields on `patchEnvelopeSchema`: that one is the withdraw
- * response, and it reports the mirror-image pair under different names. A field one of two callers
- * cannot produce is indistinguishable from a field nobody serves.
- */
-/**
- * `POST /patches/{id}/withdraw`. The mirror of `draftEnvelopeSchema`.
- *
- * Drafting is the only producer of `addressed`; withdrawing the last live patch is what undoes it.
- * A row that stays `addressed` because a second draft is still open is reported in `not_reopened`
- * with the reason, and so is a terminal row -- only an `addressed` row is a candidate, because
- * `open -> triaged` is also a declared edge and returning every attached row would triage one
- * nobody has looked at.
- *
- * Parsed here for the same reason the draft envelope is: zod strips unknown keys, so through
- * `patchEnvelopeSchema` these two arrived and were dropped, and the steward whose row did not move
- * got silence.
- */
-export const withdrawEnvelopeSchema = patchEnvelopeSchema.extend({
-  reopened: z.array(z.string()),
-  not_reopened: z.array(
-    z.object({ observation_id: z.string(), state: z.string(), why: z.string() }),
-  ),
-});
-
-export const draftEnvelopeSchema = patchEnvelopeSchema.extend({
-  addressed: z.array(z.string()),
-  not_addressed: z.array(
-    z.object({ observation_id: z.string(), state: z.string(), why: z.string() }),
-  ),
-});
-
-export const observationEnvelopeSchema = z.object({
-  ok: z.boolean(),
-  observation: observationSchema,
-});
-
-export const patchesSchema = z.object({
-  patches: z.array(patchSchema),
-  meta: observationQueueMetaSchema,
 });

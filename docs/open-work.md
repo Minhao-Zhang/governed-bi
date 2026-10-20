@@ -608,107 +608,12 @@ hash** while changing no behaviour, so setting it produces a row that lies. A fu
 produces nothing at all. The failure mode is a reader believing the capability is in force, which is
 what this entry exists to prevent.
 
-### 3.10a Four things measured while building the return path (2026-08-23)
+### 3.10 The return path is deleted
 
-Each one changed a decision in [ADR 0015](adr/0015-the-return-path.md), which records *which*
-decision and points here for the evidence.
-
-**F1 — the `raised` channel held zero rows, on three independent checks.**
-`select count(*) from writes where channel='raised'` → 0; a full msgpack decode of all 931
-checkpoints in `runs/conversations.sqlite` → 0; the 23 thread rows in
-`.langgraph_api/.langgraph_ops.pckl` → 0. A byte-grep shows 47 apparent hits and every one is
-English prose inside `messages`. **So the migration needed no drain tool**, which is what let the
-channel deletion move earlier and get cheaper. The channel and `api/raised_write.py` are deleted;
-`ServeState` went 48 → 47.
-
-**F2 — the cost of deleting a channel is the contract, not the code.** The writer was one path and
-the readers were two call sites and a constant, all in `api/thread_turns.py`. What actually took the
-time: `docs/openapi.json` pinned `RaisedRowResponse` with seven required non-nullable fields,
-`report_id` was declared in the pending queue's `meta.columns` *because a client keys a card on it*,
-and `tests/api/test_the_spec_matches_the_server.py` held four assertions over that operation. About
-half a day. `docs/return-path.md` called it "a rename with a deleted owner, not a rename with churn"
-and that was half wrong; the page now says so.
-
-**And the spec was missing seven operations, not two.** `GET /observations` in both shapes and
-`GET /observations/{id}` shipped with the review screen and were never declared, which made
-`ui/scripts/check-api-contract.ts`'s "inventory of record" claim about `docs/openapi.json` false.
-All seven are declared and driven against real payloads now.
-
-**F7 — `corpus/store.py::write` on an existing id writes a second file with the same id.**
-`store.load` returns both with zero problems and `retrieve/index.py:316` then raises
-`ValueError: duplicate index id` — after the commit. Measured on the same one-word `summary` edit:
-`store.write` touches 343 lines and lands at a different path; `corpus/patch.py::apply_edit` touches
-4 and lands where the asset already lives. **This is why a bundle is a `git apply` diff and never a
-directory copy**, and why conformance rule V23 exists even though it finds zero today.
-
-**F8 — `corpus/snapshot.py`'s `rmtree` was guarded only against nesting.** `_identify_corpus`
-guarded `restore` and not the destination, and it was **measured deleting a scratch directory of
-unrelated files**. Fixed: `_identify_corpus(dest)` runs before the `rmtree`, an empty directory is
-allowed, and an existing file raises `NotADirectoryError`.
-
-### 3.10b Complaints cluster weakly, measured on the real 73
-
-ADR 0015's open question 7 asked whether complaints cluster. **They do not, and the design's
-batching argument does not survive it.** Measured on the 73 coverage-miss failures the importer
-produced from `runs/eval/proxy_v4_corpus30872d3.jsonl`:
-
-| key | clusters | singletons | largest | in a cluster ≥2 |
-|---|---:|---:|---:|---:|
-| `(category, schema, missing[:3])` | 70 | 67 | 2 | **8%** |
-| **`(category, schema)`** — shipped | 54 | 37 | 3 | **49%** |
-| `(schema, missing[:1])` | 63 | 55 | 4 | 25% |
-| `(schema,)` | 36 | 17 | 6 | 77% |
-| `(category,)` | 4 | 0 | 33 | 100% |
-
-56 of 73 miss exactly one table and those tables are mostly *different*, so the absent table
-identifies a **turn** rather than a problem — which is why `missing_tables` stays on the row as
-evidence and out of the key. The largest cluster is 3. Anything sized on "the marginal cost of one
-more observation in a cluster is zero" has to be re-sized, and `/review` is a list with an optional
-grouping rather than a cluster-first screen.
-
-### 3.10c The 438-row partition now has a producer
-
-§1's table above and `failure-modes.md` §1 carry **⚠ hand-run, no producer in the tree** over the
-six-way partition of the 438 failures. `eval/feedback_import.py` reproduces it from the artifact in
-code — 1,351 rows read, 438 failures, 73 coverage misses, 87 dataset defects, 278 full coverage, 0
-crashed, 0 unparsed — so that partition is the **first** number in this block to have one. The rest
-of the hand-run block (the 292-statement diagnosis, the projection recovery counts) still does not,
-and the marks there stand.
-
-### 3.10d The return path was walked once, end to end, and the queue is 72% stale
-
-One real observation, 2026-08-24: `open` → triaged → drafted → T0/T1/T2 green → exported →
-`git apply` → committed → **`landed_verified`** → T3 → withdrawn. The first `landed_verified` this
-project has produced: the exporter predicted `41bbb2e567ea32eb` before the write and the corpus
-hashed to exactly that after, which is the strong claim (*this* tree, not *a* tree with the right
-text in it) and it only became reachable when `export_bundle` started recording the predicted hash.
-
-**The payoff was zero, and that is the finding.** The case was the cleanest available: the question
-asks what was *bought*, the gold needs `student_club.expense`, and that table's `summary` — which is
-the retrieval index — did not say the table records what was bought, though `expense_description`
-holds it. Adding it left both gold tables unlicensed, **exactly as before the edit**. Verified
-against the pre-edit tree rather than inferred, after a first reading that wrongly blamed the edit
-for a displacement that predated it. The free tier refused to certify the patch, which is what it is
-for, and the patch was withdrawn.
-
-**The funnel, measured.** 73 imported → 71 real → **20 still reproduce** → 13 whose missing table
-sits in a schema the router did reach → **11 the only repair this loop offers could plausibly fix**.
-15%.
-
-| finding | status |
-|---|---|
-| **52 of 71 open rows no longer reproduce.** 71 carry `corpus_content_hash 86ed1dbf…` and the corpus is `6e5c7b4b…` — the artifact was measured against a different tree and nothing said so | fixed: `--state` asks the queue in one pass (72s; per-row through the CLI was 32 minutes), `--decline` closes them, and the importer names both hashes. Rows are **not** dropped on import — an observation is a record of something that did happen |
-| **7 of the 20 are schema-routing failures.** The router never reached the schema, so no `summary` or `body` edit can help — and nothing in the queue, the reproducer or `/review` says which layer failed | **open.** The loop offers one repair and does not say when it is the wrong one |
-| A config error exited **1**, which three of these tools use for a verdict; and `return 1` sat inside `if args.record:`, so a run that found 19 live failures exited **0** | fixed: `corpus_target.Misconfigured` → 2, chosen in `main`, for all four |
-| Four tools each carried their own copy of "which corpus", and the copies disagreed about whether `.env` counts | fixed: `tools/corpus_target.py`. `credentials` has been this repo's dotenv reader since 2026-08-03 |
-| The exporter's printed `git apply` / `git commit -F` pair **does not work** — the change lands unstaged and the commit exits 1 | fixed: `--index`, and a test parses the commands out of stdout and runs them |
-| Withdrawing a patch left its observations reading `addressed` | fixed: `move_patch` returns them to `triaged` and reports what it could not move |
-| `airline.Air Carriers` reports missing while `airline.Air_Carriers_66c534` is licensed — one table, compared as physical name against asset id. 2 of 73 rows are false | fixed: `gold_table_ids` offers both spellings a gold could be licensed under, re-deriving the id with the same `slug` that minted it. It was **three** comparisons, not one — `table_coverage`, `retrieval_funnel` and `feedback_import._missing_tables`, the last of which files operator-facing rows. `coverage_miss` 73 → 71 |
-| 2 of 73 rows carry no `corpus_content_hash` at all | counted apart from a mismatch; why they have none is unexplained |
-
-**What this says about the feature.** Every defect above was found by *using* it. Three days of
-reading and mutation testing beforehand found none of them — they are all in the joins, which is
-what you would expect of a loop that had never been driven.
+Closed by the pivot's P3. The store, the review page, the note control and the tools that
+drafted a corpus change from a complaint are gone ([ADR 0015](adr/0015-the-return-path.md)).
+`/clarifications/pending` reads interrupt state only. The measurements in the old §3.10a–§3.10d
+described that loop and are not open work.
 
 ### 3.10e The corpus gate is wired to a nightly, and its baseline still equals the corpus tip
 

@@ -1,67 +1,17 @@
-"""Custom REST routes mounted by ``langgraph.json``'s ``http.app`` (ADR 0007 §7).
+"""Custom REST routes mounted by ``langgraph.json``'s ``http.app`` (ADR 0007).
 
-Route shapes follow ``docs/openapi.json``, which is the inventory of record. Capabilities
-report what is actually built. **Nothing here needs a model**: serving a turn is the streamed
-LangGraph Server path (``langgraph.json``'s ``graphs.serve`` → ``api/graph_app.make_graph``)
-and nothing else.
+Every route here is a read. A turn is served by the graph the platform streams, not by
+this app. :func:`make_app` takes the session, the turn log and the pending-clarification
+reader; :func:`app_from_environment` is the only place that resolves the environment, and
+it does so on the first request so importing this module needs no database.
 
-**Every route here is a read except the return path's** (ADR 0015). ``POST /turns/{id}/raised``
-files an observation and ``PATCH /observations/{id}`` amends its note, both in
-``api/feedback_routes.py`` over ``runs/feedback.sqlite``. Four steward verbs exist and are
-**mounted only when ``GOVERNED_BI_FEEDBACK_ADMIN`` is set**, returning 404 otherwise — a 403 would
-confirm the route exists, and with no credential the switch is the whole of the control.
-
-What that changed and what it did not. Filing no longer writes graph state, so the ~250 lines that
-existed to do that safely are gone along with the 409 that refused a paused thread — the reader
-whose turn is paused can file now. The pending queue no longer projects ``values.raised`` off every
-thread, so its 40 uncached round trips per request are one indexed query. **The disclosure is
-unchanged**: nothing here authenticates (A7, below), so any caller reaching the port can file
-against any turn and read every open question, and neither verb narrows what a
-caller sees. Two things are arithmetically better — one row once instead of a
-row re-serialised into every later checkpoint, and a store that can be swept — and neither is a
-control.
-
-``POST /chat`` and ``POST /chat/resume`` are **deleted** (2026-08-18, ADR 0014). They were a
-second topology for the same job — no ``accept`` node, the whole of ``ServeState`` in and out, a
-process-wide ``InMemorySaver`` of their own and a 32-thread LRU over it — and the second store is
-what made them a bug rather than a fallback: the two transports never shared a thread, so
-degrading to REST lost the conversation it was meant to rescue. Their append into the audit log
-went with them, so ``record_node`` is the only writer of a turn: it returns the envelope onto
-``ServeState.turns`` and the checkpointer persists it.
-
-**The surface has a constructor** (2026-08-11). :func:`make_app` takes its three dependencies —
-the session, the turn log and the pending-clarification reader — and returns an app over
-exactly those. :func:`app_from_environment` is the adapter the process entry uses, and is the
-only thing here that resolves anything from the environment; the module-level :data:`app` is
-that adapter's output because ``langgraph.json`` names an attribute rather than a factory.
-
-The two adapters are what justify the seam: the environment in production, a fake ``Session`` in
-tests. Resolution stays **lazy** for the environment one — importing this module must not build
-a Postgres session, or every test that imports it needs a database.
-
-**None of these routes asks for a credential** (2026-08-13). Between 2026-08-10 and 2026-08-13 a
-middleware here refused every path but ``/livez`` without a shared ``GOVERNED_BI_API_KEY``,
-because the platform will not apply its own auth middleware to a custom app (``langgraph.json``'s
-``http.enable_custom_route_auth`` raises ``ValueError: Cannot apply middleware: route
-_IncludedRouter(...) has no app`` on fastapi 0.141, and the server then never binds). That closed
-audit A7. It has been deliberately removed: this is a single-operator dev engine on
-``127.0.0.1``, LangGraph Studio's bootstrap fetches carry no custom headers so the key made
-Studio unusable, and the maintainer chose reachability over transport auth.
-
-So A7 is open again, knowingly: ``/audit/turns`` and ``/audit/turns/{turn_id}/trace`` hand every
-thread's SQL, the full turn records and an absolute path to the conversation store to anything
-that can reach the port — and the platform's own ``/threads`` and ``/runs``, on the same port and
-under the same absent credential, will spend model budget for it. Nothing this app serves will:
-the chat pair that used to is deleted. The ``_cors_headers`` helper that made a 401 legible
-to a browser went with the middleware — with no refusal to head by hand, every response now
-passes back through the platform's ``CORSMiddleware`` normally. See ``api/auth.py``, which keeps
-the state-write denials that are *not* authentication.
+Nothing here asks for a credential. One operator on loopback is the deployment, so the
+port is the boundary. ``api/auth.py`` still refuses a client-supplied state write.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -70,7 +20,6 @@ from fastapi.responses import JSONResponse
 
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import make_router
-from governed_bi.api.feedback_routes import make_admin_router, make_feedback_router
 from governed_bi.model.provider import reasoning_effort_of
 from governed_bi.paths import REPO_ROOT
 from governed_bi.register.assets import ASSET_REGISTER
@@ -81,43 +30,13 @@ __all__ = ["make_app", "app_from_environment", "app"]
 # ── the seam ─────────────────────────────────────────────────────────────────
 
 
-def make_app(session: Any, turn_log: Any, pending: Any, store: Any) -> FastAPI:
-    """An app over exactly these four dependencies. **The constructor.**
+def make_app(session: Any, turn_log: Any, pending: Any) -> FastAPI:
+    """An app over the session, the turn log and the pending-clarification reader.
 
-    ``session`` is a :class:`~governed_bi.serve.session.Session` (or anything with its read
-    surface: ``assets_by_id``, ``structure``, ``connector``, ``agent_model``, ``knobs_resolved``,
-    ``corpus_content_hash``, ``problems``). ``turn_log`` is a reader of served turns plus one
-    write, and the whole seam is six members, because a fork that implements fewer gets an
-    ``AttributeError`` out of a route rather than a refusal: ``list_turns`` and
-    ``SUMMARY_FIELDS`` for ``/audit/turns``, ``TURN_LOG_DIR`` for that route's ``meta.log_dir``,
-    ``get_turn`` and ``clarifications_of`` for ``/audit/turns/{id}/trace``. The seam is **four
-    members now, not six**: ``append_raised`` and ``raised_of`` went with the channel (ADR 0015
-    §2), and ``get_turn`` gained a second caller — the return path's filing route reads the turn's
-    question and record off it, because an observation copies its attribution rather than joining
-    to a store that removes rows. :class:`governed_bi.api.thread_turns.ThreadTurnLog` is the
-    production one.
-
-    **There is no ``graph``.** It was the third dependency and only the deleted chat pair ever
-    called it, so keeping the parameter would advertise a transport this app does not have. A
-    turn is served by the graph ``langgraph.json`` mounts, which the platform drives; this app
-    never holds it.
-
-    ``pending`` is the third, added when the pending-clarification queue was: a reader exposing
-    ``pending(limit=, offset=)`` and ``PENDING_FIELDS``, with
-    :class:`governed_bi.api.thread_turns.PendingClarifications` the production one. It is a
-    separate dependency from ``turn_log`` because it answers a different question — an open
-    question has no turn yet, which is exactly why thread state does not record it.
-
-    ``store`` is the fourth, added with the return path (ADR 0015): a
-    :class:`~governed_bi.feedback.store.FeedbackStore`. It is a **dependency and not a default**
-    for the reason the next sentence gives — an app that built its own would put
-    ``runs/feedback.sqlite`` behind every test that constructs one, and a test suite that writes
-    into the operator's real queue is a suite nobody can trust twice.
-
-    All four are required and none is defaulted. A default would put the environment back in the
-    constructor, which is the thing this exists to remove.
+    All three are required. A default would put the environment back in the constructor.
+    ``pending`` is separate from ``turn_log`` because an unanswered question has no turn yet.
     """
-    return _build_app(lambda: session, turn_log, pending, store)
+    return _build_app(lambda: session, turn_log, pending)
 
 
 def app_from_environment() -> FastAPI:
@@ -142,12 +61,12 @@ def app_from_environment() -> FastAPI:
     # the two hold different questions; they share the one in-process client seam, which is the
     # thing that must not exist twice.
     return _build_app(
-        session_from_environment, ThreadTurnLog(), PendingClarifications(), feedback_store()
+        session_from_environment, ThreadTurnLog(), PendingClarifications()
     )
 
 
 def _build_app(
-    get_session: Callable[[], Any], turn_log: Any, pending: Any, store: Any
+    get_session: Callable[[], Any], turn_log: Any, pending: Any
 ) -> FastAPI:
     """Assemble the app from a session thunk, a turn log and a pending-question reader.
 
@@ -227,87 +146,50 @@ def _build_app(
         limit: int = Query(50, ge=1, le=500),
         thread_id: str | None = None,
     ) -> dict[str, Any]:
-        """Served turns, newest first. ``incomplete_fields`` is judged against today's register.
+        """Served turns, newest first; ``thread_id`` narrows to one conversation's transcript.
 
-        ``thread_id`` narrows to one conversation, which is what a transcript needs. It used to be
-        needed because the *store* was global — one time-ordered log of every thread — and it is
-        still needed now the source is thread state, because a transcript asks for one thread and
-        the reader would otherwise page through every other one to find it.
-
-        **``limit`` is bounded**, matching the four feedback routes that already were. Until
-        2026-09-18 it was a bare ``int = 50``: ``thread_turns`` does ``max(1, int(limit))``, a
-        floor and no ceiling, and then pages threads until it has that many turns — capped only
-        by ``_MAX_THREADS = 1000``, materialising every turn envelope it walks past. So one
-        request could walk every thread in the deployment, and the UI already asks for 500
-        with no ``thread_id``. That this route is *also* unauthenticated is a separate and
-        deliberate decision (see this module's header, "A7 is open again, knowingly"); the
-        unbounded walk behind it was not decided anywhere.
-
-        Refused rather than clamped, like ``limit`` on ``/clarifications/pending``: a clamp
-        answers a different question than the one asked and does not say so.
+        ``limit`` is refused outside 1..500 rather than clamped, because an unbounded limit walks
+        every thread and a clamp would silently answer a different question.
         """
         return turns_page(turn_log, limit=limit, thread_id=thread_id)
 
     @app.get("/audit/turns/{turn_id}/trace")
     def audit_trace(turn_id: str) -> dict[str, Any]:
         """Turn fields grouped by owning stage, derived from ``RECORD_REGISTER``."""
-        return trace_for(turn_log, store, turn_id)
+        return trace_for(turn_log, turn_id)
 
     @app.get("/audit/corpus")
     def audit_corpus() -> dict[str, Any]:
         """Corpus inventory plus problems. ``fatal`` and ``degradations`` stay separate (ADR 0008 D9)."""
         return corpus_audit(get_session())
 
+    @app.get("/clarifications/pending")
+    def pending_clarifications(
+        limit: int = Query(50, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+    ) -> dict[str, Any]:
+        """Questions the engine asked and nobody has answered, oldest first.
+
+        Interrupt state only. A paused clarification writes nothing until it is
+        resumed, so the queue is the platform's interrupted threads.
+        """
+        page = pending.pending(limit=limit, offset=offset)
+        return {
+            "rows": list(page.rows),
+            "meta": {
+                "n": len(page.rows),
+                "truncated": bool(page.truncated),
+                "threads_scanned": int(page.threads_scanned),
+                "limit": limit,
+                "offset": offset,
+                "columns": list(pending.PENDING_FIELDS),
+            },
+        }
+
     # Mounted last so the app's own paths are declared first; the router's own ordering
     # (`/schema/summary` before `/schema/{table_id}`) is stated in `make_router`.
     app.include_router(make_router(_DeferredSession(get_session)))
-    # No `_Deferred` wrapper: the pending reader builds its client on first read already, so it
-    # costs nothing at import and holds no session.
-    # ONE read of the switch, and it decides two things: whether the steward's verbs mount, and
-    # how wide the reader routes project. Two independent reads is how they come to disagree -- and
-    # a disagreement here is exactly what shipped: `GET /patches` answered 404 while
-    # `GET /observations/{id}` served every patch's `was`, `becomes` and `rationale` regardless.
-    #
-    # `_truthy` rather than a bare `os.environ.get`, because the bare version armed the router on
-    # `GOVERNED_BI_FEEDBACK_ADMIN=false`. An operator writing `=false` in `.env` to disable it was
-    # granting unauthenticated triage, draft and withdraw.
-    for_steward = _truthy(os.environ.get("GOVERNED_BI_FEEDBACK_ADMIN"))
-    app.include_router(
-        make_feedback_router(pending, turn_log, store, for_steward=for_steward)
-    )
-    # The steward's verbs, and the `if` is the control. They are new authority -- moving a row's
-    # state, drafting a patch -- on a surface where reaching the port is sufficient, so they ship
-    # unmounted and a deployment opts in. Unmounted means 404: a 403 confirms the route is there.
-    if for_steward:
-        app.include_router(make_admin_router(store))
     return app
-
-
-#: Environment values that mean "off". A bare truthiness test on the string armed the admin router
-#: on `=false`, `=0`, `=off` and `=no` -- verified -- so an operator writing `=false` in `.env` to
-#: disable it was granting unauthenticated triage, draft and withdraw. There is no `_truthy` helper
-#: anywhere else in `src/` to reuse, so this is the pattern's first instance and it lives beside the
-#: one switch that needs it.
-_FALSY = frozenset({"", "0", "false", "no", "off"})
-
-
-def _truthy(raw: str | None) -> bool:
-    """Whether an environment value means "on". Absent, blank and the four spellings of no are off."""
-    return (raw or "").strip().lower() not in _FALSY
-
-
-def feedback_store() -> Any:
-    """The return path's store, at ``GOVERNED_BI_FEEDBACK_DB`` or ``runs/feedback.sqlite``.
-
-    Read here rather than in ``feedback/`` because only an entry point may read the environment
-    (``tests/conformance/test_only_entry_points_read_the_environment.py``), and this module is one.
-    The path goes through ``paths.assert_not_a_warehouse``, so a DSN in that variable is refused
-    rather than accepted by something.
-    """
-    from governed_bi.feedback.store import FeedbackStore
-
-    raw = os.environ.get("GOVERNED_BI_FEEDBACK_DB")
-    return FeedbackStore(raw if raw else REPO_ROOT / "runs" / "feedback.sqlite")
 
 
 class _DeferredSession:
@@ -740,7 +622,7 @@ def turns_page(turn_log: Any, *, limit: int = 50, thread_id: str | None = None) 
     }
 
 
-def trace_for(turn_log: Any, store: Any, turn_id: str) -> dict[str, Any]:
+def trace_for(turn_log: Any, turn_id: str) -> dict[str, Any]:
     """``/audit/turns/{id}/trace``' body: fields grouped by their register-declared owner."""
     from governed_bi.register.record import RECORD_REGISTER, missing_required, undeclared_keys
     from governed_bi.register.stages import Stage
@@ -794,25 +676,6 @@ def trace_for(turn_log: Any, store: Any, turn_id: str) -> dict[str, Any]:
         # the statement above was chosen *because* of the answer below, so a trace without it
         # cannot explain the SQL it is showing.
         "clarifications": clarifications,
-        # Observations filed about this turn, on the trace for the reason above rather than for a
-        # different one: somebody read the statement and said it was wrong, and a trace that shows
-        # the statement without that is showing half of what happened. Read from
-        # ``runs/feedback.sqlite`` keyed on ``turn_id``, not from a channel -- the ``raised``
-        # channel this replaces was deleted with ADR 0015 §2, and the key on the wire changed with
-        # it: ``raised`` held rows minted by ``serve/raised.py``, and ``observations`` holds rows
-        # the store owns and can move through a lifecycle.
-        "observations": [
-            {
-                "observation_id": obs.observation_id,
-                "filed_at": obs.filed_at,
-                "source": obs.source.value,
-                "kind": obs.kind.value,
-                "category": obs.category.value if obs.category else None,
-                "state": obs.state.value,
-                "note": obs.note,
-            }
-            for obs in store.observations_for_turn(turn_id)
-        ],
         "ledger": (record.get("execution") or {}).get("attempts") or [],
         "terminal": (record.get("execution") or {}).get("terminal"),
         "missing_required": sorted(absent),

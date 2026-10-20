@@ -16,22 +16,6 @@ SQLite is the offline test/CI substrate.
 6. [Design decisions](design-decisions.md) — short index into the ADRs.
 7. [Glossary](glossary.md) — canonical terms.
 8. [Open work](open-work.md) — what is unfinished, and the evidence for each.
-9. [Return path](return-path.md) — how reader and engineer feedback becomes a corpus change
-   ([ADR 0015](adr/0015-the-return-path.md), **steps 0–6 built and on `main`**; the
-   agentic pipeline, T4/T5, the categorised capture surface and `/reports` are not). Both pages open with a note on
-   where the design and what shipped differ, and the evidence is in
-   [open work](open-work.md) §3.10a–3.10c.
-
-   The tools, in the order a change moves through them:
-
-   | | |
-   |---|---|
-   | `tools/import_eval_failures.py` | an eval artifact's failures become observations. **Not the only row source, and not the only one with a caller:** `POST /turns/{id}/raised` ships mounted and unauthenticated, and `ui/components/answer/raise-note.tsx` — which predates this branch — renders on the answer card and calls it. What the design called the capture UI is the *richer* surface that is absent: a category picker, an `expected` field, `/reports` |
-   | `tools/verify_patch.py` | the free ladder, T0–T2. Delta gates over the patched tree, in memory |
-   | `tools/reproduce_observation.py` | T3: does this question still miss a gold table? Free, and **run it with `--embed`**. `--state open` asks the whole queue in one pass — measured 2026-08-24: **52 of 71 open rows no longer reproduced**, in 72 seconds, because the artifact was measured against a corpus that has since changed. `--decline` moves those to `declined`/`cannot_reproduce`. Exit **2** means it could not run; **1** means something still reproduces |
-   | `tools/export_bundle.py` | a bundle an engineer applies with `git apply`. Two content checks are fatal here and nowhere else |
-   | `tools/check_landed.py` | did it land? Read off the corpus, stored nowhere |
-   | `tools/check_ratchet.py` | the corpus's conformance debt may shrink and may not grow |
 
 ## Decision records (ADRs)
 
@@ -60,7 +44,7 @@ build in the present tense after that build was deleted.
 | [0012](adr/0012-access-seam-principal-and-authorization.md) | The access seam: principal, authorization, and the Layer 6 split — **reversed**; the seam is deleted and the Layer 6 split stays |
 | [0013](adr/0013-the-declared-abstention-policy.md) | The declared abstention policy |
 | [0014](adr/0014-one-conversation-store.md) | One conversation store, on a durable LangGraph checkpointer — **supersedes 0004 §5** |
-| [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **Accepted; steps 0–6 built** (the agentic pipeline, T4/T5, the categorised capture surface and `/reports` are not; a minimal note control does ship) |
+| [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **reversed**; the loop is deleted and the waiting list reads interrupts only |
 | [0016](adr/0016-gating-the-corpus-repository.md) | Gating the served corpus: "did the corpus add a finding since somebody last looked?" — **Accepted; the nightly is now on `main`** (a job **here**, not in the corpus: the rules are statements about this engine, so the consumer runs the check. `ci.yml`'s `corpus` job, `schedule` plus `workflow_dispatch`. Baseline is a corpus SHA in `tools/corpus_baseline.py`; bumping it is the acknowledgement. Answers 0015's open "who owns the corpus repository's CI" — nobody, by design. What is still open is that the baseline equals the corpus tip, so the first green run proves nothing: [open work](open-work.md) §3.10e) |
 | [0017](adr/0017-a-served-chat-app-over-a-layer-the-user-brings.md) | A served chat app over a semantic layer the user brings — **Proposed**; deletes access, the return path, the extra pages and most repository gates |
 | [0018](adr/0018-every-answer-states-its-assumptions.md) | Every answer states its assumptions, and the server checks them — **Proposed** |

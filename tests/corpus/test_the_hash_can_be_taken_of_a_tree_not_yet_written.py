@@ -1,19 +1,8 @@
-"""``corpus_content_hash`` over a tree with one file substituted, and why that is needed.
+"""``corpus_content_hash`` over a tree with one file's bytes substituted.
 
-``DerivedState.landed_verified`` means "the loaded corpus is *exactly* the tree this bundle
-predicted", as distinct from ``landed_matched`` -- "the assets are right and something else landed
-alongside". ``lifecycle.py`` reads ``patch.expected_corpus_content_hash`` to tell them apart.
-
-**Nothing set that field.** ``tools/export_bundle.py`` deliberately omits it from the manifest --
-"the digest of a tree nobody has written yet" -- and names ``tools/check_landed.py`` as where it gets
-computed; that file does not contain the symbol, does not call ``move_patch``, and never did. So the
-field was always ``None``, the branch never fired, and ``landed_verified`` was a declared state with
-no producer. The tests that covered it built the hash by hand.
-
-The digest is a deterministic walk of relative path plus file content, so the post-state hash *is*
-computable before the commit: same walk, one file's bytes substituted. `overrides` is a parameter on
-the one hash function rather than a second function, because two digest implementations is how two
-answers to "is this the same corpus" come to disagree.
+The digest is a walk of relative path plus file content, so a post-edit hash is computable
+before the file is written: same walk, one file replaced. ``overrides`` is a parameter on
+the one hash function, because two digest implementations would disagree about sameness.
 """
 
 from __future__ import annotations

@@ -643,9 +643,8 @@ def test_v12_fires_in_file_mode_on_a_summary_quoting_a_held_out_question(
 ) -> None:
     """The leakage gate, at the moment prose is written.
 
-    ``docs/adr/0015-the-return-path.md`` makes V12 fatal in ``tools/export_bundle.py`` because the
-    return path carries **held-out** question text back to a person who then writes corpus prose
-    from it. ``--file`` is the loop that person is in, and V12 was deferred there.
+    V12 is the leakage gate on corpus prose. ``--file`` is the loop a person is in while
+    writing an asset, and the rule has to fire there.
     """
     out = _run_json(
         capsys,

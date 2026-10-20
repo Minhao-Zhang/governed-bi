@@ -1,32 +1,17 @@
-"""``/audit/turns?limit`` is bounded, and was not. The four feedback routes always were.
+"""``/audit/turns?limit`` is bounded.
 
-``thread_turns`` reads the caller's ``limit`` as ``max(1, int(limit))`` — a floor and no
-ceiling — and then pages threads until it has that many turns, materialising every turn
-envelope it walks past, stopping only at ``_MAX_THREADS = 1000``. With a bare ``int = 50`` on
-the route, ``?limit=1000000`` walked every thread in the deployment in one request. The UI
-already asks for 500 with no ``thread_id``.
-
-**Separate from the fact that the route is unauthenticated**, which is deliberate and
-recorded in ``api/routes.py``'s header ("A7 is open again, knowingly", with the reachability
-argument for LangGraph Studio). The unbounded walk behind it was not decided anywhere — it is
-the one parameter on this surface that had a floor and no ceiling, while
-``/clarifications/pending``, ``/observations`` and ``/patches`` all carry
-``Query(ge=…, le=…)``.
-
-Refused rather than clamped, for the reason the sibling routes give: a clamp answers a
-different question than the one asked and says nothing about having done so.
+A bare int would let one request walk every thread. The route refuses a limit outside
+``Query(ge=1, le=500)`` rather than clamping it.
 """
 
 from __future__ import annotations
 
-import tempfile
 from typing import Any
 
 from fastapi.testclient import TestClient
 
 from governed_bi.api.routes import make_app
 from governed_bi.api.thread_turns import PendingPage
-from governed_bi.feedback.store import FeedbackStore
 
 
 class _TurnLog:
@@ -53,8 +38,7 @@ class _Queue:
 
 
 def _client() -> Any:
-    store = FeedbackStore(tempfile.mkdtemp(prefix="auditwin-") + "/feedback.sqlite")
-    return TestClient(make_app(object(), _TurnLog(), _Queue(), store))
+    return TestClient(make_app(object(), _TurnLog(), _Queue()))
 
 
 def test_an_unbounded_audit_window_is_refused() -> None:

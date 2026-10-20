@@ -1,23 +1,9 @@
 """Where the repository is, and what a local path may not be.
 
-One definition, because ``python -m governed_bi.serve`` and ``api/graph_app.py`` must agree
-when a file moves (``tools/check_one_implementation.py`` enforces it).
-
-**Resolved at import time, not in a function.** ``Path.resolve()`` calls ``os.getcwd``, the
-blocking call `blockbuster` leaves armed under ``langgraph dev``; resolving inside an async
-handler raised ``BlockingError: Blocking call to os.getcwd``. Module level runs before the
-event loop exists.
-
-Only the entry points may *read* ``.env``, and ``credentials`` is where the reading happens;
-this module says where the repository is and refuses one thing a path must never be.
-
-**Why the refusal lives here.** :func:`assert_not_a_warehouse` was written for the conversation
-checkpointer and lived in ``serve/checkpointer.py``. The return path's store needs exactly the same
-guard on exactly the same class of value, and ``feedback`` sits *below* ``serve`` in
-``tools/check_imports.py::LAYERS`` -- so the choice was a duplicated copy that can drift or one
-definition in the innermost layer every other may ask. It is stdlib-only and it is a fact about a
-path, so it moved rather than being copied. ``serve/checkpointer.py`` re-exports it, and its
-callers and tests did not change.
+One definition, so every entry point agrees when a file moves. Paths resolve at import time
+because ``Path.resolve()`` calls ``os.getcwd``, which `blockbuster` refuses inside the event
+loop under ``langgraph dev``. :func:`assert_not_a_warehouse` lives here because it is a
+stdlib-only fact about a path that every layer may need.
 """
 
 from __future__ import annotations
@@ -47,11 +33,8 @@ _WAREHOUSE_MARKERS: tuple[str, ...] = (
 def assert_not_a_warehouse(value: str, *, source: str) -> str:
     """Return ``value``, or raise if it names a database server rather than a file.
 
-    Two local SQLite stores are configured by environment variable -- the conversation
-    checkpointer and the return path's feedback store -- and neither may ever be pointed at the
-    analytics warehouse. The failure this prevents is not a crash: a DSN in one of those variables
-    would be *accepted* by something and the operational data would end up in the database the
-    engine is meant to read from.
+    The conversation checkpointer is a local SQLite file. A DSN here would not crash; it would
+    put operational data into the warehouse the engine reads from, so it is refused.
     """
     lowered = value.lower()
     for marker in _WAREHOUSE_MARKERS:

@@ -3,8 +3,7 @@
 A number in prose and the set in code drift apart unless something connects them, so each
 assertion is paired with the comment that states the number, and each failure message names the
 file whose prose has to change. Corpus-dependent figures are measurements of a sibling checkout
-and stay out; docstring promises about behaviour live in
-``tests/feedback/test_the_store_keeps_the_promises_in_its_docstrings.py``.
+and stay out.
 """
 
 from __future__ import annotations

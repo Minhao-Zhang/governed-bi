@@ -4,7 +4,7 @@
  * inventory of record — and decided in ADR 0009 Amendment 1; the capability
  * flags that gate it are ADR 0007 §7. Every response is validated with zod at
  * the boundary (fail-loud). Streaming chat goes through `useStream` (see the
- * chat feature); this covers the fourteen reads and the one write.
+ * chat feature); this covers the custom reads.
  *
  * In mock mode (`USE_MOCKS`, i.e. no `NEXT_PUBLIC_LANGGRAPH_URL`) each call
  * resolves to a neutral placeholder from `lib/mock/fixtures`, so the UI renders
@@ -19,10 +19,6 @@ import {
   MOCK_AUDIT_CORPUS,
   MOCK_AUDIT_TRACE,
   MOCK_AUDIT_TURNS,
-  MOCK_OBSERVATIONS,
-  MOCK_PATCH,
-  MOCK_PATCHES,
-  MOCK_OBSERVATION_CLUSTERS,
   MOCK_PENDING_QUEUE,
   MOCK_CAPABILITIES,
   MOCK_ER_GRAPH,
@@ -41,13 +37,6 @@ import {
   auditCorpusSchema,
   auditTraceSchema,
   auditTurnsSchema,
-  observationSchema,
-  observationClustersSchema,
-  observationEnvelopeSchema,
-  observationsSchema,
-  draftEnvelopeSchema,
-  withdrawEnvelopeSchema,
-  patchesSchema,
   pendingQueueSchema,
   corpusFieldsSchema,
   corpusRowsSchema,
@@ -59,13 +48,6 @@ import {
   tableViewSchema,
 } from "@/lib/schemas";
 import type {
-  Observation,
-  ObservationClusters,
-  ObservationEnvelope,
-  Observations,
-  DraftEnvelope,
-  WithdrawEnvelope,
-  Patches,
   AssetRow,
   AuditCorpus,
   AuditTrace,
@@ -138,50 +120,6 @@ function scopeQuery(scope?: SchemaScope): string {
     node_budget: scope.nodeBudget,
     kinds: scope.kinds?.length ? scope.kinds.join(",") : undefined,
   });
-}
-
-async function post<T>(path: string, body: unknown, schema: z.ZodType<T>): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`${LANGGRAPH_URL}${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    throw new ApiError(`Could not reach the backend at ${LANGGRAPH_URL}${path}.`);
-  }
-  if (!res.ok) throw new ApiError(`${path} returned ${res.status}.`, res.status);
-  return parse(path, schema, await res.json());
-}
-
-/**
- * `PATCH`, for the one route that has one.
- *
- * A separate function rather than a `method` argument on `post`, because the two differ in what a
- * non-2xx *means* and the caller has to be able to tell: a 409 from `PATCH /observations/{id}` is
- * "somebody has already triaged this, so the note is frozen", which is a sentence to show, not a
- * failure to retry. `ApiError` carries the status for exactly that.
- */
-async function patch<T>(path: string, body: unknown, schema: z.ZodType<T>): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`${LANGGRAPH_URL}${path}`, {
-      method: "PATCH",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    throw new ApiError(`Could not reach the backend at ${LANGGRAPH_URL}${path}.`);
-  }
-  if (!res.ok) throw new ApiError(`${path} returned ${res.status}.`, res.status);
-  return parse(path, schema, await res.json());
 }
 
 export const api = {
@@ -301,187 +239,6 @@ export const api = {
       pendingQueueSchema,
       MOCK_PENDING_QUEUE,
     ),
-
-  /**
-   * The review queue (`GET /observations`), **oldest first**.
-   *
-   * Oldest-first because the row that has waited longest is the one to act on — the opposite of
-   * `/audit`, where the newest event is the one you came for. Read `meta.truncated` before
-   * presenting `meta.total` as a count.
-   */
-  observations: (params: {
-    state?: string;
-    category?: string;
-    limit?: number;
-    offset?: number;
-  } = {}): Promise<Observations> =>
-    get(
-      `/observations${qs({
-        state: params.state,
-        category: params.category,
-        limit: params.limit ?? 50,
-        offset: params.offset ?? 0,
-      })}`,
-      observationsSchema,
-      MOCK_OBSERVATIONS,
-    ),
-
-  /**
-   * The same queue, grouped structurally (`GET /observations?group=cluster`).
-   *
-   * The grouping is `(category, schema)` and nothing more — no embedding, no model, no cost — so
-   * the surface that renders it must carry the caption saying nothing read the questions. Measured
-   * on the 73 failures imported from the v4 arm: 37 of 54 clusters hold one observation and the
-   * largest holds three, so this helps about half the queue and no more.
-   */
-  observationClusters: (limit = 200): Promise<ObservationClusters> =>
-    get(
-      `/observations${qs({ group: "cluster", state: "open,triaged", limit })}`,
-      observationClustersSchema,
-      MOCK_OBSERVATION_CLUSTERS,
-    ),
-
-  /** One observation, its drafted patches, and its transition history. */
-  observation: (observationId: string): Promise<Observation> =>
-    get(
-      `/observations/${encodeURIComponent(observationId)}`,
-      observationSchema,
-      MOCK_OBSERVATIONS.rows[0],
-    ),
-
-  /* ── the steward's verbs ────────────────────────────────────────────────
-   *
-   * **All four 404 unless the engine was started with `GOVERNED_BI_FEEDBACK_ADMIN` set** — a 403
-   * would confirm the routes exist. That means a 404 from any of them is ambiguous between "no
-   * such row" and "this engine does not offer the verb", and the surface says so rather than
-   * guessing; there is no capability flag for it, because `/capabilities` describes the serve
-   * path.
-   *
-   * **None of them writes to the corpus.** Drafting records what a change would be. The write is
-   * `git apply` and a commit in the corpus repository, run by a person, and that gap is the
-   * provenance gate the whole return path is built around.
-   */
-
-  /** Move an observation. The server's transition table decides; a 409 means it refused. */
-  triageObservation: (
-    observationId: string,
-    body: {
-      to: string;
-      detail?: string;
-      decline_reason?: string;
-      duplicate_of?: string;
-      blocked_note?: string;
-    },
-  ): Promise<ObservationEnvelope> => {
-    if (USE_MOCKS) {
-      return Promise.resolve({
-        ok: true,
-        observation: { ...MOCK_OBSERVATIONS.rows[0], state: body.to, open: body.to !== "declined" },
-      });
-    }
-    return post(
-      `/observations/${encodeURIComponent(observationId)}/triage`,
-      body,
-      observationEnvelopeSchema,
-    );
-  },
-
-  /** Amend the note on an untriaged observation. 409 once somebody has looked. */
-  amendObservation: (
-    observationId: string,
-    body: { note?: string; expected?: string },
-  ): Promise<ObservationEnvelope> => {
-    if (USE_MOCKS) {
-      return Promise.resolve({
-        ok: true,
-        observation: { ...MOCK_OBSERVATIONS.rows[0], note: body.note ?? "" },
-      });
-    }
-    return patch(
-      `/observations/${encodeURIComponent(observationId)}`,
-      body,
-      observationEnvelopeSchema,
-    );
-  },
-
-  /**
-   * Draft a patch (`POST /patches`, 201).
-   *
-   * `base_corpus_content_hash` must be the **full** 64-character digest. The 16-character prefix
-   * every display shows is refused with 422, because it never equals the digest the landing check
-   * compares against — a patch nobody had touched would report `superseded`.
-   */
-  draftPatch: (body: {
-    intent: string;
-    namespace: string;
-    asset_type?: string;
-    asset_id?: string;
-    field_path?: string;
-    was?: string;
-    becomes?: string;
-    rationale?: string;
-    base_corpus_content_hash: string;
-    observations?: string[];
-  }): Promise<DraftEnvelope> => {
-    if (USE_MOCKS) {
-      return Promise.resolve({ ok: true, patch: MOCK_PATCH, addressed: [], not_addressed: [] });
-    }
-    return post("/patches", body, draftEnvelopeSchema);
-  },
-
-  /** Abandon a patch. The reason is required by the server, not just by the form. */
-  withdrawPatch: (patchId: string, reason: string): Promise<WithdrawEnvelope> => {
-    if (USE_MOCKS) {
-      return Promise.resolve({
-        ok: true,
-        patch: { ...MOCK_PATCH, state: "withdrawn", withdrawn_reason: reason },
-        reopened: [],
-        not_reopened: [],
-      });
-    }
-    return post(
-      `/patches/${encodeURIComponent(patchId)}/withdraw`,
-      { reason },
-      withdrawEnvelopeSchema,
-    );
-  },
-
-  /** Patches, newest first. `state` is comma-separated. */
-  patches: (params: { state?: string; limit?: number } = {}): Promise<Patches> =>
-    get(
-      `/patches${qs({ state: params.state, limit: params.limit ?? 50 })}`,
-      patchesSchema,
-      MOCK_PATCHES,
-    ),
-
-  /**
-   * File an observation about a finished turn (`POST /turns/{id}/raised`).
-   *
-   * 201, not 200: the route creates a row in a store rather than appending to a channel.
-   * `category` and `expected` are optional -- the first tap files something valid, and a
-   * refinement is never a gate.
-   */
-  raiseTurn: (
-    turnId: string,
-    body: {
-      kind: "from_refusal" | "wrong_answer";
-      category?: string;
-      note?: string;
-      expected?: string;
-    },
-  ): Promise<{ ok: boolean; observation: Record<string, unknown> }> => {
-    if (USE_MOCKS) {
-      return Promise.resolve({
-        ok: true,
-        observation: { kind: body.kind, note: body.note ?? "", state: "open", open: true },
-      });
-    }
-    return post(
-      `/turns/${encodeURIComponent(turnId)}/raised`,
-      body,
-      z.object({ ok: z.boolean(), observation: z.record(z.string(), z.unknown()) }),
-    );
-  },
 
   /** One turn, grouped by the pipeline stage that produced each recorded field
    * (GET /audit/turns/{id}/trace). The grouping is derived from the engine's

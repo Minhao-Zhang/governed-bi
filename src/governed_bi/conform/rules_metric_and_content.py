@@ -370,9 +370,8 @@ def check_unique_ids(assets: list[tuple[str, dict[str, Any], Path]]) -> list[Fin
     """V23: one id, one file.
 
     A duplicate passes every other rule here, loads with zero problems, and then raises
-    ``ValueError: duplicate index id`` in ``build_index`` -- **after** the commit. Measured, and it
-    is exactly what ``corpus/store.py::write`` produces on an existing id, which is why
-    ``corpus/patch.py`` exists and why a bundle is a diff rather than a file copy.
+    ``ValueError: duplicate index id`` in ``build_index`` -- **after** the commit.
+    ``corpus/store.py::write`` produces a second file with the same id.
 
     **One finding per file, keyed like every other rule.** This used to emit one line per *id*,
     beginning with the id rather than the file, and the reporter could not key it: ``_where_of``

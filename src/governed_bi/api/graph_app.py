@@ -394,29 +394,11 @@ def record_node() -> Any:
 
 
 def build_serve_graph(session: Session) -> Any:
-    """The served topology, compiled. **The constructor a test can call.**
+    """The graph ``langgraph.json`` serves: ``accept`` before ``guard``, ``record`` after ``stamp``.
 
-    This is the graph ``langgraph.json`` runs: ``accept`` in front of ``guard`` (so the turn is
-    derived from a client conversation rather than accepted from one) and ``record`` after
-    ``stamp``. It is a *different topology* from
-    :func:`~governed_bi.serve.graph.compile_graph`, which every other graph test uses — that one
-    has no ``accept``, no ``record``, and passes the whole of ``ServeState`` in and out. The
-    difference is deliberate and is the trust boundary (see ``ServeInput`` / ``ServeOutput``).
-
-    :func:`~governed_bi.serve.runtime.trust` is called here and not by the caller, because it is
-    what makes the graph loadable the way the server loads it: LangGraph Server puts only JSON on
-    ``config["configurable"]``, and every node needs ``policy``, ``index``, ``connector`` and the
-    rest. Forcing them over whatever a request supplies is also the reason a client cannot swap
-    the corpus out from under a run. It is process-wide state; a caller that builds two graphs
-    over two sessions gets the second one's constants, and ``trust()`` with no argument clears.
-
-    No checkpointer — the server supplies its own (needed for ``/threads``).
-    ``POST /turns/{id}/raised`` must not call this Pregel: a saver-less ``aupdate_state`` raises,
-    and even a later copy would leave the thread row that pending/trace read stale. It no longer
-    wants to — ADR 0015 §2 moved that write off graph state into ``runs/feedback.sqlite``
-    (``api/feedback_routes.py``), which deleted ``api/raised_write.py`` and the 409 it had to
-    answer on a paused thread. The constraint is kept because it binds the next write that is
-    tempted to reach for state from an HTTP handler, not because anything violates it today.
+    It differs from ``serve.graph.compile_graph`` on purpose, at the trust boundary. ``trust()``
+    is called here, so the server-side constants override whatever a request supplies and a
+    client cannot swap the corpus; it is process-wide. No checkpointer: the server brings one.
     """
     trust(dict(session.configurable()["configurable"]))
     return build_graph(accept=accept_node(session), record=record_node()).compile()

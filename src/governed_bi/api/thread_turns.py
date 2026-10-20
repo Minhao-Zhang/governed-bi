@@ -1,35 +1,11 @@
-"""The audit surface's reader, sourced from **thread state** instead of the JSONL log.
+"""Readers for the audit surface and the pending queue, over thread state.
 
-It fills ``make_app``'s ``turn_log`` seam, which is now **readers only** -- ``list_turns``,
-``get_turn``, ``clarifications_of``, ``summarise_turn``, ``SUMMARY_FIELDS``, ``TURN_LOG_DIR``.
-There is no ``append_turn``
-because there is no second sink: ``api/graph_app.record_node`` returns the turn onto
-``ServeState.turns`` and the checkpointer persists it. `api/trace_store.py` and
-``runs/serve/*.jsonl`` are deleted.
-
-The wire contract is byte-identical to what the JSONL-backed reader served, which is what lets
-`npm run check:api` act as the regression test for a change of *store*.
-
-**Why thread state can now answer this at all.** A turn's record used to exist only in the log,
-because ``PER_TURN_RESET`` clears the per-turn channels at the top of every turn and a checkpoint
-therefore described only the newest one. ``ServeState.turns`` accumulates instead, so the thread
-holds every turn of its own conversation.
-
-**The reads go through the in-process client, which is an authentication bypass by
-construction.** ``get_client(url=None)`` mounts the server's own ASGI app at
-``root_path="/noauth"``, and ``langgraph_api.auth.middleware.ConditionalAuthenticationMiddleware``
-short-circuits on exactly that prefix -- "disable auth for requests originating from SDK ASGI
-transport" (``auth/middleware.py:46``). Upstream names this the auth-bypass primitive behind
-GHSA-q3v5-r5ch-p57j. So "no credential to hold" is not a convenience worth advertising: this
-reader runs *inside* the door, holding **no credential**, and every thread in the store is visible
-to it. Reaching the platform's store any other way would mean either a second checkpointer handle
-(a second answer to what a thread contains) or a loopback HTTP request to ourselves, so the bypass
-is kept and written down rather than worked around.
-
-**And it only runs inside the Agent server.** Outside it the in-process transport cannot resolve,
-and :class:`InProcessServerRequired` says so -- see that class for why the SDK's own failure mode
-could not be left in place.
-
+Each turn's record accumulates on ``ServeState.turns``, so the checkpointer is the only store.
+Reads go through the in-process client (``get_client(url=None)``), which LangGraph mounts at
+``/noauth`` and so sees every thread with no credential. That is kept deliberately: the
+alternatives are a second checkpointer handle, which is a second answer to what a thread holds,
+or a loopback HTTP call to ourselves. It only resolves inside the Agent server; outside it,
+:class:`InProcessServerRequired` is raised.
 """
 
 from __future__ import annotations
@@ -166,12 +142,6 @@ class ThreadTurnLog:
     def __init__(self, client_factory: Any | None = None) -> None:
         self._client_factory = client_factory
         self._client: Any | None = None
-        # There was a second parameter here, ``state_writer``: the in-process append of the
-        # ``raised`` channel, injected by tests and hopped onto the server loop in production
-        # through the deleted ``api/raised_write.py``. ADR 0015 §2 moved filing to
-        # ``runs/feedback.sqlite`` and no caller has passed it since; it was assigned and read
-        # nowhere, so this reader was carrying a field whose only remaining content was a
-        # sentence about a module that no longer exists.
 
     summarise = staticmethod(summarise_turn)
     #: Read off the instance by ``routes.turns_page`` to build ``meta.columns``.
@@ -501,20 +471,7 @@ def _answered_clarifications_of(thread: Any) -> dict[str, list[dict[str, Any]]]:
 # transport into an SDK module global on failure (see `InProcessServerRequired`), and that leak
 # was fixed once already. A reader that acquired its own client would reintroduce it.
 
-#: List-view columns for the pending queue, in display order. Same role as `SUMMARY_FIELDS`:
-#: `meta.columns` is on the wire and the client renders from it.
-#:
-#: **Some of these are null on half the rows, which is the shape and not a defect.** The queue
-#: unions two populations -- an unanswered interrupt, read from thread state here, and an open
-#: observation, read from ``runs/feedback.sqlite`` by ``api/feedback_routes.py`` -- so
-#: `clarification_id`/`basis` are null on every observation and `observation_id` on every
-#: interrupt. The rule is that a *declared* column is present and null where it does not apply,
-#: never absent: a client forced to tell "no value" from "no such key" ends up guessing which kind
-#: of row it holds. `source` says which, and is the one column never null.
-#:
-#: Declared here although this reader now produces only the interrupt half, because `meta.columns`
-#: describes the **response**, and the response is the union. Moving the declaration to the router
-#: would put it next to one of the two readers and away from the other.
+#: List-view columns for the pending queue, in display order. ``meta.columns`` names them.
 PENDING_FIELDS: tuple[str, ...] = (
     "asked_at",
     "question",
@@ -524,36 +481,9 @@ PENDING_FIELDS: tuple[str, ...] = (
     "thread_id",
     "source",
     "basis",
-    # Declared rather than carried, unlike `interrupt_id`/`task_id`, because the client
-    # *consumes* it: the pending queue keys an observation's card on it, and an observation has no
-    # `clarification_id` to key on instead. A column the client renders from and `meta.columns`
-    # does not name is a contract that happens to work.
-    #
-    # `observation_id` since 2026-08-23, where it was `report_id`. That name was minted by
-    # `serve/raised.py::mint_report_id`, which is deleted -- and "report" would have been the third
-    # meaning of the word in one system, after `eval/report.py` and the thing every BI user means
-    # by it. Null on an interrupt row, which this reader is the only producer of.
-    "observation_id",
 )
 
-#: The `source` value on a pending row that came from a live ``ask_user`` interrupt rather than from
-#: ``runs/feedback.sqlite``. The client switches on it to decide which card to draw
-#: (``ui/components/clarifications/pending-queue.tsx``).
-#:
-#: **Here because this is the module that writes it**, and it was not. The constant lived in
-#: ``api/feedback_routes.py`` -- kept from the deleted ``serve/raised.py`` (``4a0d11a``) -- claiming
-#: in its own note to be the shared spelling, while ``_open_questions_of`` below wrote the string by
-#: hand and nothing imported the constant at all. ``feedback_routes.py`` was the wrong home in any
-#: case: it never emits this value. Its ``_as_pending_row`` fills the same column from
-#: ``obs.kind.value``, which is the *other* half of the axis, so the two halves of one column were
-#: spelled in two files and one of the spellings was unreachable.
-#:
-#: The other two values of the axis are :class:`governed_bi.feedback.events.Kind`'s members, and this
-#: module does not name them: importing ``feedback/`` to restate an axis it does not produce would be
-#: a second declaration of the same three values. What holds all three together instead is
-#: ``docs/openapi.json``'s ``enum`` on this property and
-#: ``tests/api/test_the_pending_source_axis_has_one_spelling.py``, which compares Python, the spec
-#: and ``ui/lib/schemas.ts`` against each other.
+#: The only ``source`` this queue writes: a live ``ask_user`` interrupt.
 PENDING_SOURCE_INTERRUPT = "interrupt"
 
 #: Prefix ``serve/tools.py`` builds a clarification id with: ``f"clar-{turn_id}-{digest}"``.
@@ -563,18 +493,8 @@ _CLARIFICATION_PREFIX = "clar-"
 class PendingPage(NamedTuple):
     """One page of the queue, plus what it could not show.
 
-    ``truncated`` is not cosmetic. ADR 0009 D2/D9 exist because a silently short list reads as
-    "this is everything" -- and here the consequence is a reader whose question is waiting and an
-    operator who cannot see it. The route puts this on the wire.
-
-    Three different losses raise it and the flag does not say which: the window (``offset+limit``
-    landed short of the rows built), and either walk stopping on :data:`_MAX_THREADS`.
-    :func:`_pending_async` records what each one costs a reader. One flag for three causes is
-    deliberate -- all three mean "this is not everything", which is the only thing the caller can
-    act on -- but it is the reason ``threads_scanned`` travels beside it.
-
-    ``threads_scanned`` counts **distinct threads read**, not reads: a paused thread is fetched by
-    both walks and counted once.
+    ``truncated`` is set when the window or the ``_MAX_THREADS`` walk cut rows off, because a
+    silently short list reads as "nobody is waiting". ``threads_scanned`` counts threads read.
     """
 
     rows: list[dict[str, Any]]
@@ -606,31 +526,8 @@ def turn_of_clarification(clarification_id: str) -> str | None:
 class PendingClarifications:
     """Questions the engine asked and nobody has answered, across every conversation.
 
-    **Why this can be a pure read with no store of its own.** A clarification that *was* answered
-    lands in the ``clarifications`` channel, because ``serve/tools.py`` writes it on the far side
-    of ``interrupt()``. One that was *not* answered -- the reader closed the tab -- writes nothing
-    at all, so the queue is exactly the half that state does not record. Its truth lives in the
-    platform's own interrupt state, which ADR 0014's durable checkpointer made survive a restart;
-    before that this reader could not have existed.
-
-    So that half of the queue is one ``threads.search(status="interrupted", ...)``. No ledger file,
-    no new table, no write path. ``clarification_id`` carries the ``turn_id``
-    (:func:`turn_of_clarification`), which is the join back to the turn that asked -- no separate
-    link field is needed.
-
-    ``interrupts`` is *selected* rather than ``extract``ed: it is a first-class
-    ``ThreadSelectField``, so none of ``extract``'s ten-path budget is spent on it.
-
-    **The other half is not read-free.** A note a reader files on a finished card lands in
-    ``ServeState.raised``, which is state rather than interrupt state, and finding it means paging
-    the store unfiltered. :func:`_pending_async` is where that walk's cost, its bound, and what the
-    bound hides are written down; this class is only the client.
-
-    **Read-only, deliberately.** The owner's
-    2026-08-19 decision was that an operator's answer feeds the semantic layer instead, and that
-    path is gated on a provenance check this repository does not have -- ``session.py``'s
-    ``visible_assets`` filters ``governance.excluded`` alone, so a ``proposed`` asset already reaches
-    the model's context. Until that gate exists, this surface only shows.
+    An unanswered clarification writes nothing until it is resumed, so the queue is the
+    platform's interrupt state: ``threads.search(status="interrupted")``.
     """
 
     #: Read off the instance by the route to build ``meta.columns``.
@@ -669,50 +566,9 @@ def _pending(*, limit: int, offset: int, client: Any) -> PendingPage:
 
 
 async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage:
-    """One row per thing waiting, unioned from interrupt state and the ``raised`` channel.
+    """One row per unanswered clarification, from interrupted threads only.
 
-    ``interrupts`` is ``{task_id: [Interrupt, ...]}`` and one thread can in principle hold more
-    than one, so the window is taken over **rows** rather than threads -- the same reason
-    ``_collect_async`` counts turns rather than threads. Only ``kind == "clarification"`` is
-    reported from interrupt state; an open ``raised`` note joins the same queue with ``source`` of
-    ``from_refusal`` / ``wrong_answer``, and a finished refusal is never rewritten as an interrupt.
-
-    **Two walks, because the populations want opposite queries.** Paused questions are
-    ``status="interrupted"`` with ``interrupts`` selected and no ``raised`` path: that population is
-    a handful at any volume, so this half stays complete and cannot be pushed past
-    :data:`_MAX_THREADS` by a store that grew for unrelated reasons, and reading ``raised`` here too
-    would report every note on a paused thread twice.
-
-    **Notes take no status filter at all, and that is the coverage decision.** A note is filed on a
-    *finished* turn, and a thread's status when an operator opens the queue is whatever its last run
-    left: ``idle`` normally, ``error`` when it crashed -- exactly the turn a reader reaches for the
-    flag button on -- ``busy`` while a later question runs. Asking only for ``idle`` hid a filed
-    note for as long as its thread sat elsewhere, and *permanently* under ``error``, since nothing
-    moves a thread out of it. Enumerating all four is the same read with a hole left for the status
-    the platform adds next, so the filter is dropped; :func:`_open_raised_of`'s ``kind``/``open``
-    check is what narrows.
-
-    **What that costs, unwritten until now.** The note walk projects ``values.raised`` off *every*
-    thread in the store, so the queue's price is proportional to the store rather than to the paused
-    handful: ``ceil(threads / _THREAD_PAGE)`` round trips, capped at ``_MAX_THREADS/_THREAD_PAGE``
-    = 20 per walk and so 40 for one request, uncached, every time.
-    ``extract`` is what holds a row to one channel instead of the whole of ``ServeState`` -- the
-    2.42 MB :func:`_threads` measured.
-
-    **So :data:`_MAX_THREADS` can now actually bite**, which it could not when only interrupted
-    threads were paged, and the direction of the loss is the unhelpful one: both walks sort
-    ``updated_at`` ascending, so the bound keeps the least recently touched threads and drops the
-    most recently touched. Past :data:`_MAX_THREADS` threads a note filed today is the first one
-    missing. Sorting the other way does not fix it -- a thread's ``updated_at`` tracks its latest
-    turn, not its note's age -- so the loss is reported instead, and ``truncated`` is the whole of
-    that report. **No status is excluded, so no note is structurally invisible; the notes this
-    reader can fail to show are the ones past the bound, and ``truncated`` is true exactly then.**
-
-    ``threads_scanned`` counts **distinct** threads read, keyed on ``thread_id`` (in every ``select``
-    here). Summing the walks would double-count each paused thread and make the number mean "reads",
-    which answers nothing a caller asks. It still answers what it was added for -- "was the store
-    read at all", separating an empty queue from an unread store -- and now says it about the whole
-    store rather than the interrupted slice.
+    The window is over rows, not threads, because one thread can hold more than one interrupt.
     """
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -754,18 +610,12 @@ async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage
                 return False
         return True
 
-    paused_bound = await _walk(
+    truncated = await _walk(
         status="interrupted",
         select=["thread_id", "updated_at", "interrupts", "metadata"],
         extract=None,
         rows_of=_open_questions_of,
     )
-    # One walk now, not two. The second projected ``values.raised`` off **every** thread in the
-    # store -- 40 uncached round trips per request, priced against the store rather than against
-    # the paused handful -- and ADR 0015 §2 replaced that channel with a table. The note half of
-    # the queue is one indexed query, composed by ``api/feedback_routes.py`` where a surface that
-    # wants both populations can hold both readers. So this reader reads threads and nothing else.
-    truncated = paused_bound
 
     rows.sort(key=lambda row: str(row.get("asked_at") or ""))
     window = rows[offset : offset + limit]
@@ -811,10 +661,6 @@ def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
                     "thread_id": thread_id,
                     "source": PENDING_SOURCE_INTERRUPT,
                     "basis": value.get("basis"),
-                    # Null because an interrupt is not an observation, not because it went
-                    # missing -- see :data:`PENDING_FIELDS` on why a declared column is never
-                    # absent.
-                    "observation_id": None,
                     # ``interrupt_id`` and ``task_id`` are what a resume would have to name.
                     # Carried because withholding them would make this surface un-actionable the
                     # day the provenance gate lands, and they identify nothing a reader could not

@@ -84,25 +84,6 @@ def test_the_funnel_counts_the_same_licensed_table_the_coverage_metric_does() ->
     assert counts["correct"] == 1
 
 
-def test_the_return_path_does_not_file_a_licensed_table_as_missing() -> None:
-    """The same comparison decides what an operator is told, not only what a report prints.
-
-    ``feedback_import`` writes ``missing_tables`` onto an :class:`Observation` and buckets the row
-    as ``coverage_miss``, whose reader-facing sentence is "the turn was not allowed to read this".
-    Said about a table the turn *was* allowed to read, it sends somebody to curate an asset that
-    already exists.
-    """
-    from governed_bi.eval.feedback_import import _missing_tables
-
-    row = {
-        "question_id": "q",
-        "gold_sql": GOLD,
-        "licensed": [AIR_CARRIERS_ID, "airline.Airlines"],
-    }
-
-    assert _missing_tables(row) == set()
-
-
 def test_a_slug_without_its_digest_is_not_the_same_table() -> None:
     """Normalising spaces to underscores is not the fix, and must not become one.
 

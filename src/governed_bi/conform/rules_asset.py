@@ -256,8 +256,7 @@ def check_local(kind: str, a: dict[str, Any], where: str) -> dict[str, list[Find
         # is a rule of ``src/`` this file did not have to obey while it lived under ``tools/``:
         # ``tools/check_measurement_locality.py`` permits one formatting site in the package, so a
         # precision claim is made in the one place that also knows how to render an absence. Two
-        # decimal places, unchanged -- the finding text is what a writer reads and what
-        # ``verify_patch.py`` diffs.
+        # decimal places, unchanged -- the finding text is what a writer reads.
         ratio = Measured.of(function_ratio(summary))
         out["V4"].append(
             Finding(f"{where}: summary is not prose (function-word ratio "

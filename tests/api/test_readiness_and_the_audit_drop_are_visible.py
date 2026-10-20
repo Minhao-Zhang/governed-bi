@@ -19,13 +19,10 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contracts import scratch_feedback_store  # noqa: E402
-
-
 def _client(get_session: Any) -> TestClient:
     from governed_bi.api.routes import _build_app
 
-    return TestClient(_build_app(get_session, object(), object(), scratch_feedback_store()))
+    return TestClient(_build_app(get_session, object(), object()))
 
 
 def test_readyz_is_503_when_the_session_cannot_be_built() -> None:

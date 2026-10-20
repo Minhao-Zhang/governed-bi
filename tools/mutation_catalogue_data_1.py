@@ -408,23 +408,6 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
                 "uninterpretable payload means.",
     ),
     Mutation(
-        id="feedback-store-opens-an-older-file-as-current",
-        what="the upgrade path is skipped, so an older store opens clean and is missing columns",
-        path="src/governed_bi/feedback/rows.py",
-        anchor="    steps = range(found + 1, SCHEMA_VERSION + 1)",
-        replacement="    return\n    steps = range(found + 1, SCHEMA_VERSION + 1)",
-        tests=(
-            "tests/feedback/test_the_feedback_store_is_not_a_comparability_knob.py::"
-            "test_an_older_store_is_upgraded_rather_than_opened_as_if_current",
-        ),
-        finding="The shipped state until 2026-09-18. `executescript(SCHEMA)` is all CREATE "
-                "TABLE IF NOT EXISTS, so on an existing file it adds no column and rewrites "
-                "no version — a store at 1 opened by code that knows 2 reported itself "
-                "up-to-date and raised OperationalError at the first request touching the new "
-                "field. The newer-store direction *was* handled and tested, which is what made "
-                "the gap hard to see.",
-    ),
-    Mutation(
         id="corpus-writes-platform-line-endings",
         what="the corpus hash goes back to depending on which OS wrote the file",
         path="src/governed_bi/corpus/store.py",
@@ -445,27 +428,6 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
                 "the machine that checks it is open-work 3.9's test-that-cannot-fail wearing "
                 "this catalogue's clothes. Caught now by a third test that simulates a "
                 "CRLF-default platform instead of requiring one.",
-    ),
-    Mutation(
-        id="pending-union-pages-one-half-only",
-        what="the merged slice goes back to taking the head, so page two repeats page one",
-        path="src/governed_bi/api/feedback_routes.py",
-        # The *slice*, not the one-sided read. Reverting only `store.queue`'s `limit` leaves
-        # the merge correct and the mutation survives — which is worth knowing: the defect
-        # needed both halves, and the slice is the half that produces the duplication.
-        anchor="        visible = rows[offset : offset + limit]",
-        replacement="        visible = rows[:limit]",
-        tests=(
-            "tests/api/test_the_pending_queue_unions_two_stores.py::"
-            "test_the_second_page_does_not_repeat_the_first",
-        ),
-        finding="The shipped state until 2026-09-18, and the union had no test at all — the "
-                "sibling file's comment pointed at a `test_the_pending_queue_unions_two_stores"
-                ".py` that did not exist. `offset` was pushed into one of two stores, which "
-                "cannot be a partial fix because neither store knows the other's rows. "
-                "Measured on 60+60 interleaved rows at limit=50: three pages served 150 rows "
-                "for 120, 50 duplicated and 45 unreachable, while `meta.offset` echoed the "
-                "request so nothing on the wire said so.",
     ),
     Mutation(
         id="wrap-the-turn-clock-never-restarts",

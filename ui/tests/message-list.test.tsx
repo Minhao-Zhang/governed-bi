@@ -41,7 +41,7 @@ describe("MessageList", () => {
     expect(screen.getByText(/needs a table this corpus does not license/)).toBeTruthy();
     expect(screen.getByText("refused")).toBeTruthy();
     expect(screen.queryByText("clarification")).toBeNull();
-    expect(screen.getByRole("button", { name: "This refusal looks wrong" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "This refusal looks wrong" })).toBeNull();
   });
 
   it("renders a declined clarification distinctly from a refusal", () => {
