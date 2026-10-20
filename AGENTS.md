@@ -6,8 +6,10 @@
 
 ## Current priorities
 
-Until 2026-11-20 all work follows `docs/reviews/2026-09-improvement-milestones.md`. Read its
-"Rules for every milestone" before starting any change, and name the milestone the change serves.
+All work follows `docs/reviews/2026-10-pivot-milestones.md`, which carries out the decisions in
+`docs/reviews/2026-10-pivot.md` and ADRs 0017 to 0020. Read its "Rules for every milestone" before
+starting any change, and name the milestone the change serves. The trim plan, its milestones, the
+Ossie plan and the September milestones are superseded.
 
 ## Repo Structure
 
@@ -24,14 +26,11 @@ Until 2026-11-20 all work follows `docs/reviews/2026-09-improvement-milestones.m
 
 ## Documentation Guidelines
 
-- **Comments record decisions; git records history.** A comment or docstring states the *decision*:
-  the reason, the constraint or measurement behind it, and the rejected alternative when a reader
-  would otherwise re-propose it. The 2026-09-18 outside review, run on a comment-stripped mirror,
-  re-filed four settled decisions as defects, so this layer is load-bearing. The story of how the
-  code got here (dates, audit IDs, "used to", "until", earlier wrong versions) goes in the commit
-  message. Write one to three sentences per decision; when you edit a longer one, trim it to its
-  decision in the same commit. `tools/` CLIs use `__doc__` as `--help` text, so keep those
-  complete.
+- **The code is the authority; comments state only decisions.** A comment says why the code is
+  this way, or what alternative was rejected, in at most three lines (docstrings five, module
+  docstrings ten; `tools/` module docstrings are `--help` and are exempt); anything longer is an
+  ADR with a one-line pointer. When a comment disagrees with the code, the code wins: fix or
+  delete the comment in the same change.
 - **Trust them, and verify the ones you rely on.** They are prose, so they can drift. When one is
   load-bearing for what you are about to change, check it against the code and *fix the prose in
   the same commit* — a comment that contradicts the code beside it is worse than no comment.
