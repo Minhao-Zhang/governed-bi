@@ -582,7 +582,8 @@ run it after P4 to avoid conflicts in `ci.yml`.
 ### P6. Delete the parts that are off by default, and make settings plain
 
 **Goal:** the reflection and negative-example nodes, the cost layer and the knob roles are gone,
-and every remaining setting is a plain default with the config hash still recorded.
+every remaining setting is a plain default in the repository with the config hash still recorded,
+and settings and secrets are read apart, once, at startup.
 
 **Depends on:** P5.
 
@@ -599,7 +600,27 @@ and every remaining setting is a plain default with the config hash still record
 4. Delete `register/citations.py`, its caller, and `measure/gates.py` if, after reading it, it is
    only quotability gating. Keep `register/assets.py`, `quantity.py`, `record.py`, `facets.py`,
    `stages.py`, `prompts.py`, `arm_profiles.py` and `arms.toml` (finding 12).
-5. Delete the matching tests; update `docs/architecture.md`.
+5. **Settings live in the repository.** Every setting the engine reads (the model ids and
+   efforts, retries and timeouts, the agent and rail node timeouts, the recursion limit, the
+   corpus path, and the checkpoint and vector-cache paths) is a named default in the one
+   settings module this milestone leaves in place of `register/knobs.py`. A real environment
+   variable `GOVERNED_BI_*` overrides one for a run, and the override enters the config hash.
+   Settings are not read from `.env`: a `.env` that sets anything other than the secrets in
+   task 6 stops startup with a message naming the key, because an override nobody can see in
+   the repository is how two runs drift apart.
+6. **Secrets live in `.env` and nowhere else.** The secrets are `OPENAI_API_KEY`,
+   `GOVERNED_BI_PG_DSN` (the whole DSN, since a real one carries a password) and, for tracing,
+   the `LANGSMITH_*` variables, which LangSmith reads itself. `credentials.py` reads them from
+   the environment, then `.env`, and they never enter the config hash or the turn record.
+7. **One reader, called once.** Each entry point (`api/graph_app.py`, `serve/__main__.py` and
+   the eval driver) builds the settings and the secrets once and passes them down. Delete the
+   direct `os.environ` reads in `api/graph_app.py`, `model/provider.py`,
+   `serve/nodes/agent_core.py`, `serve/graph.py`, `serve/checkpointer.py`,
+   `retrieve/vector_cache.py` and `register/knobs.py::env_override`. Today some of these read
+   `.env` through `credentials` and others see it only when a launcher copied it into the
+   environment (`serve/__main__.py:58` says so), so the server and an eval run can resolve
+   different settings from the same files.
+8. Delete the matching tests; update `docs/architecture.md` and `docs/usage.md#environment`.
 
 **Deliverables:** the PRs.
 
@@ -611,13 +632,23 @@ and every remaining setting is a plain default with the config hash still record
 - [ ] `git grep -nE "reflect_node|negative_node|reflect_enabled|negative_tau|cost_budget|Role\.comparability|register\.citations" -- src tests tools`
       returns nothing.
 - [ ] A test asserts that changing one setting changes the recorded config hash.
+- [ ] `git grep -nE "os\.environ|getenv" -- src` returns only the settings module,
+      `credentials.py`, and the two platform flags `LANGSERVE_GRAPHS` and
+      `__LANGGRAPH_DEFER_LOOPBACK_TRANSPORT`, each with a one-line reason.
+- [ ] A test builds the settings through the server's entry point and through the eval
+      driver's from the same environment and `.env`, and gets the same resolved settings and
+      config hash.
+- [ ] A test puts `GOVERNED_BI_MODEL=x` in a temporary `.env` and startup fails naming that
+      key; another sets a fake `OPENAI_API_KEY` and finds its value in neither the config hash
+      nor a recorded turn.
 
-**Out of scope:** renaming (P8); the gateways (P7).
+**Out of scope:** renaming (P8); the gateways and their variables (P7).
 
 **Stop and ask the owner if:** removing a node changes any snapshot row (it was not off), or
 `measure/gates.py` turns out to hold something the paired test or coverage needs.
 
-**Size:** about 20 files; roughly 2,500 lines removed.
+**Size:** about 30 files; roughly 2,500 lines removed and 200 added for the settings module
+and its tests.
 
 ---
 
@@ -633,8 +664,8 @@ and every remaining setting is a plain default with the config hash still record
    and `model/embedder.py`, including the `bedrock_converse` path and the `proxy` refusal. Keep
    `model/deterministic_embedder.py`, which the snapshot and the tests use.
 2. Make the code defaults match the chosen setup: agent and utility model `gpt-6-luna`,
-   embeddings `text-embedding-3-large`, provider `openai`, so a fresh checkout without `.env`
-   model lines runs the same setup. Update `.env.example` to match.
+   embeddings `text-embedding-3-large`, provider `openai`, so a fresh checkout with no
+   `GOVERNED_BI_*` variable set runs the same setup.
 3. Delete the `bedrock` extra (`pyproject.toml:125`), run `uv lock`, and change
    `uv sync --frozen --extra bedrock` in `ci.yml` to `uv sync --frozen` in every job.
 4. Delete the tools with no use after the pivot (decision 8): `routing_recall.py` (the snapshot
@@ -645,7 +676,17 @@ and every remaining setting is a plain default with the config hash still record
    `run_datalake_eval.py`, `datalake_report.py` (cut down to accuracy, coverage, the two halves
    and disagreement, which P16 reports), `regrade.py`, `selective_curve.py`, `smoke_api.py`,
    `load_demo_schema.py`, and the two snapshot tools until P17.
-5. Delete the tests and docs of everything removed.
+5. **Delete the variables that only chose between gateways or named a second database:**
+   `GOVERNED_BI_PROVIDER` and the three `*_PROVIDER` variables, `GOVERNED_BI_AWS_REGION`, the
+   three `GOVERNED_BI_PROXY_*` variables, and the `PG_RENAME_DECOY_DSN` alias, so
+   `credentials.PG_DSN_NAMES` becomes the one name `GOVERNED_BI_PG_DSN`. Rewrite `.env.example`
+   as the secrets of P6 task 6 and one sentence pointing at the settings module; its history
+   and explanations are deleted or move into that module's docstrings within the comment budget.
+6. Delete the tests and docs of everything removed.
+
+**Owner, after merge:** cut the local `.env` to the same secrets, with the BIRD DSN under
+`GOVERNED_BI_PG_DSN`. Startup refuses anything else from P6 on, so this cannot be skipped
+silently.
 
 **Deliverables:** the PRs.
 
@@ -654,8 +695,12 @@ and every remaining setting is a plain default with the config hash still record
 - [ ] `ls tools/*.py | wc -l` is 10.
 - [ ] `git grep -niE "proxy_gateway|proxy_embedder|bedrock|langchain_aws|boto3" -- src tests tools pyproject.toml uv.lock .github`
       returns nothing.
-- [ ] With the model lines removed from a copy of `.env`, the resolved knobs name `gpt-6-luna` for
-      both models and `text-embedding-3-large` for embeddings.
+- [ ] With no `GOVERNED_BI_*` variable set, the resolved settings name `gpt-6-luna` for both
+      models and `text-embedding-3-large` for embeddings.
+- [ ] `git grep -nE "PG_RENAME_DECOY_DSN|GOVERNED_BI_(MODEL_|UTILITY_|EMBEDDING_)?PROVIDER|GOVERNED_BI_AWS_REGION|GOVERNED_BI_PROXY_" -- src tests tools docs/usage.md .env.example`
+      returns nothing.
+- [ ] The only variable names `.env.example` assigns, commented or not, are `OPENAI_API_KEY`,
+      `GOVERNED_BI_PG_DSN` and `LANGSMITH_*`.
 - [ ] `uv run --frozen python tools/smoke_api.py --help` exits 0.
 
 **Out of scope:** model tuning; the baseline run.
