@@ -489,7 +489,12 @@ waiting for an answer still works from interrupts alone.
 2. Delete `api/browse.py` and `api/browse_routes.py`, and from `api/routes.py` the routes
    `/corpus/assets`, `/graph`, `/knowledge-graph`, `/audit/corpus`, `/audit/turns` and
    `/audit/turns/{turn_id}/trace`, unless step 1 found the chat page calling one. Delete the
-   readers in `api/thread_turns.py` that only those routes use.
+   readers in `api/thread_turns.py` that only those routes use. Four custom routes stay:
+   `/capabilities`, `/clarifications/pending` (P13's sidebar), and the health checks `/livez`
+   and `/readyz`, which a deployment probes even though the page does not.
+   Cut `tools/smoke_api.py` and `tests/api/test_smoke_script.py` down to those four routes; the
+   tool called nine of the deleted ones. The owner chose on 2026-10-20 to keep it, as the one
+   check that a running server answers.
 3. In `ui/`: delete `app/audit`, `app/clarifications`, `app/corpus`, `app/history`, `app/schema`
    and `app/settings`, their components, `lib/display-mode.ts`, the display-mode picker and every
    `atLeast(mode, …)` branch (nine files read the display mode). The chat page shows what the
@@ -511,9 +516,11 @@ waiting for an answer still works from interrupts alone.
 - [ ] `ls ui/app` shows only `favicon.ico`, `globals.css`, `layout.tsx` and `page.tsx`.
 - [ ] `git grep -nE "browse_routes|api\.browse|display-mode|useDisplayMode|whyLines|routedSchemasLabel" -- src tests ui`
       returns nothing.
-- [ ] `docs/openapi.json` lists only the routes recorded in task 1 that stay, checked by
-      `test_the_spec_matches_the_server.py`, and the chat page makes no request to
-      `/corpus/assets` (the network panel, a new conversation).
+- [ ] `docs/openapi.json` lists exactly `/capabilities`, `/clarifications/pending`, `/livez`
+      and `/readyz`, checked by `test_the_spec_matches_the_server.py`, and the chat page makes no
+      request to `/corpus/assets` (the network panel, a new conversation).
+- [ ] `uv run --frozen python tools/smoke_api.py --help` exits 0, and
+      `tests/api/test_smoke_script.py` passes against those four routes.
 - [ ] By hand: ask a question, get an answer with SQL and table; reload with `?thread=<id>` and
       see the same conversation; answer a clarification.
 
@@ -681,7 +688,8 @@ and its tests.
    P6), `shadow_replay.py`, and `eval/shadow.py` and `eval/replay.py` if nothing kept imports
    them. Ten stay: `check_train_only.py`, `check_no_benchmark_discriminators.py`,
    `run_datalake_eval.py`, `datalake_report.py` (cut down to accuracy, coverage, the two halves
-   and disagreement, which P16 reports), `regrade.py`, `selective_curve.py`, `smoke_api.py`,
+   and disagreement, which P16 reports), `regrade.py`, `selective_curve.py`, `smoke_api.py`
+   (cut to the four remaining routes in P4),
    `load_demo_schema.py`, and the two snapshot tools until P17.
 5. **Delete the variables that only chose between gateways or named a second database:**
    `GOVERNED_BI_PROVIDER` and the three `*_PROVIDER` variables, `GOVERNED_BI_AWS_REGION`, the
