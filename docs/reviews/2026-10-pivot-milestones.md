@@ -1312,7 +1312,7 @@ the graph lazily. **Size:** fixes only.
 | `tools/check_*.py` | 12 | |
 | Declared knobs or settings | 63 | |
 | UI pages | 8 | |
-| Snapshot SHA-256 and wall time | (P1) | |
+| Snapshot SHA-256 and wall time | `b4f62e8c8b16518176ff223edbf30cf0fafcdf5e9f60dbfbc23116045fd231b4`, 387 s | |
 | CI time of the `test` job | (P5) | |
 | Checkpoint size after one turn | (P12) | |
 | EX and coverage, two runs, total and by half | (P16) | |

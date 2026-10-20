@@ -95,10 +95,8 @@ def _build_pieces(
     seen: set[str] = set()
 
     def _add(aid: str) -> None:
-        # The one gate. Every id the block can name arrives through here — schema assets,
-        # every `by_type` bucket and the closure's `pulled_in` — so filtering at the entrance
-        # covers the rules block, the reliability caveats and the pulled-in column rosters
-        # without three more tests that could each be forgotten separately.
+        # The one gate: every id the block can name enters here, so a withheld id is filtered
+        # once for the rules, the caveats and the column rosters alike.
         if aid not in seen and aid not in withheld:
             seen.add(aid)
             ids.append(aid)
@@ -110,7 +108,10 @@ def _build_pieces(
     for type_key in (*_STRUCTURAL, "few_shot"):
         for aid in by_type.get(type_key) or ():
             _add(str(aid))
-    for aid in pulled_in:
+    # Sorted because `resolve` and `connect` build `pulled_in` by walking sets, so its insertion
+    # order follows `PYTHONHASHSEED`; `_collect_rules` keeps first-seen order, so two pulled-in
+    # tables that carry rules would otherwise render them in a different order per process.
+    for aid in sorted(pulled_in, key=str):
         _add(str(aid))
 
     pieces: list[dict[str, Any]] = []
@@ -128,11 +129,8 @@ def _build_pieces(
         at = _asset_type(asset)
         if at not in _STRUCTURAL:
             continue
-        # **A hit that is also in ``pulled_in`` is a hit.** ``connect_node`` finishes with
-        # ``pulled_in.setdefault(join_id, "connect")`` over ``complete_joins``, so every join
-        # the question hit is added to ``pulled_in`` after the fact; with ``pulled_in`` winning
-        # it lost its body (measured on the gold layer: 2 of 2 and 3 of 3 join hits on two
-        # turns). ``pulled_in`` records where an asset *entered* the set.
+        # A hit that is also in ``pulled_in`` is a hit: ``connect_node`` adds every join the
+        # question hit to ``pulled_in`` after the fact, and letting that win would drop the body.
         is_hit = aid in hit_ids or aid in by_type_ids
         rows.append((aid, asset, is_hit, _score_for(aid, selected, retrieved)))
     rows.sort(key=lambda r: (_STRUCTURAL.index(_asset_type(r[1])), r[0]))
