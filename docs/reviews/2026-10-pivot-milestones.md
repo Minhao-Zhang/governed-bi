@@ -357,16 +357,16 @@ runs reproduce byte for byte with no model and no network.
 two snapshot files under `runs/` (ignored by git), and their SHA-256 in section 8.
 
 **Sign-off criteria**
-- [ ] Two runs at the same commit, in separate processes, produce files with the same SHA-256.
-- [ ] The task 0 test passes: a question whose pulled-in tables include at least two with
+- [x] Two runs at the same commit, in separate processes, produce files with the same SHA-256.
+- [x] The task 0 test passes: a question whose pulled-in tables include at least two with
       `rules` renders the same context hash in two subprocesses with `PYTHONHASHSEED` set to 1
       and 2.
-- [ ] The snapshot has 1,351 question rows, 131 statement rows and 12 probe rows (a count by row
+- [x] The snapshot has 1,351 question rows, 131 statement rows and 12 probe rows (a count by row
       kind).
-- [ ] Editing one character of one table `summary` in a copy of the corpus makes
+- [x] Editing one character of one table `summary` in a copy of the corpus makes
       `pivot_compare.py` print the difference and exit 1.
-- [ ] The tool test passes with sockets blocked, and fails if a model client is constructed.
-- [ ] Wall time for one full run is recorded in section 8.
+- [x] The tool test passes with sockets blocked, and fails if a model client is constructed.
+- [x] Wall time for one full run is recorded in section 8.
 
 **Out of scope:** any change to `src/` other than the sort in task 0.
 
