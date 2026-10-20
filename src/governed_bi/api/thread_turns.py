@@ -21,20 +21,10 @@ construction.** ``get_client(url=None)`` mounts the server's own ASGI app at
 short-circuits on exactly that prefix -- "disable auth for requests originating from SDK ASGI
 transport" (``auth/middleware.py:46``). Upstream names this the auth-bypass primitive behind
 GHSA-q3v5-r5ch-p57j. So "no credential to hold" is not a convenience worth advertising: this
-reader runs *inside* the door, holding **no principal**, and every thread in the store is visible
+reader runs *inside* the door, holding **no credential**, and every thread in the store is visible
 to it. Reaching the platform's store any other way would mean either a second checkpointer handle
 (a second answer to what a thread contains) or a loopback HTTP request to ourselves, so the bypass
 is kept and written down rather than worked around.
-
-What that costs a fork which puts a credential back in front of ``/audit/turns``
-(``docs/enterprise-fork.md`` is where that trigger is recorded): the credential gates the *route*
-and does nothing to the reader behind it. Per-caller filtering therefore has to happen in
-:func:`_collect_async`, on the record's ``identity`` and the thread's ``metadata`` -- both are
-projected there already, and the comment at that line is the hook. **Nothing filters today and
-nothing here should**: ADR 0012 and ``api/auth.py`` record one principal and no way to tell two
-callers apart, so an access-control system written now would be a second answer to a question
-this repository has not yet asked. A second principal is the change that makes the hook
-load-bearing.
 
 **And it only runs inside the Agent server.** Outside it the in-process transport cannot resolve,
 and :class:`InProcessServerRequired` says so -- see that class for why the SDK's own failure mode
@@ -400,13 +390,6 @@ async def _collect_async(
                 continue
             if wanted_turn is not None and str(record.get("turn_id") or "") != wanted_turn:
                 continue
-            # ── the authorization hook ───────────────────────────────────────────────────
-            # A per-caller filter goes on the line above this comment, and the module docstring
-            # says why it can go nowhere else: this reader sits behind `/noauth`, so it holds no
-            # principal and a credential on the route cannot reach it. `record["identity"]` is
-            # the caller `serve/accept.py` recorded, and `thread["metadata"]` is projected beside
-            # it. There is one principal today (ADR 0012), so a filter here would compare every
-            # caller against itself; a second principal is what makes this line do work.
             out.append(dict(entry))
             if wanted_turn is not None:
                 return out
@@ -430,8 +413,7 @@ async def _threads(client: Any, *, thread_id: str | None) -> AsyncIterator[Any]:
     ``ServeState``, measured at 2.42 MB for sixteen threads, because ``values`` holds the
     delivered context. Extracting one path reads the same rows for kilobytes. The path root must
     be one of ``values``/``metadata``/``config``/``interrupts``, and ``values.turns`` is the
-    channel ``record_node`` appends to. ``metadata`` is selected on both paths because it is half
-    of what the authorization hook in :func:`_collect_async` would filter on.
+    channel ``record_node`` appends to.
     """
     if thread_id is not None:
         for thread in await client.threads.search(
@@ -644,8 +626,7 @@ class PendingClarifications:
     the store unfiltered. :func:`_pending_async` is where that walk's cost, its bound, and what the
     bound hides are written down; this class is only the client.
 
-    **Read-only, deliberately.** Answering from here would mean resuming another caller's thread,
-    and ``serve/resume.py::authorise_resume`` refuses that by design (ADR 0006 B9). The owner's
+    **Read-only, deliberately.** The owner's
     2026-08-19 decision was that an operator's answer feeds the semantic layer instead, and that
     path is gated on a provenance check this repository does not have -- ``session.py``'s
     ``visible_assets`` filters ``governance.excluded`` alone, so a ``proposed`` asset already reaches

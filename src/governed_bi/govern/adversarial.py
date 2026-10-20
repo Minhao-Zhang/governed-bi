@@ -35,7 +35,6 @@ from ..corpus.schema import (
     ReliabilityStatus,
     TableAsset,
 )
-from ..ports import Grant, PredicateEnforcement, Reach, RowPredicate
 from .layers import RULES, Layer
 from .pipeline import spellings_for
 from .policy import BI_SCOPE_RULE_ID, GUARD_RULE_IDS
@@ -73,10 +72,6 @@ CASE_FAMILIES: frozenset[str] = frozenset(
         "table",
         "injection",
         "spelling",
-        # ADR 0012. Its own family rather than folded into `table` / `column`, so the report's
-        # family table shows how thin or thick the authorization half is instead of hiding it
-        # inside the licensing counts -- which is the conflation the ADR exists to end.
-        "authorization",
     }
 )
 
@@ -152,21 +147,6 @@ class AdversarialWorld:
     licensed: frozenset[str]
     excluded: frozenset[str]
     suspect: frozenset[str]
-    #: ADR 0012. What the world's principal may read, independent of what retrieval licensed.
-    #: The two sets overlap and neither contains the other, on purpose — see
-    #: :func:`_parse_world`.
-    authorized: frozenset[str] = frozenset()
-    denied_columns: frozenset[str] = frozenset()
-    row_predicates: tuple[RowPredicate, ...] = ()
-
-    def grant(self) -> Grant:
-        """The world's authorization, as the value an ``AccessPolicy`` would return."""
-        return Grant(
-            reach=Reach.listed,
-            tables=self.authorized,
-            denied_columns=self.denied_columns,
-            row_predicates=self.row_predicates,
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,10 +222,6 @@ class WorldFixture:
     ambiguous: frozenset[str]
     by_table: Mapping[str, Mapping[str, str]]
     default_schema: str
-    #: The world's grant, carried here so :mod:`.adversarial_run` puts it on the policy it
-    #: runs with. A caller-supplied policy cannot override it: the grant is part of the world
-    #: the cases were written against, exactly like ``licensed``.
-    grant: Grant = Grant()
 
 
 # ── loading ───────────────────────────────────────────────────────────────────
@@ -284,60 +260,12 @@ def _parse_world(body: Mapping[str, Any]) -> AdversarialWorld:
             "refuse and a checker that licensed everything would score perfectly"
         )
 
-    authorized = frozenset(str(x) for x in body.get("authorized", ()))
-    unknown = sorted(authorized - set(resolved))
-    if unknown:
-        raise ValueError(
-            f"[world].authorized names {unknown}, which no [world.tables] entry declares"
-        )
-    # The same argument the licence check makes, one rule over (ADR 0012 §3). A world whose
-    # authorized set covers everything it licenses gives `r_table_not_authorized` nothing to
-    # fire on, and an access layer that authorized everything would score perfectly.
-    if not (licensed - authorized):
-        raise ValueError(
-            "[world] authorizes every table it licenses, so the authorization half of the "
-            "TABLES layer has nothing to refuse. Declare a table that retrieval found and "
-            "this principal may not read -- that is the case ADR 0012 exists for."
-        )
-    denied = frozenset(str(x) for x in body.get("denied_columns", ()))
-    declared_columns = {
-        f"{table}.{column}".lower()
-        for table, columns in resolved.items()
-        for column in columns
-    }
-    unknown = sorted(key for key in denied if key.lower() not in declared_columns)
-    if unknown:
-        raise ValueError(
-            f"[world].denied_columns names {unknown}, which no [world.tables] entry declares"
-        )
-
-    predicates: list[RowPredicate] = []
-    for table, spec in (body.get("row_predicate") or {}).items():
-        if table not in resolved:
-            raise ValueError(
-                f"[world.row_predicate] names {table!r}, which no [world.tables] entry declares"
-            )
-        if not isinstance(spec, Mapping) or not isinstance(spec.get("expression"), str):
-            raise ValueError(f"[world.row_predicate.{table}] needs a string `expression`")
-        predicates.append(
-            RowPredicate(
-                table=str(table),
-                expression=str(spec["expression"]),
-                enforcement=PredicateEnforcement(
-                    spec.get("enforcement", PredicateEnforcement.refuse.value)
-                ),
-            )
-        )
-
     return AdversarialWorld(
         default_schema=str(body.get("default_schema") or ""),
         tables=resolved,
         licensed=licensed,
         excluded=frozenset(str(x) for x in body.get("excluded", ())),
         suspect=frozenset(str(x) for x in body.get("suspect", ())),
-        authorized=authorized,
-        denied_columns=denied,
-        row_predicates=tuple(sorted(predicates, key=lambda p: p.table)),
     )
 
 
@@ -634,7 +562,6 @@ def build_world_fixture(world: AdversarialWorld) -> WorldFixture:
         ambiguous=ambiguous,
         by_table=by_table,
         default_schema=world.default_schema,
-        grant=world.grant(),
     )
 
 

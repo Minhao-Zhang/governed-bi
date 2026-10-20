@@ -44,7 +44,6 @@ from governed_bi.serve.ledger import (
     execution_from_attempts,
     pipeline_error_attempt,
 )
-from governed_bi.serve.resume import ResumeRejected, authorise_resume
 from governed_bi.serve.runtime import bool_knob, configurable, prompt_variants
 from governed_bi.serve.schema_term_guard import find_schema_leak
 from governed_bi.serve.structured_check import percentage_scale_suffix
@@ -272,7 +271,7 @@ def build_tools(
 ) -> list[Any]:
     """Build the five ADR tools closed over this turn's bounds + corpus."""
     cfg = configurable(config)
-    bounds = bounds or tool_bounds_from_state(state, cfg)
+    bounds = bounds or tool_bounds_from_state(state)
     assets = resolve_assets(config)
     policy = policy_from_config(config)
     connector = cfg.get("connector")
@@ -552,41 +551,8 @@ def build_tools(
                 basis=resolved_basis,
             )
         )
-        # **The resume identity gate (ADR 0006 B9), on the first instruction that can hold it.**
-        # ``interrupt()`` raises on the initial pass, so everything below runs only on a resume —
-        # and only here do both halves exist in one frame: ``state`` is the *paused* turn's
-        # checkpoint, ``config`` belongs to the run applying the resume. The streamed transport
-        # posts ``{"command": {"resume": …}}`` straight into the graph, so nothing in ``api/`` is
-        # consulted; ``api/auth.py`` can read that payload but not the thread it targets
-        # (``serve/resume.py``'s module docstring measures why), and it cannot refuse
-        # ``command.resume`` wholesale without deleting the paused-turn protocol.
-        #
-        # Before the line, not after: ``parse_resume`` below is where an unauthorised caller's
-        # text would first become something the model is handed and the record keeps.
-        try:
-            authorise_resume(state, config)
-        except ResumeRejected:
-            # The ``start`` row above is already on the live stream, and on *this* run's stream
-            # too, since the replay re-emitted it; a raise alone never closes it, so the operator
-            # would watch a clarification spin forever and find only ``error_type:
-            # "ResumeRejected"`` in the record. ``detail`` stays ``started``: the clarification
-            # id, never the answer, which is the thing this refusal is withholding.
-            emit(
-                kind="tool",
-                step="ask_user",
-                status="refused",
-                event_id=tool_event_id("ask_user", _call_id(runtime)),
-                detail=started,
-            )
-            raise
-        # **The latch is given back here**, after the gate and before the answer is read: an
-        # authorised resume means this question is no longer outstanding, so the next one the
-        # model asks in this same ``agent_core`` execution is a genuinely new question and must be
-        # allowed to pause. Kept *after* ``authorise_resume`` so that call stays the first
-        # instruction ``interrupt()`` returns onto (ADR 0006 B9) — a caller who was not asked
-        # neither answers the question nor frees it. ``remove`` cannot raise: this frame appended
-        # the entry, the check above admits exactly one, and nothing between the two lines
-        # ``await``s, so no other frame can have taken it.
+        # The latch is given back once the interrupt returns: the next question the model asks
+        # in this same ``agent_core`` execution is a new one and must be allowed to pause.
         pending_clarification.remove(clarification_id)
         text, resolution, fail_closed = parse_resume(
             answer, why=why_text, expected_id=clarification_id

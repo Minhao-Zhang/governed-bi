@@ -13,9 +13,6 @@ of the rules. A patch this layer accepts is a file the engine can load.
 repository and is not rebuildable from it; this layer produces candidates and a human commits
 them. The one write primitive that touches corpus text lives in ``corpus/patch.py`` and is aimed
 at a staging tree.
-
-The grant seam is composed in ``api/``, where the session lives, so nothing here imports
-``api/visibility.py``.
 """
 
 

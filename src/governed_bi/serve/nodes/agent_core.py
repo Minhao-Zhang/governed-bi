@@ -120,8 +120,8 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
         # when ``path_kind`` is ``answered`` (capped / all-refused).
         "path_kind": "crashed" if failure is not None else "answered",
         # **Sealed, not raw.** A loop that died with a tool call pending commits an ``AIMessage``
-        # whose ``tool_use`` nothing ever answered, and this write is the single point all three
-        # ways of dying pass through — so the repair is here and not three times over. It does
+        # whose ``tool_use`` nothing ever answered, and this write is the single point both
+        # ways of dying pass through — so the repair is here and not twice over. It does
         # not change what this turn *reports* (still ``crashed``, same ``failure``, same ledger);
         # it stops the turn from taking the whole thread with it. See :func:`_sealed`.
         "messages": _sealed(fresh, failure, paused=bool(result.get("__interrupt__"))),
@@ -595,7 +595,7 @@ def _sealed(fresh: list[Any], failure: Mapping[str, Any] | None, *, paused: bool
     ``01a01bb8`` (2026-08-19), 12 ``tool_use`` against 11 ``tool_result``, and every subsequent
     turn raised ``ValidationException`` before reaching a single attempt. What makes this route
     worse is that the damaging turn stamps an ordinary ``crashed`` and reads like a normal
-    failure. Three paths reach it, all probed:
+    failure. Two paths reach it, both probed:
 
     1. ``agent_node_timeout_s`` — a live production knob. The soft wall is checked **between**
        frames (:func:`_run` says why it must be), so it fires exactly in the window after the
@@ -604,9 +604,6 @@ def _sealed(fresh: list[Any], failure: Mapping[str, Any] | None, *, paused: bool
        ``GovernanceUsageError``, which ``serve/tools.py::_fetch`` deliberately re-raises instead
        of converting to a tool reply, and ``GraphRecursionError`` from the exploration tools
        ``_CapEndsTheTurn`` does not count.
-    3. ``ResumeRejected`` from ``serve/resume.py``, raised on the line ``ask_user``'s
-       ``interrupt()`` returns on — latent while there is one principal, live the moment a fork
-       has two.
 
     **A paused turn must not be "repaired".** A turn stopped at ``interrupt()`` has an unanswered
     ``tool_use`` *by design*: answering it is exactly what would break resume, the feature this

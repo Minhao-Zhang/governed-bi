@@ -8,13 +8,11 @@
  *
  * **This is display, not permission. It is not a security boundary and must never be described as
  * one.** Anyone can set it — it is a value in their own `localStorage` — and the engine neither
- * knows nor honours it. What actually withholds an asset is the access seam (ADR 0012): a grant
- * removes it from the model's prompt, from the four tools that can name one, and from every route
- * that projects a corpus asset. Choosing `business` hides the SQL panel from a reader who did not
- * want it; it does not stop anyone from reading the SQL out of `/audit/turns`, which today needs no
- * credential at all (audit finding A7, open). Presenting this control as protection would make it
- * exactly the kind of thing `docs/enterprise-fork.md` warns about: something that looks like a
- * boundary and is not.
+ * knows nor honours it. Nothing in the engine withholds an asset from
+ * anyone. Choosing `business` hides the SQL panel from a reader who did not want it; it does not
+ * stop anyone from reading the SQL out of `/audit/turns`, which today needs no credential at all
+ * (audit finding A7, open). Presenting this control as protection would make it something that
+ * looks like a boundary and is not.
  *
  * **Deliberately client-only** (owner's decision, 2026-08-19). There is no `ui_display_mode` on
  * `/capabilities` and nothing in the engine produces one, so this store is the whole mechanism.

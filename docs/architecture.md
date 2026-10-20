@@ -73,21 +73,11 @@ review, not by the topology and not by a test: G2 is prose in
 and introspection — never that one of them calls `check()`. Layers, rules and
 executor paths: [ADR 0006](adr/0006-execution-time-governance.md).
 
-**Authorization is a wired seam that ships open.** `ports.py:331` declares the `AccessPolicy`
-port and `govern/access.py` holds its two adapters, and the TABLES and COLUMNS layers ask the
-resulting grant
-(`r_table_not_authorized`, `r_column_not_authorized`, `r_row_predicate_unenforced`).
-`api/graph_app.py::access_policy_from_environment` is the composition root and the only place in
-`src/` that chooses one: `OpenAccessPolicy` unless `GOVERNED_BI_ACCESS_POLICY` names a
-`StaticRoleAccessPolicy` TOML file, and a `RuntimeError` rather than a fallback if that file is
-missing. `resolve_access_grant` asks it once for the principal
-`api/auth.py::authenticated_principal` resolves — one principal, asserted rather than
-authenticated, since no route asks a caller for anything ([usage](usage.md#serve-langgraph-server))
-— and the grant rides on `GovernancePolicy`. The
-default grant authorizes everything, so on a stock install those three rules never fire — what the
-grant *does* narrow when one is configured, and what it deliberately does not, is
-[ADR 0012 §8](adr/0012-access-seam-principal-and-authorization.md). What a fork implements, in
-what order: [enterprise fork](enterprise-fork.md).
+**There is no authorization.** The engine serves one local operator, so the TABLES layer asks one
+question, whether the turn licensed the table (`r_table_not_licensed`), and COLUMNS asks whether the
+corpus allows, excludes or marks the column suspect. `api/auth.py` admits every caller and refuses
+only a state-writing payload ([ADR 0012](adr/0012-access-seam-principal-and-authorization.md) is the
+reversal record).
 
 `AgentMiddleware` *is* used in `agent_core`, for three things that are **not**
 governance: injecting the retrieval context block on every model call (via

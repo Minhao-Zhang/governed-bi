@@ -10,10 +10,7 @@ from langgraph.types import Command
 
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.graph import compile_graph
-from governed_bi.serve.resume import CALLER_KEY
 from governed_bi.serve.scripted_model import ScriptedChatModel
-
-ASKED = "analyst-7"
 
 
 def _ask(basis: str) -> AIMessage:
@@ -50,7 +47,6 @@ def _config(thread_id: str, model: Any) -> dict[str, Any]:
             "thread_id": thread_id,
             "policy": GovernancePolicy(guard_rules_enabled={}),
             "agent_model": model,
-            CALLER_KEY: ASKED,
         }
     }
 
@@ -72,7 +68,6 @@ def _turn(thread_id: str) -> dict[str, Any]:
         "facet_route_hits": [("facet_schema", "sales", 1.0)],
         "messages": [],
         "usage": [],
-        "identity": {"token": ASKED, "id": ASKED},
         "clarifications": [],
     }
 

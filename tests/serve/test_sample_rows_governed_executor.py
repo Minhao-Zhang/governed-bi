@@ -41,8 +41,7 @@ def test_tool_bounds_from_state_includes_pulled_in() -> None:
                 "pulled_in": {"s.t.extra": "resolve"},
                 "attributions": {},
             },
-        },
-        {},
+        }
     )
     assert bounds.may_read_body("s.t.extra")
     assert bounds.may_inspect_schema("s.t")
@@ -99,7 +98,7 @@ def test_sample_rows_asks_for_the_engines_spelling_in_the_right_schema() -> None
     payload, ok, attempt = sample_rows(
         "airline.Air_Carriers_66c534.Code",
         limit=5,
-        bounds=tool_bounds_from_state(state, {}),
+        bounds=tool_bounds_from_state(state),
         assets=assets,
         connector=Recorder(),
         corpus=for_analyst([table, column]),
@@ -175,7 +174,7 @@ def test_sample_rows_is_a_governed_executor_path() -> None:
     payload, ok, attempt = sample_rows(
         "sales.customers.ssn",
         limit=5,
-        bounds=tool_bounds_from_state(state, {}),
+        bounds=tool_bounds_from_state(state),
         assets=assets,
         connector=Recorder(),
         corpus=for_analyst([table, suspect]),

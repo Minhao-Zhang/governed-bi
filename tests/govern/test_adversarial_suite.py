@@ -488,58 +488,6 @@ def test_the_bypass_coverage_claim_must_match_the_cases(
     assert expect in str(err.value), str(err.value)
 
 
-@pytest.mark.parametrize(
-    "find, replace, expect",
-    [
-        pytest.param(
-            'licensed = ["s.t"]',
-            'licensed = ["s.t"]\nauthorized = ["s.t"]',
-            "authorizes every table it licenses",
-            id="authorizes_everything_it_licenses",
-        ),
-        pytest.param(
-            'licensed = ["s.t"]',
-            'licensed = ["s.t"]\nauthorized = ["s.absent"]',
-            "no [world.tables] entry",
-            id="phantom_authorization",
-        ),
-        pytest.param(
-            'licensed = ["s.t"]',
-            'licensed = ["s.t"]\ndenied_columns = ["s.t.zzz"]',
-            "no [world.tables] entry",
-            id="phantom_denied_column",
-        ),
-        pytest.param(
-            'licensed = ["s.t"]',
-            'licensed = ["s.t"]\n[world.row_predicate]\n"s.absent" = { expression = "x" }',
-            "no [world.tables] entry",
-            id="predicate_on_an_undeclared_table",
-        ),
-        pytest.param(
-            'licensed = ["s.t"]',
-            'licensed = ["s.t"]\n[world.row_predicate]\n"s.t" = { enforcement = "refuse" }',
-            "needs a string `expression`",
-            id="predicate_with_no_expression",
-        ),
-    ],
-)
-def test_the_worlds_authorization_declarations_must_be_real(
-    tmp_path: Path, find: str, replace: str, expect: str
-) -> None:
-    """ADR 0012's half of the world, held to the same standard as the licence's.
-
-    The first parameter is the one with teeth and it is the licence check's argument one rule
-    over: a world that authorizes everything it licenses gives ``r_table_not_authorized``
-    nothing to fire on, so an access layer that authorized everything would score perfectly —
-    which is exactly why ``[world].licensed`` may not cover every declared table either.
-    """
-    broken = VALID.replace(find, replace, 1)
-    assert broken != VALID, "the parametrised break did not match the fixture"
-    with pytest.raises(ValueError) as err:
-        _load(tmp_path, broken)
-    assert expect in str(err.value), str(err.value)
-
-
 def test_a_benign_case_may_not_declare_a_refusal(tmp_path: Path) -> None:
     """Declaring a layer for a benign case would make a false refusal look intended, which is
     the one thing the benign half exists to make impossible to hide."""
@@ -584,12 +532,9 @@ def test_the_driver_runs_and_reports_its_denominators() -> None:
 def probes():
     """``tools/govern_bench.py``'s probe runner, imported by path.
 
-    **The runner is in a tool and not in ``govern/`` on purpose.** A probe has to ask what the
-    principal was *shown*, which means calling ``serve/context.py::withheld_by_grant`` and
-    ``serve/fetch.py`` — both above ``govern/`` in the layer order, so ``adversarial_run.py``
-    may not import them and ``tools/check_imports.py`` would say so. A tool sits above every
-    layer, which is what tools are for. The cases stay data in ``adversarial.toml``, so this
-    gate and the driver still read one file rather than two lists that drift.
+    **The runner is in a tool and not in ``govern/`` on purpose.** A probe asks what a tool
+    shows, which means calling ``serve/fetch.py``, above ``govern/`` in the layer order. The
+    cases stay data in ``adversarial.toml``, so this gate and the driver read one file.
     """
     import importlib.util
 
@@ -606,37 +551,28 @@ def probes():
     return module.run_disclosure_probes()
 
 
-def test_nothing_the_grant_withholds_is_disclosed_on_any_surface(probes) -> None:
+def test_nothing_outside_the_licence_is_disclosed_on_any_surface(probes) -> None:
     """The build-failing half of the disclosure instrument.
 
-    A ``[[case]]`` asks whether a statement was refused. A ``[[probe]]`` asks what the principal
-    was shown, and the three defects an independent review found on 2026-08-12 were all of the
-    second kind: ``inspect_schema`` handing over every denied column of an authorized table, a
-    bare-spelled join's ON clause naming a withheld table, and ``may_sample`` failing open on a
-    mixed-case denial. None of the three is expressible as SQL, and the suite as it stood
-    measured only SQL — so every one of them would have come back.
+    A ``[[case]]`` asks whether a statement was refused. A ``[[probe]]`` asks what a turn was
+    shown, and ``inspect_schema`` and ``sample_rows`` build no statement for the layer stack to
+    read, so a suite that measured only SQL would let them hand over an unlicensed table.
     """
     leaked = [r for r in probes if r.kind == "attack" and r.failed]
     assert not leaked, "\n".join(f"{r.id} [{r.surface}]: {r.detail}" for r in leaked)
 
 
-def test_the_disclosure_filter_is_a_filter_and_not_an_outage(probes) -> None:
-    """The benign half, and it is not decoration.
-
-    ``withheld_by_grant`` returning every asset id would score a perfect disclosure rate on the
-    test above, exactly as ``def check(...): return {"passed": False}`` scores a perfect bypass
-    rate on attacks alone. The controls include the case that keeps the denial *specific*:
-    ``sales.leads`` declares a column with the same bare name as the denied one and the grant
-    does not deny it, so a filter keyed on bare names fails here.
-    """
+def test_the_disclosure_bound_is_a_filter_and_not_an_outage(probes) -> None:
+    """The benign half, and it is not decoration: a bound that refused everything would score a
+    perfect disclosure rate on the test above, exactly as ``def check(...): return
+    {"passed": False}`` scores a perfect bypass rate on attacks alone."""
     hidden = [r for r in probes if r.kind == "benign" and r.failed]
     assert not hidden, "\n".join(f"{r.id} [{r.surface}]: {r.detail}" for r in hidden)
 
 
 def test_every_disclosure_surface_carries_both_an_attack_and_a_control(probes) -> None:
-    """Per surface, not in aggregate. Four surfaces sharing one pool of controls would let a
-    surface with only attacks read as covered — the ``by_family`` argument from the case half,
-    which exists so a thin family is visible rather than inferred."""
+    """Per surface, not in aggregate: surfaces sharing one pool of controls would let a surface
+    with only attacks read as covered, so a thin surface is visible rather than inferred."""
     by_surface: dict[str, set[str]] = {}
     for r in probes:
         by_surface.setdefault(r.surface, set()).add(r.kind)

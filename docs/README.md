@@ -32,8 +32,6 @@ SQLite is the offline test/CI substrate.
    | `tools/export_bundle.py` | a bundle an engineer applies with `git apply`. Two content checks are fatal here and nowhere else |
    | `tools/check_landed.py` | did it land? Read off the corpus, stored nowhere |
    | `tools/check_ratchet.py` | the corpus's conformance debt may shrink and may not grow |
-10. [Enterprise fork](enterprise-fork.md) — what an enterprise deployment must implement for
-   PII / RLS / RBAC, in what order, and what this repository deliberately does not do for it.
 
 ## Decision records (ADRs)
 
@@ -59,7 +57,7 @@ build in the present tense after that build was deleted.
 | [0009](adr/0009-browsing-and-filtering-api.md) | Browsing, filtering, and relationship API |
 | [0010](adr/0010-live-stage-events.md) | Live stage events |
 | [0011](adr/0011-two-model-split-and-facet-query-rewriting.md) | Two models and a query per facet |
-| [0012](adr/0012-access-seam-principal-and-authorization.md) | The access seam: principal, authorization, and the Layer 6 split |
+| [0012](adr/0012-access-seam-principal-and-authorization.md) | The access seam: principal, authorization, and the Layer 6 split — **reversed**; the seam is deleted and the Layer 6 split stays |
 | [0013](adr/0013-the-declared-abstention-policy.md) | The declared abstention policy |
 | [0014](adr/0014-one-conversation-store.md) | One conversation store, on a durable LangGraph checkpointer — **supersedes 0004 §5** |
 | [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **Accepted; steps 0–6 built** (the agentic pipeline, T4/T5, the categorised capture surface and `/reports` are not; a minimal note control does ship) |

@@ -380,12 +380,12 @@ def _knob_problem(
 
     A key absent from every row **and** from this run is skipped — both sides declined to say.
     No live run is in that state: ``session._resolved_knobs`` starts from ``knobs.defaults()``
-    and omits no key, so this run always records all 60 the register declares. Present on one
+    and omits no key, so this run always records every key the register declares. Present on one
     side only is a **warning**: the likeliest cause is an
     artifact older than the knob, and refusing on it would strand every artifact on disk. That
-    is the branch every artifact on disk hits — six comparability knobs are absent from all
+    is the branch every artifact on disk hits — five comparability knobs are absent from all
     seven ``proxy_*`` artifacts in ``runs/eval/`` (``abstention_policy_enabled``,
-    ``access_grant``, ``cost_budget``, ``negative_tau``, ``semantic_scale_ceiling``,
+    ``cost_budget``, ``negative_tau``, ``semantic_scale_ceiling``,
     ``sqlglot_version``) and recorded by any run that would resume one.
 
     "Absent" and "recorded ``None``" stay apart throughout, which is why membership is tested

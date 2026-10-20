@@ -1,62 +1,12 @@
 """The state-write denial. **No credential is required to reach this engine.**
 
-Wired by ``langgraph.json``'s ``auth.path``, which stays wired even though nothing here
-authenticates: the ``@auth.on`` handlers below are the reason the block exists. Without
-``auth.path`` ``LANGGRAPH_AUTH_TYPE`` defaults to ``"noop"``, and a noop backend runs no
-``@auth.on`` handler either — the state-write denials would go with it.
+Wired by ``langgraph.json``'s ``auth.path``. ``@auth.authenticate`` admits every caller with one
+constant identity: without it LangGraph Server runs no ``@auth.on`` handler, and the denials go.
+No shared key (Studio's fetches carry no custom headers): the ``127.0.0.1`` binding is the control.
 
-Two things happen here, and only one of them is about who is calling.
-
-**A1/A7 were closed by a shared key, and the key was deliberately removed (2026-08-13).** The
-2026-08-10 audit found ~82 routes with no authentication, and the fix was a shared
-``GOVERNED_BI_API_KEY`` compared here in constant time and again in ``routes.py``'s middleware.
-It worked, and it made the product unusable: LangGraph Studio's bootstrap fetches carry no custom
-headers, so its probe arrived with no ``x-api-key`` and the whole surface answered 401 through a
-middleware that runs outside CORS, presenting as an opaque network error rather than a refusal.
-This is a single-operator local dev engine bound to ``127.0.0.1``, the operator is the only
-principal, and the maintainer chose reachability over transport auth: **reaching the port is now
-sufficient.**
-
-What that re-exposes is A1 and A7, verbatim and on purpose. Anything that can reach the port —
-another process on the machine, a container on the same bridge, a page whose origin
-``langgraph.json``'s ``http.cors`` allow-list happens to permit — can drive the engine, spend
-model budget, and read ``/audit/turns`` and ``/audit/turns/{id}/trace``, which return every
-thread's SQL, the full turn records and an absolute path to the thread store -- which is a file,
-``.langgraph_api/.langgraph_ops.pckl`` (``api/thread_turns.ThreadTurnLog.TURN_LOG_DIR``), not a
-directory. The
-binding to loopback is the whole of the remaining control. A fork that exposes this port to a network has to
-put the credential back, and ``docs/enterprise-fork.md`` is where that trigger is recorded.
-
-**A2/A3 — ``threads.update`` is denied outright.** ``POST /threads/{id}/state`` forwards a
-client-supplied ``as_node`` (``langgraph_api/api/threads.py:322``) straight into
-``graph.aupdate_state``, and ``as_node`` is what bypasses ``input_schema``. Measured on this
-graph: ``as_node=None`` is filtered as designed, ``as_node="accept"`` writes ``ServeState``
-directly — which widens ``ToolBounds.licensed`` (a resume then executes SQL against it),
-overwrites ``identity``, and forges ``corpus_content_hash``, the field every quotability gate
-reads as the treatment identity. Authenticating the caller does not fix that; the write channel
-should not exist. Nothing in this system updates thread state over HTTP: ``serve/`` writes state
-from inside the graph, and the UI only creates threads and streams runs.
-
-The route cannot be disabled on its own — ``http.disable_threads`` would take ``/threads`` with
-it, and ``useStream`` needs that — so the denial is here, on the ``"update"`` action that
-``langgraph_runtime_inmem.ops.Threads.State.post`` actually consults.
-
-**What this does not do.** It is not authorization of any kind beyond the two denials above.
-There is one principal and no way to tell two callers apart, so ``resume_authorised``'s
-per-caller check (``govern/bounds.py``) is still the only thing that distinguishes them. That was
-true while the key existed too: a shared key cannot name a caller either.
-
-**And it is not where the resume gate lives, because it cannot be.** ``@auth.on.threads.create_run``
-below sees the resuming *request* — ``kwargs.command.resume`` and ``thread_id`` are both in the
-``RunsCreate`` it is handed, and :func:`_command_of` already reads the first. It cannot see the
-*thread*: ``Auth.types.AuthContext`` carries ``permissions``, ``user``, ``resource`` and
-``action``, and the ``identity`` the paused turn was checkpointed with is graph state, reachable
-only through a runtime connection and a compiled graph that no auth handler is given. Refusing
-``command.resume`` outright is not available either — that is the paused-turn protocol. So B9 is
-enforced inside the graph, at the line ``serve/tools.py``'s ``ask_user`` resumes on; what closes
-audit A5's write half is ``serve/accept.py`` recording the authenticated caller as the turn's
-``identity``, and it reads it from the ``configurable`` slot :func:`_authenticate`'s return value
-lands in. ``serve/resume.py``'s module docstring is the long form.
+The denials are about payloads, not callers: ``threads.update`` and a run carrying
+``command.update`` or ``command.goto`` would write ``ServeState`` (widening ``licensed``, forging
+``corpus_content_hash``), so they are refused; ``command.resume`` passes.
 """
 
 from __future__ import annotations
@@ -65,72 +15,18 @@ from collections.abc import Mapping
 
 from langgraph_sdk import Auth
 
-from governed_bi.govern.access import LOCAL_PRINCIPAL
-from governed_bi.ports import Principal
-
-__all__ = [
-    "auth",
-    "authenticated_principal",
-]
+__all__ = ["auth"]
 
 auth = Auth()
 
-
-def authenticated_principal() -> Principal:
-    """The one :class:`~governed_bi.ports.Principal` this server executes turns for.
-
-    **A function of nothing, because authentication here is a function of nothing.**
-    :func:`_authenticate` admits every caller, so every request is the same subject — as it
-    was when a shared key guarded the door, since a shared key cannot distinguish two callers
-    either. The single-principal model did not change when the key went; it just stopped
-    being proven by anything.
-
-    It exists so the composition root has **one** place to change. ``govern/access.py`` used
-    to record that ``LOCAL_PRINCIPAL`` was "not imported by ``api/`` today" and now records
-    that it is — this function being the importer — because the literal written twice is the
-    drift this repository keeps auditing for. ``_authenticate`` returns ``LOCAL_PRINCIPAL.id``
-    instead of its own copy of the string, so the identity the resume guard compares and the
-    principal the access policy is asked about cannot come apart.
-
-    A fork that authenticates people replaces this with something taking the request's
-    claims. The moment it can return two different principals, audit findings A5, A6 and B1
-    go live — the deleted ``/chat/resume`` validated by
-    thread, and ``POST /threads/search`` returns the rendered context block. That trigger is
-    recorded in ``docs/enterprise-fork.md`` and is deliberately not fixed here.
-    """
-    return LOCAL_PRINCIPAL
+#: The one identity every request carries. Nothing reads it.
+_LOCAL_IDENTITY = "governed-bi-local"
 
 
 @auth.authenticate
 async def _authenticate() -> Auth.types.MinimalUserDict:
-    """Admit every caller. **Reaching the port is the whole of the check.**
-
-    It takes no parameters because it reads nothing: no ``headers``, no ``authorization``, no
-    ``request``. A signature that accepted them would suggest something inspects them. Until
-    2026-08-13 this compared ``GOVERNED_BI_API_KEY`` in constant time and raised 401 otherwise,
-    closing audit A1 — see the module docstring for why the key was removed and what that
-    re-exposes.
-
-    **It cannot simply be deleted, and this is why ``langgraph.json`` keeps its ``auth`` block.**
-    ``langgraph_api/auth/custom.py`` raises at startup when a loaded ``Auth`` object has no
-    ``@auth.authenticate`` handler, and dropping ``auth.path`` instead would fall back to the noop
-    backend, which runs no ``@auth.on`` handler either — the ``threads.update`` and
-    ``threads.create_run`` denials below would go with it. Those are not authentication and do not
-    depend on knowing the caller: they refuse a *payload*, from anyone.
-
-    ``identity`` is spelled through :func:`authenticated_principal` rather than as a literal, so
-    the string ``govern/bounds.resume_authorised`` compares and the principal
-    ``api/graph_app.py`` asks the access policy about are one value (ADR 0012 §8.1). It is not
-    evidence of anything about the caller — it was not when a shared key produced it either.
-
-    **This return value is now load-bearing twice.** ``langgraph_api/models/run.py`` copies it into
-    every run's ``configurable["langgraph_auth_user_id"]``, which is the only slot
-    ``serve/resume.py`` will read a caller from: ``serve/accept.py`` stores it as the turn's
-    ``identity`` and ``ask_user`` compares the resuming run's copy against it. A fork returning two
-    different principals gets the B9 gate for free, on the streamed transport, without touching
-    ``serve/``.
-    """
-    return {"identity": authenticated_principal().id, "permissions": []}
+    """Admit every caller. It reads nothing, so a signature that suggested otherwise would lie."""
+    return {"identity": _LOCAL_IDENTITY, "permissions": []}
 
 
 # ``type: ignore`` on the decorator, not a signature change: the SDK's ``_ActionHandler``
@@ -148,9 +44,9 @@ async def _no_state_writes(ctx: Auth.types.AuthContext, value: dict) -> None:
     which nothing in this system performs.
 
     A denial rather than a filter: a filter would restrict *which* threads may be written, and
-    the finding is not about ownership. `ServeState` is the engine's own record — `identity`,
-    `licensed`, `knobs_resolved`, `corpus_content_hash` — and a client that can set those can
-    forge an audit record and widen the tool bounds the layer stack enforces against. There is no
+    the finding is not about ownership. `ServeState` is the engine's own record — `licensed`,
+    `knobs_resolved`, `corpus_content_hash` — and a client that can set those can forge an
+    audit record and widen the tool bounds the layer stack enforces against. There is no
     value of "which thread" that makes that acceptable.
     """
     raise Auth.exceptions.HTTPException(

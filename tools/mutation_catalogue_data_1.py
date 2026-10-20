@@ -320,23 +320,6 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
                 "deleting this one line left the original A4 test green",
     ),
     Mutation(
-        id="access-policy-with-no-reachable-role-starts-anyway",
-        what="a policy whose roles nobody holds loads, and every query then refuses silently",
-        path="src/governed_bi/api/graph_app.py",
-        anchor="    if declared and not (set(declared) & set(principal.roles)):",
-        replacement="    if False:",
-        tests=(
-            "tests/conformance/test_a_declared_mechanism_is_reachable_from_the_shipped_config"
-            ".py::test_an_access_policy_no_principal_can_hold_is_refused_at_startup",
-        ),
-        finding="`StaticRoleAccessPolicy.grant_for` returns `Grant()` — reach=listed, no "
-                "tables — for a principal holding none of the declared roles, and "
-                "`authenticated_principal` returns one constant with one role. So an "
-                "operator who writes `[role.analyst]` gets a server that starts, looks "
-                "configured, and refuses every query with nothing anywhere naming the "
-                "mismatch. Fail-closed and silent, which is the pair that wastes a day.",
-    ),
-    Mutation(
         id="report-a-non-quotable-delta-reads-as-a-result",
         what="the rendered comparison drops its quotability, so a copied line loses the gate",
         path="src/governed_bi/eval/report.py",
@@ -505,24 +488,6 @@ MUTATIONS_DATA_1: tuple[Mutation, ...] = (
                 "clock, and `_LIST_VIEW_KEYS` projects `latency_sec` to the audit list, so "
                 "the number was served as well as stored. The eval graph has no `accept` "
                 "node, so no measured arm could observe it.",
-    ),
-    Mutation(
-        id="access-denied-columns-accepts-a-schemaless-key",
-        what="a two-part denied_columns key loads again, and denies nothing",
-        path="src/governed_bi/govern/access.py",
-        anchor='                body.get("denied_columns"), parts=(3,), where=f"{where}.denied_columns"',
-        replacement='                body.get("denied_columns"), parts=(2, 3), where=f"{where}.denied_columns"',
-        tests=(
-            "tests/govern/test_access_seam.py::"
-            "test_the_policy_file_fails_at_load_not_at_query_time",
-        ),
-        finding="The shipped state until 2026-09-18. `resolve_grant` folds with "
-                "`default_schema=None` on the serve path, so `denied_columns = "
-                "['orders.salary']` never matched the 3-part key `denies_column` is asked "
-                "about: the file parsed, the server started, no warning was issued, and the "
-                "column was neither refused by COLUMNS nor withheld from the prompt. The "
-                "sibling `tables` typo fails closed and is noticed on the first query; this "
-                "one fails open and is noticed never.",
     ),
     Mutation(
         id="guard-served-policy-runs-no-rule",

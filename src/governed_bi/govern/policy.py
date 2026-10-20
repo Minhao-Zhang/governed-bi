@@ -4,12 +4,6 @@ Mostly a typed view of ADR 0006 knobs (defaults from ``register.knobs``). Defaul
 read, never restated. ``UNSET`` knobs (``cost_budget``, ``guard_rules_enabled``) are
 carried — ``Unset.__bool__`` raises; use the explicit accessors. ``hard_block_suspect``
 differs between benchmark and production so the config hash can tell them apart.
-
-``access_grant`` (ADR 0012) is the one field that is **not** a knob, and it is carried here
-rather than added as a keyword to ``check()`` / ``prepare()`` for ADR 0008 D7's reason: an
-optional control argument is a control that will be un-wired, and that is precisely what
-happened to ``spellings``. Every production caller already threads a policy, so wiring
-authorization is a change at the one place the policy is constructed.
 """
 
 from __future__ import annotations
@@ -17,7 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping
 
-from ..ports import OPEN_GRANT, Grant
 from ..register.knobs import UNSET, Unset, knob_default
 from .functions import PERMITTED_FUNCTIONS
 
@@ -79,12 +72,6 @@ class GovernancePolicy:
     guard_rules_enabled: Mapping[str, bool] | Unset = field(
         default_factory=lambda: knob_default("guard_rules_enabled")
     )
-    #: Who this turn is executed for, as authorization (ADR 0012). Defaults to
-    #: :data:`~governed_bi.ports.OPEN_GRANT`, which authorizes every table, denies no column
-    #: and declares no row predicate — so the TABLES and COLUMNS layers behave exactly as
-    #: they did before the seam existed. **Not** ``None``-as-open: ADR 0006 G1's "absence is
-    #: not permission" applies here too, so openness is a value with a name.
-    access_grant: Grant = field(default_factory=lambda: OPEN_GRANT)
 
     def __post_init__(self) -> None:
         """Refuse a ``guard_rules_enabled`` key that names no rule.
@@ -160,15 +147,6 @@ def _assert_policy_tracks_the_register() -> None:
         raise AssertionError("guard_rules_enabled has acquired a default; see OQ3.")
     if UNSET is not knob_default("cost_budget"):  # pragma: no cover - import-time guard
         raise AssertionError("register.knobs no longer ships cost_budget as UNSET")
-    if not policy.access_grant.is_open:  # pragma: no cover - import-time guard
-        raise AssertionError(
-            "the default access grant is no longer open. ADR 0012 ships the seam with an "
-            "adapter that changes nothing, and a restrictive default would silently move "
-            "every measured number in runs/ — including the v4 arm, which is the control. "
-            "A deployment that wants one constructs it, and the grant's digest then reaches "
-            "knobs_resolved through serve/session.py::_resolved_knobs (ADR 0012 §7), so two "
-            "runs under different authorization cannot hash identically."
-        )
 
 
 _assert_policy_tracks_the_register()

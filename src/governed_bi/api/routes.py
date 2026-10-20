@@ -9,15 +9,15 @@ and nothing else.
 files an observation and ``PATCH /observations/{id}`` amends its note, both in
 ``api/feedback_routes.py`` over ``runs/feedback.sqlite``. Four steward verbs exist and are
 **mounted only when ``GOVERNED_BI_FEEDBACK_ADMIN`` is set**, returning 404 otherwise — a 403 would
-confirm the route exists, and with one principal the switch is the whole of the control.
+confirm the route exists, and with no credential the switch is the whole of the control.
 
 What that changed and what it did not. Filing no longer writes graph state, so the ~250 lines that
 existed to do that safely are gone along with the 409 that refused a paused thread — the reader
 whose turn is paused can file now. The pending queue no longer projects ``values.raised`` off every
 thread, so its 40 uncached round trips per request are one indexed query. **The disclosure is
 unchanged**: nothing here authenticates (A7, below), so any caller reaching the port can file
-against any turn and read every open question, and neither verb goes through
-``api/visibility.py::visible()``. Two things are arithmetically better — one row once instead of a
+against any turn and read every open question, and neither verb narrows what a
+caller sees. Two things are arithmetically better — one row once instead of a
 row re-serialised into every later checkpoint, and a store that can be swept — and neither is a
 control.
 
@@ -71,7 +71,6 @@ from fastapi.responses import JSONResponse
 from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
 from governed_bi.api.browse_routes import make_router
 from governed_bi.api.feedback_routes import make_admin_router, make_feedback_router
-from governed_bi.api.visibility import visible
 from governed_bi.model.provider import reasoning_effort_of
 from governed_bi.paths import REPO_ROOT
 from governed_bi.register.assets import ASSET_REGISTER
@@ -193,7 +192,7 @@ def _build_app(
     @app.get("/corpus/assets")
     def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
         """Assets of one type as rows. ``type`` is validated against the register."""
-        return asset_rows(visible(get_session()), type)
+        return asset_rows(get_session(), type)
 
     @app.get("/graph")
     def er_graph(
@@ -205,7 +204,7 @@ def _build_app(
     ) -> dict[str, Any]:
         """Bounded ER relationship view (ADR 0009 D2). ``meta.truncated`` / ``meta.dropped`` are required."""
         return _bounded(
-            _graph_payload(visible(get_session())), schema, focus, radius, node_budget, kinds
+            _graph_payload(get_session()), schema, focus, radius, node_budget, kinds
         )
 
     @app.get("/knowledge-graph")
@@ -218,7 +217,7 @@ def _build_app(
     ) -> dict[str, Any]:
         """Bounded semantic graph. Same scope contract as ``/graph``."""
         return _bounded(
-            _knowledge_payload(visible(get_session())), schema, focus, radius, node_budget, kinds
+            _knowledge_payload(get_session()), schema, focus, radius, node_budget, kinds
         )
 
     # Audit surface under `/audit` (avoids colliding with LangGraph Server's `/runs`).
@@ -257,7 +256,7 @@ def _build_app(
     @app.get("/audit/corpus")
     def audit_corpus() -> dict[str, Any]:
         """Corpus inventory plus problems. ``fatal`` and ``degradations`` stay separate (ADR 0008 D9)."""
-        return corpus_audit(visible(get_session()))
+        return corpus_audit(get_session())
 
     # Mounted last so the app's own paths are declared first; the router's own ordering
     # (`/schema/summary` before `/schema/{table_id}`) is stated in `make_router`.

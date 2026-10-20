@@ -39,14 +39,9 @@ class Layer(IntEnum):
     FUNCTIONS = 3
     #: Every reference binds to exactly one in-scope source (§4).
     BINDING = 4
-    #: Every bound column is allowed, not excluded, not suspect, and not denied to this
-    #: principal (``r_column_not_authorized``, the PII seam of ADR 0012 section 4). Five rule
-    #: ids, of which ``check._columns`` raises four in the order that section fixes;
-    #: ``r_column_authorization_unavailable`` is declared here with no raiser anywhere.
+    #: Every bound column is allowed, not excluded and not suspect: three rule ids.
     COLUMNS = 5
-    #: Three rules, in a fixed order that is itself the security property (ADR 0012 section 3):
-    #: every base table is in the licensed set, then authorized for this principal, then free
-    #: of a declared row predicate this engine cannot enforce.
+    #: Every base table is in the licensed set.
     TABLES = 6
     #: Cost / shape estimate. Ships disabled: ``cost_budget`` is UNSET.
     COST = 7
@@ -123,25 +118,9 @@ RULES: Mapping[str, Layer] = {
     "r_column_not_allowed": Layer.COLUMNS,
     "r_column_excluded": Layer.COLUMNS,
     "r_column_suspect": Layer.COLUMNS,
-    "r_column_authorization_unavailable": Layer.COLUMNS,
-    #: The PII seam (ADR 0012 §4). The principal is denied this column, which is a
-    #: *per-caller* fact and therefore distinct from ``r_column_excluded`` (the corpus hides
-    #: it from everyone) and from ``r_column_not_allowed`` (no such column here at all).
-    "r_column_not_authorized": Layer.COLUMNS,
     # ── TABLES ──
-    #: Retrieval did not license this table **this turn**. Not an authorization verdict:
-    #: 19 of the v4 arm's 20 refusals end here and every one of them is a retrieval miss
-    #: (open-work.md §4.2), which is exactly why the next rule exists.
+    #: Retrieval did not license this table **this turn**.
     "r_table_not_licensed": Layer.TABLES,
-    #: The principal may not read this table, whatever retrieval found (ADR 0012 §3).
-    #: Checked *after* ``r_table_not_licensed`` on purpose: a table the turn never licensed
-    #: is refused as unlicensed whether or not the principal could have seen it, so the pair
-    #: of rules is not an oracle for which tables exist.
-    "r_table_not_authorized": Layer.TABLES,
-    #: A row-level predicate is declared for this table and this engine does not apply one
-    #: (ADR 0012 §5). Refusing is the only safe reading: executing without the predicate
-    #: returns exactly the rows it was written to withhold.
-    "r_row_predicate_unenforced": Layer.TABLES,
     # ── COST ──
     "r_cost_budget_exceeded": Layer.COST,
 }

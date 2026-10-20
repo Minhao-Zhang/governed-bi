@@ -1,7 +1,7 @@
 """The three patch verbs on the admin router, and the two things they must not do.
 
 The verbs are mounted only under ``GOVERNED_BI_FEEDBACK_ADMIN``, so every test here sets it. That
-switch is the whole of the control — ``api/auth.py`` returns one principal — which is why the
+switch is the whole of the control — ``api/auth.py`` admits every caller — which is why the
 default-off case is asserted in ``test_an_observation_is_filed_on_a_turn.py`` rather than here.
 
 **Neither verb writes to the corpus and neither can.** Drafting records what a change *would* be;

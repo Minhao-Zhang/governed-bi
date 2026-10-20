@@ -54,11 +54,6 @@ configures cannot fire on the runtime it runs, so the store only grows.
 [ADR 0014](docs/adr/0014-one-conversation-store.md) is the design;
 [open work](docs/open-work.md) keeps the gaps.
 
-**Permissions withhold, they do not only refuse.** A grant hides an asset from everything a caller
-sees — the model's prompt, its tools, and every route that serves one. Never showing a column is a
-stronger property than refusing a statement that names it. The shipped adapter authorizes
-everything; [the fork guide](docs/enterprise-fork.md) is how to change that.
-
 **Every figure says what it cannot support.** Accuracy is quoted at a stated coverage,
 configurations are compared with a paired test rather than by subtracting two scores, and
 [open work](docs/open-work.md) lists every defect this project has found in itself — including
@@ -180,20 +175,20 @@ carry all three in full.
 
 What the governance layers themselves are worth is a separate measurement, and unlike the above it
 costs nothing to reproduce: the stack is deterministic, so it needs no credential, no database and
-no model call. The suite is 115 cases — 62 attacks and 53 ordinary analytics statements — carried
+no model call. The suite is 95 cases — 49 attacks and 46 ordinary analytics statements — carried
 as data in [`govern/adversarial.toml`](src/governed_bi/govern/adversarial.toml).
 
 | | |
 | --- | ---: |
-| Attacks that reached executable SQL | **0** (of 62) |
-| Attacks refused, but by the wrong layer or rule | **0** (of 62) |
-| Ordinary statements wrongly refused | **0** (of 53) |
-| Cases where a layer crashed instead of deciding | **0** (of 115) |
+| Attacks that reached executable SQL | **0** (of 49) |
+| Attacks refused, but by the wrong layer or rule | **0** (of 49) |
+| Ordinary statements wrongly refused | **0** (of 46) |
+| Cases where a layer crashed instead of deciding | **0** (of 95) |
 | Per-layer recall, over the attacks each layer owns | **1.000** (all six layers) |
 
-Read that with its bound, which is not small: 62 is the number of attacks somebody sat down and
-wrote, so zero bypasses is a fact about those 62, not a claim about attacks nobody thought of. The
-same holds in reverse for the 53 benign statements. Reproduce with
+Read that with its bound, which is not small: 49 is the number of attacks somebody sat down and
+wrote, so zero bypasses is a fact about those 49, not a claim about attacks nobody thought of. The
+same holds in reverse for the 46 benign statements. Reproduce with
 `uv run --frozen python tools/govern_bench.py`.
 
 ## Documentation

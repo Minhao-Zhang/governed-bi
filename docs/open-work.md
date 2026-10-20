@@ -436,7 +436,7 @@ in a docstring, and **nothing on the other end reads it**. Each instance is indi
 together they are the reason numbers here have twice been quotable and wrong.
 
 A sweep found 28 and the checker now reports **5**. It stood at 6 across the 2026-08-12
-access-seam and abstention work, which added two comparability knobs (`access_grant`,
+access-seam and abstention work, which added comparability knobs (among them
 `abstention_policy_enabled`), a record field (`abstention`) and a state channel of the same name,
 every one of them with a consumer on the other end; `clarifications` closed on 2026-08-19. That is
 the number to watch when adding a declaration: it is easy to move, and the only thing in CI that
@@ -757,26 +757,23 @@ data. And the template-echo bug fixed in `95e3b07` **did not fire**: this arm pr
 zero rows carry the signature, so it is uncontaminated.
 
 What remains open is not a better judge. It is what governance itself buys, and **that has a
-first number instead of none**. `src/governed_bi/govern/adversarial.toml` is 115 cases as data —
-62 attacks, 53 benign statements — loaded by both `tests/govern/test_adversarial_suite.py` and
+first number instead of none**. `src/governed_bi/govern/adversarial.toml` is 95 cases as data —
+49 attacks, 46 benign statements — loaded by both `tests/govern/test_adversarial_suite.py` and
 `tools/govern_bench.py`, so the gate that fails a build and the report that prints the rates
 cannot drift apart. It needs no credential and no network, and the layer stack is deterministic,
 so unlike every other measurement here it has no noise floor and two runs are identical. On the
-current tree: **bypass 0/62**, **misattribution 0/62** (refused, but by the wrong layer or the
-wrong rule), **false refusal 0/53**, and **zero guardrail errors** on either half. Per-layer
+current tree: **bypass 0/49**, **misattribution 0/49** (refused, but by the wrong layer or the
+wrong rule), **false refusal 0/46**, and **zero guardrail errors** on either half. Per-layer
 recall is **1.000** on the six layers that own attacks — PARSE 7/7, NO_WRITE 7/7, FUNCTIONS 13/13,
-BINDING 9/9, COLUMNS 11/11, TABLES 15/15. COST owns no attack, so it has no rate at all and prints
+BINDING 9/9, COLUMNS 7/7, TABLES 6/6. COST owns no attack, so it has no rate at all and prints
 as not measured rather than as a pass.
 
-Twenty of those cases are the `authorization` family ADR 0012 added, which is why COLUMNS and
-TABLES carry more attacks than the other four layers: they are the two the access grant narrows.
-A further twelve `[[probe]]` cases sit beside the statement cases and measure *disclosure* rather
-than refusal — whether a withheld asset reaches the prompt, a tool reply or an HTTP body — at
-**disclosed 0/7** and **over-withheld 0/5**.
+A further handful of `[[probe]]` cases sit beside the statement cases and measure *disclosure*
+rather than refusal: whether a tool reply names a table the turn never licensed.
 
 The item stays open because of what those rates are not:
 
-* **They are a fact about 62 attacks somebody thought of.** A bypass rate of 0 over hand-written
+* **They are a fact about 49 attacks somebody thought of.** A bypass rate of 0 over hand-written
   cases is not a rate over the attacks nobody wrote, and adding cases does not turn it into one.
   What the suite gives is a floor that a change has to keep clearing, not a claim about the space
   of statements.
@@ -784,14 +781,13 @@ The item stays open because of what those rates are not:
   surface to aim a statement at, so they are covered by *argument* — the structural claims in
   ADR 0006 — and not by a case. The file declares that per family and the loader enforces the
   declaration both ways, which makes the gap visible; it does not close it.
-* **The benign half is the same kind of sample.** 0/53 says that 53 ordinary analytics
+* **The benign half is the same kind of sample.** 0/46 says that 46 ordinary analytics
   statements are not refused, and the statements a real analyst writes are not that set. Its
   demonstrated value so far is as a cost measurement on a fix rather than as a safety claim: the
   first, tree-wide repair of §3.2a scored 2/46 on the benign half as it then stood, and was
   withdrawn for it.
-* **No fork has run any of it.** Every authorization and disclosure figure above is measured on a
-  fictional world declared in the suite itself, against a scripted model. The false-refusal rate
-  of a real grant over a real corpus is unmeasured, and ADR 0012 records it as owed.
+* **Every figure above is measured on a fictional world declared in the suite itself**, against a
+  scripted model.
 * **The scope gate is still outside the suite.** Its fail-open on affirmative-prefixed replies is
   fixed and pinned by `tests/serve/test_guard_bi_scope.py`, but every case here drives `check()`
   and `prepare()`. A gate that costs a model call cannot go in a suite whose whole property is
@@ -976,50 +972,13 @@ change what "governed" means and needs an ADR, not a patch — and per §4.1 it 
 contrast arm that would attribute the abstention property to the allowlist rather than to
 everything else that differs between two systems.
 
-**Answered in part, 2026-08-12: [ADR 0012](adr/0012-access-seam-principal-and-authorization.md).**
-The ADR does *not* do what the paragraph above imagines. It does not widen governance to the whole
-routed schema, and it does not touch the retrieval budget: `licensed` keeps exactly the meaning it
-had. What it adds is the **second master, as its own set**. A turn now carries an `authorized` set
-derived from an `AccessPolicy` port, and the TABLES layer asks three questions in a fixed order —
-`r_table_not_licensed` (retrieval missed), then `r_table_not_authorized` (this principal may not),
-then `r_row_predicate_unenforced`. COLUMNS gains `r_column_not_authorized` beside
-`r_column_excluded`.
+**Answered by deletion, P2 of the pivot: [ADR 0012](adr/0012-access-seam-principal-and-authorization.md)
+is a reversal record.** The second master it added, an `authorized` set derived from an
+`AccessPolicy`, is gone, so `licensed` is again the only set the TABLES layer asks and
+`r_table_not_licensed` again means only that retrieval missed.
 
-Three consequences for this section and for §4.1.
-
-* **The abstention accounting keeps its shape and gains a falsifier.** Today the argument that
-  "19/20 refusals are retrieval misses" rests on there being nothing else `r_table_not_licensed`
-  could mean — an argument from an absent feature, which stops working the day anyone deploys this
-  behind a permission model. The histogram can now separate the two without a second
-  implementation.
-* **No number moved, and that was the requirement.** The shipped default is an open grant, and
-  under it all three new predicates are constant functions, so the three new branches are
-  unreachable. All 95 pre-ADR adversarial cases produce byte-identical verdicts — including
-  `layers_evaluated`, `bound` and `Prepared.sql`. The v4 arm is untouched.
-* **The Layer 6 contrast arm §4.1 still wants is still not run.** ADR 0012 is the *mechanism* that
-  makes it cheap — relaxing the allowlist is now a `Grant`, not a code edit — but the arm has not
-  been run and the outward wording does not change until it has
-  (`git-history:docs/analysis/strategy-checkpoint-2026-08-11.md` §2.6, deleted by `298465f`).
-
-What is still open here, restated because the ADR narrowed rather than closed it: whether the
-*retrieval* budget and the *governance* allowlist should be different sets at all. They still are
-not. ADR 0012 added a third set that intersects both and answers a different question.
-
-Two items it created, both in [ADR 0012 §7 and §8](adr/0012-access-seam-principal-and-authorization.md),
-and **both closed the same day**. The grant's digest is now the `access_grant` knob, resolved from
-`GovernancePolicy.access_grant` and never from the register default — a default carrying the open
-digest would publish "open" for a fork shipping a restriction, which is the `agent_recursion_limit`
-defect in the security register. And all four of §8's wires exist: `api/graph_app.py` builds the
-policy and resolves the one principal, `ToolBounds` carries the grant, `_resolved_knobs` carries
-its digest, and `serve/context.py::withheld_by_grant` narrows both the rendered block and
-`readable_assets` from one set. `tests/serve/test_the_access_seam_reaches_the_served_app.py`
-refuses a licensed, unauthorized table as `r_table_not_authorized` **through `build_serve_graph`**,
-with the paired open-grant run of the same statement executing it.
-
-What that buys §4.2 in particular: `r_table_not_licensed` now has a second thing it could have
-been, so *"19 of 20 refusals are retrieval misses"* stops being an argument from an absent
-feature. The underlying question is still open — `licensed` still serves both masters, and ADR
-0012 added a third set rather than splitting the two.
+The underlying question is still open: whether the *retrieval* budget and the *governance*
+allowlist should be different sets at all. They still are not.
 
 **Filed 2026-08-22: `licensed` is seeded from the post-budget table set, which the ADRs say it
 must not be.** `serve/nodes/route_retrieve.py::route_node` (`:140`) sets it from
@@ -1062,7 +1021,7 @@ therefore live again in the words they were written in:
   was written: `api/routes.py::trace_for` also returns both `clarifications` and `raised`
   (`turn_log.clarifications_of` and `turn_log.raised_of`, keyed on the turn's own `thread_id`), so
   the trace discloses the questions the engine asked, the answers a
-  person typed, and every reader-filed note — see the grant-seam item below, which is the same
+  person typed, and every reader-filed note — see the item below, which is the same
   surface from the write side. **Wider since 2026-08-18**
   ([ADR 0014](adr/0014-one-conversation-store.md)): the record accumulates on `ServeState.turns`,
   so the platform's own unauthenticated `/threads/{id}/state` — and any `values` stream frame —
@@ -1073,18 +1032,15 @@ therefore live again in the words they were written in:
   and is withdrawn. Twenty-five turns of another thread's SQL to any caller that can open a socket
   is still audit B1's leak surface enlarged by this change and mitigated by nothing.
 
-**Filed 2026-08-22: two mounted routes sit outside the ADR 0012 grant seam, and one of them is a
-write.** `api/visibility.py::visible()` is the withholding seam the browse surface passes through,
-and its only callers are `api/browse_routes.py:59` and four handlers in `api/routes.py`
-(`/corpus/assets`, `/graph`, `/knowledge-graph`, `/audit/corpus`) — nothing else in `api/` names
-it. `GET /clarifications/pending` and `POST /turns/{turn_id}/raised` — both in
+**Filed 2026-08-22: two mounted routes are unauthenticated, and one of them is a write.**
+`GET /clarifications/pending` and `POST /turns/{turn_id}/raised` — both in
 `api/feedback_routes.py` since ADR 0015 §2 replaced `api/clarification_routes.py` and
-`api/raised_write.py` — call neither it nor anything else grant-aware. The GET hands any caller
-every unanswered question, and those questions can name assets, which was accepted because
-`/audit/turns` already discloses every thread's SQL to the same caller. The POST is a write: any
-caller reaching the port can file an observation against any turn, so the queue an operator reads
-is attacker-writable. What bounds one row is `NOTE_MAX_CHARS` (4,000) and `QUESTION_MAX_CHARS`
-(8,000) in `feedback/validate.py`; **nothing bounds the count**, and nothing sweeps the store.
+`api/raised_write.py` — hand any caller every unanswered question, and those questions can name
+assets, which was accepted because `/audit/turns` already discloses every thread's SQL to the same
+caller. The POST is a write: any caller reaching the port can file an observation against any
+turn, so the queue an operator reads is attacker-writable. What bounds one row is
+`NOTE_MAX_CHARS` (4,000) and `QUESTION_MAX_CHARS` (8,000) in `feedback/validate.py`; **nothing
+bounds the count**, and nothing sweeps the store.
 
 **Two things this write no longer does**, and both are ADR 0015 §2 improvements rather than
 mitigations of the finding above: it does not touch graph state — the
@@ -1101,38 +1057,27 @@ two findings. (The wire key was `raised` until ADR 0015 §2; a client reading th
 nothing.)
 
 Filed as its own item rather than folded into A7 because A7 is a disclosure finding and the POST is
-not. The open work is the module's own closing sentence — under a real `AccessPolicy` "both verbs
-must apply the same withholding the tools do" — and neither wire exists. Matching corrections
-landed the same day at [ADR 0009](adr/0009-browsing-and-filtering-api.md) (the "every route this
-app mounts is a read" claim, now false) and
-[ADR 0012](adr/0012-access-seam-principal-and-authorization.md) §8, whose repaired sentence names
-the exclusions: a grant withholds nothing from `ask_user`, nor from these two routes. `ask_user` is
-the fifth entry in the tool list `serve/tools.py` returns, and the only bound on what its prompt
-may name is `serve/schema_term_guard.py::find_schema_leak` — called once, from `ask_user` itself,
-and a term heuristic that knows nothing about a grant.
+not. Matching corrections landed the same day at
+[ADR 0009](adr/0009-browsing-and-filtering-api.md) (the "every route this app mounts is a read"
+claim, now false). `ask_user` is the fifth entry in the tool list `serve/tools.py` returns, and the
+only bound on what its prompt may name is `serve/schema_term_guard.py::find_schema_leak`, called
+once, from `ask_user` itself.
 
 **This is a recorded choice, not an oversight.** The engine is one operator on `127.0.0.1` under
 `langgraph dev`, and LangGraph Studio's bootstrap fetches (`/info`, `/assistants/search`,
 `/assistants/{id}`) carry no custom header — measured 2026-08-13 — so a required key made the
 primary debugging client unusable. Reachability won.
 
-**A5 is closed as of 2026-08-18, and it is the one that moved.** The clarification-resume
-identity gate is `serve/resume.py::authorise_resume`, called by `ask_user` on the instruction
-`interrupt()` returns on, comparing the paused turn's checkpointed `identity` against
-`configurable["langgraph_auth_user_id"]` on the resuming run — a slot `langgraph_api` fills from
-this repo's `@auth.authenticate` and refuses to let a client name. It fires on the streamed
-transport, which is now the only one. What it cannot do here is *distinguish* two callers, because
-`api/auth.py` returns one principal to everybody; the gate is correct and its input is degenerate,
-which is why this stays under §4.3 rather than being called done. A6 retires with `POST /chat/resume`
-rather than being fixed: the route whose check was same-thread-not-same-caller is deleted.
+**A5 is withdrawn by decision (P2 of the pivot).** The clarification-resume identity gate is
+deleted along with the principal it compared: the engine serves one local operator, so the thread
+id is the only handle on a paused clarification. A6 retired earlier with `POST /chat/resume`.
 
 **What is actually open here** is not "put the key back". It is that the repository now has one
 control against this class of exposure, the CORS origin list, and that control stops a browser
 and nothing else. Two things would have to be settled before this engine is reachable from
 anywhere but loopback: a credential Studio can carry (a query parameter or a reverse proxy that
 injects the header, neither tried), and whether `/audit/turns` should project past turns to a
-caller at all — [ADR 0012 §8.7](adr/0012-access-seam-principal-and-authorization.md) records it as
-unfiltered by design, which was a smaller claim when it sat behind a key. Neither is scheduled.
+caller at all, which was a smaller question when it sat behind a key. Neither is scheduled.
 A2, A3 and A4 stay closed throughout: the `@auth.on` handlers that refuse a client-supplied
 state-writing `command` are untouched, and `langgraph.json` keeps `auth.path` for them.
 

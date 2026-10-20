@@ -5,11 +5,10 @@ one side of something and the other side was left at its default, where nothing 
 omission as an omission.
 
 * ``input_schema=ServeInput`` closed what a client may **write**. Nothing closed what it may
-  **read**, so the served graph returned every state channel on ``invoke`` — ``identity`` (the
-  token clarification-resume authorises against) and ``delivery`` (the whole rendered corpus
-  context block) among them. ``output_schema=ServeOutput`` closed the ``invoke`` half **only**,
+  **read**, so the served graph returned every state channel on ``invoke`` — ``delivery`` (the whole
+  rendered corpus context block) among them. ``output_schema=ServeOutput`` closed the ``invoke`` half **only**,
   which is where these tests stop: re-measured on langgraph 1.2.11, ``stream_channels_asis`` is
-  still all 47 channels (46 before ``turns``), so ``values`` frames and ``get_state`` are
+  still every declared channel (46), so ``values`` frames and ``get_state`` are
   unchanged. That remainder is B1 and is open — nothing below asserts
   otherwise.
 * ``compile_graph`` defaults to an ``InMemorySaver`` that nothing ever empties, and
@@ -25,7 +24,7 @@ from governed_bi.serve.graph import build_graph, compile_graph
 
 #: Channels a client must never be handed back. Not exhaustive — the schema is an allowlist and
 #: this is a tripwire on the specific keys that motivated it.
-_MUST_NOT_ESCAPE = ("identity", "delivery", "knobs_resolved", "query_vector", "retrieve_hooks")
+_MUST_NOT_ESCAPE = ("delivery", "knobs_resolved", "query_vector", "retrieve_hooks")
 
 
 def test_the_served_graph_returns_only_what_the_interface_reads() -> None:
@@ -37,8 +36,7 @@ def test_no_internal_channel_escapes_on_the_served_path() -> None:
     served = build_graph(accept=lambda s: {}).compile()
     leaked = [k for k in _MUST_NOT_ESCAPE if k in served.output_channels]
     assert leaked == [], (
-        f"{leaked} reach the client again. `identity` is what resume_authorised() gates on and "
-        "`delivery` carries the rendered corpus; see ServeOutput."
+        f"{leaked} reach the client again. `delivery` carries the rendered corpus; see ServeOutput."
     )
 
 

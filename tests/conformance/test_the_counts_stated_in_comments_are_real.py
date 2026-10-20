@@ -1,22 +1,10 @@
 """Every number a ``#`` comment states about a set in this tree, asserted against the set.
 
-**Why this file exists.** A 2026-08-25 audit went looking for comments that had drifted and found
-almost none: ``ArmProfile`` really does have twelve fields, the serde allowlist really does derive
-eighteen entries of which exactly three are ours, COLUMNS really does own five rule ids. The
-comments were right. What none of them had was a *reason to stay* right — the number lived in prose
-and the set lived in code, and nothing connected them. That is the shape of every drift defect this
-repository has actually shipped: not a wrong statement, but a true statement with no gate under it.
-
-So this is the gate. Each assertion below is paired with the comment that states the number, and
-each failure message names the file whose prose has to change. A count that moves is a decision;
-this makes it a decision somebody records rather than a sentence that quietly stops being true.
-
-**What is deliberately not here.** Corpus-dependent figures (``api/browse.py``'s "7,300 semantic
-nodes over 12,131 edges", measured on ``30872d3``) are measurements of a sibling checkout, not of
-this tree, and they carry their corpus and their date. Pinning them here would fail on a corpus bump
-for a reason that is not a defect. Docstring promises about *behaviour* live in
-``tests/feedback/test_the_store_keeps_the_promises_in_its_docstrings.py``, which is this file's
-model.
+A number in prose and the set in code drift apart unless something connects them, so each
+assertion is paired with the comment that states the number, and each failure message names the
+file whose prose has to change. Corpus-dependent figures are measurements of a sibling checkout
+and stay out; docstring promises about behaviour live in
+``tests/feedback/test_the_store_keeps_the_promises_in_its_docstrings.py``.
 """
 
 from __future__ import annotations
@@ -31,11 +19,9 @@ PKG = ROOT / "src" / "governed_bi"
 def test_the_per_layer_rule_counts_match_govern_layers_comments() -> None:
     """``govern/layers.py`` states two of these in prose, beside the enum members.
 
-    COLUMNS: "Five rule ids, of which ``check._columns`` raises four in the order that section
-    fixes". TABLES: "Three rules, in a fixed order that is itself the security property". Both are
-    ADR 0012 claims, and the ordering half of each is what the adversarial suite measures. The other
-    five layers get no prose count, and are pinned here anyway: a rule moving *between* layers is
-    the change that would make the two prose numbers wrong without touching either line.
+    COLUMNS: "three rule ids". TABLES: one rule. The other five layers get no prose count, and
+    are pinned here anyway: a rule moving *between* layers is the change that would make the two
+    prose numbers wrong without touching either line.
     """
     import collections
 
@@ -48,54 +34,15 @@ def test_the_per_layer_rule_counts_match_govern_layers_comments() -> None:
         "NO_WRITE": 4,
         "FUNCTIONS": 2,
         "BINDING": 6,
-        "COLUMNS": 5,
-        "TABLES": 3,
+        "COLUMNS": 3,
+        "TABLES": 1,
         "COST": 1,
     }
     assert dict(per_layer) == expected, (
-        "the reason-code-to-layer map moved. `govern/layers.py` states COLUMNS' count as **five "
-        "rule ids** and TABLES' as **three rules** in the comments above those two enum members, "
-        f"and `docs/adr/0006` fixes the order. Expected {expected}, got {dict(per_layer)}. Update "
+        "the reason-code-to-layer map moved. `govern/layers.py` states COLUMNS' count as **three "
+        "rule ids** and TABLES' as **one** in the comments above those two enum members. "
+        f"Expected {expected}, got {dict(per_layer)}. Update "
         "the prose in `govern/layers.py` and this expectation together, in one commit."
-    )
-
-
-def test_the_columns_rule_with_no_raiser_is_still_the_one_named() -> None:
-    """The COLUMNS comment names its own dead branch: five ids, four raised.
-
-    ``r_column_authorization_unavailable`` "is declared here with no raiser anywhere". That is an
-    absence claim, and an absence claim is the kind that rots silently in the *safe* direction —
-    somebody wires it up, the comment keeps saying nothing raises it, and a reader trusts the
-    comment. Asserted by scanning `src/` rather than by importing, because "nothing raises it" is a
-    statement about the whole tree.
-    """
-    from governed_bi.govern.layers import RULES, Layer
-
-    columns_rules = {rule for rule, layer in RULES.items() if layer is Layer.COLUMNS}
-    assert "r_column_authorization_unavailable" in columns_rules, (
-        "the rule the COLUMNS comment calls declared-with-no-raiser is not a COLUMNS rule any "
-        f"more. COLUMNS owns {sorted(columns_rules)}."
-    )
-
-    sources = [p for p in sorted(PKG.rglob("*.py")) if "__pycache__" not in p.parts]
-    assert len(sources) >= 50, (
-        f"scanned {len(sources)} files under {PKG}, far below the engine's size — the walk is "
-        "reaching the wrong root and the assertion below would be vacuous."
-    )
-
-    naming: list[str] = []
-    for path in sources:
-        if path.name == "layers.py":
-            continue  # the declaration itself
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if "r_column_authorization_unavailable" in line and not line.lstrip().startswith("#"):
-                naming.append(f"{path.relative_to(PKG).as_posix()}:{number}: {line.strip()}")
-
-    assert not naming, (
-        "`r_column_authorization_unavailable` now has a raiser, so `govern/layers.py`'s COLUMNS "
-        "comment — 'five rule ids, of which `check._columns` raises four' and "
-        "'declared here with no raiser anywhere' — is wrong. Fix the comment, then change this "
-        "test on purpose:\n  " + "\n  ".join(naming)
     )
 
 

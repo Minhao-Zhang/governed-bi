@@ -265,7 +265,7 @@ def test_the_response_carries_the_row_and_its_computed_openness(
 
 
 def test_the_steward_verbs_are_not_mounted_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """404 and not 403: a 403 confirms the route exists. With one principal the switch is the whole
+    """404 and not 403: a 403 confirms the route exists. With no credential the switch is the whole
     of the control, so the honest default is off."""
     client, store = _client(tmp_path, monkeypatch)
     filed = client.post(f"/turns/{TURN}/raised", json={"kind": "wrong_answer"}).json()

@@ -39,7 +39,6 @@ _log = logging.getLogger(__name__)
 
 __all__ = [
     "configure_logging",
-    "ACCESS_POLICY_VAR",
     "CORPORA_DIR",
     "CORPUS_DIR_VAR",
     "MODEL_EFFORT_VAR",
@@ -96,12 +95,6 @@ SEED_DIR_VAR = "GOVERNED_BI_SEED_DIR"
 
 #: Drop-in directory for curated corpora (gitignored).
 CORPORA_DIR = "corpora"
-
-#: A ``StaticRoleAccessPolicy`` TOML file (ADR 0012 §2). Unset ⇒ ``OpenAccessPolicy``, which
-#: authorizes everything and is what this repository ships. Resolved against the repo root for
-#: the reason ``CORPUS_DIR_VAR`` is: a policy path read relative to the process's cwd resolves
-#: to nothing and would fail as "no such file" rather than "you are in the wrong directory".
-ACCESS_POLICY_VAR = "GOVERNED_BI_ACCESS_POLICY"
 
 
 _SESSION: Session | None = None
@@ -179,7 +172,7 @@ def _build_session_from_environment() -> Session:
 
     kwargs: dict[str, Any] = {
         "connector": PostgresConnector(dsn),
-        "policy": serve_policy(root),
+        "policy": serve_policy(),
         "agent_model": model,
         "utility_model": utility,
     }
@@ -197,135 +190,20 @@ def _build_session_from_environment() -> Session:
     return _SESSION
 
 
-def serve_policy(root: Path) -> Any:
-    """The governance policy the **served** surface runs under. Production, not the benchmark.
+def serve_policy() -> Any:
+    """The governance policy the served surface runs under: production, not the benchmark.
 
-    Named and separate from ``_session`` so the one line below that differs from every other
-    entry point is assertable, rather than a keyword buried in a dict literal.
-
-    **``guard_rules_enabled``: all six on — the five deterministic rules and the scope gate.**
-    Until 2026-09-18 this passed ``{BI_SCOPE_RULE_ID: True}`` and the docstring here said
-    "injection rules stay off (ADR 0006 OQ3), scope gate on". The first half was true and the
-    second was the *only* half anyone read: ``g_bi_scope`` is not a member of ``GUARD_RULES``,
-    :func:`~governed_bi.govern.guard.guard` iterates that mapping, and every id absent from
-    ``guard_rules_enabled`` is silently ``False``. So the served surface evaluated **zero**
-    deterministic predicates, and a textbook ``Ignore all previous instructions`` came back
-    ``clear``. The mapping now names every id explicitly rather than relying on a default,
-    and ``GovernancePolicy.__post_init__`` refuses one that dispatches nothing.
-
-    **OQ3's blocker was the red-team corpus, and it exists now.** ADR 0006 OQ3 held the rules
-    off until each had two numbers — adversarial recall and benign firing rate. The
-    ``prompt_injection`` family in ``govern/adversarial.toml`` is the first; the second is
-    measured on the benchmark's own 1,351 questions, where all five rules together fire on
-    **zero** (question text and question+evidence alike; the longest question is 200
-    characters against a ``g_length_max_chars`` of 8,000). That is a false-refusal rate on
-    the exact population every published number in this repository describes, which is why
-    turning these on does not move a single one of them.
-
-    **``hard_block_suspect=False``, which is the knob's own production value.** Its ``why``
-    reads "True in development and on the benchmark, False in production, where a suspect
-    column warns instead of refusing" — and until 2026-08-19 this entry point passed nothing,
-    so the served surface silently ran the benchmark's arm. What that cost, measured on the
-    live corpus: ``plant_run_hour_readings.tag_description`` is ``suspect``, and it is also
-    the *only* bridge from a historian tag to an asset — the column's own body says so. Asked
-    which chillers ran the most hours, the agent correctly reached for ``sample_rows`` on it,
-    was refused at COLUMNS, and fell back to reading bare tag names (``BOP_HMI_DFP4_TOT_RT``)
-    from which no equipment type can be recovered. It spent all five ``run_query`` attempts
-    and hit the cap. There are 81 tags and none of them is a chiller, which one look at the
-    descriptions would have settled.
-
-    **"Warns" is not a verdict field; the warning is in the prompt.** ``serve/context.py``
-    renders one line per suspect column — ``- <column>: suspect - <note>`` — so with the hard
-    block off the model still knows which columns it may not trust, and can say so in the
-    answer. Reading the ``False`` branch as "the caveat disappears" is the mistake; the
-    caveat moves from the layer stack to the analyst.
-
-    Every other entry point keeps the ``True`` default on purpose: ``eval/arms.py`` and the
-    ``tools/`` drivers construct their own ``GovernancePolicy`` and are the benchmark, where
-    a suspect column must refuse so a measured number cannot rest on one.
-    """
+    Every guard rule is on (they fire on none of the 1,351 benchmark questions), and a suspect
+    column warns in the prompt instead of refusing. The benchmark entry points keep the
+    refusing default so a measured number cannot rest on a suspect column."""
     from governed_bi.govern.policy import KNOWN_GUARD_RULE_IDS, GovernancePolicy
 
     return GovernancePolicy(
-        # Built from the vocabulary rather than written out, so a sixth rule is on here the
-        # day it exists. Enabling by omission is what went wrong before; there is no omission
-        # left to make.
+        # Built from the vocabulary rather than written out, so a new rule is on here the day
+        # it exists: an id absent from this mapping is silently off.
         guard_rules_enabled={rule_id: True for rule_id in sorted(KNOWN_GUARD_RULE_IDS)},
-        access_grant=resolve_access_grant(root),
         hard_block_suspect=False,
     )
-
-
-def access_policy_from_environment(root: Path) -> Any:
-    """The run's :class:`~governed_bi.ports.AccessPolicy`. ``OpenAccessPolicy`` unless configured.
-
-    The composition root, and the only place in ``src/`` that chooses one. A path in
-    :data:`ACCESS_POLICY_VAR` selects the reference adapter; anything else would be a fork's
-    own adapter constructed here.
-
-    **A missing file raises.** An operator who set the variable asked for a restriction, and
-    falling back to the open policy would serve every table while the record said a policy
-    file had been read — which is the shape ADR 0012 §7 refuses for the digest and this
-    function would reproduce one layer up.
-    """
-    from governed_bi.govern.access import OpenAccessPolicy, StaticRoleAccessPolicy
-
-    configured = os.environ.get(ACCESS_POLICY_VAR)
-    if not configured:
-        return OpenAccessPolicy()
-    path = Path(configured)
-    resolved = path if path.is_absolute() else (root / path).resolve()
-    if not resolved.is_file():
-        raise RuntimeError(
-            f"{ACCESS_POLICY_VAR} is set to {configured!r}, which resolves to {resolved} and is "
-            "not a file. Refusing to fall back to OpenAccessPolicy: a server that authorizes "
-            "every table while its operator believes a policy file is in force is worse than "
-            f"one that will not start. Unset {ACCESS_POLICY_VAR} to serve open."
-        )
-    return StaticRoleAccessPolicy.from_toml(resolved)
-
-
-def resolve_access_grant(root: Path) -> Any:
-    """This turn's :class:`~governed_bi.ports.Grant` — the wire ADR 0012 §8.1 owed.
-
-    One policy, asked once, for the one principal :func:`~governed_bi.api.auth.authenticated_principal`
-    resolves. ``GovernancePolicy`` carries the result, so ``check()`` and ``prepare()`` read the
-    grant off the policy every serve node already threads (ADR 0012 §2's argument against a
-    ``grant=`` keyword).
-
-    A raising adapter propagates and the server does not start. That is deliberate and is the
-    port's own contract: a directory that is down is a wiring failure, and turning it into a
-    grant — of any width — would either lock every analyst out or open the doors, with the
-    ledger recording neither.
-
-    **A policy whose roles this principal cannot hold is refused here** (2026-09-18), for the
-    same argument ``govern/access.py::_require_keys`` makes about the file's keys: it is read
-    once and enforced thousands of times. ``StaticRoleAccessPolicy.grant_for`` returns
-    ``Grant()`` — ``reach=listed``, no tables — for a principal holding none of the declared
-    roles. That is fail-*closed*, and silently so: an operator who writes ``[role.analyst]``
-    gets a server that starts, looks configured, and refuses every query, with nothing
-    anywhere naming the mismatch. ``authenticated_principal`` returns one constant with one
-    role, so this is not a hypothetical shape — it is every role except that one.
-
-    Refused rather than warned because there is no working deployment on the other side of
-    the warning. A fork that gives ``authenticated_principal`` a real implementation is the
-    case this must not block, and it does not: the check reads whatever that function
-    returns.
-    """
-    from governed_bi.api.auth import authenticated_principal
-
-    policy = access_policy_from_environment(root)
-    principal = authenticated_principal()
-    declared = getattr(policy, "roles", None)
-    if declared and not (set(declared) & set(principal.roles)):
-        raise RuntimeError(
-            f"the access policy declares roles {sorted(declared)} and the authenticated "
-            f"principal {principal.id!r} holds {sorted(principal.roles)}. No declared role is "
-            "reachable, so every grant resolves to 'no tables' and the server would start, "
-            "look configured, and refuse every query. Give the principal one of those roles, "
-            "or declare a role it holds."
-        )
-    return policy.grant_for(principal)
 
 
 def _utility_model(credentials: Any) -> Any:

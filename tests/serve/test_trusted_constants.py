@@ -253,7 +253,6 @@ def _stop_at(seen: dict) -> Any:
         seen.update(
             route_top_n=state.get("route_top_n"),
             retrieve_hooks=state.get("retrieve_hooks"),
-            identity=state.get("identity"),
             messages=len(state.get("messages") or []),
         )
         return {
@@ -278,13 +277,11 @@ def test_a_request_cannot_write_a_knob_into_graph_state():
             "messages": [{"role": "user", "content": "how many sensors"}],
             "route_top_n": 99,
             "retrieve_hooks": {"forced": True},
-            "identity": {"token": "someone-else"},
         }
     )
     assert seen["messages"] == 1, "the conversation must still get through"
     assert seen["route_top_n"] is None, f"client set route_top_n={seen['route_top_n']!r}"
     assert seen["retrieve_hooks"] is None, "client reached a test hook"
-    assert seen["identity"] is None, "client named its own identity"
 
 
 def test_the_in_process_graph_still_takes_a_whole_turn():

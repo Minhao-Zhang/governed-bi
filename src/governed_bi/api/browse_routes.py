@@ -1,14 +1,6 @@
 """Browsing routes: filtering, lean catalog, table detail (ADR 0009).
 
 HTTP shell over :mod:`governed_bi.api.browse`. Projections match the client's declared shapes.
-
-**Every handler reads the session through** :func:`~governed_bi.api.visibility.visible`
-(ADR 0012 §8.5), never the one it was constructed with. Reading the raw session was how
-``GET /corpus/rows?type=column`` returned a column the same deployment's grant withheld from
-the model — including its ``sample_values`` through ``/schema/{table_id}``. Narrowing at the
-entrance rather than in each of the five handlers is the same argument
-``serve/context.py::_build_pieces._add`` makes for its one gate: five filters are five things
-that can each be forgotten separately.
 """
 
 from __future__ import annotations
@@ -25,7 +17,6 @@ from governed_bi.api.browse import (
     row_for,
     sort_rows,
 )
-from governed_bi.api.visibility import visible
 from governed_bi.corpus.schema import class_for
 from governed_bi.register.assets import ASSET_REGISTER
 
@@ -47,16 +38,6 @@ def make_router(session: Any) -> APIRouter:
     parameterised path captures the literal one.
     """
     router = APIRouter()
-
-    def _seen() -> Any:
-        """This session, narrowed to what the grant discloses. **Per request, not per app.**
-
-        Per app would resolve ``_DeferredSession`` at import — ``langgraph.json`` names a module
-        attribute, so building the router must not require a database — and would pin one
-        answer for the process. Per request costs one boolean under the open grant, which is
-        what this repository ships.
-        """
-        return visible(session)
 
     @router.get("/corpus/fields")
     def corpus_fields(type: str | None = None) -> dict[str, Any]:
@@ -105,7 +86,7 @@ def make_router(session: Any) -> APIRouter:
         ops_by_field = {column["name"]: column["ops"] for column in columns}
 
         predicates, malformed = parse_where(where or ())
-        assets = [a for a in _seen().assets_by_id.values() if a.asset_type.value == type]
+        assets = [a for a in session.assets_by_id.values() if a.asset_type.value == type]
         matched, unknown = apply_where(assets, predicates, ops_by_field)
         ordered = sort_rows(matched, sort, order)
 
@@ -128,11 +109,10 @@ def make_router(session: Any) -> APIRouter:
 
         ``offset`` and ``limit`` are echoed as applied after clamping.
         """
-        seen = _seen()
         tables = sorted(
             (
                 a
-                for a in seen.assets_by_id.values()
+                for a in session.assets_by_id.values()
                 if a.asset_type.value == "table"
                 and (schema is None or getattr(a, "schema", None) == schema)
             ),
@@ -140,22 +120,21 @@ def make_router(session: Any) -> APIRouter:
         )
         start = max(0, int(offset))
         applied_limit = max(1, min(SUMMARY_PAGE_LIMIT, int(limit)))
-        items = [_table_summary(seen, table) for table in tables[start : start + applied_limit]]
+        items = [_table_summary(session, table) for table in tables[start : start + applied_limit]]
         return {"total": len(tables), "offset": start, "limit": applied_limit, "items": items}
 
     @router.get("/schema/{table_id}")
     def schema_detail(table_id: str) -> dict[str, Any]:
         """One table's full detail. Declared after ``/schema/summary`` so the literal path wins."""
-        seen = _seen()
-        table = seen.assets_by_id.get(table_id)
+        table = session.assets_by_id.get(table_id)
         if table is None or table.asset_type.value != "table":
             raise HTTPException(status_code=404, detail=f"no table asset {table_id!r}")
-        return _table_view(seen, table)
+        return _table_view(session, table)
 
     @router.get("/columns/{column_id}/related")
     def column_related(column_id: str) -> dict[str, Any]:
         """Every semantic-layer item touching one physical column."""
-        return related_to_column(_seen(), column_id)
+        return related_to_column(session, column_id)
 
     return router
 

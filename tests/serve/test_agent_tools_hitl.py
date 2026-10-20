@@ -1,4 +1,4 @@
-"""F3: tools bounds, delivery_hash, ask_user HITL + identity-bound resume.
+"""F3: tools bounds, delivery_hash, ask_user HITL + resume.
 
 **Split, 2026-08-19.** The ``sample_rows`` governed-executor cluster, plus the two short generic
 checks that sat next to it (``test_delivery_hash_stable_for_same_tool_payload``,
@@ -20,7 +20,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-import pytest
 from langchain_core.messages import AIMessage
 from langgraph.types import Command
 
@@ -33,7 +32,7 @@ from governed_bi.serve.agent_state import CAP_LEDGER_KEY
 from governed_bi.serve.delivery import delivery_hash_for, payload_digest
 from governed_bi.serve.events import tool_event_id
 from governed_bi.serve.graph import compile_graph
-from governed_bi.serve.resume import CALLER_KEY, ResumeRejected, resume_clarification
+from governed_bi.serve.resume import resume_clarification
 from governed_bi.serve.scripted_model import ScriptedChatModel
 from governed_bi.serve.tools import build_tools
 
@@ -123,7 +122,7 @@ def _runtime(call_id: str, committed: dict[str, Any] | None = None) -> Any:
     ``tool.invoke({"args": ...})`` fails validation on it before the body runs. Supplying one
     here is what keeps these tests direct unit tests of the tool bodies rather than agent
     round-trips — the agent path is covered end to end by
-    ``test_ask_user_interrupt_and_identity_resume`` and the F turn contracts.
+    ``test_ask_user_interrupt_and_resume`` and the F turn contracts.
     """
     from langchain.tools import ToolRuntime
 
@@ -399,7 +398,7 @@ def test_a_checker_that_raises_is_recorded_rather_than_returned_as_a_string() ->
     )
 
 
-def test_ask_user_interrupt_and_identity_resume() -> None:
+def test_ask_user_interrupt_and_resume() -> None:
     model = ScriptedChatModel(
         responses=[
             AIMessage(
@@ -417,7 +416,6 @@ def test_ask_user_interrupt_and_identity_resume() -> None:
         ]
     )
     graph = compile_graph()
-    token = "identity-secret-f3"
     config = {
         "configurable": {
             "thread_id": "t-hitl",
@@ -441,20 +439,12 @@ def test_ask_user_interrupt_and_identity_resume() -> None:
         "facet_route_hits": [("facet_schema", "sales", 1.0)],
         "messages": [],
         "usage": [],
-        "identity": {"token": token},
         "clarifications": [],
     }
     paused = graph.invoke(turn, config)
     assert paused.get("__interrupt__")
 
-    with pytest.raises(ResumeRejected):
-        resume_clarification(
-            graph, config=config, identity={"token": "wrong"}, answer="2020"
-        )
-
-    done = resume_clarification(
-        graph, config=config, identity={"token": token}, answer="2020"
-    )
+    done = resume_clarification(graph, config=config, answer="2020")
     assert done.get("path_kind") == "answered" or done.get("answer", {}).get(
         "outcome"
     ) in {"answered", "clarification", "no_sql"}
@@ -503,7 +493,6 @@ def test_the_ledger_survives_the_interrupt() -> None:
         ]
     )
     graph = compile_graph()
-    token = "identity-ledger"
     config = {"configurable": {
         "thread_id": "t-ledger", "policy": GovernancePolicy(guard_rules_enabled={}),
         "agent_model": model, "assets_by_id": _assets(),
@@ -516,13 +505,13 @@ def test_the_ledger_survives_the_interrupt() -> None:
         "attempt_id": "a", "corpus_content_hash": "c", "prompt_set_hash": "p",
         "knobs_resolved": {}, "n_re_served": 0, "licensed": ["sales.customers"],
         "facet_route_hits": [("facet_schema", "sales", 1.0)],
-        "messages": [], "usage": [], "identity": {"token": token},
+        "messages": [], "usage": [],
     }
 
     paused = graph.invoke(turn, config)
     assert paused.get("__interrupt__"), "precondition: ask_user paused the turn"
 
-    done = resume_clarification(graph, config=config, identity={"token": token}, answer="2020")
+    done = resume_clarification(graph, config=config, answer="2020")
     execution = done["answer"]["record"]["execution"]
     attempts = list(execution.get("attempts") or ())
 
@@ -608,14 +597,14 @@ def test_only_one_clarification_may_be_outstanding_per_turn() -> None:
     assert "already has one" in text.lower()
 
 
-def _clarify_turn(*, thread: str, turn: str, token: str) -> dict[str, Any]:
-    """A turn shaped for the ``ask_user`` path — the keys ``test_ask_user_interrupt_and_identity_resume`` uses."""
+def _clarify_turn(*, thread: str, turn: str) -> dict[str, Any]:
+    """A turn shaped for the ``ask_user`` path — the keys ``test_ask_user_interrupt_and_resume`` uses."""
     return {
         "question": "revenue?", "thread_id": thread, "turn_index": 1, "turn_id": turn,
         "run_id": "r", "question_id": "q", "db_id": "sales", "attempt_id": "a",
         "corpus_content_hash": "c", "prompt_set_hash": "p", "knobs_resolved": {},
         "n_re_served": 0, "facet_route_hits": [("facet_schema", "sales", 1.0)],
-        "messages": [], "usage": [], "identity": {"token": token}, "clarifications": [],
+        "messages": [], "usage": [], "clarifications": [],
     }
 
 
@@ -635,10 +624,9 @@ def test_a_second_question_after_a_resume_is_not_refused_as_still_outstanding() 
     this one is answered", which is what it had just done, so the advice is unfollowable.
 
     The assertion is that the second question **pauses** rather than returning a string: a real
-    interrupt, on its own ``clarification_id``, answerable by the same identity.
+    interrupt, on its own ``clarification_id``.
     """
     graph = compile_graph()
-    token = "identity-two-questions"
     config = {
         "configurable": {
             "thread_id": "t-two-q",
@@ -659,13 +647,13 @@ def test_a_second_question_after_a_resume_is_not_refused_as_still_outstanding() 
         }
     }
 
-    paused = graph.invoke(_clarify_turn(thread="t-two-q", turn="turn-two-q", token=token), config)
+    paused = graph.invoke(_clarify_turn(thread="t-two-q", turn="turn-two-q"), config)
     first = [i.value for i in (paused.get("__interrupt__") or ())]
     assert [v.get("question") for v in first] == ["which year?"], (
         f"precondition: the turn must pause on the first question, got {first}"
     )
 
-    after = resume_clarification(graph, config=config, identity={"token": token}, answer="2020")
+    after = resume_clarification(graph, config=config, answer="2020")
 
     texts = [str(getattr(m, "content", "")) for m in (after.get("messages") or ())]
     assert not [t for t in texts if "already has one" in t.lower()], (
@@ -681,7 +669,7 @@ def test_a_second_question_after_a_resume_is_not_refused_as_still_outstanding() 
         "it answers"
     )
 
-    done = resume_clarification(graph, config=config, identity={"token": token}, answer="EMEA")
+    done = resume_clarification(graph, config=config, answer="EMEA")
     answers = [c.get("answer") for c in (done.get("clarifications") or ())]
     assert answers == ["2020", "EMEA"], (
         f"both answered clarifications must reach the record, got {answers}"
@@ -710,7 +698,6 @@ def test_the_replayed_ask_user_start_reuses_the_row_id_rather_than_opening_a_sec
     times the node re-executes.
     """
     graph = compile_graph()
-    token = "identity-replay"
     conf = {
         "thread_id": "t-replay",
         "policy": GovernancePolicy(guard_rules_enabled={}),
@@ -738,9 +725,9 @@ def test_the_replayed_ask_user_start_reuses_the_row_id_rather_than_opening_a_sec
         return out
 
     paused = ask_user_events(
-        _clarify_turn(thread="t-replay", turn="turn-replay", token=token), conf
+        _clarify_turn(thread="t-replay", turn="turn-replay"), conf
     )
-    resumed = ask_user_events(Command(resume="2020"), {**conf, CALLER_KEY: token})
+    resumed = ask_user_events(Command(resume="2020"), conf)
     events = paused + resumed
 
     assert [e["status"] for e in events] == ["start", "start", "ok"], (

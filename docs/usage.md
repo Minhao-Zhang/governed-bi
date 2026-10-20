@@ -37,14 +37,8 @@ No knob is settable from a config file. Runtime configuration is, in precedence 
 2. `GOVERNED_BI_*` variables (see below).
 3. Defaults in [`register/knobs.py`](../src/governed_bi/register/knobs.py).
 
-**One file is an exception, and it is not a knob.** `GOVERNED_BI_ACCESS_POLICY` points at a
-TOML you write, loaded by
-[`govern/access.py`](../src/governed_bi/govern/access.py)`::StaticRoleAccessPolicy.from_toml`
-and selected at `api/graph_app.py::access_policy_from_environment` — the only place in `src/`
-that chooses a policy. Unset means `OpenAccessPolicy`; a path that does not exist is a startup
-`RuntimeError`, not a silent fallback to open. `src/` also ships two TOMLs of its own
-(`govern/adversarial.toml`, `register/arms.toml`), but those are declared claims the test suite
-holds the code to, not configuration you edit.
+`src/` ships two TOMLs of its own (`govern/adversarial.toml`, `register/arms.toml`), but those are
+declared claims the test suite holds the code to, not configuration you edit.
 
 Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 
@@ -62,7 +56,6 @@ Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 | `GOVERNED_BI_PROXY_REGION` | AWS region for that secret lookup. Unset falls through to boto3's own resolution chain |
 | `GOVERNED_BI_PROXY_CA_BUNDLE` | Path to a CA bundle for the proxy's TLS chain. Unset disables verification |
 | `GOVERNED_BI_CORPUS_DIR` | Corpus directory (else one dir under `corpora/`, or seed via schema) |
-| `GOVERNED_BI_ACCESS_POLICY` | Path to a `StaticRoleAccessPolicy` TOML file ([ADR 0012](adr/0012-access-seam-principal-and-authorization.md) §2), resolved against the repo root. Unset means `OpenAccessPolicy`, which authorizes every table and is what this repository ships. Set to a path that is not a file and the server **refuses to start** rather than serving open under a policy the operator believes is in force |
 | `GOVERNED_BI_SCHEMA` | Optional: seed / pin schema from the live database |
 | `GOVERNED_BI_MODEL` | Main chat model, read by the server and the one-turn CLI both. Unset → `has_live_model: false` on the server, and exit 2 from the CLI unless `--model` or `--no-model` is passed |
 | `GOVERNED_BI_UTILITY_MODEL` | Small model for facet rewrite / scope gate |
@@ -114,7 +107,6 @@ operator tunes), **unmeasured** (a knob override no arm has ever varied). "Read 
 | `GOVERNED_BI_CORPUS_DIR` | `api/graph_app.py`, `feedback/__init__.py` | location | keep |
 | `GOVERNED_BI_SCHEMA` | `api/graph_app.py` | location | keep |
 | `GOVERNED_BI_SEED_DIR` | `api/graph_app.py` | location | remove: the default under `runs/seeded-corpus/` has no known override |
-| `GOVERNED_BI_ACCESS_POLICY` | `api/graph_app.py`, `api/visibility.py` | location | keep |
 | `GOVERNED_BI_CONVERSATION_DB` | `serve/checkpointer.py` | location | keep |
 | `GOVERNED_BI_HARNESS_DB` | `serve/checkpointer.py` | location | keep |
 | `GOVERNED_BI_FEEDBACK_DB` | `api/routes.py` | location | keep |
@@ -258,10 +250,8 @@ second job that has nothing to do with who is calling: `@auth.on.threads.update`
 `@auth.on.threads.create_run` refuse a client-supplied state-writing `command`, which is what
 keeps audit findings A2, A3 and A4 closed. Thread state carries `licensed` — the bound the layer
 stack enforces against — and `corpus_content_hash`, the treatment identity every quotability gate
-reads. `@auth.authenticate` remains and now allows unconditionally; it returns the single
-principal `authenticated_principal()` names, which is what the access seam
-([ADR 0012](adr/0012-access-seam-principal-and-authorization.md)) is asked about. One principal
-was already the model here — it is simply no longer proven by anything.
+reads. `@auth.authenticate` remains and allows unconditionally, returning a constant identity that
+nothing reads.
 
 Route shapes are in [`openapi.json`](openapi.json).
 
@@ -280,16 +270,14 @@ state-transition refusals, not pause refusals. Four more write verbs are mounted
 `GOVERNED_BI_FEEDBACK_ADMIN` is set; the whole surface, verb by verb with its status codes, is in
 [return path](return-path.md).
 `GET /clarifications/pending` is unanswered `ask_user` prompts union those open observations,
-oldest first. Answering a pending interrupt from that page is still refused (ADR 0006 B9).
+oldest first. Answering a pending interrupt from that page is not built.
 
 A clarification is answered by posting a run with `{"command": {"resume": …}}` on the same thread.
 Resume maps: `{answer}` and `{choice_id}` proceed, `{declined: true}` fails closed,
 `{deferred: true}` proceeds under the stated why. The shipped UI sends only those four.
 `{cancelled: true}` is still accepted and folded into the same fail-closed branch as
 `{declined: true}`, for older clients — nothing in this repo's client sends it.
-`serve/resume.py::authorise_resume` refuses one whose caller is not the caller that was asked
-(ADR 0006 §10 B9); with one principal and no transport credential that gate cannot tell two
-callers apart, which is the state [`enterprise-fork.md`](enterprise-fork.md) says to fix first.
+The thread id is the only handle on a paused clarification.
 
 Conversations are durable as of 2026-08-18: `langgraph.json` mounts an `AsyncSqliteSaver` over
 `runs/conversations.sqlite`, the server logs *"Using custom checkpointer: AsyncSqliteSaver"* at

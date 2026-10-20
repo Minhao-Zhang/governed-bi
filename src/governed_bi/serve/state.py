@@ -519,7 +519,7 @@ class ServeInput(TypedDict, total=False):
     """Everything a client is allowed to write into the graph. Deliberately one key.
 
     The write half of the trust boundary — A2/A3, which measured a client
-    forging ``licensed``, ``corpus_content_hash`` and ``identity`` straight into ``ServeState``.
+    forging ``licensed`` and ``corpus_content_hash`` straight into ``ServeState``.
 
     ``trust()`` forces run constants over a caller's ``configurable``, but the graph's own
     ``input`` is a second write channel: ``langgraph_api`` forwards the client's dict unfiltered,
@@ -548,24 +548,13 @@ class ServeOutput(TypedDict, total=False):
     narrow. Two measurements on langgraph 1.2.11, of two different things, and the difference
     matters:
 
-    - the compiled ``accept`` graph's ``stream_channels_asis`` is all **48** declared channels;
+    - the compiled ``accept`` graph's ``stream_channels_asis`` is all **46** declared channels;
     - but the root ``values`` frames of an actual streamed run carried **only** ``answer`` and
       ``messages`` — 4 frames, 0 containing ``turns``, measured over the wire from the client.
 
     So the graph *attribute* is wide and the frames are not. ``get_state(...)`` and
-    ``GET /threads/{id}/state`` **are** wide: both return ``identity`` (the token
-    :func:`~governed_bi.serve.resume.authorise_resume` gates clarification resume on) and
-    ``delivery`` (the whole rendered corpus context block). This class is not a guarantee about
-    either surface.
-
-    Count went 46 → 47 with :attr:`ServeState.turns`, 47 → 48 with a ``raised`` channel, and
-    **48 → 47 on 2026-08-23 when that channel was deleted** (ADR 0015 §2). It held reader-filed
-
-    notes, and an accumulating channel cannot hold a row that changes: a note has a lifecycle, so
-    closing one would have meant a second row and a fold in every reader. Those rows live in
-    ``runs/feedback.sqlite`` now. The channel is gone rather than kept-and-unused because it was
-    measured empty — zero rows across the checkpoint store, the harness store and every platform
-    thread row — so there was nothing to migrate and no reason to carry a compatibility union.
+    ``GET /threads/{id}/state`` **are** wide: both return ``delivery`` (the whole rendered corpus context block).
+    This class is not a guarantee about either surface.
 
     ``turns`` widens the §B1 remainder on the **checkpoint-read** surfaces
     and not on the streamed one: what escapes there is one ``answer["record"]`` per read plus
@@ -583,8 +572,6 @@ class ServeState(TypedDict, total=False):
     evidence: str
     thread_id: str
     turn_index: int
-    #: GovernancePolicy rides ``configurable["policy"]`` (not msgpack-safe).
-    identity: dict[str, Any]
     run_id: str
     turn_id: str
     question_id: str
@@ -718,7 +705,7 @@ ACCUMULATING: frozenset[str] = frozenset(
 
 #: Written by ``turn()`` itself — turn identity and run claims.
 TURN_IDENTITY: frozenset[str] = frozenset({
-    "question", "evidence", "turn_index", "thread_id", "identity", "run_id", "turn_id",
+    "question", "evidence", "turn_index", "thread_id", "run_id", "turn_id",
     "question_id", "db_id", "attempt_id", "corpus_content_hash", "prompt_set_hash",
     "knobs_resolved", "n_re_served",
 })

@@ -32,11 +32,10 @@ patch's ``was``/``becomes``/``rationale``/``base_corpus_content_hash``, and a tr
 ``detail``.
 
 **What is still disclosed, and this part genuinely is unchanged.** Nothing here authenticates;
-reaching the port is sufficient (``docs/enterprise-fork.md``). So the GET hands any caller every open
+reaching the port is sufficient. So the GET hands any caller every open
 question with the SQL the engine generated, and the POST lets any caller file against any turn. That
 was accepted on the grounds that ``/audit/turns`` already discloses every thread's SQL to the same
-caller, and those grounds have not changed. Under a real ``AccessPolicy`` both verbs still owe the
-withholding the tools apply.
+caller, and those grounds have not changed.
 """
 
 from __future__ import annotations
@@ -342,7 +341,7 @@ def make_feedback_router(
         tiebreak for equal timestamps, which is a larger change than this queue is worth.
         ``truncated`` already says "there is more" and the UI reads it.
 
-        Answering a paused question from here is still refused (ADR 0006 B9). The link the UI grows
+        Answering a paused question from here is not built. The link the UI grows
         instead routes an operator's answer into the semantic layer as an observation, which is the
         provenance gate this whole design is.
         """
@@ -604,7 +603,7 @@ def make_admin_router(store: FeedbackStore) -> APIRouter:
     """The steward's verbs. **Mounted only when ``GOVERNED_BI_FEEDBACK_ADMIN`` is set.**
 
     404 when unmounted rather than 403, because a 403 confirms the route exists. This is a
-    deployment switch and not an identity: ``api/auth.py`` returns one principal, so with the
+    deployment switch and not an identity: ``api/auth.py`` admits every caller, so with the
     switch on, whoever reaches the port is the steward. The honest control is that it is off.
     """
     router = APIRouter()

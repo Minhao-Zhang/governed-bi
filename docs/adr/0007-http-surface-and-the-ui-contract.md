@@ -360,8 +360,7 @@ the conversation store on disk. That last one got *wider* on 2026-08-18: a `valu
 `get_state` now carries every prior turn's record rather than the newest, because
 `ServeState.turns` accumulates ([ADR 0014](0014-one-conversation-store.md), audit B1). The CORS origin list in `langgraph.json` is the only remaining
 narrowing, and it narrows browsers only. **The port is the boundary.** A deployment that is not
-one operator on loopback needs authentication in front of this engine — see
-[`docs/enterprise-fork.md`](../enterprise-fork.md).
+one operator on loopback needs authentication in front of this engine.
 
 **What survives, and why `langgraph.json` keeps `auth.path`.** `api/auth.py` still holds its
 `Auth()` instance and both `@auth.on` handlers. `threads.update` and `threads.create_run` refuse a

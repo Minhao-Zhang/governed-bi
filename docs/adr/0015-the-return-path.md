@@ -885,8 +885,7 @@ this branch; four wait on the pipeline; one is retired. Each says which.
   > uniqueness "becomes a conformance rule that runs in the corpus repository's CI, before the
   > merge" is wrong on both halves: the rule runs here, and after. Nothing about the design of the
   > return path changes; where the check runs does.
-- **Row-level security, tenancy, or a user store.** `docs/enterprise-fork.md` is unchanged by this
-  ADR. In particular the store records no identity for who filed an observation, because
+- **Row-level security, tenancy, or a user store.** In particular the store records no identity for who filed an observation, because
   `api/auth.py` returns one principal and inventing a per-user notion here would be a boundary
   that is not one.
 - **Making the engine the curator.** The pipeline authors *candidates*. The corpus remains

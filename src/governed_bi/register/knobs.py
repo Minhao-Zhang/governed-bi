@@ -377,16 +377,6 @@ KNOB_REGISTER: tuple[Knob, ...] = (
        "themselves (audit D2)"),
     _k("g_length_max_chars", 8_000, Role.comparability, "guard's hard input bound"),
     _k("cost_budget", UNSET, Role.comparability, "the cost layer's shape estimate bound"),
-    _k("access_grant", None, Role.comparability,
-       "digest of the Grant this run's AccessPolicy returned (ADR 0012 §7). ADR 0006 §13 "
-       "requires security configuration to enter the config hash, or two runs under different "
-       "authorization hash identically -- harmless while the only shipped grant is open, and "
-       "fatal the day a fork ships a restrictive one. The default is None and NOT the open "
-       "grant's digest, deliberately: a digest that came from this register rather than from "
-       "the policy would publish `open` for a fork serving a restriction, which is exactly the "
-       "agent_recursion_limit defect (behaviour moves, the artifact says the default) in the "
-       "security register. session._resolved_knobs reads it off GovernancePolicy.access_grant, "
-       "so a null here means no policy was threaded, never that the grant was open"),
 
     # ── measurement ─────────────────────────────────────────────────────────
     _k("cache_cost_reduction_target", 0.30, Role.comparability,

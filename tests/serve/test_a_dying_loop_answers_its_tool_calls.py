@@ -14,9 +14,8 @@ that route — the attempt cap — and until this file the invariant was enforce
 What makes the routes below worse is that the damaging turn stamps an ordinary ``crashed`` and
 reads like any other failure.
 
-Three paths reach it, and each has a test here: the ``agent_node_timeout_s`` wall (a live
-production knob), any exception out of the nested agent with a call pending, and ``ResumeRejected``
-from a resume by the wrong caller.
+Two paths reach it, and each has a test here: the ``agent_node_timeout_s`` wall (a live
+production knob) and any exception out of the nested agent with a call pending.
 
 **And the one thing the repair must not do.** A turn paused at ``interrupt()`` has an unanswered
 ``tool_use`` *by design*; answering it would break resume, which is the feature the clarification
@@ -42,10 +41,7 @@ from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve import graph as graph_module
 from governed_bi.serve.nodes import agent_core
 from governed_bi.serve.nodes.agent_core import agent_core_node
-from governed_bi.serve.resume import CALLER_KEY
 from governed_bi.serve.scripted_model import ScriptedChatModel
-
-ASKED = "analyst-7"
 
 
 def _ask_user(*ids: str) -> AIMessage:
@@ -106,11 +102,10 @@ def _state() -> dict[str, Any]:
         "usage": [],
         "clarifications": [],
         "licensed": ["beer_factory.customers"],
-        "identity": {"token": ASKED},
     }
 
 
-def _config(model: Any, *, caller: str = ASKED) -> dict[str, Any]:
+def _config(model: Any) -> dict[str, Any]:
     return {
         "configurable": {
             "thread_id": "t-strand",
@@ -119,7 +114,6 @@ def _config(model: Any, *, caller: str = ASKED) -> dict[str, Any]:
             "agent_model": model,
             "connector": _Stub(),
             "corpus": analyst_corpus_from_keys(allowed=["beer_factory.customers.id"]),
-            CALLER_KEY: caller,
         }
     }
 
@@ -238,37 +232,11 @@ def test_a_wiring_failure_raised_out_of_a_tool_answers_the_pending_call(
     assert "GovernanceUsageError" in str(out["messages"][-1].content)
 
 
-# ── path 3: a resume the identity gate refuses ───────────────────────────────────────
-
-
 def _paused(graph: Any, model: Any) -> dict[str, Any]:
     paused = graph.invoke(_state(), _config(model))
     assert paused.get("__interrupt__"), "precondition: ask_user did not pause the turn"
     return paused
 
-
-def test_a_resume_by_the_wrong_caller_does_not_poison_the_thread() -> None:
-    """``ResumeRejected`` is raised on the line ``interrupt()`` returns on (ADR 0006 B9).
-
-    Latent while there is one principal and live the moment a fork has two — and it lands in the
-    worst possible place, because the ``ask_user`` ``tool_use`` is already in the frame and the
-    answer that would have closed it is exactly what the gate is withholding. The refusal must
-    cost the hijacker the turn, not cost the victim the thread.
-    """
-    graph = graph_module.compile_graph()
-    model = ScriptedChatModel(responses=[_ask_user("c1"), AIMessage("ok: 2020")])
-    _paused(graph, model)
-
-    done = graph.invoke(Command(resume="2020"), _config(model, caller="analyst-8"))
-
-    # Unchanged: this is still a crashed turn and still says why. The repair is about the thread.
-    assert done["path_kind"] == "crashed"
-    assert done["failure"] == {"stage": "agent_core", "error_type": "ResumeRejected"}
-    assert not _dangling(done["messages"]), (
-        f"unanswered tool_use {sorted(_dangling(done['messages']))} after a refused resume; the "
-        "victim's thread would be unusable from here on"
-    )
-    assert not (done.get("clarifications") or []), "the refused answer must not be recorded"
 
 
 # ── the pause, which must be left exactly as it is ───────────────────────────────────
@@ -300,7 +268,7 @@ def test_a_paused_turn_never_reaches_the_repair(monkeypatch: pytest.MonkeyPatch)
     assert (paused.get("messages") or []) == []
 
 
-def test_an_authorised_resume_still_gets_its_answer() -> None:
+def test_a_resume_still_gets_its_answer() -> None:
     """The paired positive, without which every assertion above is satisfiable by a graph that
     stopped resuming at all: the answer becomes the ``ask_user`` reply, and not an error one."""
     graph = graph_module.compile_graph()

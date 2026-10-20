@@ -10,16 +10,8 @@ May import ``ports``, ``register``, ``corpus``; no model, no connector.
 
 from __future__ import annotations
 
-from .access import (
-    LOCAL_PRINCIPAL,
-    OPEN_RESOLVED,
-    OpenAccessPolicy,
-    ResolvedGrant,
-    StaticRoleAccessPolicy,
-    resolve_grant,
-)
 from .binding import Bindings, ColumnBinding, LayerRefusal, bind
-from .bounds import OUT_OF_SCOPE_MESSAGE, ToolBounds, resume_authorised
+from .bounds import OUT_OF_SCOPE_MESSAGE, ToolBounds
 from .check import GovernanceUsageError, check, graded_delivery_eligible
 from .functions import (
     ADVERSARIAL_SET,
@@ -45,17 +37,12 @@ __all__ = [
     "GovernancePolicy",
     "GovernanceUsageError",
     "GuardVerdict",
-    "LOCAL_PRINCIPAL",
     "Layer",
     "LayerRefusal",
-    "OPEN_RESOLVED",
     "OUT_OF_SCOPE_MESSAGE",
-    "OpenAccessPolicy",
     "PERMITTED_FUNCTIONS",
     "Prepared",
     "RULES",
-    "ResolvedGrant",
-    "StaticRoleAccessPolicy",
     "ToolBounds",
     "attempt_record",
     "bind",
@@ -68,7 +55,5 @@ __all__ = [
     "is_valid_schema_id",
     "permitted_functions_digest",
     "prepare",
-    "resolve_grant",
-    "resume_authorised",
     "table_key",
 ]

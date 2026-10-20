@@ -21,7 +21,6 @@ from sqlglot.errors import SqlglotError
 
 from ..corpus.analyst import AnalystCorpus
 from ..register.knobs import Unset
-from .access import ResolvedGrant, resolve_grant
 from .binding import Bindings, LayerRefusal, bind
 from .functions import canonical_function_name
 from .identifiers import normalise_column_key, normalise_table_key
@@ -99,13 +98,6 @@ def check(
     allowed_keys = frozenset(
         normalise_column_key(key, default_schema) for key in corpus.allowed_columns
     )
-    # ADR 0012. Resolved here, beside the other four, and for the same reason: a policy file
-    # with a malformed key is a caller error, and a blocked verdict would report it as an
-    # unsafe query. The default grant is open, so every predicate below is constant and the
-    # three authorization branches are unreachable — which is the whole of the claim that
-    # this seam changed no measured number.
-    grant = resolve_grant(policy.access_grant, default_schema)
-
     evaluated: list[Layer] = []
     layer = Layer.PARSE
     try:
@@ -141,15 +133,13 @@ def check(
 
         layer = Layer.COLUMNS
         evaluated.append(layer)
-        blocked = _columns(
-            bound, allowed_keys, excluded_keys, suspect_keys, grant, policy, evaluated
-        )
+        blocked = _columns(bound, allowed_keys, excluded_keys, suspect_keys, policy, evaluated)
         if blocked is not None:
             return blocked
 
         layer = Layer.TABLES
         evaluated.append(layer)
-        blocked = _tables(bound, licensed_keys, grant, evaluated)
+        blocked = _tables(bound, licensed_keys, evaluated)
         if blocked is not None:
             return blocked
 
@@ -292,19 +282,10 @@ def _columns(
     allowed: frozenset[str],
     excluded: frozenset[str],
     suspect: frozenset[str],
-    grant: ResolvedGrant,
     policy: GovernancePolicy,
     evaluated: list[Layer],
 ) -> CheckVerdict | None:
-    """Four rules in a fixed order, and the order is an argument (ADR 0012 §4).
-
-    ``excluded`` and ``suspect`` are corpus-wide facts that precede any principal, so they
-    are reported first: they reveal nothing about *this* caller. ``denies_column`` comes
-    next, ahead of ``not allowed``, because collapsing "you may not read this" into "there
-    is no such column" is exactly the conflation §4.2 asks to end one layer up. It runs
-    after the corpus rules and never instead of them — denial narrows an allowlist, it does
-    not replace one.
-    """
+    """Three rules in a fixed order: excluded, suspect, then not allowed."""
     for binding in bound.columns:
         if binding.column_key in excluded:
             return refuse(
@@ -319,13 +300,6 @@ def _columns(
                 "and hard_block_suspect is on",
                 evaluated=evaluated,
             )
-        if grant.denies_column(binding.column_key):
-            return refuse(
-                "r_column_not_authorized",
-                f"{binding.reference} binds to {binding.column_key}, which this principal "
-                "is denied",
-                evaluated=evaluated,
-            )
         if binding.column_key not in allowed:
             return refuse(
                 "r_column_not_allowed",
@@ -338,41 +312,14 @@ def _columns(
 def _tables(
     bound: Bindings,
     licensed: frozenset[str],
-    grant: ResolvedGrant,
     evaluated: list[Layer],
 ) -> CheckVerdict | None:
-    """Licence first, then authorization, then the unenforceable predicate (ADR 0012 §3).
-
-    **The order is the security property, not a style choice.** ``licensed`` is what
-    retrieval found this turn; the grant is what the principal may ever see. Asking the
-    grant first would make the pair of rules an oracle: a caller could tell a table that
-    exists-but-is-denied from one that does not exist, by reading which refusal came back.
-    Asking the licence first means ``r_table_not_authorized`` fires only for a table this
-    turn already put in front of the model, so it discloses nothing new — and it is then
-    exactly the distinction open-work.md §4.2 says the conflated set is costing:
-    "retrieval missed" and "you may not" stop being the same reason code.
-    """
+    """A base table must be in the set the turn licensed."""
     for reference, key in bound.tables.items():
         if key not in licensed:
             return refuse(
                 "r_table_not_licensed",
                 f"{reference} resolves to {key}, which this turn does not license",
-                evaluated=evaluated,
-            )
-        if not grant.authorizes_table(key):
-            return refuse(
-                "r_table_not_authorized",
-                f"{reference} resolves to {key}, which this principal is not authorized to "
-                "read. The turn licensed it and the access policy does not grant it",
-                evaluated=evaluated,
-            )
-        if grant.refuses_for_row_predicate(key):
-            return refuse(
-                "r_row_predicate_unenforced",
-                f"{reference} resolves to {key}, which carries a declared row-level "
-                "predicate this engine does not apply. Executing the statement would return "
-                "the rows the predicate exists to withhold, so it refuses instead; declare "
-                "enforcement = \"database_role\" once the database enforces it",
                 evaluated=evaluated,
             )
     return None

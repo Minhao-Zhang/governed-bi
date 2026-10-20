@@ -161,7 +161,6 @@ def _run_one(
             str(question.get("question") or question.get("utterance") or qid),
             turn_index=1,
             thread_id=thread_id,
-            identity={"token": f"eval-{run_id}"},
             # Passing evidence is the BIRD condition for EX. The grader departs from BIRD on
             # purpose (`eval/grade.results_match`: numeric tolerance, text never a number). An
             # arm that wants the harder no-hint condition omits the key from the question dict.
@@ -410,5 +409,4 @@ def _base_turn(question: Mapping[str, Any], *, run_id: str, arm: str) -> dict[st
         "messages": [],
         "usage": [],
         "clarifications": [],
-        "identity": question.get("identity") or {"token": f"eval-{run_id}"},
     }

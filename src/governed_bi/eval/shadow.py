@@ -32,8 +32,8 @@ as:
   The projection is **exact**: prod would have ended the turn there, so everything observed
   downstream is precisely what prod would have thrown away.
 * :data:`Counterfactual.probe` — exact in the same sense, but the verdict came from a separate pass.
-* :data:`Counterfactual.bound` — the gate changes what the model *sees* (a restrictive grant, a denied
-  column), so "prod would have refused this statement" is observable and "what prod would have
+* :data:`Counterfactual.bound` — the gate changes what the model *sees* (no gate
+  declares this tier), so "prod would have refused this statement" is observable and "what prod would have
   answered instead" is not. Counted, never folded into a projected score.
 
 **What this cannot tell you.** It measures what governance *costs*, never what it *buys*. The

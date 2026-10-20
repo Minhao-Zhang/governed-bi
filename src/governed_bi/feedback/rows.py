@@ -308,8 +308,7 @@ def migrate(conn: sqlite3.Connection, *, what: str) -> None:
     "migrations are thought about here".
 
     A bump with no entry in :data:`MIGRATIONS` is refused at open rather than deferred to the
-    first query, on the same argument ``govern/access.py::_require_keys`` makes about a policy
-    file: read once, enforced thousands of times.
+    first query: the store is opened once and read by every request after it.
 
     ``what`` names the file in errors. Passed in rather than read off the connection so this
     stays a pure function of ``conn`` and the module's own constants — it is called by

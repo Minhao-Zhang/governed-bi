@@ -60,8 +60,7 @@ def test_an_undeclared_reason_lands_in_its_own_bucket_and_not_in_a_stage() -> No
     Two import-time guards keep the *declarations* in step with each other, and neither can see
     a node writing a string that is in no register — a value they never meet. Here it is counted
     by name, outside ``by_stage``, so a histogram that no longer adds up says which string is
-    why. Crediting it to a stage would be exactly the misattribution ADR 0012 §3 split the
-    TABLES layer to end, one level up.
+    why. Crediting it to a stage would be exactly the misattribution ADR 0013 exists to end.
     """
     hist = refusal_histogram(
         [

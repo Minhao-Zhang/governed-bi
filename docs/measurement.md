@@ -620,7 +620,7 @@ a pure function of fields the row carries. Three tiers, and
 |---|---|---|
 | `replay` | the five deterministic guard rules; the ADR 0013 abstention policy | **Exact.** Inputs are fixed before the model acts and are on the row |
 | `probe` | `g_bi_scope` | Exact, from a separate pass that read only the question |
-| `bound` | a restrictive `access_grant`, `denied_columns` | The refusals are countable; the cost in right answers is **not** projectable, because the gate changes what the model sees |
+| `bound` | none declared | The refusals are countable; the cost in right answers is **not** projectable, because the gate changes what the model sees |
 
 A gate whose inputs are missing makes the tool **refuse** rather than report zero
 refusals. A gate the arm actually enforced is refused too — there is nothing left to

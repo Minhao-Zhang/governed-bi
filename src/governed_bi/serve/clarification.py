@@ -1,7 +1,7 @@
 """Shared ask_user interrupt / resume payloads (ADR 0014 thread state).
 
 The interrupt value, the resume maps the UI already sends, and the row written
-onto ``ServeState.clarifications`` after an authorised resume. Callers that
+onto ``ServeState.clarifications`` after a resume. Callers that
 invent a second spelling of ``basis`` or ``resolution`` will desynchronise the
 pending queue from the live prompt.
 """

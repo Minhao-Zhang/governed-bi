@@ -17,19 +17,10 @@ CI as part of ``pytest``. Naming it ``check_`` would add a second, redundant enf
 same property in a register whose value is that each entry means something distinct.
 
 **The second half: disclosure.** A `[[case]]` asks whether a statement was refused. A
-`[[probe]]` asks what the principal was *shown* — the rendered context block, and the payload of
-each tool that has no statement for the layer stack to read. Refusing is not disclosing, and on
-2026-08-12 an independent review found three places where the two disagreed in the shipped tree
-(`inspect_schema` handing over every denied column of an authorized table; a bare-spelled join's
-ON clause naming a withheld table; `may_sample` failing open on a mixed-case denial). None of
-the three is expressible as SQL, so a suite that measures only statements would let all three
-back in.
-
-The probe runner lives **here and not in `govern/adversarial_run.py`** because it must call
-`serve/context.py::withheld_by_grant` and `serve/fetch.py`, which sit above `govern/` in the
-layer order. A tool is above every layer, which is what tools are for. The cases stay data in
-`adversarial.toml`, so this driver and `tests/govern/test_adversarial_suite.py` still read one
-file rather than two lists that drift.
+`[[probe]]` asks what a tool that builds no statement (`inspect_schema`, `sample_rows`) shows the
+model, which only the licence bound in `ToolBounds` stands in front of. The runner is here, not
+in `govern/adversarial_run.py`, because it calls `serve/fetch.py`, above `govern/` in the layer
+order.
 
 Usage::
 
@@ -70,14 +61,12 @@ from governed_bi.govern.adversarial_run import (  # noqa: E402
 from governed_bi.govern.layers import Layer  # noqa: E402
 from governed_bi.govern.policy import GUARD_RULE_IDS  # noqa: E402
 
-PROBE_SURFACES: frozenset[str] = frozenset(
-    {"context", "inspect_schema", "read_body", "may_sample"}
-)
+PROBE_SURFACES: frozenset[str] = frozenset({"inspect_schema", "may_sample"})
 
 
 @dataclass(frozen=True, slots=True)
 class ProbeResult:
-    """One disclosure probe, and what the principal was actually shown."""
+    """One disclosure probe, and what the tool actually showed."""
 
     id: str
     kind: str
@@ -91,86 +80,20 @@ class ProbeResult:
         return self.status in ("disclosed", "hidden")
 
 
-def _probe_world_assets(world: AdversarialWorld, declared: list[dict]) -> dict[str, object]:
-    """The world's tables and columns, plus the joins and terms only the probes read."""
-    from governed_bi.corpus.schema import AssetType, Binding, JoinAsset, TermAsset
+def _disclosure_surfaces(world: AdversarialWorld) -> dict[str, object]:
+    """What the two tools show, computed once through the production functions.
 
-    assets = {a.id: a for a in _world_assets(world)}
-    for row in declared:
-        kind = str(row.get("kind") or "")
-        if kind == "join":
-            asset = JoinAsset(
-                id=str(row["id"]),
-                left_table=str(row["left_table"]),
-                right_table=str(row["right_table"]),
-                on=str(row["on"]),
-                summary=str(row.get("summary") or ""),
-            )
-        elif kind == "term":
-            asset = TermAsset(
-                id=str(row["id"]),
-                name=str(row["name"]),
-                summary=str(row.get("summary") or ""),
-                binding=Binding(target_type=AssetType.column, target_id=str(row["target_id"])),
-            )
-        else:
-            raise ValueError(f"[[probe_asset]] {row.get('id')!r}: unknown kind {kind!r}")
-        assets[asset.id] = asset
-    return assets
-
-
-def _disclosure_surfaces(world: AdversarialWorld, declared: list[dict]) -> dict[str, object]:
-    """Everything this principal is shown, computed once, through the production functions.
-
-    Not a re-implementation: the block comes from ``render_context`` with the withheld set
-    ``assemble`` passes it, the bounds come from ``ToolBounds`` with the same set, and the tool
-    payloads come from ``serve/fetch.py``. A probe harness that rebuilt any of the three would
-    measure itself.
+    The bounds come from ``ToolBounds`` and the payload from ``serve/fetch.py``; a probe harness
+    that rebuilt either would measure itself.
     """
     from governed_bi.govern.bounds import ToolBounds
-    from governed_bi.serve.context import render_context, withheld_by_grant
-    from governed_bi.serve.fetch import inspect_schema, read_body
+    from governed_bi.serve.fetch import inspect_schema
 
-    assets = _probe_world_assets(world, declared)
-    resolved = __import__(
-        "governed_bi.govern.access", fromlist=["resolve_grant"]
-    ).resolve_grant(world.grant(), world.default_schema)
-    withheld = withheld_by_grant(assets, resolved)
-
-    # Every asset is treated as retrieved, which is the widest the renderer can be asked to be:
-    # a probe over a narrow shortlist would pass for a table retrieval simply never found.
-    # `by_type` and not only `selected`, because `_build_pieces` walks the type buckets and the
-    # closure to decide *which ids the block may name* and reads `selected` only for scoring —
-    # so a probe that filled `selected` alone renders an empty block and every attack passes.
-    by_type: dict[str, list[str]] = {}
-    for aid, asset in assets.items():
-        by_type.setdefault(str(getattr(asset.asset_type, "value", "")), []).append(aid)
-    retrieved = {
-        "selected": {aid: {"score": 1.0} for aid in assets},
-        "pulled_in": {},
-        "by_type": by_type,
-        "attributions": {},
-    }
-    block, _hash = render_context(
-        retrieved=retrieved,
-        assets_by_id=assets,
-        schemas=sorted({str(getattr(a, "schema", "") or "") for a in assets.values()} - {""}),
-        withheld=withheld,
-    )
-    bounds = ToolBounds(
-        licensed=world.licensed,
-        readable_assets=frozenset(assets) - withheld,
-        grant=resolved,
-        withheld=withheld,
-    )
+    assets = {a.id: a for a in _world_assets(world)}
+    bounds = ToolBounds(licensed=world.licensed, readable_assets=frozenset(assets))
     return {
-        "assets": assets,
         "bounds": bounds,
-        "context": block,
         "inspect_schema": lambda t: inspect_schema(t, bounds=bounds, assets=assets)[0],
-        "read_body": lambda t: read_body(
-            [t], bounds=bounds, assets=assets, max_chars=80_000
-        )[0],
     }
 
 
@@ -194,7 +117,7 @@ def _run_probe(probe: dict, surfaces: dict) -> ProbeResult:
             f"may_sample({target!r}) = {allowed}, expected {expect}",
         )
 
-    payload = surfaces["context"] if surface == "context" else surfaces[surface](target)
+    payload = surfaces[surface](target)
     leaked = [s for s in probe.get("forbidden") or () if str(s) in payload]
     absent = [s for s in probe.get("required") or () if str(s) not in payload]
     if leaked:
@@ -215,11 +138,11 @@ def run_disclosure_probes() -> tuple[ProbeResult, ...]:
         raise ValueError("duplicate probe id; ids key the report")
     if not any(str(p.get("kind")) == "benign" for p in probes):
         raise ValueError(
-            "no benign disclosure probes. A renderer that withheld everything would score a "
+            "no benign disclosure probes. A bound that refused everything would score a "
             "perfect disclosure rate, which is the argument the case suite already makes about "
             "its own controls."
         )
-    surfaces = _disclosure_surfaces(load_adversarial_suite().world, list(data.get("probe_asset") or ()))
+    surfaces = _disclosure_surfaces(load_adversarial_suite().world)
     return tuple(_run_probe(p, surfaces) for p in probes)
 
 
@@ -233,9 +156,9 @@ def probe_lines(results: tuple[ProbeResult, ...]) -> list[str]:
         "",
         f"disclosure probes — {len(results)} ({len(attacks)} attack, {len(benign)} benign)",
         f"  disclosure rate      {len(leaked) / len(attacks):.3f}  ({len(leaked)}/{len(attacks)})"
-        "   the principal was shown something the grant withholds",
+        "   a tool showed something outside the licensed set",
         f"  over-withheld rate   {len(hidden) / len(benign):.3f}  ({len(hidden)}/{len(benign)})"
-        "   the principal was denied something the grant allows",
+        "   a tool refused something the licensed set allows",
     ]
     by_surface: dict[str, list[ProbeResult]] = {}
     for r in results:

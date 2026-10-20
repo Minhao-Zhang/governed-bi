@@ -77,7 +77,7 @@ def unauthenticated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[An
 
 @pytest.fixture()
 def as_steward(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, FeedbackStore]:
-    """The switch on. ``api/auth.py`` returns one principal, so whoever reaches the port is the
+    """The switch on. ``api/auth.py`` admits every caller, so whoever reaches the port is the
     steward -- which is what the admin router's own docstring says the switch means."""
     monkeypatch.setenv(ADMIN_SWITCH, "1")
     return _client(tmp_path)

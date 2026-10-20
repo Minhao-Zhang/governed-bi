@@ -127,11 +127,10 @@ def refusal_histogram(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     mean once artifacts exist: a reader can see that the histogram does not add up and see which
     string is why.
 
-    ``by_stage`` is the question §4.2 of open-work.md asks — *retrieval missed, you may not, or
-    the engine decided to withhold* — and it is answerable only because ADR 0012 split
-    ``r_table_not_authorized`` out of the licensing count and ADR 0013 put the abstention
-    reasons in the same table. Unattributed reasons are **not** in ``by_stage``: there is no
-    stage to credit, and inventing one is the misattribution both ADRs exist to end.
+    ``by_stage`` is the question §4.2 of open-work.md asks — *retrieval missed or the engine
+    decided to withhold* — and it is answerable because ADR 0013 put the abstention reasons in the
+    same table. Unattributed reasons are **not** in ``by_stage``: there is no stage to credit,
+    and inventing one is the misattribution that ADR exists to end.
 
     Counted over the rows the arm classified ``refused``. A crash is not a refusal (``Outcome``
     keeps them apart), a cap is ``capped``, and a clarification is its own outcome — so a

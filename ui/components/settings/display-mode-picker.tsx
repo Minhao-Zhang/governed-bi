@@ -10,9 +10,8 @@
  * trip exists to make.
  *
  * The card states that it is not a permission. That sentence is load-bearing rather than decorative:
- * a reader who believes `business` withholds the SQL from anyone else has been misled, and
- * `docs/enterprise-fork.md` exists partly to stop this repository shipping something that looks
- * like a boundary and is not. See `lib/display-mode.ts` for the full argument.
+ * a reader who believes `business` withholds the SQL from anyone else has been misled. See
+ * `lib/display-mode.ts` for the full argument.
  */
 
 import { Eye, Ruler, Wrench } from "lucide-react";

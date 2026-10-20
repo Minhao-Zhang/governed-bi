@@ -452,11 +452,8 @@ def test_the_licensed_set_has_no_widening_method() -> None:
     anything authorised it. The fix is structural — there is no mutator to call, and
     assignment raises.
 
-    **Callables only**, which is a narrowing of this scan and not a loosening of the claim. It
-    used to walk every name in ``dir()``, so ADR 0012's ``withheld`` field — a frozenset that
-    *removes* assets from what the tools may name — failed it on the four letters ``with``. The
-    claim was always about a method that widens; a frozen dataclass's fields cannot widen
-    anything, which the assignment below is what proves.
+    **Callables only**: the claim is about a method that widens, and a frozen dataclass's fields
+    cannot widen anything, which the assignment below is what proves.
     """
     from governed_bi.govern.bounds import ToolBounds
 
@@ -478,17 +475,6 @@ def test_sample_rows_is_bounded_by_the_columns_table() -> None:
     assert bounds.may_sample("beer_factory.customers.city") is True
     assert bounds.may_sample("beer_factory.secrets.token") is False
     assert bounds.may_sample("customers") is False, "a bare id has no table to license"
-
-
-def test_a_resume_needs_a_matching_identity_and_two_unknowns_do_not_match() -> None:
-    """B9: a guessable ``thread_id`` was a handle on another caller's paused
-    clarification. ``None == None`` is the comparison that let v1's ``"unknown"``
-    corpus hash pass a gate, so it is explicitly not a match here."""
-    from governed_bi.govern.bounds import resume_authorised
-
-    assert resume_authorised(stored_identity="analyst-7", caller_identity="analyst-7") is True
-    assert resume_authorised(stored_identity="analyst-7", caller_identity="analyst-8") is False
-    assert resume_authorised(stored_identity=None, caller_identity=None) is False
 
 
 # ── identifiers ───────────────────────────────────────────────────────────────

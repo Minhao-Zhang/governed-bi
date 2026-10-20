@@ -42,15 +42,13 @@ from langchain_core.messages import AIMessage
 
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.graph import compile_durable
-from governed_bi.serve.resume import ResumeRejected, resume_clarification
+from governed_bi.serve.resume import resume_clarification
 from governed_bi.serve.scripted_model import ScriptedChatModel
 
 #: Long enough that a slow Windows file open is not a failure, short enough that a genuine block
 #: is reported in the same minute. The failure mode being bounded is a *block*, which no timeout
 #: value can make pass, so this only decides how long a broken run takes to say so.
 DEADLINE_S = 60.0
-
-TOKEN = "identity-restart"
 
 
 def _asking_model() -> ScriptedChatModel:
@@ -112,7 +110,6 @@ def _turn(thread: str) -> dict[str, Any]:
         "facet_route_hits": [("facet_schema", "sales", 1.0)],
         "messages": [],
         "usage": [],
-        "identity": {"token": TOKEN},
         "clarifications": [],
     }
 
@@ -180,7 +177,6 @@ def test_a_pause_is_resumed_by_a_graph_that_did_not_write_it(tmp_path: Path) -> 
             return resume_clarification(
                 graph,
                 config=_config(thread, _asking_model()),
-                identity={"token": TOKEN},
                 answer="2020",
             )
 
@@ -203,42 +199,34 @@ def test_a_pause_is_resumed_by_a_graph_that_did_not_write_it(tmp_path: Path) -> 
     )
 
 
-def test_the_identity_gate_reads_the_token_off_disk(tmp_path: Path) -> None:
-    """ADR 0006 B9 across the restart, which is the half a fresh process cannot fake.
+def test_a_resume_reaches_only_the_thread_it_names(tmp_path: Path) -> None:
+    """The thread id is the only handle, so an answer sent to another thread must not land here.
 
-    ``resume_clarification`` loads the checkpointed ``identity`` for the thread and compares it to
-    the caller's. In one process that comparison could pass on a value still in memory; here the
-    only copy is the one the saver wrote, so this asserts the gate is reading the file. A restart
-    that lost ``identity`` would fail *open* -- every caller authorised, because there is nothing
-    to disagree with -- which is why the wrong token is tested before the right one.
+    The pause is on disk and a second graph resumes some *other* thread with a different answer.
+    Whatever that does to the stray thread, the paused one must still be waiting for its own
+    answer afterwards, and must record only that answer.
     """
     db = tmp_path / "conversations.sqlite"
-    thread = "t-restart-identity"
+    thread = "t-restart-named"
     _pause_one(db, thread)
 
     def work() -> Any:
         with compile_durable(path=db) as graph:
-            with pytest.raises(ResumeRejected):
+            try:
                 resume_clarification(
-                    graph,
-                    config=_config(thread, _asking_model()),
-                    identity={"token": "wrong-token"},
-                    answer="2020",
+                    graph, config=_config("t-restart-stray", _asking_model()), answer="1999"
                 )
+            except Exception:  # noqa: BLE001 -- a thread with no pause may refuse; either is fine
+                pass
             return resume_clarification(
-                graph,
-                config=_config(thread, _asking_model()),
-                identity={"token": TOKEN},
-                answer="2020",
+                graph, config=_config(thread, _asking_model()), answer="2020"
             )
 
-    box = _bounded(work, "the identity gate on a fresh saver")
+    box = _bounded(work, "the resume of the named thread after a stray one")
     if "error" in box:
         raise box["error"]
-    done = box["value"]
-    assert any(
-        c.get("answer") == "2020" for c in (done.get("clarifications") or [])
-    ), "the authorised resume after a rejected one must still deliver the answer"
+    answers = [c.get("answer") for c in (box["value"].get("clarifications") or [])]
+    assert answers == ["2020"], f"the paused thread recorded {answers!r}, expected only its own answer"
 
 
 def test_the_paused_thread_is_the_only_one_on_disk(tmp_path: Path) -> None:

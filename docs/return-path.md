@@ -866,8 +866,8 @@ single coverage bucket is 7 questions — 0.52pp.
 | `wrong_value` (definition) | the metric resolver passes | T2 | exact |
 | prose that reaches the prompt | the new content rules | T0/T1 | exact |
 
-Every zero in that table is reported through `measure/stats.py::rule_of_three`, so `0/53` renders
-as "≤ 5.7%" and cannot be quoted as "0% false refusals". That function already exists.
+Every zero in that table is reported through `measure/stats.py::rule_of_three`, so `0/46` renders
+as "≤ 6.5%" and cannot be quoted as "0% false refusals". That function already exists.
 
 **What no tier reads is the answer.** A complaint whose gold tables were all licensed and whose
 answer was still wrong is a semantics defect, and the free ladder cannot see it. The panel says so

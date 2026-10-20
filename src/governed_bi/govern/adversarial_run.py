@@ -188,12 +188,7 @@ def run_adversarial_suite(
     beyond reading the suite file."""
     suite = suite or load_adversarial_suite()
     fixture = build_world_fixture(suite.world)
-    # The world's grant, not the caller's. `licensed`, `excluded` and `suspect` already come
-    # from the world and a case's expectation is written against all of them together; an
-    # authorization that a caller could swap out would make `r_table_not_authorized`'s
-    # expectations true of some runs and not others, which is a suite that measures the
-    # caller rather than the layer stack (ADR 0012 §9).
-    resolved = replace(policy or GovernancePolicy(), access_grant=fixture.grant)
+    resolved = policy or GovernancePolicy()
     return SuiteReport(
         version=suite.version,
         results=tuple(_run_case(case, fixture, resolved) for case in suite.cases),

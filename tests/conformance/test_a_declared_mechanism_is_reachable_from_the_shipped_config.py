@@ -26,12 +26,6 @@ refused is a vocabulary whose reachability nobody wrote down either way.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
-ROOT = Path(__file__).resolve().parent.parent.parent
-
 #: ``vocabulary -> where its shipped reachability is established``.
 #:
 #: The value is prose read by a person; the key is what the test below enumerates. A new
@@ -79,7 +73,7 @@ def test_the_served_policy_reaches_every_deterministic_guard_rule() -> None:
     from governed_bi.api.graph_app import serve_policy
     from governed_bi.govern.policy import KNOWN_GUARD_RULE_IDS
 
-    policy = serve_policy(ROOT)
+    policy = serve_policy()
     unreachable = sorted(
         rule for rule in KNOWN_GUARD_RULE_IDS if not policy.guard_rule_enabled(rule)
     )
@@ -88,53 +82,6 @@ def test_the_served_policy_reaches_every_deterministic_guard_rule() -> None:
         "guard_rules_enabled is silently False, which is how five rules that were fully "
         "line-covered ran on no served turn at all"
     )
-
-
-def test_an_access_policy_no_principal_can_hold_is_refused_at_startup() -> None:
-    """A role nobody holds is a deployment that starts, looks configured, and refuses all.
-
-    ``StaticRoleAccessPolicy.grant_for`` returns ``Grant()`` — ``reach=listed``, no tables —
-    for a principal holding none of the declared roles. Fail-closed, and silently: every
-    query refuses and nothing names the mismatch. ``authenticated_principal`` returns one
-    constant holding one role, so "a role nobody holds" is every role except that one.
-
-    Refused rather than warned for ``_require_keys``' reason: a policy file is read once and
-    enforced thousands of times, and there is no working deployment on the other side of the
-    warning.
-    """
-    import tempfile
-
-    from governed_bi.api.graph_app import ACCESS_POLICY_VAR, resolve_access_grant
-
-    directory = Path(tempfile.mkdtemp(prefix="reachable-role-"))
-    unreachable = directory / "unreachable.toml"
-    unreachable.write_text(
-        'version="1"\n[role.analyst]\ntables=["sales.orders"]\n', encoding="utf-8"
-    )
-    reachable = directory / "reachable.toml"
-    reachable.write_text(
-        'version="1"\n[role.local]\ntables=["sales.orders"]\n', encoding="utf-8"
-    )
-
-    import os
-
-    previous = os.environ.get(ACCESS_POLICY_VAR)
-    try:
-        os.environ[ACCESS_POLICY_VAR] = str(unreachable)
-        with pytest.raises(RuntimeError, match="No declared role is reachable"):
-            resolve_access_grant(ROOT)
-
-        os.environ[ACCESS_POLICY_VAR] = str(reachable)
-        grant = resolve_access_grant(ROOT)
-        assert "sales.orders" in grant.tables, (
-            "a role the principal does hold must still load; the check is about the "
-            "intersection being empty, not about roles being unusual"
-        )
-    finally:
-        if previous is None:
-            os.environ.pop(ACCESS_POLICY_VAR, None)
-        else:
-            os.environ[ACCESS_POLICY_VAR] = previous
 
 
 def test_every_closed_vocabulary_is_in_the_inventory() -> None:
