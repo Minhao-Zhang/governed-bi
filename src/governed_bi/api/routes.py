@@ -1,9 +1,10 @@
 """Custom REST routes mounted by ``langgraph.json``'s ``http.app`` (ADR 0007).
 
-Every route here is a read. A turn is served by the graph the platform streams, not by
-this app. :func:`make_app` takes the session, the turn log and the pending-clarification
-reader; :func:`app_from_environment` is the only place that resolves the environment, and
-it does so on the first request so importing this module needs no database.
+Four reads: ``/livez``, ``/readyz``, ``/capabilities`` and ``/clarifications/pending``. A turn
+is served by the graph the platform streams, not by this app. :func:`make_app` takes the session
+and the pending-clarification reader; :func:`app_from_environment` is the only place that
+resolves the environment, and it does so on the first request so importing this module needs no
+database.
 
 Nothing here asks for a credential. One operator on loopback is the deployment, so the
 port is the boundary. ``api/auth.py`` still refuses a client-supplied state write.
@@ -18,11 +19,8 @@ from typing import Any
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 
-from governed_bi.api.browse import DEFAULT_NODE_BUDGET, subgraph
-from governed_bi.api.browse_routes import make_router
 from governed_bi.model.provider import reasoning_effort_of
 from governed_bi.paths import REPO_ROOT
-from governed_bi.register.assets import ASSET_REGISTER
 
 __all__ = ["make_app", "app_from_environment", "app"]
 
@@ -30,49 +28,33 @@ __all__ = ["make_app", "app_from_environment", "app"]
 # ── the seam ─────────────────────────────────────────────────────────────────
 
 
-def make_app(session: Any, turn_log: Any, pending: Any) -> FastAPI:
-    """An app over the session, the turn log and the pending-clarification reader.
+def make_app(session: Any, pending: Any) -> FastAPI:
+    """An app over the session and the pending-clarification reader.
 
-    All three are required. A default would put the environment back in the constructor.
-    ``pending`` is separate from ``turn_log`` because an unanswered question has no turn yet.
+    Both are required. A default would put the environment back in the constructor.
     """
-    return _build_app(lambda: session, turn_log, pending)
+    return _build_app(lambda: session, pending)
 
 
 def app_from_environment() -> FastAPI:
     """The process entry's adapter: the same app, over dependencies resolved on first request.
 
     Lazy on purpose. ``langgraph.json`` points ``http.app`` at the module attribute below, so
-    this runs at import — and ``session_from_environment`` builds a Postgres connector and seeds
+    this runs at import, and ``session_from_environment`` builds a Postgres connector and seeds
     a corpus. Resolving it here would make importing this module require a database.
     """
     from governed_bi.api.graph_app import configure_logging, session_from_environment
-    from governed_bi.api.thread_turns import PendingClarifications, ThreadTurnLog
+    from governed_bi.api.thread_turns import PendingClarifications
 
     configure_logging()
-
-    # `ThreadTurnLog`: the audit surface reads a turn's record out of thread state now that
-    # `ServeState.turns` accumulates it, so there is no second store of the same thing. Its
-    # header says why that is readable in-process.
-    #
-    # `PendingClarifications`: the other half of the same store, and the half state does not
-    # record — a question nobody answered writes nothing, so its only trace is the platform's
-    # interrupt state. Constructed separately rather than folded into the reader above because
-    # the two hold different questions; they share the one in-process client seam, which is the
-    # thing that must not exist twice.
-    return _build_app(
-        session_from_environment, ThreadTurnLog(), PendingClarifications()
-    )
+    return _build_app(session_from_environment, PendingClarifications())
 
 
-def _build_app(
-    get_session: Callable[[], Any], turn_log: Any, pending: Any
-) -> FastAPI:
-    """Assemble the app from a session thunk, a turn log and a pending-question reader.
+def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
+    """Assemble the app from a session thunk and a pending-question reader.
 
     A thunk rather than a value, so :func:`make_app` can hand over a concrete object and
-    :func:`app_from_environment` can defer. That is the one difference between the two adapters,
-    and it lives here rather than in the routes.
+    :func:`app_from_environment` can defer.
     """
     app = FastAPI(title="governed-bi", version="2")
 
@@ -85,12 +67,9 @@ def _build_app(
     def readyz() -> dict[str, Any] | JSONResponse:
         """Ready when the session resolves with no fatal corpus problem; 503 if not.
 
-        Resolving the session is the check: under bare ``uvicorn`` it is lazy, and a missing DSN,
-        a missing corpus, or a model set without its credential raises there. No model at all is
-        a supported mode (``has_live_model: false``), so it is ready. The reason carries our own
-        ``RuntimeError`` text, which names variables, and only the type of anything else, which
-        may hold a DSN. Under ``langgraph dev`` the platform loads ``graph_app.py`` by path, so
-        the served graph holds its own session and this one is built from the same environment.
+        Resolving the session is the check. The reason carries our own ``RuntimeError`` text,
+        which names variables, and only the type of anything else, which may hold a DSN. No model
+        at all is a supported mode (``has_live_model: false``), so it is ready.
         """
         try:
             session = get_session()
@@ -107,61 +86,6 @@ def _build_app(
     def capabilities() -> dict[str, Any]:
         """What this server can actually do. The UI blocks on this response."""
         return capabilities_for(get_session())
-
-    @app.get("/corpus/assets")
-    def corpus_assets(type: str | None = None) -> list[dict[str, Any]]:
-        """Assets of one type as rows. ``type`` is validated against the register."""
-        return asset_rows(get_session(), type)
-
-    @app.get("/graph")
-    def er_graph(
-        schema: str | None = None,
-        focus: str | None = None,
-        radius: int = 1,
-        node_budget: int = DEFAULT_NODE_BUDGET,
-        kinds: str | None = None,
-    ) -> dict[str, Any]:
-        """Bounded ER relationship view (ADR 0009 D2). ``meta.truncated`` / ``meta.dropped`` are required."""
-        return _bounded(
-            _graph_payload(get_session()), schema, focus, radius, node_budget, kinds
-        )
-
-    @app.get("/knowledge-graph")
-    def knowledge_graph(
-        schema: str | None = None,
-        focus: str | None = None,
-        radius: int = 1,
-        node_budget: int = DEFAULT_NODE_BUDGET,
-        kinds: str | None = None,
-    ) -> dict[str, Any]:
-        """Bounded semantic graph. Same scope contract as ``/graph``."""
-        return _bounded(
-            _knowledge_payload(get_session()), schema, focus, radius, node_budget, kinds
-        )
-
-    # Audit surface under `/audit` (avoids colliding with LangGraph Server's `/runs`).
-
-    @app.get("/audit/turns")
-    def audit_turns(
-        limit: int = Query(50, ge=1, le=500),
-        thread_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Served turns, newest first; ``thread_id`` narrows to one conversation's transcript.
-
-        ``limit`` is refused outside 1..500 rather than clamped, because an unbounded limit walks
-        every thread and a clamp would silently answer a different question.
-        """
-        return turns_page(turn_log, limit=limit, thread_id=thread_id)
-
-    @app.get("/audit/turns/{turn_id}/trace")
-    def audit_trace(turn_id: str) -> dict[str, Any]:
-        """Turn fields grouped by owning stage, derived from ``RECORD_REGISTER``."""
-        return trace_for(turn_log, turn_id)
-
-    @app.get("/audit/corpus")
-    def audit_corpus() -> dict[str, Any]:
-        """Corpus inventory plus problems. ``fatal`` and ``degradations`` stay separate (ADR 0008 D9)."""
-        return corpus_audit(get_session())
 
     @app.get("/clarifications/pending")
     def pending_clarifications(
@@ -186,63 +110,21 @@ def _build_app(
             },
         }
 
-    # Mounted last so the app's own paths are declared first; the router's own ordering
-    # (`/schema/summary` before `/schema/{table_id}`) is stated in `make_router`.
-    app.include_router(make_router(_DeferredSession(get_session)))
     return app
-
-
-class _DeferredSession:
-    """A session that resolves on first attribute read.
-
-    :func:`make_router` takes a session and not a thunk, because that is the honest interface
-    for a caller that has one — and every caller except the process entry does. This is the
-    adapter for the one that does not: ``langgraph.json`` names a module attribute, so
-    :data:`app` is built at import, and resolving the environment there would make importing
-    this module require a database.
-
-    Attribute reads only, which is all the browse routes do (``assets_by_id``). Under
-    :func:`make_app` the thunk is a constant, so this forwards to the object the caller passed
-    and adds nothing but one attribute lookup.
-    """
-
-    __slots__ = ("_get",)
-
-    def __init__(self, get: Callable[[], Any]) -> None:
-        self._get = get
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._get(), name)
 
 
 # ── projections: a function of the session, testable without an app ──────────
 
 
 def models_for(session: Any) -> dict[str, Any]:
-    """The three model surfaces this run resolved, for the settings page.
+    """The three model surfaces this run resolved, read from ``knobs_resolved``.
 
-    **Read from ``knobs_resolved``, not off the client objects.** That mapping is what every
-    measurement row publishes, so a settings page built from it shows the identity a run is
-    actually recorded under — and a disagreement between screen and artifact becomes
-    impossible rather than merely unlikely. ``serve/runtime.py::model_id`` is where that
-    identity is derived, and its own note records what a wrong derivation cost.
-
-    ``embedding.id`` is **provider-qualified** (``bedrock:amazon.titan-embed-text-v2:0``) and is
-    reported verbatim rather than split on ``:``. The qualifier is part of the cache-key
-    identity (``retrieve.semantic.cache_key`` is ``model|dimensions|text``), and the id itself
-    can contain a colon — Titan's ``…-v2:0`` does — so parsing it would corrupt the one field
-    that keeps two gateways' vectors apart. ``provider`` is carried beside it instead.
-
-    ``utility.effort`` is observed off the live client because no knob records it: the register
-    declares ``llm_reasoning_effort`` for the agent surface only. Adding a second knob is not
-    this function's call to make (``register/knobs.py`` is the one home for a knob), so the
-    field is honest about being an observation and is ``None`` when there is no live model.
+    That mapping is what every measurement row publishes, so the screen and the artifact cannot
+    disagree. ``embedding.id`` is reported verbatim: it is provider-qualified and may contain a
+    colon. ``utility.effort`` is observed off the live client because no knob records it.
     """
     knobs = session.knobs_resolved
-    # `getattr`, matching how this module reads `connector.dialect`: these projections are
-    # documented as "a function of the session, testable without an app", and a hard attribute
-    # read here would make every existing test fake grow a field to keep passing — which is a
-    # test-maintenance tax for no assertion. A session without the handle reports no effort.
+    # `getattr`, so a test fake without the handle reports no effort rather than failing.
     utility = getattr(session, "utility_model", None)
     return {
         "agent": {
@@ -266,11 +148,8 @@ def models_for(session: Any) -> dict[str, Any]:
 def connection_for(session: Any) -> dict[str, Any]:
     """Which warehouse this engine is pointed at. **Credential-free by construction.**
 
-    The redaction is the connector's (``datasource/postgres.py::endpoint``), not this
-    function's — see that property for why it lives there. Here the only job is to be robust
-    about *shape*: a partial session or a test double may have no ``endpoint``, or one that is
-    not a mapping, and a settings page is not worth a 500. ``dialect`` is always present because
-    every connector declares it.
+    The redaction is the connector's (``datasource/postgres.py::endpoint``). Here the only job is
+    to tolerate a session or test double with no ``endpoint``, or one that is not a mapping.
     """
     out: dict[str, Any] = {"dialect": getattr(session.connector, "dialect", "postgres")}
     endpoint = getattr(session.connector, "endpoint", None)
@@ -280,18 +159,10 @@ def connection_for(session: Any) -> dict[str, Any]:
 
 
 def durable_checkpointer_configured() -> bool:
-    """Whether this deployment mounts a durable checkpointer, read off ``langgraph.json``.
+    """Whether ``langgraph.json`` declares a checkpointer, and its module is on disk.
 
-    **Derived, because the alternative is unobservable from here.** The platform injects the saver
-    it loads from ``checkpointer.path`` into every graph it runs (``langgraph_api/graph.py``
-    copies the compiled graph with the saver attached), and this custom app never holds that
-    graph — there is no object here to ask. What *is* in the process is the file that decides it,
-    and the module it names: if either stops existing the flag goes false without anyone editing
-    this line, which is what ADR 0009 D4 asks of a capability flag.
-
-    Both halves are checked. The field alone would report a checkpointer that fails to load; the
-    file alone would report one nothing mounts. Neither says the saver is *open* — a live handle
-    is what cannot be seen from here, and this is honest about being a configuration reading.
+    The platform injects the saver into the graphs it runs, and this app never holds one, so the
+    file that decides it is what can be read. It says nothing about whether the saver is open.
     """
     try:
         config = json.loads((REPO_ROOT / "langgraph.json").read_text(encoding="utf-8"))
@@ -305,14 +176,8 @@ def durable_checkpointer_configured() -> bool:
 def served_graph_declared() -> bool:
     """Whether ``langgraph.json`` declares the streamed graph, and its module is on disk.
 
-    The streaming transport is the platform's, not this app's, so there is no client object here
-    to ask -- the same bind as :func:`durable_checkpointer_configured`, and the same answer: read
-    the file that decides it and the module it names. Delete either and the flag goes false with
-    nobody editing this line, which is what makes it an observation.
-
-    It cannot see that the graph *imports*. A syntactically broken `serve` module would leave this
-    true while the server failed to start -- at which point nothing answers `/capabilities` either,
-    so the lie is unobservable.
+    Read off the file for the same reason as :func:`durable_checkpointer_configured`. It cannot
+    see that the graph imports, but then nothing answers ``/capabilities`` either.
     """
     try:
         config = json.loads((REPO_ROOT / "langgraph.json").read_text(encoding="utf-8"))
@@ -329,13 +194,6 @@ def _not_ready(reason: str) -> JSONResponse:
 
 def capabilities_for(session: Any) -> dict[str, Any]:
     """``/capabilities``' body. Every field is an observation (ADR 0007 §7)."""
-    #: Bound once so ``can_clarify`` cannot drift from ``can_stream``.
-    #
-    # Derived, not the literal `True` it was. It was left hardcoded because a `false` value would
-    # have made the UI mount the REST fallback against a route that no longer exists -- and that
-    # reason is spent: the fallback is deleted and `can_stream: false` now renders `<NoTransport/>`,
-    # which explains itself. So the last capability flag that described an intention rather than an
-    # observation is one too (ADR 0009 D4).
     can_stream = served_graph_declared()
     durable = durable_checkpointer_configured()
     return {
@@ -345,342 +203,14 @@ def capabilities_for(session: Any) -> dict[str, Any]:
         "edit_mode": "none",
         "can_stream": can_stream,
         "has_live_model": session.agent_model is not None,
-        # Kept: the existing header chip reads it, and it is the agent surface's id. The
-        # per-surface detail is under `models`, which is what the settings page renders.
         "model": session.knobs_resolved.get("chat_model"),
         "models": models_for(session),
-        # Which warehouse this engine is pointed at, credential-free — the connector redacts
-        # (`datasource/postgres.py::endpoint`). `getattr` for the same reason as `dialect`
-        # above: these projections must stay callable with a partial session.
         "connection": connection_for(session),
-        "can_scope": True,
-        "can_search": False,
-        # `can_stream and …` is kept, unchanged, from ADR 0009 D12 — the flag mounts the
-        # interrupt prompt, so it must not be true on a client that cannot show one. The
-        # expression is now *trivially* satisfied on its first term rather than load-bearing:
-        # the streamed transport is the only one there is, and it has the clarification pair.
-        # Still the right shape, because the term that can go false is the model.
+        # The flag mounts the interrupt prompt, so it must not be true without a model.
         "can_clarify": can_stream and session.agent_model is not None,
-        # Both derived (ADR 0009 D4: a flag is flipped by building the thing, not by editing the
-        # line). They were hardcoded `False` and described `POST /chat`'s process-local
-        # `InMemorySaver`, which is deleted; the served path checkpoints to SQLite through
-        # `langgraph.json`'s `checkpointer.path` → `serve/checkpointer.py` (ADR 0014).
         "checkpoint_durable": durable,
-        # One observation, not two: an `ask_user` interrupt *is* checkpoint state, and the
-        # resume reads it back out of the same store through the platform's `Command(resume=…)`.
-        # So this cannot be true while `checkpoint_durable` is false, and it must not be reported
-        # as a separate belief. The behaviour *was* watched end to end on 2026-08-19: a
-        # clarification paused, the process was killed with nothing left listening, a fresh one
-        # re-mounted the prompt from checkpointed interrupt state, and answering it resumed the
-        # turn to a correct answer (
-        # `git-history:docs/analysis/adopting-the-downstream-fork-2026-08-19.md`).
-        # `tests/serve/test_a_pause_survives_a_restart_on_disk.py` has covered the saver half
-        # since 2026-08-20: a real `ask_user` interrupt written onto `AsyncSqliteSaver` through
-        # `compile_durable`, then answered by a second graph over the same file. Its own header
-        # says that is deliberately not a process boundary, so nothing automated drives a real
-        # `ask_user` interrupt and resume across a process boundary through `AsyncSqliteSaver`.
+        # A paused `ask_user` interrupt is checkpoint state, so this is the same observation.
         "hitl_survives_process_restart": durable,
-    }
-
-
-def _provenance_status(asset: Any) -> str | None:
-    """``asset.audit.provenance.status``, or ``None`` when any link is absent.
-
-    Absent ≠ clean: ADR 0005 §6 requires "not measured" to stay distinguishable.
-    """
-    provenance = getattr(getattr(asset, "audit", None), "provenance", None)
-    status = getattr(provenance, "status", None)
-    return status.value if status is not None else None
-
-
-def asset_rows(session: Any, type: str | None = None) -> list[dict[str, Any]]:
-    """``/corpus/assets``' body.
-
-    ``provenance_status`` and ``excluded`` are required by the client's ``assetRowSchema``.
-    """
-    known = {t.value for t in ASSET_REGISTER}
-    if type is not None and type not in known:
-        return []
-    return [
-        {
-            "id": a.id,
-            "asset_type": a.asset_type.value,
-            "summary": a.summary,
-            "schema": getattr(a, "schema", None),
-            "provenance_status": _provenance_status(a),
-            "excluded": bool(getattr(getattr(a, "governance", None), "excluded", False)),
-        }
-        for a in sorted(session.assets_by_id.values(), key=lambda a: a.id)
-        if type is None or a.asset_type.value == type
-    ]
-
-
-def _graph_payload(session: Any) -> dict[str, Any]:
-    """ER graph: tables as nodes, join relationships as edges.
-
-    Drawn from ``CorpusStructure`` (ADR 0005 §2.8.2), not a second asset walk.
-    """
-    structure = session.structure
-    by_id = session.assets_by_id
-
-    edges: list[dict[str, Any]] = []
-    for left, right in sorted(structure.join_edges):
-        join_ids = list(structure.joins_by_edge.get((left, right), ()))
-        # Count distinct ON digests: bidirectional declarations yield two join assets.
-        distinct_relationships = len({str(j).rsplit("_", 1)[-1] for j in join_ids})
-        first = by_id.get(join_ids[0]) if join_ids else None
-        confidence = getattr(first, "confidence", None)
-        edges.append(
-            {
-                "id": join_ids[0] if join_ids else f"{left}->{right}",
-                "source": left,
-                "target": right,
-                "on": str(getattr(first, "on", "") or ""),
-                "cardinality": getattr(getattr(first, "cardinality", None), "value", None),
-                "confidence": confidence,
-                "low_confidence": bool(confidence is not None and confidence < 0.5),
-                "join_ids": join_ids,
-                "n_relationships": distinct_relationships,
-            }
-        )
-
-    nodes: list[dict[str, Any]] = []
-    for asset in sorted(by_id.values(), key=lambda a: a.id):
-        if asset.asset_type.value != "table":
-            continue
-        columns = [by_id.get(cid) for cid in (getattr(asset, "columns", ()) or ())]
-        columns = [c for c in columns if c is not None]
-        nodes.append(
-            {
-                "id": asset.id,
-                "label": getattr(asset, "physical_name", asset.id),
-                "physical_name": getattr(asset, "physical_name", asset.id),
-                "kind": "table",
-                "schema": structure.schema_tags.get(asset.id),
-                "row_count": getattr(asset, "row_count", None),
-                "n_columns": len(columns),
-                "excluded": bool(getattr(getattr(asset, "governance", None), "excluded", False)),
-                "has_suspect": any(
-                    getattr(getattr(c, "reliability", None), "status", None) is not None
-                    and getattr(getattr(c, "reliability", None), "status").value == "suspect"
-                    for c in columns
-                ),
-                "provenance_status": _provenance_status(asset),
-            }
-        )
-    return {"nodes": nodes, "edges": edges, "meta": {"n_nodes": len(nodes), "n_edges": len(edges)}}
-
-
-#: Edge relation label by source asset type (client vocabulary).
-_SEMANTIC_NODE_KINDS: frozenset[str] = frozenset(
-    {"table", "join", "metric", "term", "note", "few_shot", "negative_example"}
-)
-
-_RELATION_BY_SOURCE: dict[str, str] = {
-    "join": "join",
-    "metric": "measures",
-    "term": "grounds",
-    "few_shot": "exemplifies",
-    "column": "belongs_to",
-    "table": "has_column",
-}
-
-
-def _knowledge_payload(session: Any) -> dict[str, Any]:
-    """Semantic graph: every asset kind, edges from the reference closure.
-
-    Columns are re-pointed to their owning table (not drawn as nodes).
-    """
-    structure = session.structure
-    by_id = session.assets_by_id
-
-    def _semantic_id(asset_id: str) -> str | None:
-        """The node this id draws as: itself, its table, or nothing."""
-        kind = structure.asset_types.get(asset_id, "")
-        if kind in _SEMANTIC_NODE_KINDS:
-            return asset_id
-        if kind == "column":
-            parent = getattr(by_id.get(asset_id), "parent_table", None)
-            return parent if parent in by_id else None
-        return None
-
-    nodes = [
-        {
-            "id": asset.id,
-            "kind": asset.asset_type.value,
-            "label": getattr(asset, "physical_name", None) or getattr(asset, "name", None) or asset.id,
-            "excluded": bool(getattr(getattr(asset, "governance", None), "excluded", False)),
-            "provenance_status": _provenance_status(asset),
-            "confidence": getattr(asset, "confidence", None),
-            "schema": structure.schema_tags.get(asset.id),
-        }
-        for asset in sorted(by_id.values(), key=lambda a: a.id)
-        if asset.asset_type.value in _SEMANTIC_NODE_KINDS
-    ]
-
-    edges: list[dict[str, Any]] = []
-    seen_edges: set[tuple[str, str]] = set()
-    for source, targets in sorted(structure.references.items()):
-        kind = structure.asset_types.get(source, "")
-        relation = _RELATION_BY_SOURCE.get(kind, "related")
-        drawn_source = _semantic_id(source)
-        if drawn_source is None:
-            continue
-        for target in sorted(targets):
-            drawn_target = _semantic_id(target)
-            if drawn_target is None or drawn_target == drawn_source:
-                continue
-            if (drawn_source, drawn_target) in seen_edges:
-                continue
-            seen_edges.add((drawn_source, drawn_target))
-            confidence = getattr(by_id.get(source), "confidence", None)
-            edges.append(
-                {
-                    "id": f"{drawn_source}->{drawn_target}",
-                    "source": drawn_source,
-                    "target": drawn_target,
-                    "relation": relation,
-                    "confidence": confidence,
-                    "low_confidence": bool(confidence is not None and confidence < 0.5),
-                }
-            )
-    return {"nodes": nodes, "edges": edges, "meta": {"n_nodes": len(nodes), "n_edges": len(edges)}}
-
-
-def _bounded(
-    payload: dict[str, Any],
-    schema: str | None,
-    focus: str | None,
-    radius: int,
-    node_budget: int,
-    kinds: str | None,
-) -> dict[str, Any]:
-    """The scope contract both graph routes share, applied once."""
-    return subgraph(
-        nodes=payload["nodes"],
-        edges=payload["edges"],
-        schema=schema,
-        focus=focus,
-        radius=radius,
-        kinds=[k.strip() for k in kinds.split(",") if k.strip()] if kinds else None,
-        node_budget=node_budget,
-    )
-
-
-def corpus_audit(session: Any) -> dict[str, Any]:
-    """``/audit/corpus``' body. ``fatal`` and ``degradations`` stay separate (ADR 0008 D9)."""
-    counts: dict[str, int] = {}
-    for asset in session.assets_by_id.values():
-        counts[asset.asset_type.value] = counts.get(asset.asset_type.value, 0) + 1
-    structure = session.structure
-    return {
-        "corpus_content_hash": session.corpus_content_hash,
-        "assets": {"total": len(session.assets_by_id), "by_type": dict(sorted(counts.items()))},
-        "schemas": sorted(
-            {s for s in structure.table_schemas.values() if s},
-        ),
-        "structure": {
-            "join_edges": len(structure.join_edges),
-            "references": len(structure.references),
-            "schema_tags": len(structure.schema_tags),
-            "untagged_assets": len(session.assets_by_id) - len(structure.schema_tags),
-            "table_pairs_with_joins": len(structure.joins_by_edge),
-        },
-        "problems": {
-            "fatal": [str(p) for p in session.fatal_problems],
-            "degradations": [str(p) for p in session.degradations],
-            "n_fatal": len(session.fatal_problems),
-            "n_degradations": len(session.degradations),
-        },
-        "servable": not session.fatal_problems,
-    }
-
-
-# ── projections of the turn log ───────────────────────────────────────────────
-
-
-def turns_page(turn_log: Any, *, limit: int = 50, thread_id: str | None = None) -> dict[str, Any]:
-    """``/audit/turns``' body.
-
-    ``meta.log_dir`` is **where these turns come from**, and since ADR 0014 that is the
-    conversation checkpoint database rather than a directory of JSONL files — the audit surface
-    reads thread state, and there is no second store to name. The *key* keeps the old spelling
-    deliberately: the client's ``auditTurnsSchema`` requires ``log_dir`` and the audit footer
-    renders it, so renaming the field would break ``npm run check:api`` to relabel one caption.
-    The value is read off the seam (``turn_log.TURN_LOG_DIR``) and not from
-    ``serve/checkpointer.py``, because a route that names the production store directly would
-    report it for an app built over a fake.
-    """
-    turns = turn_log.list_turns(limit=limit, thread_id=thread_id)
-    return {
-        "turns": turns,
-        "meta": {
-            "n": len(turns),
-            "log_dir": str(turn_log.TURN_LOG_DIR),
-            "columns": list(turn_log.SUMMARY_FIELDS),
-        },
-    }
-
-
-def trace_for(turn_log: Any, turn_id: str) -> dict[str, Any]:
-    """``/audit/turns/{id}/trace``' body: fields grouped by their register-declared owner."""
-    from governed_bi.register.record import RECORD_REGISTER, missing_required, undeclared_keys
-    from governed_bi.register.stages import Stage
-
-    entry = turn_log.get_turn(turn_id)
-    if entry is None:
-        return {"found": False, "turn_id": turn_id}
-    record = entry.get("record") or {}
-    absent = missing_required(record)
-    # The turn carries the thread it belongs to, so this is one keyed read and not a second scan.
-    # A turn recorded without one (nothing writes that path today) reports no clarifications
-    # rather than searching every thread for it.
-    thread_id = record.get("thread_id")
-    clarifications = (
-        turn_log.clarifications_of(str(thread_id), turn_id) if thread_id else []
-    )
-
-    by_stage: dict[str, list[dict[str, Any]]] = {}
-    for field in RECORD_REGISTER:
-        by_stage.setdefault(field.owner.value, []).append(
-            {
-                "name": field.name,
-                "tier": field.tier.value,
-                "value": record.get(field.name),
-                "present": field.name in record and record.get(field.name) is not None,
-                "required_and_absent": field.name in absent,
-                "why": field.why,
-            }
-        )
-
-    order = [stage.value for stage in Stage]
-    stages = [
-        {"stage": name, "fields": by_stage[name]}
-        for name in sorted(by_stage, key=lambda n: (order.index(n) if n in order else len(order), n))
-    ]
-    return {
-        "found": True,
-        "turn_id": turn_id,
-        "question": entry.get("question"),
-        "answer_text": entry.get("answer_text"),
-        "outcome": entry.get("outcome"),
-        "asked_at": entry.get("asked_at"),
-        "stages": stages,
-        # What the reader was asked mid-turn and what they said. Not a member of ``stages``,
-        # because that is ``RECORD_REGISTER`` grouped by owning stage and this is not a record
-        # field -- it is the ``clarifications`` channel, read beside the envelope rather than
-        # joined into it (``get_turn`` returns the five keys ``record_node`` stored, and
-        # `tests/api/test_the_audit_surface_reads_thread_state.py` holds it to them).
-        #
-        # It belongs on the trace for the reason ``ledger`` does: where a clarification happened,
-        # the statement above was chosen *because* of the answer below, so a trace without it
-        # cannot explain the SQL it is showing.
-        "clarifications": clarifications,
-        "ledger": (record.get("execution") or {}).get("attempts") or [],
-        "terminal": (record.get("execution") or {}).get("terminal"),
-        "missing_required": sorted(absent),
-        "record": record,
-        "undeclared_keys": sorted(undeclared_keys(record)),
     }
 
 

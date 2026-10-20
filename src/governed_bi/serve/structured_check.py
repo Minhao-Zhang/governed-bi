@@ -46,7 +46,7 @@ def percentage_scale_suffix(question: str | None, sql: str | None) -> str:
     that broke before a verdict existed. The reply the model is holding in that case is a
     verdict, and appending engine advice to a verdict mixes two surfaces this repository keeps
     apart (``_fetch`` decides a tool's status by comparing the payload against
-    ``OUT_OF_SCOPE_MESSAGE`` by identity; the audit surface shows the reply verbatim). There is
+    ``OUT_OF_SCOPE_MESSAGE`` by identity; the transcript shows the reply verbatim). There is
     also nothing to check: a statement that never ran produced no answer to be mis-scaled.
     Deciding it here rather than at the call site keeps the whole rule in the tested unit
     instead of splitting it across a caller's ``if``.

@@ -10,22 +10,9 @@ import { canStream } from "@/lib/capabilities";
 import { LANGGRAPH_URL, USE_MOCKS } from "@/lib/env";
 
 /**
- * The chat cockpit's transport selector. Each transport owns exactly one hook, so
- * we mount whichever container fits the environment (mounting different components
- * is fine — calling hooks conditionally is not):
- *
- *  - USE_MOCKS (no backend URL)      → <MockChat/>   (synthetic, keeps the banner)
- *  - backend + can_stream === true   → <StreamChat/> (useStream)
- *  - backend + can_stream === false  → <NoTransport/> (there is no chat here; say so)
- *
- * **The `POST /chat` fallback is gone**, with the engine route it called. There is now one
- * chat transport against a real engine, so `can_stream: false` is not a degraded mode — it
- * is an engine that cannot serve chat at all, and the third branch exists to say that
- * instead of rendering a composer that can never answer.
- *
- * `USE_MOCKS` is a build-time constant, so the early return never changes across
- * renders; the capabilities probe lives in its own child so its hook runs
- * unconditionally.
+ * Picks the transport: <MockChat/> with no backend URL, <StreamChat/> when the backend reports
+ * `can_stream`, else <NoTransport/>, since there is no non-streaming chat to fall back to.
+ * `USE_MOCKS` is a build-time constant, so the early return never changes between renders.
  */
 export function ChatPanel() {
   if (USE_MOCKS) return <MockChat />;
@@ -54,13 +41,7 @@ function ChatSkeleton() {
   );
 }
 
-/**
- * The attached backend cannot stream, so this app has no way to ask it anything.
- *
- * Deliberately not a composer: there is no transport behind it. The copy names the flag,
- * the address it was read from, and the fact that the read-only surfaces are unaffected —
- * everything a reader needs to tell "the engine is misconfigured" from "chat is broken".
- */
+/** The backend cannot stream, so there is no composer: nothing could answer it. */
 function NoTransport() {
   return (
     <div className="flex h-full items-center justify-center p-6">
@@ -75,8 +56,7 @@ function NoTransport() {
           fallback, so no question can be answered from here.
         </p>
         <p className="text-sm text-muted-foreground">
-          Point the UI at a server started with <code className="text-xs">langgraph dev</code>. The
-          Schema, Corpus and Audit views read plain HTTP routes and still work.
+          Point the UI at a server started with <code className="text-xs">langgraph dev</code>.
         </p>
       </div>
     </div>

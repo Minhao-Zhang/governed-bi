@@ -46,11 +46,8 @@ export interface ChatMessage {
   role: ChatRole;
   text?: string;
   answer?: AnswerView;
-  /** The stage-event trace captured live, kept on the finished turn so the
-   * timeline persists after the answer lands. There is no second source: the v2
-   * record carries `execution` (an attempt ledger with no stage names), not the
-   * stage events, so a turn whose live trace was missed has no trace at all —
-   * see the note in <ProvenanceDrawer/>. */
+  /** The stage-event trace captured live, kept on the finished turn. The record carries only
+   * the attempt ledger, not the stage events, so a turn whose live trace was missed has none. */
   steps?: TimelineStep[];
 }
 

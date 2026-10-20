@@ -38,7 +38,7 @@ build in the present tense after that build was deleted.
 | [0006](adr/0006-execution-time-governance.md) | Execution-time governance |
 | [0007](adr/0007-http-surface-and-the-ui-contract.md) | HTTP surface and the UI contract |
 | [0008](adr/0008-identifiers-end-to-end.md) | Identifiers end to end |
-| [0009](adr/0009-browsing-and-filtering-api.md) | Browsing, filtering, and relationship API |
+| [0009](adr/0009-browsing-and-filtering-api.md) | Browsing, filtering, and relationship API — **reversed**; the browse routes and every page but chat are deleted |
 | [0010](adr/0010-live-stage-events.md) | Live stage events |
 | [0011](adr/0011-two-model-split-and-facet-query-rewriting.md) | Two models and a query per facet |
 | [0012](adr/0012-access-seam-principal-and-authorization.md) | The access seam: principal, authorization, and the Layer 6 split — **reversed**; the seam is deleted and the Layer 6 split stays |

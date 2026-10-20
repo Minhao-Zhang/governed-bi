@@ -1,23 +1,9 @@
-"""``tools/smoke_api.py``, run against four assets in memory.
+"""``tools/smoke_api.py``, run against assets in memory.
 
-**Why a script gets a test.** It is a live-stack tool, it is not in CI, and no test imported it —
-so when the C5 refactor turned `routes.capabilities()`, `routes.er_graph()`,
-`routes.knowledge_graph()`, `routes.corpus_assets()`, `routes._session()`,
-`browse_routes.schema_summary()` and `browse_routes.column_related()` into closures inside
-`make_app`, every one of those calls became an `AttributeError` and the suite stayed green. The
-script was broken for as long as the refactor was in the tree and the only way to find out was to
-run it against a Postgres server and a corpus.
-
-That is the failure this file removes, and the removal is a design change rather than a test: the
-checks moved into :func:`~tools.smoke_api.run_checks`, which takes a client. The environment lives
-in ``main()`` alone. So the assertions the script makes about the payload shapes can run over an
-in-memory session with no database, no model, no corpus on disk and no credential, and the only
-thing left un-exercised is the environment adapter — which is the part a smoke script exists to
-exercise by hand.
-
-**This is not a substitute for running it.** It cannot tell you the real corpus produces a
-connected graph or that a real column resolves. It tells you the script still calls things that
-exist and still asserts what it says it asserts.
+The script is a live-stack tool that is not in CI, so its checks live in ``run_checks``, which
+takes a client, and this file runs them over an in-memory session with no database, model or
+credential. It proves the script still calls routes that exist and asserts what it says; it is not
+a substitute for running it against the real corpus.
 """
 
 from __future__ import annotations
@@ -51,21 +37,11 @@ def smoke_api():
 
 
 def _session() -> Any:
-    """Two joined tables, their columns, and a term. The smallest corpus the script's checks fit.
-
-    **Two tables and a join, deliberately.** The script asserts ``edges or not nodes`` on
-    ``/graph`` — "truncation is bounded AND connected" — and a one-table corpus produces one node
-    and no edges, which fails a check that is not wrong about the lake it was written for. The
-    fixture is the shape the real corpus has rather than the assertion being loosened to fit a
-    smaller one: this file exists to prove the script still runs, not to re-decide what it checks.
-    (The check *is* imprecise — an isolated table is a fact about a corpus, not a defect — and
-    that is reported rather than changed here.)
-    """
+    """One table, its column and a term: enough for the session to resolve with no fatal problem."""
     from governed_bi.corpus.schema import (
         AssetType,
         Binding,
         ColumnAsset,
-        JoinAsset,
         SchemaAsset,
         TableAsset,
         TermAsset,
@@ -77,31 +53,11 @@ def _session() -> Any:
         SchemaAsset(id="beer", name="beer", summary="beer brands and sales"),
         TableAsset(
             id="beer.brands", schema="beer", physical_name="brands",
-            summary="Brands of root beer.",
-            columns=("beer.brands.name", "beer.brands.id"),
+            summary="Brands of root beer.", columns=("beer.brands.name",),
         ),
         ColumnAsset(
             id="beer.brands.name", schema="beer", parent_table="beer.brands",
             physical_name="name", summary="Brand name.",
-        ),
-        ColumnAsset(
-            id="beer.brands.id", schema="beer", parent_table="beer.brands",
-            physical_name="id", summary="Brand id.",
-        ),
-        TableAsset(
-            id="beer.sales", schema="beer", physical_name="sales",
-            summary="Sales per brand.",
-            columns=("beer.sales.brand_id",),
-        ),
-        ColumnAsset(
-            id="beer.sales.brand_id", schema="beer", parent_table="beer.sales",
-            physical_name="brand_id", summary="The brand sold.",
-        ),
-        JoinAsset(
-            id="beer.sales__beer.brands__brand",
-            left_table="beer.sales", right_table="beer.brands",
-            on="beer.sales.brand_id = beer.brands.id",
-            summary="Each sale is of one brand.",
         ),
         TermAsset(
             id="term.root_beer", name="root beer", summary="root beer, sarsaparilla",
@@ -120,44 +76,23 @@ def _session() -> Any:
     return session
 
 
-class _TurnLog:
-    """The turn-log surface ``make_app`` reads, in memory. Readers only -- nothing appends."""
-
-    TURN_LOG_DIR = Path("/nowhere")
-    SUMMARY_FIELDS: tuple[str, ...] = ("turn_id", "outcome")
-
-    def list_turns(self, limit: int = 50, thread_id: str | None = None) -> list[dict[str, Any]]:
-        return []
-
-    def get_turn(self, turn_id: str) -> dict[str, Any] | None:
-        return None
-
-    def clarifications_of(self, thread_id: str, turn_id: str) -> list[dict[str, Any]]:
-        return []
-
-
 def test_every_check_the_script_makes_still_passes(smoke_api) -> None:
-    """The whole of ``run_checks``, over an app built from :func:`_session`.
+    """The whole of ``run_checks``, over the four routes of an app built from :func:`_session`.
 
-    Asserts the returned failure list is empty **and** that the run printed something: a
-    ``run_checks`` that returned early would report no failures, which is the shape the script's
-    own `PASS` line would then print.
-
-    The client is built here rather than through the script's own helper, because the helper's
-    only remaining job was to attach a transport credential and the engine requires none
-    (2026-08-13). ``run_checks`` takes a client, which is the seam that matters.
+    Asserts the failure list is empty **and** that every check ran: a ``run_checks`` that returned
+    early would report no failures.
     """
     from fastapi.testclient import TestClient
 
     from governed_bi.api.routes import make_app
 
     lines: list[str] = []
-    app = make_app(_session(), _TurnLog(), _Pending())
+    app = make_app(_session(), _Pending())
     failures = smoke_api.run_checks(TestClient(app), out=lines.append)
 
     assert not failures, "\n".join(lines)
     checks = [line for line in lines if line.startswith(("  ok  ", "  FAIL"))]
-    assert len(checks) >= 15, (
+    assert len(checks) >= 9, (
         f"the script made {len(checks)} checks, which is fewer than it declares. A `run_checks` "
         f"that returns early reports no failures and prints PASS:\n" + "\n".join(lines)
     )
@@ -166,13 +101,7 @@ def test_every_check_the_script_makes_still_passes(smoke_api) -> None:
 class _Pending:
     """What ``make_app`` asks of the pending-question reader: nothing is waiting.
 
-    Empty rather than seeded. These tests are about the app's other surfaces, and a fake holding
-    rows would turn any assertion about them into an assertion about this class.
-    ``tests/api/test_the_pending_queue_reads_interrupt_state.py`` is where the queue itself is
-    pinned, against a fake that enforces ``status`` and ``select``.
-
-    Self-contained -- it does not import ``PendingPage`` -- because ``make_app`` is imported
-    inside the test bodies here, so there is no module-level engine import to sit beside.
+    The queue itself is pinned in ``tests/api/test_the_pending_queue_reads_interrupt_state.py``.
     """
 
     PENDING_FIELDS: tuple[str, ...] = ("asked_at", "question")
@@ -184,3 +113,11 @@ class _Pending:
 
     def pending(self, *, limit: int = 50, offset: int = 0) -> Any:
         return self._Page()
+
+
+def test_the_help_is_the_module_docstring_and_exits_zero(smoke_api, capsys) -> None:
+    """``--help`` must not need a database: it exits before the environment is read."""
+    with pytest.raises(SystemExit) as raised:
+        smoke_api.main(["--help"])
+    assert raised.value.code == 0
+    assert "/clarifications/pending" in capsys.readouterr().out

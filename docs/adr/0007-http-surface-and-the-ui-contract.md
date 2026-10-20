@@ -9,9 +9,9 @@ already marked inline in the body and nowhere in the header):*
   it — the envelope, `register/stages.py` as the authority, and the boundary being three places
   rather than one.
 - **§7**'s capability set was **re-decided by** [ADR 0009](0009-browsing-and-filtering-api.md)
-  (D4: a flag is an observation, flipped by building the thing; D12: `can_clarify` binds to both
-  the tool and the model) and **amended by** [ADR 0014](0014-one-conversation-store.md) §3a for
-  the two durability flags.
+  (`can_clarify` binds to both the tool and the model) and **amended by**
+  [ADR 0014](0014-one-conversation-store.md) §3a for the two durability flags. 0009 is reversed:
+  `can_scope` and `can_search` went with the browse routes, and the app mounts four reads.
 - **§6**'s deferred resume-identity gap was **closed 2026-08-18**, forced by retiring
   `POST /chat/resume`; see the note in that section.
 - **Amendment 3**'s statement of what an unauthenticated port costs got *wider* under
@@ -31,8 +31,8 @@ dependency surface survived the deletion and the code did not.
 
 `docs/openapi.json` is still tracked and is, at the time of this decision, v1's spec for all
 twelve routes. It is the spec-of-record for the rebuild, not a historical artifact. (It has
-since been rewritten: it carries `"version": "2"` and the fourteen GET paths the app actually
-mounts. `AnswerResponse` left with `POST /chat` on 2026-08-18.)
+since been rewritten: it carries `"version": "2"` and the four routes the app mounts,
+`/livez`, `/readyz`, `/capabilities` and `/clarifications/pending`.)
 
 ## The decisions
 
@@ -118,13 +118,11 @@ its own ADR.
 > reintroduced in one of this ADR's two acceptance criteria. It now fails on an empty scan and on
 > a scan far below the engine's size.
 >
-> **`tier` is not banned by name, because it is also a real field property.** `RecordField.tier`
-> off `RECORD_REGISTER` says *why a field is recorded* (`identity` | `treatment` | `decision` |
-> `outcome` | `cost` | `health`) and `/audit/turns/{id}/trace` serialises it per register row;
-> `ui/lib/schemas.ts`'s `auditTraceFieldSchema` documents the distinction from the client side.
-> What §3 forbids is the *reliability* tier v1's `AnswerView` required on the answer card. The
-> test pins the register's single production site by file and text and fails on any second
-> producer of a `"tier"` key under `src/`, so bringing the badge back is still a deliberate edit.
+> **`tier` is checked as a produced key, not as a word.** `RecordField.tier` off
+> `RECORD_REGISTER` says *why a field is recorded* (`identity` | `treatment` | `decision` |
+> `outcome` | `cost` | `health`), which §3 does not forbid. Nothing under `src/` serialises a
+> `"tier"` key any more, so the test fails on any producer of one, and bringing the badge back
+> is still a deliberate edit.
 >
 > `openapi.json`'s `AnswerResponse` was v1's `AnswerView` verbatim, eight required fields the
 > engine produces none of, and is replaced with the shape this section specifies.
@@ -268,15 +266,14 @@ single-operator local tool, and it gets its own decision rather than an improvis
 
 ### 7. `/capabilities` reports what is true, and false is a legitimate answer
 
-It is the UI's **first** request; without it the chat panel pins at a skeleton forever. Twelve
-fields *(fourteen as of 2026-08-22 — see the correction after this paragraph)*, and each is an
-observation: `environment`, `dialect`, `model`, `has_live_model` iff a
+It is the UI's **first** request; without it the chat panel pins at a skeleton forever. Each
+field is an observation: `environment`, `dialect`, `model`, `has_live_model` iff a
 model is actually configured, `can_stream` true, **`can_edit` false** with `edit_mode: "none"`
 (the curator is out of scope), `can_clarify` iff the `ask_user` tool is bound *and* a model is
 configured — re-decided the next day, and [ADR 0009](0009-browsing-and-filtering-api.md) D12 is
 what `capabilities_for` computes now: `can_stream and agent_model is not None`, because the flag
-is the switch that mounts the prompt and the REST transport has no prompt to mount —
-`can_scope` true, `can_search` false, and the two durability flags
+is the switch that mounts the prompt and the REST transport has no prompt to mount — and the
+two durability flags
 `checkpoint_durable` / `hitl_survives_process_restart`, both derived from whether
 `langgraph.json` mounts a durable checkpointer ([ADR 0014](0014-one-conversation-store.md) §3a).
 
@@ -289,54 +286,32 @@ is the switch that mounts the prompt and the REST transport has no prompt to mou
 > (2026-08-19). Tracked in [`docs/open-work.md`](../open-work.md) §4.4. `can_clarify`'s
 > expression is unchanged and still right; the transport it excluded is simply gone.
 
-Reporting a capability **false** is not a defeat. `can_search` is false and the UI degrades to a
-client-side index over what it already has, which is a route we do not have to build to get end
-to end. Two flags reporting the *server* rather than the mounted client is the failure this
-field set is shaped against — hence `can_clarify` binding to both the tool and the model, and
+Reporting a capability **false** is not a defeat. Two flags reporting the *server* rather than
+the mounted client is the failure this field set is shaped against — hence `can_clarify` binding to both the tool and the model, and
 hence the durability flags saying what the checkpointer actually does.
 
-> **Two fields short, and one is no longer asserted. Recounted 2026-08-22.**
-> `api/routes.py::capabilities_for` returns **fourteen** keys. The two the enumeration above
-> never mentions are **`models`** (`models_for(session)` — the per-surface model detail the
-> settings page renders, beside the single `model` id the header chip reads) and
+> **Two fields the enumeration above never mentions** are **`models`** (`models_for(session)` —
+> the per-surface model detail, beside the single `model` id the header chip reads) and
 > **`connection`** (`connection_for(session)` — which warehouse this engine is pointed at,
 > credential-free, redacted by `datasource/postgres.py::endpoint`). Both are observations, so
 > the principle of this section holds; the count did not.
 >
 > `can_stream` is also no longer the flat `true` written above. It is derived from
 > `served_graph_declared()`, for this section's own reason: a hardcoded flag describing an
-> intention rather than an observation is the failure the field set is shaped against
-> ([ADR 0009](0009-browsing-and-filtering-api.md) D4). A `false` now renders `<NoTransport/>`,
+> intention rather than an observation is the failure the field set is shaped against.
+> A `false` now renders `<NoTransport/>`,
 > which explains itself, instead of mounting a fallback against a deleted route.
 
-Required for the chat path: `/capabilities` plus the graph. Ungated and therefore required
-for the other pages not to error: `/health`, `/schema/summary`, `/corpus/assets`, `/graph`,
-`/knowledge-graph` — all cheap projections of the `Session`'s assets and, now that
-`CorpusStructure` exists, the two graph routes are edges plus assets rather than new work.
-
-> **Amendment 1 (2026-08-04): `/health` is deleted; `/audit/corpus` is the ungated corpus
-> projection.** The two routes answered one question from one set of session fields — counts by
-> type, servable, `n_fatal`, `n_degradations`, the problem strings — and `/audit/corpus` answers
-> it better on the only field they shaped differently: it returns `fatal` and `degradations` as
-> separate lists, which ADR 0008 D9 requires, where `/health` flattened both into `findings`.
->
-> `/health`'s three remaining fields were hardcoded zeros. Two of them (`n_suspect_columns`,
-> `n_low_confidence_joins`) are true of an uncurated corpus. The third was not:
-> `governance.excluded` is a real per-asset field that `/corpus/assets` reads on every row and
-> the browser's "Hide excluded" control filters on, so a single marked asset would have had this
-> route report `0` beside a page showing the badge.
->
-> Two surfaces over one fact is two things to keep in step; the reason to keep the pair was
-> three counters, and one of them was a latent disagreement. `/livez` is unaffected — it is the
-> liveness probe, and unlike `/health` it deliberately does not touch the session, so it is the
-> one that was always right for that job.
+**The routes that remain.** The chat page needs `/capabilities` plus the platform's thread API.
+`/clarifications/pending` lists unanswered `ask_user` interrupts, and `/livez` and `/readyz` are
+the probes a deployment calls. Every other custom read went with the pages that used it
+([ADR 0009](0009-browsing-and-filtering-api.md), reversed).
 
 ### Amendment 3 (2026-08-13): the transport authenticates nobody
 
 **The original decision said nothing about authentication, and that was the state of the surface
 for nine days.** The 2026-08-10 audit named it — A1, "~82 routes with no authentication", and A7,
-"`/audit/turns` and `/audit/turns/{id}/trace` return every thread's SQL, full records, and an
-absolute log path, unauthenticated". Both were closed on 2026-08-12 by a shared key in
+"every thread's SQL and full records are readable, unauthenticated". Both were closed on 2026-08-12 by a shared key in
 `GOVERNED_BI_API_KEY`, compared in constant time, required on every route but `GET /livez`. That
 change was never written down here.
 
@@ -353,11 +328,9 @@ makes the primary debugging client unusable, on a port that is already loopback-
 to cost more than it bought. The maintainer chose reachability over transport auth.
 
 **What that costs, stated rather than dropped.** Anything that can open a socket to the port can
-drive the engine: post a turn — over the platform's own `/threads` and `/runs`, since 2026-08-18
-the only way to serve one — execute governed SQL against the configured database, and read
-`/audit/turns`, which returns every thread's SQL, the full turn records, and an absolute path to
-the conversation store on disk. That last one got *wider* on 2026-08-18: a `values` frame or a
-`get_state` now carries every prior turn's record rather than the newest, because
+drive the engine: post a turn over the platform's own `/threads` and `/runs`, execute governed
+SQL against the configured database, and read any thread's state, which carries every prior
+turn's record rather than the newest, because
 `ServeState.turns` accumulates ([ADR 0014](0014-one-conversation-store.md), audit B1). The CORS origin list in `langgraph.json` is the only remaining
 narrowing, and it narrows browsers only. **The port is the boundary.** A deployment that is not
 one operator on loopback needs authentication in front of this engine.
@@ -378,7 +351,7 @@ distinguish two callers, and it is a function of nothing now because there is no
 - The engine gains `src/governed_bi/api/`, and `tools/check_imports.py`'s already-declared
   `api` layer finally has something in it.
 - The UI's answer card, reliability stamp and step vocabulary change. Its transport,
-  clarification flow, provenance drawer and schema pages do not.
+  clarification flow and provenance drawer do not.
 - `docs/openapi.json` must be regenerated from the implementation rather than kept by hand;
   a spec no process checks is the defect this repository keeps rediscovering.
 - Nothing here makes a run quotable on its own. `facet_degraded` is the gate: it is `True`

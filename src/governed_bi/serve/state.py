@@ -200,25 +200,12 @@ class Answer(TypedDict):
 
 
 class TurnEntry(TypedDict, total=False):
-    """One finished turn's audit envelope — the five keys the deleted JSONL log wrote.
-
-    These five keys were the JSONL log's line shape, kept when the log was deleted because the
-    audit surface already read them and ``api/thread_turns.summarise_turn`` still projects them.
-    ``api/graph_app.record_node`` builds one envelope; there is no second sink left to disagree
-    with it.
+    """One finished turn's envelope, built only by ``api/graph_app.record_node``.
 
     ``question`` / ``answer_text`` sit beside ``record`` rather than inside it because merged
-    in, every record read back out fails ``undeclared_keys``.
-
-    ``total=False`` and not ``NotRequired`` per key: ``record_node`` always fills all five, so
-    absence here means "an older row", not "optional field", and a reader must tolerate it
-    either way.
-
-    Three fields are ``| None`` because ``record_node`` really writes ``None`` into them
-    (the ``TurnEntry`` literal in ``api/graph_app.record_node``) — a refusal has no prose, and a
-    turn derived from a non-text message has no question. Declaring them ``str`` would describe a shape the only writer
-    violates, and the readers (``api/thread_turns.summarise_turn``, the audit routes) already
-    treat null as "not present".
+    in, every record read back out fails ``undeclared_keys``. Three fields are ``| None`` because
+    ``record_node`` writes ``None`` into them: a refusal has no prose, and a turn derived from a
+    non-text message has no question.
     """
 
     #: UTC isoformat to the second, stamped when the turn was recorded.
@@ -236,9 +223,7 @@ class TurnEntry(TypedDict, total=False):
     compacted: dict[str, Any]
     #: Turns dropped from this thread's history *before* this row, because
     #: :data:`MAX_TURNS_RETAINED` bit. Carried on the **oldest surviving** row, which is where the
-    #: gap is. ADR 0009 D2: a cap that says nothing reads as full coverage, and ``/audit/turns``
-    #: has no truncation field on the wire — so this is the only place the elision is stated, and
-    #: surfacing it is owed by whoever next changes that response shape.
+    #: gap is: a cap that says nothing reads as full coverage.
     elided_turns: int
 
 
@@ -281,11 +266,8 @@ COMPACT_MIN_VALUE_BYTES = 256
 #: reads history today, which is why the elision is also *stated* on the row above the gap.
 MAX_TURNS_RETAINED = 25
 
-#: Record keys the audit list view projects that the register does **not** require. Mirrors
-#: ``api/thread_turns.SUMMARY_FIELDS`` and ``summarise_turn``'s ``licensed_count``, spelled here
-#: rather than imported because ``serve`` sits below ``api`` in the layering;
-#: ``tests/serve/test_a_thread_keeps_every_turn.py`` asserts the two agree, so the copy cannot
-#: drift silently.
+#: Record keys a one-line summary of a past turn needs that the register does **not** require,
+#: so an archived row can still be listed without its checkpoint.
 _LIST_VIEW_KEYS: frozenset[str] = frozenset({
     "terminal_reason", "schemas", "generated_sql", "latency_sec", "licensed",
 })
@@ -324,11 +306,9 @@ def _sized(value: Any) -> int:
 def _marker(name: str, value: Any) -> dict[str, Any]:
     """What an archived record carries in place of a bulk value.
 
-    **The key stays present.** Deleting it would make ``/audit/turns/{id}/trace`` render
-    ``present: false`` beside the register's "why", which says the stage did not produce the
-    value — a truncation reading as an omission, the shape ADR 0009 D2 refuses. A value that
-    names itself cannot be misread, and ``sha256`` lets a reader match it against the full copy in
-    that turn's own checkpoint.
+    **The key stays present.** Deleting it would read as "the stage did not produce the value", a
+    truncation reading as an omission. A value that names itself cannot be misread, and ``sha256``
+    lets a reader match it against the full copy in that turn's own checkpoint.
     """
     payload = json.dumps(value, default=str, sort_keys=True)
     return {
@@ -387,11 +367,10 @@ def keep_turns(left: Any, right: Any) -> list[dict[str, Any]]:
       :func:`compact_turn_record` shrinks the row ~14× and :data:`MAX_TURNS_RETAINED` bounds how
       many there are; together they replace an unbounded term with a fixed one.
     * **Duplicate rows.** ``operator.add`` cannot deduplicate, so a turn resumed after an
-      ``ask_user`` interrupt could append its envelope twice and the audit list would show one
-      question answered twice. ``record["turn_id"]`` is the upsert key the register already
-      declares for exactly this, so a repeat write **replaces** rather than appends.
+      ``ask_user`` interrupt could append its envelope twice. ``record["turn_id"]`` is the upsert
+      key the register already declares for exactly this, so a repeat write **replaces**.
 
-    Oldest first, as before — ``api/thread_turns`` reverses per thread and sorts on ``asked_at``.
+    Oldest first.
     """
     rows: list[dict[str, Any]] = [
         dict(row) for row in (cleared(left) or ()) if isinstance(row, Mapping)

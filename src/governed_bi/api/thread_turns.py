@@ -1,9 +1,7 @@
-"""Readers for the audit surface and the pending queue, over thread state.
+"""The pending-clarification reader, over the platform's interrupt state.
 
-Each turn's record accumulates on ``ServeState.turns``, so the checkpointer is the only store.
 Reads go through the in-process client (``get_client(url=None)``), which LangGraph mounts at
-``/noauth`` and so sees every thread with no credential. That is kept deliberately: the
-alternatives are a second checkpointer handle, which is a second answer to what a thread holds,
+``/noauth`` and so sees every thread with no credential. That avoids a second checkpointer handle
 or a loopback HTTP call to ourselves. It only resolves inside the Agent server; outside it,
 :class:`InProcessServerRequired` is raised.
 """
@@ -12,464 +10,25 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple
 
-from ..register.quantity import Measured
-
 __all__ = [
-    "ThreadTurnLog",
     "PendingClarifications",
     "PendingPage",
     "InProcessServerRequired",
-    "SUMMARY_FIELDS",
     "PENDING_FIELDS",
     "PENDING_SOURCE_INTERRUPT",
-    "summarise_turn",
 ]
 
-#: List-view columns (a subset of record field names), in display order.
-SUMMARY_FIELDS: tuple[str, ...] = (
-    "turn_id",
-    "run_id",
-    "thread_id",
-    "question_id",
-    "db_id",
-    "outcome",
-    "terminal_reason",
-    "schemas",
-    "generated_sql",
-    "latency_sec",
-    # The attempt ledger. A transcript rebuilt from a record has to show the same governance
-    # badge the live turn showed; without it a turn renders "no SQL attempted" above its own
-    # SQL panel.
-    "execution",
-)
-
-
-def summarise_turn(entry: Mapping[str, Any]) -> dict[str, Any]:
-    """One envelope projected to a list row.
-
-    ``missing_required`` is computed here rather than stored, so a turn recorded before a register
-    row existed is judged by today's register -- the column asks "is this turn quotable", which is
-    a question about the current declaration and not about the date it was written.
-    """
-    from ..register.record import missing_required
-
-    record = entry.get("record") or {}
-    summary = {name: record.get(name) for name in SUMMARY_FIELDS}
-    # An absent quantity reaches the wire as **null**, not as its own object. `latency_sec` is a
-    # `Measured` when no wrapped node stamped `turn_started_at` -- rare, but reachable on a turn
-    # that crashed in `accept`. The JSONL log used to flatten it with `json.dumps(default=str)`
-    # and the schema admitted a string for exactly that reason; state keeps the object, and the
-    # client validates this field as `z.number().nullable()`, so one such row would fail the parse
-    # for **every** row in the response. Null is also the honest reading: unmeasured is not a
-    # number. This is not formatting -- `Measured.render` still owns that.
-    for name, value in list(summary.items()):
-        if isinstance(value, Measured) or (isinstance(value, Mapping) and "why" in value and "state" in value):
-            summary[name] = None
-    summary["asked_at"] = entry.get("asked_at")
-    summary["question"] = entry.get("question")
-    summary["answer_text"] = entry.get("answer_text")
-    summary["outcome"] = entry.get("outcome") or record.get("outcome")
-    summary["licensed_count"] = len(record.get("licensed") or ())
-    execution = record.get("execution") or {}
-    attempts = execution.get("attempts") or ()
-    summary["attempts"] = len(attempts)
-    summary["attempts_passed"] = sum(1 for a in attempts if (a or {}).get("passed"))
-    summary["incomplete_fields"] = len(missing_required(record))
-    return summary
-
-
-#: Threads fetched per ``threads.search`` page. A page is a round trip and every caller's budget
-#: is counted in *turns*, so this trades one for the other; 50 covers the whole store at this
-#: repository's volume in a single call. Pages are pulled on demand (:func:`_threads` is a
-#: generator), so a request the first page satisfies costs exactly one round trip.
+#: Threads fetched per ``threads.search`` page; 50 covers the store at this volume in one call.
 _THREAD_PAGE = 50
 
-#: Hard bound on threads scanned for one request, so a store that grows cannot turn the audit
-#: list into an unbounded read. On `/audit/turns` **nothing reports when it bites**, which is a
-#: known gap and not a design: that route has no truncation field on the wire (ADR 0009 D2 argues
-#: one is owed), and adding one means changing the shape this swap deliberately keeps identical.
-#: The pending queue *does* report it -- :attr:`PendingPage.truncated` -- and :func:`_pending_async`
-#: is where what that flag can and cannot tell a reader is written down.
+#: Hard bound on threads scanned for one request. :attr:`PendingPage.truncated` reports it.
 _MAX_THREADS = 1000
 
-#: The list read's projection. ``extract`` rather than ``select=["values"]`` for the reason
-#: :func:`_threads` gives at length -- an unprojected thread carries the whole of ``ServeState``,
-#: measured at 2.42 MB for sixteen threads.
-_EXTRACT: dict[str, str] = {"turns": "values.turns"}
-
-#: :meth:`ThreadTurnLog.clarifications_of`'s projection. A separate constant and not a second path
-#: on :data:`_EXTRACT`, because the two reads want different things: the list read pays for this
-#: channel on **every** thread it pages through and never looks at it, while one turn's trace wants
-#: it for one thread it can already name. Widening the paged read to serve the narrow one is how a
-#: 2.42 MB projection got measured in the first place.
-_CLARIFICATION_EXTRACT: dict[str, str] = {"clarifications": "values.clarifications"}
-
-#: Stands for "this server exposes no such attribute", which is not the same as ``None``. Used
-#: once, by :func:`_in_process_client`.
+#: Stands for "this server exposes no such attribute", which is not the same as ``None``.
 _UNCHECKED = object()
-
-
-class InProcessServerRequired(RuntimeError):
-    """This reader was used outside the Agent server process, where it cannot work.
-
-    Named, because the SDK's own failure here is neither named nor free. ``get_client(url=None)``
-    tries ``from langgraph_api.server import app``; when that fails it *swallows* the exception,
-    builds ``ASGITransport(app=None, root_path="/noauth")`` and **appends it** to the module global
-    ``langgraph_sdk._shared.utilities._registered_transports`` -- a list drained only by
-    ``configure_loopback_transports(app)``, which the server calls at startup and nothing else
-    ever calls. Outside the server that list therefore grows by one entry per call and the call
-    still fails, later and elsewhere, with a bare ``TypeError: 'NoneType' object is not callable``
-    naming neither the reader nor the reason. Measured before this class existed: two
-    ``list_turns()`` calls, two ``TypeError``s, two leaked transports.
-
-    :func:`_in_process_client` raises this *instead of* calling ``get_client``, so nothing is
-    registered and nothing leaks.
-    """
-
-
-class ThreadTurnLog:
-    """``turn_log`` over LangGraph thread state.
-
-    ``client_factory`` exists so this is testable without a server: the production default is
-    :func:`_in_process_client`, whose transport only resolves inside the Agent server, and a
-    reader whose ordering and thread-isolation rules can only be exercised by booting a server is
-    a reader whose rules go untested.
-    """
-
-    def __init__(self, client_factory: Any | None = None) -> None:
-        self._client_factory = client_factory
-        self._client: Any | None = None
-
-    summarise = staticmethod(summarise_turn)
-    #: Read off the instance by ``routes.turns_page`` to build ``meta.columns``.
-    SUMMARY_FIELDS = SUMMARY_FIELDS
-
-    @property
-    def TURN_LOG_DIR(self) -> Any:  # noqa: N802 -- the seam's name, kept so the wire key is
-        """Where the rows this reader returns actually come from, for the audit footer.
-
-        **Not the checkpoint database.** ``threads.search`` reads the *thread row's* ``values``,
-        and under ``langgraph dev`` the in-memory runtime copies the checkpoint into that row at
-        run completion and persists it to ``.langgraph_api/.langgraph_ops.pckl`` — so these rows
-        come out of a pickle, while ``runs/conversations.sqlite`` holds the checkpoints nothing
-        here reads. Naming the SQLite file was wrong and pointed an auditor at the wrong artifact.
-
-        That pickle is treated as a disposable cache by its owner: a ``ModuleNotFoundError`` while
-        loading it logs "Removing invalid cache data" and **deletes the file**. Since thread
-        ``values`` holds live Python objects, renaming or moving a module whose instances reach
-        state destroys the audit history while the checkpoints survive unread. See ADR 0014.
-
-        The attribute keeps its name because ``meta.log_dir`` is on the wire and the client's
-        schema and footer both read that key.
-        """
-        from governed_bi.paths import REPO_ROOT
-
-        return REPO_ROOT / ".langgraph_api" / ".langgraph_ops.pckl"
-
-    def list_turns(self, limit: int = 50, thread_id: str | None = None) -> list[dict[str, Any]]:
-        """Newest turns first, as summaries. ``thread_id`` narrows to one conversation.
-
-        Ordering is ``updated_at`` descending **per thread**, and newest-first *within* a thread
-        by reversing its ``turns``. That is not the same as a global sort by ``asked_at``, so the
-        rows are sorted once more at the end: two conversations interleave in time, and a reader
-        who sorts by "when was this asked" must not see one thread's older turn above another's
-        newer one.
-        """
-        wanted = max(1, int(limit))
-        out = [self.summarise(entry) for entry in self._entries(limit=wanted, thread_id=thread_id)]
-        out.sort(key=lambda row: str(row.get("asked_at") or ""), reverse=True)
-        return out[:wanted]
-
-    def get_turn(self, turn_id: str) -> dict[str, Any] | None:
-        """One turn's full envelope, or ``None``.
-
-        A scan, as the log's was, but a **short-circuiting** one: the wanted ``turn_id`` goes down
-        into :func:`_collect_async`, which tests each envelope as its thread arrives and returns
-        on the first match. Threads are paged on demand, so a turn in the newest thread costs one
-        round trip and materialises one envelope. Only a *miss* pays for the whole scan, and a
-        miss is the only case that has to, bounded by ``_MAX_THREADS`` like every other read
-        here (no ``limit``: with a ``turn_id`` the answer is one row or none, so a turn budget
-        would be a second stopping rule that can never fire).
-
-        It stays a scan because an index over one developer's traffic would be a second source of
-        truth for a millisecond lookup, and because the store cannot answer the question either:
-        the ``values`` filter ``threads.search`` accepts is JSONB *containment* over the top-level
-        ``values`` dict, and the in-memory runtime this repository runs implements it as
-        ``is_jsonb_contained`` (``langgraph_runtime_inmem/ops.py:729``), which for a list-valued
-        key falls through to ``superset[key] != value`` -- equality against the whole ``turns``
-        list. There is no way to ask it for a thread containing *one* matching element.
-        """
-        for entry in self._entries(limit=None, thread_id=None, turn_id=str(turn_id)):
-            return dict(entry)
-        return None
-
-    def clarifications_of(self, thread_id: str, turn_id: str) -> list[dict[str, Any]]:
-        """What this turn asked its reader mid-flight, and what they answered.
-
-        The other half of the pair :class:`PendingClarifications` reads: that reader takes the
-        questions still sitting in interrupt state — the ones nobody answered — and this one takes
-        the ones somebody did, which ``serve/tools.py`` writes into the ``clarifications`` channel
-        on the far side of ``interrupt()``. Between them they cover every clarification the engine
-        has ever asked, and neither needs a store of its own.
-
-        **Read-side only, and one round trip.** Both channels are already in thread state; the
-        join needs no new field because ``ask_user`` puts ``turn_id`` on the row. ``thread_id`` is
-        a parameter rather than something looked up because every caller is holding the turn's
-        record, which carries it — so this is ``ids=[thread_id]``, not a scan.
-
-        Returns ``[]`` for a turn that asked nothing. That is a real answer and not a shrug: a
-        clarification either happened or did not, and this reader has read the channel either way.
-        """
-        client = self._client_once()
-        threads = _blocking(
-            client.threads.search(
-                ids=[str(thread_id)],
-                limit=1,
-                select=["thread_id", "metadata"],
-                extract=_CLARIFICATION_EXTRACT,
-            )
-        )
-        for thread in threads or ():
-            return _answered_clarifications_of(thread).get(str(turn_id)) or []
-        return []
-
-    # ── the store ────────────────────────────────────────────────────────────
-
-    def _entries(
-        self, *, limit: int | None, thread_id: str | None, turn_id: str | None = None
-    ) -> Iterator[dict[str, Any]]:
-        for entry in _collect(limit=limit, thread_id=thread_id, turn_id=turn_id, client=self._client_once()):
-            yield entry
-
-    def _client_once(self) -> Any:
-        """The one client this reader uses, built on first read.
-
-        **One, not one per call.** Each ``get_client()`` builds an ``httpx.AsyncClient`` that
-        nothing ever ``aclose()``s, so a client per request was a per-request object leak on top
-        of the transport leak :class:`InProcessServerRequired` describes. One client over an ASGI
-        transport holds no sockets, so there is nothing for a shutdown hook to close and no hook
-        is added.
-
-        **Built lazily**, because ``routes._build_app`` constructs this class during
-        ``load_custom_app``, which is the one window where ``langgraph_api.server`` is
-        half-imported by construction and the in-process transport genuinely cannot resolve.
-
-        **Safe to reuse across loops**, which is the part not to assume: ``_blocking`` opens a
-        fresh ``asyncio.run`` per call, so a cached client outlives the loop that first used it.
-        It survives that because nothing in the path binds to a loop at construction --
-        ``httpx.AsyncClient`` over an ASGI transport has no connection pool, and
-        ``langgraph_api.asgi_transport.ASGITransport`` calls ``asyncio.get_running_loop()`` and
-        creates its futures *per request*, handing the app coroutine to the server's own
-        ``_MAIN_LOOP`` (``call_soon_in_main_loop``) precisely because the caller is expected to be
-        on some other loop. ``tests/api/test_the_audit_surface_reads_thread_state.py`` drives a
-        real ``httpx.AsyncClient`` over an ASGI app through two separate ``asyncio.run`` calls to
-        keep that a measured claim rather than a read one.
-        """
-        if self._client is None:
-            factory = self._client_factory or _in_process_client
-            self._client = factory()
-        return self._client
-
-
-def _in_process_client() -> Any:
-    """``langgraph_sdk``'s in-process client, or a named refusal -- never a leak.
-
-    The import is attempted here, and its failure raised, rather than left to ``get_client``:
-    :class:`InProcessServerRequired` records what ``get_client`` does with the same failure.
-    """
-    reason: str | None = None
-    if os.environ.get("__LANGGRAPH_DEFER_LOOPBACK_TRANSPORT") == "true":
-        # The window in which ``langgraph_api.api.load_custom_app`` imports *this* application.
-        # ``get_client`` honours this flag ahead of any import attempt and registers a deferred
-        # ``app=None`` transport, so it leaks on this branch too. No request can arrive during
-        # the window, so refusing is not a behaviour anything depends on.
-        reason = "the server is still importing this application"
-    else:
-        try:
-            from langgraph_api.server import app  # noqa: F401
-        except Exception as exc:  # noqa: BLE001 -- `get_client` catches Exception here as well
-            reason = f"{type(exc).__name__}: {exc}"
-        else:
-            # Importable is not the same as *running*, and a test process is where the two come
-            # apart: anything that has configured the runtime can import the module. The
-            # transport dispatches the app onto ``langgraph_api.asyncio._MAIN_LOOP``, which only
-            # ``langgraph_runtime_inmem.lifespan`` sets and only at server startup, so without it
-            # the very next thing is an unnamed ``RuntimeError: No event loop set`` at request
-            # time -- the failure this class exists to stop being anonymous. Checked through
-            # ``getattr`` with a non-``None`` default: older servers used plain
-            # ``httpx.ASGITransport``, which needs no such loop, and their absence of the
-            # attribute is not an absence of a server.
-            from langgraph_api import asyncio as server_loop
-
-            if getattr(server_loop, "_MAIN_LOOP", _UNCHECKED) is None:
-                reason = "the server's modules are imported but no server is running"
-    if reason is not None:
-        raise InProcessServerRequired(
-            "the audit turn reader only works inside the LangGraph Agent server: it reads thread "
-            "state over langgraph_sdk's in-process ASGI transport, which resolves only while "
-            "`langgraph_api.server.app` exists in this process "
-            f"({reason}). Outside the server there is no store to read -- run `uv run langgraph "
-            "dev` and call `/audit/turns` on that, or pass a `client_factory`, which is what the "
-            "tests do."
-        )
-
-    from langgraph_sdk import get_client
-
-    return get_client()
-
-
-def _blocking(coro: Any) -> Any:
-    """Drive an async client call from a sync route handler.
-
-    Starlette runs a sync ``def`` handler in a worker thread with no running loop, so
-    ``asyncio.run`` is safe here — the same reasoning the deleted ``routes._chat_graph`` recorded
-    for the graph facade. If this is ever called from an async handler it must be awaited instead.
-    """
-    return asyncio.run(coro)
-
-
-def _collect(*, limit: int | None, thread_id: str | None, turn_id: str | None, client: Any) -> list[dict[str, Any]]:
-    return _blocking(_collect_async(limit=limit, thread_id=thread_id, turn_id=turn_id, client=client))
-
-
-async def _collect_async(
-    *, limit: int | None, thread_id: str | None, turn_id: str | None, client: Any
-) -> list[dict[str, Any]]:
-    """Envelopes from thread state, newest thread first, newest turn first within a thread.
-
-    Three narrowings, and each is the only thing between a route and the whole store:
-    ``thread_id`` asks the store for one thread, ``turn_id`` returns on the first match, and
-    ``limit`` stops pulling pages once it is met. Threads arrive one at a time from
-    :func:`_threads` so that stopping stops the *paging* and not merely the filtering.
-    """
-    wanted_turn = None if turn_id is None else str(turn_id)
-    out: list[dict[str, Any]] = []
-    async for thread in _threads(client, thread_id=thread_id):
-        for entry in reversed(_turns_of(thread)):
-            if not isinstance(entry, Mapping):
-                continue
-            record = entry.get("record") or {}
-            # Belt for the `ids=` filter in `_threads`, and the only filter at all on the paged
-            # path: a thread whose state was migrated or hand-edited could carry a row for
-            # another thread, and an audit view showing one conversation inside another is worse
-            # than an empty one. `tests/api/test_http_contract.py` pins the no-leak property.
-            if thread_id is not None and record.get("thread_id") not in (None, thread_id):
-                continue
-            if wanted_turn is not None and str(record.get("turn_id") or "") != wanted_turn:
-                continue
-            out.append(dict(entry))
-            if wanted_turn is not None:
-                return out
-        if limit is not None and len(out) >= limit:
-            break
-    return out
-
-
-async def _threads(client: Any, *, thread_id: str | None) -> AsyncIterator[Any]:
-    """Threads to read, newest-updated first, **one at a time and one page at a time**.
-
-    A generator rather than a list because the caller's stopping conditions are counted in turns
-    while the store's paging is counted in threads: fifty threads holding one turn each satisfy a
-    budget of fifty, one thread holding fifty satisfies it alone, and a ``get_turn`` hit in the
-    newest thread satisfies itself. Only the consumer knows which, so a page is fetched when the
-    consumer asks for the thread after the last one it was handed. Collecting first is how
-    ``get_turn`` came to page to ``_MAX_THREADS`` and materialise every envelope in the store in
-    order to find one id.
-
-    ``extract`` rather than ``select=["values"]``: an unprojected thread carries the whole of
-    ``ServeState``, measured at 2.42 MB for sixteen threads, because ``values`` holds the
-    delivered context. Extracting one path reads the same rows for kilobytes. The path root must
-    be one of ``values``/``metadata``/``config``/``interrupts``, and ``values.turns`` is the
-    channel ``record_node`` appends to.
-    """
-    if thread_id is not None:
-        for thread in await client.threads.search(
-            ids=[thread_id],
-            limit=1,
-            select=["thread_id", "metadata"],
-            extract=_EXTRACT,
-        ):
-            yield thread
-        return
-
-    offset = 0
-    while offset < _MAX_THREADS:
-        page = await client.threads.search(
-            limit=_THREAD_PAGE,
-            offset=offset,
-            sort_by="updated_at",
-            sort_order="desc",
-            select=["thread_id", "updated_at", "metadata"],
-            extract=_EXTRACT,
-        )
-        if not page:
-            return
-        for thread in page:
-            yield thread
-        offset += len(page)
-        if len(page) < _THREAD_PAGE:
-            return
-
-
-def _channel_of(thread: Any, name: str) -> list[Any]:
-    """One list-valued ``ServeState`` channel, from wherever the client put it.
-
-    ``extract`` lands values under ``extracted``; a thread selected *with* ``values`` carries
-    them under ``values``. Reading both means a caller that changes its projection does not
-    silently start seeing zero rows.
-    """
-    if isinstance(thread, Mapping):
-        extracted = thread.get("extracted")
-        if isinstance(extracted, Mapping) and isinstance(extracted.get(name), list):
-            return list(extracted[name])
-        values = thread.get("values")
-        if isinstance(values, Mapping) and isinstance(values.get(name), list):
-            return list(values[name])
-    return []
-
-
-def _turns_of(thread: Any) -> list[Any]:
-    """This thread's ``turns`` rows — the channel ``graph_app``'s record node appends to."""
-    return _channel_of(thread, "turns")
-
-
-def _answered_clarifications_of(thread: Any) -> dict[str, list[dict[str, Any]]]:
-    """This thread's **answered** clarifications, grouped by the ``turn_id`` that asked.
-
-    The other half of the pair :class:`PendingClarifications` reads. That reader takes the
-    questions still sitting in interrupt state — the ones nobody answered — and this one takes the
-    ones somebody did, which ``serve/tools.py`` writes into the ``clarifications`` channel on the
-    far side of ``interrupt()``. Together they are every clarification the engine has ever asked.
-
-    Read-side only: nothing new is stored. Both channels are already in the thread state this
-    reader was going to fetch anyway, and the join needs no new field because ``ask_user`` puts
-    ``turn_id`` on the row itself.
-
-    Grouped rather than returned flat because a turn may ask more than once: ``ask_user`` is a
-    tool the agent loop can call repeatedly, and ``clarifications_by_call`` is keyed per call.
-    """
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for row in _channel_of(thread, "clarifications"):
-        if not isinstance(row, Mapping):
-            continue
-        # `turn_id` off the row, with the id as the fallback for a row written before `ask_user`
-        # carried one — `clarification_id` has always contained it (:func:`turn_of_clarification`).
-        turn_id = str(row.get("turn_id") or "") or turn_of_clarification(str(row.get("clarification_id") or ""))
-        if not turn_id:
-            continue
-        grouped.setdefault(turn_id, []).append(dict(row))
-    return grouped
-
-
-# ── pending clarifications ───────────────────────────────────────────────────────────────────
-#
-# A second reader, in this file rather than its own, for one reason: `_in_process_client` is the
-# thing that must not have a second implementation. `get_client(url=None)` leaks an `app=None`
-# transport into an SDK module global on failure (see `InProcessServerRequired`), and that leak
-# was fixed once already. A reader that acquired its own client would reintroduce it.
 
 #: List-view columns for the pending queue, in display order. ``meta.columns`` names them.
 PENDING_FIELDS: tuple[str, ...] = (
@@ -490,6 +49,15 @@ PENDING_SOURCE_INTERRUPT = "interrupt"
 _CLARIFICATION_PREFIX = "clar-"
 
 
+class InProcessServerRequired(RuntimeError):
+    """This reader was used outside the Agent server process, where it cannot work.
+
+    Raised instead of calling ``get_client``, which on the same failure appends an ``app=None``
+    transport to an SDK module global that only server startup drains, then fails later with a
+    bare ``TypeError``.
+    """
+
+
 class PendingPage(NamedTuple):
     """One page of the queue, plus what it could not show.
 
@@ -505,13 +73,8 @@ class PendingPage(NamedTuple):
 def turn_of_clarification(clarification_id: str) -> str | None:
     """The ``turn_id`` inside a clarification id, or ``None`` when the shape is not one we mint.
 
-    ``serve/tools.py`` builds ``f"clar-{turn_id}-{digest}"``, where ``turn_id`` is
-    ``session._digest(...)`` -- a sha256 hex prefix, so it never contains ``-`` -- and the digest
-    is likewise hex. Partitioning on the *last* ``-`` is therefore exact rather than merely
-    usually right, and it stays exact if ``turn_id`` ever gains a ``-``.
-
-    **Returns ``None`` rather than guessing.** An id from some other producer would otherwise be
-    silently mangled into a ``turn_id`` that links nowhere, which is worse than an unlinked row.
+    ``turn_id`` is a hex digest with no ``-``, so partitioning on the last ``-`` is exact. Returns
+    ``None`` rather than guessing, so a foreign id leaves the row unlinked instead of mislinked.
     """
     text = str(clarification_id or "")
     if not text.startswith(_CLARIFICATION_PREFIX):
@@ -538,27 +101,65 @@ class PendingClarifications:
         self._client: Any | None = None
 
     def pending(self, *, limit: int = 50, offset: int = 0) -> PendingPage:
-        """Oldest question first -- a queue, not a feed.
-
-        Sorted ascending on the thread's ``updated_at``, which for an interrupted thread is when
-        it paused, because the row that has waited longest is the one that most needs answering.
-        That is the opposite of ``list_turns`` and deliberately so: an audit log is read
-        newest-first, a work queue oldest-first.
-        """
+        """Oldest question first: a work queue, so the row that waited longest comes first."""
         wanted = max(1, int(limit))
         start = max(0, int(offset))
         return _pending(limit=wanted, offset=start, client=self._client_once())
 
     def _client_once(self) -> Any:
-        """The one client this reader uses.
+        """The one client this reader uses, built on first read.
 
-        See ``ThreadTurnLog._client_once`` for why it is one, why it is built lazily, and why it
-        is safe to reuse across ``asyncio.run`` calls.
+        One, because each ``get_client()`` builds an ``httpx.AsyncClient`` nothing closes. Lazy,
+        because the app is constructed while ``langgraph_api.server`` is half-imported. Safe across
+        ``asyncio.run`` calls because an ASGI transport binds no loop at construction.
         """
         if self._client is None:
             factory = self._client_factory or _in_process_client
             self._client = factory()
         return self._client
+
+
+def _in_process_client() -> Any:
+    """``langgraph_sdk``'s in-process client, or a named refusal -- never a leak."""
+    reason: str | None = None
+    if os.environ.get("__LANGGRAPH_DEFER_LOOPBACK_TRANSPORT") == "true":
+        # `get_client` registers a deferred `app=None` transport on this flag ahead of any import.
+        # It is set only while the server imports this app, when no request can arrive.
+        reason = "the server is still importing this application"
+    else:
+        try:
+            from langgraph_api.server import app  # noqa: F401
+        except Exception as exc:  # noqa: BLE001 -- `get_client` catches Exception here as well
+            reason = f"{type(exc).__name__}: {exc}"
+        else:
+            # Importable is not running: only server startup sets `_MAIN_LOOP`, which the
+            # transport dispatches onto. Older servers lack the attribute and need no such loop.
+            from langgraph_api import asyncio as server_loop
+
+            if getattr(server_loop, "_MAIN_LOOP", _UNCHECKED) is None:
+                reason = "the server's modules are imported but no server is running"
+    if reason is not None:
+        raise InProcessServerRequired(
+            "the pending-clarification reader only works inside the LangGraph Agent server: it "
+            "reads thread state over langgraph_sdk's in-process ASGI transport, which resolves "
+            "only while `langgraph_api.server.app` exists in this process "
+            f"({reason}). Outside the server there is no store to read -- run `uv run langgraph "
+            "dev` and call `/clarifications/pending` on that, or pass a `client_factory`, which "
+            "is what the tests do."
+        )
+
+    from langgraph_sdk import get_client
+
+    return get_client()
+
+
+def _blocking(coro: Any) -> Any:
+    """Drive an async client call from a sync route handler.
+
+    Starlette runs a sync handler in a worker thread with no running loop, so ``asyncio.run`` is
+    safe. From an async handler it must be awaited instead.
+    """
+    return asyncio.run(coro)
 
 
 def _pending(*, limit: int, offset: int, client: Any) -> PendingPage:
@@ -582,11 +183,8 @@ async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage
     ) -> bool:
         """Page one population into ``rows``. ``True`` iff the walk stopped on the bound.
 
-        Only one of the three exits is a short list: an empty page and a short page both mean the
-        store is exhausted, while falling out of the ``while`` means :data:`_MAX_THREADS` stopped a
-        walk the data had not. A store exhausted at *exactly* the bound also reports ``True`` --
-        indistinguishable without another round trip, and over-reporting "you may not have
-        everything" is the safe direction for this flag.
+        A store exhausted at exactly the bound also reports ``True``: over-reporting "you may not
+        have everything" is the safe direction for this flag.
         """
         page_offset = 0
         while page_offset < _MAX_THREADS:
@@ -627,11 +225,8 @@ async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage
 def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
     """One row per open clarification on ``thread``, or ``[]``.
 
-    ``asked_at`` is the thread's ``updated_at``. For an interrupted thread that is the moment it
-    paused, because the in-memory runtime stamps it in the same update that writes ``interrupts``
-    and ``status``, and nothing has run on the thread since. It is named ``asked_at`` so it
-    matches the turn summaries' column, and this line is the note that it is a proxy rather than
-    a field the engine stamped.
+    ``asked_at`` is the thread's ``updated_at``, a proxy: for an interrupted thread the runtime
+    stamps it in the same update that writes ``interrupts``, and nothing has run since.
     """
     if not isinstance(thread, Mapping):
         return []
@@ -661,10 +256,7 @@ def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
                     "thread_id": thread_id,
                     "source": PENDING_SOURCE_INTERRUPT,
                     "basis": value.get("basis"),
-                    # ``interrupt_id`` and ``task_id`` are what a resume would have to name.
-                    # Carried because withholding them would make this surface un-actionable the
-                    # day the provenance gate lands, and they identify nothing a reader could not
-                    # already see on their own thread.
+                    # What a resume would have to name.
                     "interrupt_id": item.get("id"),
                     "task_id": task_id,
                 }

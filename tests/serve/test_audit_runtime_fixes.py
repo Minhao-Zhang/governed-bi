@@ -121,13 +121,9 @@ def test_proxy_chat_model_retries_default_matches_knob() -> None:
 
 
 def test_capabilities_report_durability_by_observing_the_config_not_a_literal() -> None:
-    """This asserted ``checkpoint_durable is False`` when the only saver was ``/chat``'s
-    process-local ``InMemorySaver``. That route is deleted and the served path checkpoints to
-    SQLite through ``langgraph.json``'s ``checkpointer.path`` (ADR 0014), so the flag is now true.
-
-    The assertion that matters is not the value — it is that the value is **derived**. ADR 0009 D4
-    says a capability flag is flipped by building the thing, never by editing the line, so the
-    test removes the declaration and requires the flag to follow.
+    """The value is **derived**: a capability flag is flipped by building the thing, never by
+    editing the line (ADR 0007 §7), so the test removes the declaration and requires the flag to
+    follow.
     """
     from governed_bi.api import routes
     from governed_bi.api.routes import capabilities_for
@@ -169,7 +165,7 @@ def test_capabilities_report_durability_by_observing_the_config_not_a_literal() 
     )
     assert ungraphed["can_clarify"] is False, (
         "`can_clarify` outlived `can_stream`; it mounts the interrupt prompt, so a client with no "
-        "transport must not be told it can answer a clarification (ADR 0009 D12)"
+        "transport must not be told it can answer a clarification (ADR 0007 §7)"
     )
 
 

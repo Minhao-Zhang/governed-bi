@@ -18,7 +18,7 @@ file. So a rename in place (``AttributeError``) and a move (``ModuleNotFoundErro
 the *entire* registry rather than the one unreadable row, and only the second gets the log line
 naming the cause ("Renamed or moved classes"); the rename gets "Failed to load cached data".
 ``runs/conversations.sqlite`` is untouched, so every paused turn stays resumable while nothing can
-enumerate it — the pending-clarification queue reports an empty queue and ``/audit/turns`` goes
+enumerate it — the pending-clarification queue reports an empty queue and the conversation list goes
 blank — and nothing reconciles the registry from the checkpointer, so the loss is permanent.
 
 **Why a mechanism and not a comment.** A prose rule delivered into a reader's context was

@@ -366,13 +366,11 @@ def record_node() -> Any:
             record_dict = answer.get("record") or {}
             if not isinstance(record_dict, Mapping) or not record_dict.get("turn_id"):
                 # A paused turn (``ask_user``) has no record yet. Nothing is appended: an
-                # entry with no ``turn_id`` is unaddressable by ``get_turn``.
+                # entry with no ``turn_id`` cannot be upserted by ``keep_turns``.
                 return {}
             entry: TurnEntry = {
                 # This node is the only place ``asked_at`` is set -- nothing else writes a turn
-                # envelope. ``api/thread_turns`` sorts on it in both list paths, and
-                # ``summarise_turn`` projects it onto the wire, so a row that omits it sorts on
-                # the empty string.
+                # envelope.
                 "asked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "question": str(state.get("question") or "") or None,
                 "answer_text": surface_answer_text(answer, state),

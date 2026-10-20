@@ -153,13 +153,6 @@ function statedQuestionNumber(record: Record<string, unknown>): number | null {
  * Attach the graph's own `turns` channel to the message ids {@link mapStreamToChatMessages}
  * asks about.
  *
- * **This replaced a text match, and the deletion is the point.** The records used to be fetched
- * from `GET /audit/turns` and paired with the transcript by comparing question strings, because
- * the record and the message lived in two different stores: the log is a JSONL file queried by
- * `thread_id`, and it holds rows this conversation never showed (measured on thread `019fdc77`:
- * four rows under one `thread_id` for a two-turn transcript, two from an earlier run). A position
- * could not be trusted across those two stores, so the question text was the only join key left.
- *
  * `turns` is the same store the messages come from. `api/graph_app.record_node` appends exactly
  * one row per *recorded* turn of *this thread*, to a channel reduced with `operator.add` and
  * excluded from `PER_TURN_RESET`, and it refuses to append a row whose record has no `turn_id`.

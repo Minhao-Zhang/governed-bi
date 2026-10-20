@@ -13,7 +13,7 @@ Do not re-author ADR content here.
 | Execution-time governance (the layer stack) | [0006](adr/0006-execution-time-governance.md) |
 | HTTP surface and UI contract | [0007](adr/0007-http-surface-and-the-ui-contract.md) |
 | Identifiers end to end | [0008](adr/0008-identifiers-end-to-end.md) |
-| Browse / filter / relationship API | [0009](adr/0009-browsing-and-filtering-api.md) |
+| Browse / filter / relationship API (reversed) | [0009](adr/0009-browsing-and-filtering-api.md) |
 | Live stage events | [0010](adr/0010-live-stage-events.md) |
 | Two-model split and facet rewriting | [0011](adr/0011-two-model-split-and-facet-query-rewriting.md) |
 | The access seam: principal, authorization, Layer 6 split — **reversed** | [0012](adr/0012-access-seam-principal-and-authorization.md) |

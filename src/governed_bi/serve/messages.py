@@ -70,7 +70,7 @@ def surface_answer_text(answer: Mapping[str, Any], state: Mapping[str, Any]) -> 
     model's own words — and ``narrate`` reaches it (``ledger_ended_without_answer`` is false when
     ``terminal`` is ``no_sql``), so on the ordinary path ``answer_text`` is already set and the
     first branch returns. The set matters when ``narrate`` degraded: without ``no_sql`` here, the
-    audit surface would show nothing for the one class of turn that has nothing else to show.
+    turn record would carry no answer text for the one class of turn that has nothing else to show.
     """
     text = answer.get("answer_text")
     if text:

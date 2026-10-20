@@ -2,16 +2,11 @@
 
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ThemeProvider } from "next-themes";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 
-/**
- * App-wide client providers: React Query (custom-route reads), next-themes
- * (light-first, `.dark` toggle), tooltips, and toasts. Rendered once in the root
- * layout, wrapping all routes.
- */
+/** App-wide client providers: React Query, tooltips and toasts. */
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
     () =>
@@ -24,15 +19,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider
-        attribute="class"
-        defaultTheme="light"
-        enableSystem={false}
-        disableTransitionOnChange
-      >
-        <TooltipProvider delayDuration={200}>{children}</TooltipProvider>
-        <Toaster />
-      </ThemeProvider>
+      <TooltipProvider delayDuration={200}>{children}</TooltipProvider>
+      <Toaster />
     </QueryClientProvider>
   );
 }

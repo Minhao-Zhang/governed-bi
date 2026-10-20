@@ -276,7 +276,7 @@ _assert_absence_cannot_carry_a_value()
 #:
 #: The damage is silent and asymmetric: ``runs/conversations.sqlite`` survives untouched, so
 #: every paused turn is still resumable while nothing can list it — the pending-clarification
-#: queue reports empty and ``/audit/turns`` goes blank. Nothing reconciles the registry from the
+#: queue reports empty and the chat page's conversation list goes blank. Nothing reconciles the registry from the
 #: checkpointer at startup (``start_pool`` only back-fills empty lists).
 #:
 #: The module path is **not** checked here, because a move deletes this file and takes the guard
@@ -297,7 +297,7 @@ On the next `langgraph dev` boot the unpickle raises, and langgraph_runtime_inme
 :start_pool catches every exception and os.remove()s the file. That deletes the
 WHOLE THREAD REGISTRY, not the unreadable row -- every interrupted thread goes with it.
 runs/conversations.sqlite survives, so the paused turns stay resumable while nothing can list
-them: the pending-clarification queue reports an empty queue and /audit/turns goes blank.
+them: the pending-clarification queue reports an empty queue and the conversation list goes blank.
 Nothing rebuilds the registry from the checkpointer.
 
 To rename anyway, in one commit:

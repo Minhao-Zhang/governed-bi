@@ -135,11 +135,10 @@ def _ask(graph: Any, question: str, *, thread: str) -> dict[str, Any]:
 
 
 def _turns(graph: Any, *, thread: str) -> list[dict[str, Any]]:
-    """The channel as the audit reader sees it — through ``get_state``, not through ``invoke``.
+    """The channel through ``get_state``, not through ``invoke``.
 
     ``output_schema=ServeOutput`` narrows ``invoke`` to ``messages`` / ``answer``, so ``turns``
-    is deliberately *not* in the returned dict. ``api/thread_turns`` reads thread state, which
-    is what this reads.
+    is deliberately *not* in the returned dict.
     """
     return list(graph.get_state({"configurable": {"thread_id": thread}}).values.get("turns") or [])
 

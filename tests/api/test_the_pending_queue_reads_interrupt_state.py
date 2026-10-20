@@ -15,12 +15,18 @@ nothing.
 
 from __future__ import annotations
 
+import asyncio
+import sys
+from types import ModuleType
 from typing import Any
 
+import httpx
 import pytest
+from langgraph_sdk._shared.utilities import _registered_transports
 
 from governed_bi.api.thread_turns import (
     PENDING_FIELDS,
+    InProcessServerRequired,
     PendingClarifications,
     turn_of_clarification,
 )
@@ -286,7 +292,7 @@ def test_a_malformed_or_empty_interrupt_map_yields_no_rows(interrupts: Any) -> N
 
 
 def test_a_short_page_says_it_is_short() -> None:
-    """ADR 0009 D2/D9. A silently truncated queue reads as "nobody is waiting"."""
+    """A silently truncated queue reads as "nobody is waiting"."""
     threads = [_thread(f"t-{i}", f"2026-08-19T{i:02d}:00:00Z", {"k": [_interrupt(TURN_A, f"q{i}")]}) for i in range(5)]
     queue, _ = _queue(threads)
 
@@ -371,21 +377,8 @@ def _app_client(threads: list[dict[str, Any]]) -> Any:
 
     from governed_bi.api.routes import make_app
 
-    class _TurnLog:
-        TURN_LOG_DIR = "/nowhere"
-        SUMMARY_FIELDS: tuple[str, ...] = ("turn_id",)
-
-        def list_turns(self, limit: int = 50, thread_id: str | None = None) -> list[Any]:
-            return []
-
-        def get_turn(self, turn_id: str) -> None:
-            return None
-
-        def clarifications_of(self, thread_id: str, turn_id: str) -> list[Any]:
-            return []
-
     queue, _ = _queue(threads)
-    return TestClient(make_app(object(), _TurnLog(), queue))
+    return TestClient(make_app(object(), queue))
 
 
 def test_the_route_serves_the_queue_with_its_columns() -> None:
@@ -401,7 +394,7 @@ def test_the_route_serves_the_queue_with_its_columns() -> None:
 
 
 def test_the_route_puts_truncation_on_the_wire() -> None:
-    """ADR 0009 D2/D9: the count a caller did not get travels beside the ones it did.
+    """The count a caller did not get travels beside the ones it did.
 
     Without this the queue reports "one person is waiting" when five are, and it reports it in
     exactly the same shape as the truthful answer.
@@ -506,4 +499,91 @@ def test_every_declared_column_is_present_on_an_interrupt_row() -> None:
     assert row["source"] == "interrupt"
     assert row["interrupt_id"] and row["task_id"], "a resume needs both, so both are carried"
 
+# ── used outside the Agent server ────────────────────────────────────────────────────────────
 
+
+def test_with_no_server_module_the_reader_refuses_by_name_and_registers_no_transport(
+    monkeypatch: Any,
+) -> None:
+    """``get_client(url=None)`` would register an ``app=None`` transport that only server startup
+    drains, then fail with a bare ``TypeError``. The list's length is asserted because the
+    exception alone would pass on the leaky version. ``sys.modules[...] = None`` because whether
+    the import succeeds depends on what other tests configured.
+    """
+    monkeypatch.setitem(sys.modules, "langgraph_api.server", None)
+    before = len(_registered_transports)
+    reader = PendingClarifications()
+
+    with pytest.raises(InProcessServerRequired) as first:
+        reader.pending(limit=5)
+    assert "Agent server" in str(first.value)
+    with pytest.raises(InProcessServerRequired):
+        reader.pending(limit=5)
+
+    assert len(_registered_transports) == before
+
+
+def test_the_import_window_is_refused_too_rather_than_deferred(monkeypatch: Any) -> None:
+    """``get_client`` registers a deferred transport on this flag ahead of any import attempt."""
+    monkeypatch.setenv("__LANGGRAPH_DEFER_LOOPBACK_TRANSPORT", "true")
+    before = len(_registered_transports)
+    with pytest.raises(InProcessServerRequired) as raised:
+        PendingClarifications().pending(limit=5)
+    assert "still importing" in str(raised.value)
+    assert len(_registered_transports) == before
+
+
+def test_an_imported_server_that_is_not_running_is_refused_as_well(monkeypatch: Any) -> None:
+    """Importable is not running: only a started server sets ``langgraph_api.asyncio._MAIN_LOOP``.
+
+    The server module is stubbed because importing it for real needs runtime configuration.
+    """
+    import langgraph_api.asyncio as server_loop
+
+    stub = ModuleType("langgraph_api.server")
+    stub.app = object()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "langgraph_api.server", stub)
+    monkeypatch.setattr(server_loop, "_MAIN_LOOP", None)
+    before = len(_registered_transports)
+    with pytest.raises(InProcessServerRequired) as raised:
+        PendingClarifications().pending(limit=5)
+    assert "no server is running" in str(raised.value)
+    assert len(_registered_transports) == before
+
+
+def test_the_client_is_built_once_for_the_life_of_the_reader() -> None:
+    """One ``get_client()`` per call would be one unclosed ``httpx.AsyncClient`` per call."""
+    built: list[Any] = []
+    client = _FakeClient([])
+
+    def factory() -> Any:
+        built.append(client)
+        return client
+
+    reader = PendingClarifications(client_factory=factory)
+    reader.pending(limit=5)
+    reader.pending(limit=5, offset=1)
+    assert len(built) == 1
+
+
+def test_a_cached_client_survives_the_next_fresh_event_loop() -> None:
+    """``_blocking`` opens a new ``asyncio.run`` per call, so the cached client is used from a loop
+    that did not exist when it was built. Pinned for the real objects, since a fake would pass
+    whether or not it were true.
+    """
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": b"[]"})
+
+    client = httpx.AsyncClient(
+        base_url="http://api",
+        transport=httpx.ASGITransport(app, root_path="/noauth"),
+    )
+    try:
+        first = asyncio.run(client.post("/threads/search", json={}))
+        second = asyncio.run(client.post("/threads/search", json={}))
+    finally:
+        asyncio.run(client.aclose())
+    assert (first.status_code, second.status_code) == (200, 200)

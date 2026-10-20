@@ -27,7 +27,6 @@ describe("MessageList", () => {
     const steps = MOCK_AGENT_EVENTS.slice(0, 20).reduce<TimelineStep[]>(reduceSteps, []);
     renderWithProviders(
       <MessageList messages={[{ id: "u1", role: "user", text: "Top categories?" }]} isRunning steps={steps} />,
-      "analyst",
     );
 
     expect(screen.getByText("Top categories?")).toBeTruthy();
@@ -35,7 +34,7 @@ describe("MessageList", () => {
   });
 
   it("renders a refusal with the engine's copy and a refused stamp", () => {
-    renderWithProviders(<MessageList messages={REFUSED} isRunning={false} />, "analyst");
+    renderWithProviders(<MessageList messages={REFUSED} isRunning={false} />);
 
     expect(screen.getByText("Show me payroll by employee")).toBeTruthy();
     expect(screen.getByText(/needs a table this corpus does not license/)).toBeTruthy();
@@ -45,7 +44,7 @@ describe("MessageList", () => {
   });
 
   it("renders a declined clarification distinctly from a refusal", () => {
-    renderWithProviders(<MessageList messages={DECLINED} isRunning={false} />, "analyst");
+    renderWithProviders(<MessageList messages={DECLINED} isRunning={false} />);
 
     expect(screen.getByText(/The user declined this clarification/)).toBeTruthy();
     expect(screen.getByText("clarification")).toBeTruthy();

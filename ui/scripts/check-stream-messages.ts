@@ -262,15 +262,9 @@ check(
 );
 
 /**
- * **Records come off the thread's own `turns` channel, keyed to message ids.**
- *
- * This replaced a fetch of `GET /audit/turns` matched to the transcript by question *text*.
- * The text match existed because the log is a file queried by `thread_id` and holds rows this
- * conversation never showed (measured on thread `019fdc77`: four rows for a two-turn
- * transcript), so neither a position nor a string was an identity. `turns` is the same store
- * the messages come from — `record_node` appends one row per recorded turn of this thread, and
- * refuses a row with no `turn_id` — so the checks below are about placing rows, not matching
- * them.
+ * **Records come off the thread's own `turns` channel, keyed to message ids.** `record_node`
+ * appends one row per recorded turn of this thread and refuses a row with no `turn_id`, so the
+ * checks below are about placing rows, not matching them.
  */
 const turnRow = (opts: {
   turnId: string;

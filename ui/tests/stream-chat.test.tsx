@@ -65,7 +65,7 @@ beforeEach(() => {
 
 describe("StreamChat", () => {
   it("renders a streamed answer from the recorded event sequence", () => {
-    renderWithProviders(<StreamChat />, "analyst");
+    renderWithProviders(<StreamChat />);
 
     act(() => harness.setState!({ isLoading: true, messages: [HUMAN], values: {} }));
     act(() => MOCK_AGENT_EVENTS.forEach((ev) => harness.options!.onCustomEvent(ev)));
@@ -83,7 +83,7 @@ describe("StreamChat", () => {
   });
 
   it("sends a question with the subgraph stream options", async () => {
-    renderWithProviders(<StreamChat />, "analyst");
+    renderWithProviders(<StreamChat />);
 
     await userEvent.type(screen.getByRole("textbox", { name: "Ask a question about the governed data" }), "Top categories by revenue?{Enter}");
 
@@ -94,13 +94,13 @@ describe("StreamChat", () => {
   });
 
   it("renders a refusal and a declined clarification as different endings", () => {
-    const { unmount } = renderWithProviders(<StreamChat />, "analyst");
+    const { unmount } = renderWithProviders(<StreamChat />);
     finishWith(MOCK_REFUSAL);
     expect(screen.getByText(/needs a table this corpus does not license/)).toBeTruthy();
     expect(screen.getByText("refused")).toBeTruthy();
     unmount();
 
-    renderWithProviders(<StreamChat />, "analyst");
+    renderWithProviders(<StreamChat />);
     finishWith(MOCK_CLARIFICATION_CLOSED);
     expect(screen.getByText(/The user declined this clarification/)).toBeTruthy();
     expect(screen.getByText("clarification")).toBeTruthy();
@@ -108,7 +108,7 @@ describe("StreamChat", () => {
   });
 
   it("resumes the suspended run with the reader's answer", async () => {
-    renderWithProviders(<StreamChat />, "analyst");
+    renderWithProviders(<StreamChat />);
     act(() =>
       harness.setState!({
         isLoading: false,

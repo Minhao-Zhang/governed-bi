@@ -78,55 +78,14 @@ def _source_files() -> list[Path]:
 #: plausible-looking scan.
 MIN_SOURCE_FILES = 50
 
-#: The **one** place `src/` produces a `"tier"`, pinned by file and by text.
-#:
-#: It is `RecordField.tier` off `RECORD_REGISTER` — *why a field is recorded*, one of `identity`
-#: | `treatment` | `decision` | `outcome` | `cost` | `health` — serialised per register row by
-#: `/audit/turns/{id}/trace`. ADR 0007 §3 bans a **reliability** tier on the answer card, which
-#: is v1's `AnswerView` field and a different concept entirely: one says how a reader may use a
-#: recorded field, the other says how much to trust an answer. The client draws the same
-#: distinction in `ui/lib/schemas.ts`'s `auditTraceFieldSchema`, in a comment written for
-#: exactly this confusion.
-#:
-#: Pinned rather than banned, because banning the word would fail on a field property the
-#: register has always had, and *not* checking it leaves the ADR's third forbidden name with no
-#: enforcement at all. A second producer of a `"tier"` key fails here and has to argue for
-#: itself — which is the same trade the other two names get, reached differently.
-RECORD_TIER_SITE = ("api/routes.py", '"tier": field.tier.value,')
 
 
 def test_the_api_never_synthesizes_a_reliability_field() -> None:
-    """ADR 0007 §3, asserted **structurally**, because that is the only way it survives.
+    """ADR 0007 §3, asserted structurally: no reliability verdict is produced under `src/`.
 
-    A behavioural test — "this response has no `safety_clearance`" — is true of the inputs it
-    tried. The claim is about the code: a reliability verdict must not appear as a *produced*
-    value anywhere under `src/`.
-
-    If a future decision earns a reliability tier from a measurement, this test is the thing
-    that must be deliberately changed, and that is the point: it makes reintroducing the badge
-    a decision rather than a diff nobody read.
-
-    **Written 2026-08-06.** It was a strict-xfail stub for the whole of v2, and the audit
-    (§4.5) found what the gap cost: `safety_clearance` and `semantic_assurance` are the
-    two-axis stamp the README opens with, and they appeared in ten files — eight docs, the
-    README, and *this file* — and in **zero source files**. The one test that named them was a
-    stub in the file where 7 of 10 tests were stubs, so the honest paragraph at the top of this
-    module was the closest thing to a control, and a paragraph is not one.
-
-    Widened beyond `api/` to all of `src/`, deliberately. The claim in the docs was that the
-    *turn* is stamped with these, not that the API adds them — so a grep scoped to the boundary
-    would have passed while the docs stayed wrong, which is the situation this replaces.
-
-    **The scan asserts it scanned** (the 2026-08-11 review, F1). Before that it walked
-    `SRC.rglob`, collected `hits` and asserted `not hits` with nothing saying the walk had
-    reached anything: repointing `SRC` at a path that does not exist scanned **zero files and
-    passed green**. That is audit finding D13 — six conformance sweeps asserting `not offenders`
-    with no positive control — reintroduced in new code, in one of ADR 0007's two acceptance
-    criteria. :func:`_source_files` is the control and :data:`MIN_SOURCE_FILES` the floor.
-
-    **`tier` is handled separately and on purpose.** The ADR's third forbidden name is also a
-    live register field property (:data:`RECORD_TIER_SITE`), so a grep for the word would fail
-    on something the ADR does not forbid. It is pinned to its one site instead.
+    A behavioural test is true only of the inputs it tried. The scan asserts it reached the tree
+    (:data:`MIN_SOURCE_FILES`), and `tier` is checked as a produced key because it is also a
+    register field property the source names without serialising.
     """
     files = _source_files()
     assert len(files) >= MIN_SOURCE_FILES, (
@@ -153,22 +112,11 @@ def test_the_api_never_synthesizes_a_reliability_field() -> None:
         "it:\n  " + "\n  ".join(hits)
     )
 
-    # The third name, pinned rather than banned. Exactly one site, and it must be the register's.
-    site, text = RECORD_TIER_SITE
-    expected = [entry for entry in produces_a_tier if entry.startswith(f"{site}:")
-                and entry.endswith(text)]
-    assert len(expected) == 1, (
-        f"the register's `tier` projection is not at {site} spelled {text!r} any more, so this "
-        f"assertion no longer knows which `tier` is the permitted one: {produces_a_tier}"
-    )
-    unexpected = [entry for entry in produces_a_tier if entry not in expected]
-    assert not unexpected, (
-        "something under `src/` produces a `tier` that is not `RecordField.tier` off the record "
-        "register. ADR 0007 §3 forbids a reliability tier on the answer card: v2 observes "
-        "nothing that could earn one, and the UI drops the whole response on a mismatch, so a "
-        "synthesized badge is a reliability claim with nothing behind it. If this one is the "
-        "register's under another spelling, update RECORD_TIER_SITE and say so:\n  "
-        + "\n  ".join(unexpected)
+    # The third name. Nothing under `src/` serialises a `"tier"` key any more, so it is banned.
+    assert not produces_a_tier, (
+        "something under `src/` produces a `tier`. ADR 0007 §3 forbids a reliability tier on the "
+        "answer card: v2 observes nothing that could earn one. If this is `RecordField.tier` on "
+        "a new surface, change this test on purpose:\n  " + "\n  ".join(produces_a_tier)
     )
 
     # The paired half: the two names must not be in the record register either, since that is

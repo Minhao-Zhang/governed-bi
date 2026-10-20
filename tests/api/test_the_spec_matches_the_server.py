@@ -15,11 +15,8 @@ operation declares. Three checks, and the second is the one that catches a spec 
 handler — every ``required`` property present; every property the server sends *declared*; every
 value matching its declared type, ``anyOf`` alternatives and ``enum``.
 
-**The fixtures are the engine's, not hand-written JSON.** The turn envelope the audit surface
-reads is produced by running the served graph and passing its answer through the production
-writer (``graph_app.record_node``); the readers are the production ``ThreadTurnLog`` and
-``PendingClarifications`` over a fake LangGraph client. So ``/audit/turns``, the trace and the
-pending queue are shaped by the code that ships, not by a fake that agrees with the spec.
+**The readers are the engine's.** The pending queue is the production ``PendingClarifications``
+over a fake LangGraph client, so its rows are shaped by the code that ships.
 
 **No ``jsonschema``.** It is not declared in ``pyproject.toml`` (it arrives transitively under
 the LangGraph stack, which is not the same thing) and this file must not add a dependency. The
@@ -31,8 +28,7 @@ route, the JSON path, the component and which side is missing the field.
 
 * **Request bodies and query parameters.** Nothing here validates a request body.
 * **Most error paths.** ``/readyz`` 503 is checked. Other 404 and 422 responses are not.
-* **Query-parameter variants.** Each route is called once or twice, so a shape appearing only
-  under some ``?focus=``/``?scope=`` combination is unreached; the bounded graphs have the most.
+* **Query-parameter variants.** Each route is called once, with its default window.
 * **The streamed transport.** A turn is served over ``/runs/stream``, which this spec does not
   describe at all (ADR 0007 §7), as are the platform's own ``/threads`` and ``/runs``.
 * **Declared-but-unsent optional fields.** A property the server never emits here is tolerated,
@@ -52,9 +48,9 @@ import pytest
 
 SPEC_PATH = Path(__file__).resolve().parents[2] / "docs" / "openapi.json"
 
-#: A prompt the four-asset corpus below routes to `beer` on the lexical channel alone.
-QUESTION = "how many root beer brands are there"
 THREAD = "t-spec-conformance"
+#: A hex turn id, the shape ``serve/tools.py`` mints, so the clarification id joins back.
+TURN_ID = "a1b2c3d4e5f60718"
 
 
 # ── the structural comparison ────────────────────────────────────────────────
@@ -264,32 +260,6 @@ def _session(connector: Any) -> Any:
     return session
 
 
-def _envelope(session: Any) -> dict[str, Any]:
-    """One turn envelope, **minted by the engine**: the served graph's answer through ``record_node``.
-
-    Hand-writing it would make the audit surface's conformance a statement about the fixture.
-    ``record_node`` is the only writer of a turn envelope in the system.
-    """
-    from langchain_core.messages import HumanMessage
-
-    from governed_bi.api.graph_app import build_serve_graph, record_node
-    from governed_bi.serve.graph import as_sync
-    from governed_bi.serve.runtime import trust
-
-    trust()
-    try:
-        out = as_sync(build_serve_graph(session)).invoke(
-            {"messages": [HumanMessage(content=QUESTION)]},
-            {"configurable": {"thread_id": THREAD}},
-        )
-    finally:
-        trust()
-    assert out["answer"]["outcome"] != "crashed", out["answer"]
-    written = record_node()({"answer": out["answer"], "question": QUESTION})
-    assert written.get("turns"), "record_node stored no envelope, so there is nothing to serve"
-    return dict(written["turns"][0])
-
-
 @pytest.fixture(scope="module")
 def wire() -> dict[str, Any]:
     """The app, the spec and the turn id the tests address. Built once; the graph run is the cost.
@@ -306,15 +276,13 @@ def wire() -> dict[str, Any]:
     from fastapi.testclient import TestClient
 
     from governed_bi.api.routes import make_app
-    from governed_bi.api.thread_turns import PendingClarifications, ThreadTurnLog
+    from governed_bi.api.thread_turns import PendingClarifications
     from governed_bi.datasource.postgres import PostgresConnector
 
     # A real connector, never connected: `endpoint` is pure DSN parsing, and it is the only way
     # `connection.host`/`port`/`database` reach the wire at all (SQLite carries none of them).
     session = _session(PostgresConnector("postgresql://u:p@warehouse.example:5432/facilities"))
-    envelope = _envelope(session)
-    turn_id = envelope["record"]["turn_id"]
-    clarification_id = f"clar-{turn_id}-0123456789ab"  # `serve/tools.py`'s shape; joins back
+    clarification_id = f"clar-{TURN_ID}-0123456789ab"  # `serve/tools.py`'s shape; joins back
     asked = {
         "kind": "clarification", "clarification_id": clarification_id,
         "question": "which rating did you mean?", "why": "two columns match",
@@ -326,10 +294,6 @@ def wire() -> dict[str, Any]:
         "status": "interrupted",
         "metadata": {"graph_id": "serve"},
         "interrupts": {"task-spec-1": [{"id": "int-spec-1", "value": asked}]},
-        "values": {
-            "turns": [envelope],
-            "clarifications": [{**asked, "turn_id": turn_id, "answer": "the critic one"}],
-        },
     }
     degenerate = {
         "updated_at": "2026-08-22T09:00:00Z",
@@ -343,36 +307,19 @@ def wire() -> dict[str, Any]:
         threads = _FakeThreads([thread, degenerate])
 
     queue = PendingClarifications(client_factory=lambda: _Client())
-    log = ThreadTurnLog(client_factory=lambda: _Client())
-    app = make_app(session, log, queue)
+    app = make_app(session, queue)
 
     return {
         "spec": json.loads(SPEC_PATH.read_text(encoding="utf-8")),
         "client": TestClient(app),
-        "turn_id": turn_id,
     }
 
 
-#: Every operation these fixtures can drive, as (method, spec path, url). Coverage of the spec's
-#: full operation set is asserted by :func:`test_every_operation_in_the_spec_is_exercised_here`.
-#: Each entry is (spec path, url). The url defaults to the path when they are the same, which is
-#: every route without a path parameter or a query string.
+#: Every operation, as (method, spec path, url). Coverage of the spec's full operation set is
+#: asserted by :func:`test_every_operation_in_the_spec_is_exercised_here`.
 CASES: list[tuple[str, str, str]] = [
-    ("GET", p, u)
-    for p, u in (
-        ("/livez", ""), ("/readyz", ""), ("/capabilities", ""),
-        ("/corpus/assets", ""), ("/corpus/assets", "/corpus/assets?type=table"),
-        ("/corpus/fields", ""), ("/corpus/fields", "/corpus/fields?type=table"),
-        ("/corpus/rows", "/corpus/rows?type=table"),
-        ("/corpus/rows", "/corpus/rows?type=column"),
-        ("/schema/summary", ""), ("/schema/{table_id}", "/schema/beer.brands"),
-        ("/columns/{column_id}/related", "/columns/beer.brands.name/related"),
-        ("/columns/{column_id}/related", "/columns/nope/related"),
-        ("/graph", ""), ("/graph", "/graph?schema=beer&focus=beer.brands&radius=1"),
-        ("/knowledge-graph", ""), ("/audit/turns", ""), ("/audit/corpus", ""),
-        ("/clarifications/pending", ""),
-    )
-    for u in (u or p,)
+    ("GET", p, p)
+    for p in ("/livez", "/readyz", "/capabilities", "/clarifications/pending")
 ]
 
 
@@ -392,26 +339,6 @@ def test_the_spec_declares_every_field_the_server_sends(
     schema = _declared(wire["spec"], method, path, "200")
     problems = _violations(response.json(), schema, wire["spec"], f"{method} {url} $")
     assert not problems, "\n".join(problems)
-
-
-def test_the_spec_declares_the_trace_for_a_turn_that_exists_and_one_that_does_not(
-    wire: dict[str, Any],
-) -> None:
-    """Both branches, because they are different shapes under one schema.
-
-    A found turn carries the record beside the stages; a miss carries two keys. The spec
-    requires only ``found`` and ``turn_id``, which is what lets one component describe both — so a
-    test that only ever asked for a hit would not notice the miss growing a field.
-    """
-    schema = _declared(wire["spec"], "GET", "/audit/turns/{turn_id}/trace", "200")
-    for turn_id, expected in ((wire["turn_id"], True), ("no-such-turn", False)):
-        response = wire["client"].get(f"/audit/turns/{turn_id}/trace")
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["found"] is expected, body
-        problems = _violations(body, schema, wire["spec"], f"GET /audit/turns/{turn_id}/trace $")
-        assert not problems, "\n".join(problems)
-
 
 
 def test_the_pending_queue_carries_interrupt_ids_and_a_null_question(wire: dict[str, Any]) -> None:
@@ -438,7 +365,7 @@ def test_the_spec_declares_the_not_ready_body(wire: dict[str, Any]) -> None:
     def missing_dsn() -> Any:
         raise RuntimeError("no database: set one of GOVERNED_BI_PG_DSN / PG_RENAME_DECOY_DSN")
 
-    response = TestClient(_build_app(missing_dsn, object(), object())).get("/readyz")
+    response = TestClient(_build_app(missing_dsn, object())).get("/readyz")
     assert response.status_code == 503
     schema = _declared(wire["spec"], "GET", "/readyz", "503")
     problems = _violations(response.json(), schema, wire["spec"], "GET /readyz $")
@@ -458,9 +385,7 @@ def test_every_operation_in_the_spec_is_exercised_here() -> None:
         for path, operations in spec["paths"].items()
         for method in operations
     }
-    exercised = {(method, path) for method, path, _ in CASES} | {
-        ("GET", "/audit/turns/{turn_id}/trace"),
-    }
+    exercised = {(method, path) for method, path, _ in CASES}
     assert not declared - exercised, (
         f"docs/openapi.json declares {sorted(declared - exercised)} and nothing here validates a "
         "response for it -- add a case to CASES, or say in the docstring why it is unreachable"

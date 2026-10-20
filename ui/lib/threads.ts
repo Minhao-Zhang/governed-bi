@@ -1,25 +1,9 @@
 /**
- * Conversations — the LangGraph Server's threads, listed cheaply.
+ * Conversations: the LangGraph Server's threads, listed cheaply.
  *
- * **The engine has always persisted these; the client threw them away.** The served path
- * checkpoints to SQLite through the `checkpointer.path` factory `langgraph.json` declares
- * (`src/governed_bi/serve/checkpointer.py::conversation_checkpointer`, ADR 0014), which is
- * what `/capabilities` reports as `checkpoint_durable`. So a conversation was recoverable
- * the whole time. What was missing was on this side: `useStream` was called with no
- * `threadId`, so it minted a fresh one on every page load and there was no way to name,
- * list or reopen the ones already stored. (`.langgraph_api/*.pckl` is `langgraph dev`'s own
- * default pickle store — not where this deployment's conversations live.)
- *
- * **`select` + `extract`, not a plain search, and the difference is three orders of magnitude.**
- * Measured against a local server holding 16 threads: `threads.search({limit: 50})` returns
- * **2,421,414 bytes**, because a thread's `values` is the whole serve state — every message, the
- * delivered context block, the retrieved assets, the record. The same query restricted to four
- * scalar fields plus two extracted paths returns **3,926 bytes**. A sidebar that re-fetches on
- * focus cannot be built on the first shape.
- *
- * `extract` takes a dotted path into the thread and must start with one of `config`,
- * `interrupts`, `metadata` or `values` — the server rejects a bare key and rejects JSONPath
- * (`$.question`) with a message naming the four roots.
+ * `select` + `extract` rather than a plain search: a thread's `values` is the whole serve state,
+ * so 16 threads measured 2,421,414 bytes with it and 3,926 bytes without. An `extract` path must
+ * start with `config`, `interrupts`, `metadata` or `values`; the server rejects anything else.
  */
 
 import { Client, type Thread } from "@langchain/langgraph-sdk";
@@ -32,12 +16,8 @@ export interface ConversationSummary {
   updated_at: string;
   status: Thread["status"];
   /**
-   * The **most recent** question on the thread, not the first.
-   *
-   * `question` is a single state channel that each turn overwrites, so there is no "first
-   * question" to read without pulling the message list — which is the 2.4 MB payload this
-   * module exists to avoid. Rendered as "the last thing you asked" beside the turn count
-   * rather than as a title, because a title that silently changes is worse than no title.
+   * The most recent question, not the first: `question` is one channel each turn overwrites, and
+   * reading the first would mean pulling the message list this module exists to avoid.
    */
   question: string | null;
   /** `turn_index`, i.e. how many turns this conversation has. */
@@ -62,12 +42,7 @@ function count(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/**
- * The most recently updated conversations, newest first.
- *
- * `limit` is a real cap and not pagination: this is one operator's own traffic and the list is
- * a switcher, not an archive. If it ever needs to be one, `offset` is already on the query.
- */
+/** The most recently updated conversations, newest first. `limit` is a cap, not pagination. */
 export async function listConversations(limit = 50): Promise<ConversationSummary[]> {
   if (!LANGGRAPH_URL) return [];
   const threads = await threadsClient().threads.search({

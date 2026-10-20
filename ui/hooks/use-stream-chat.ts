@@ -388,15 +388,6 @@ export function useStreamChat(
   // above keeps the turns that finished while this component was mounted; `values.turns` covers
   // the ones that did not, which after a reload is all of them.
   //
-  // **This was a fetch of `GET /audit/turns` plus a question-text match, and both are gone.** The
-  // engine now accumulates each finished turn's envelope on a graph channel (`ServeState.turns`,
-  // `operator.add`, outside `PER_TURN_RESET`), so the records and the messages are one store and
-  // `useStream` already has them: no request, no effect, no cache to invalidate, and no window
-  // where a card is bare text while a fetch is in flight. It also fixes what the text match was
-  // working around rather than solving — the log is a file queried by `thread_id` and holds rows
-  // this conversation never showed, so neither a position nor a string was ever an identity.
-  // `turnAnswersByMessageId` explains the keying.
-  //
   // **`turns` is on the checkpoint but NOT on the streamed surface, so the rows are held.**
   //
   // Measured against `langgraph-api` on 2026-08-18, one two-turn thread: `GET

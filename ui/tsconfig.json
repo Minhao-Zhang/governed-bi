@@ -7,9 +7,8 @@
       "esnext"
     ],
     "allowJs": true,
-    // `scripts/check-api-contract.ts` runs under Node's type stripping, which resolves the
-    // real file and so needs the real `.ts` extension in the import. Safe here because
-    // `noEmit` is true — nothing is emitted that could carry an unresolvable specifier.
+    // `scripts/check-stream-messages.ts` runs under Node's type stripping, which needs the real
+    // `.ts` extension in imports. Safe because `noEmit` is true.
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "strict": true,

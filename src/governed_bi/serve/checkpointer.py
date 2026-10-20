@@ -5,20 +5,18 @@ The served store replaces the dev server's default saver -- pickle shards under
 server opens and closes on its lifespan. Mounted by ``langgraph.json``'s ``checkpointer.path``;
 LangGraph Server owns its lifecycle.
 
-**Its job is one thing: a conversation survives a restart.** It does *not* feed the audit surface,
-and an earlier version of this docstring drew that consequence anyway. ``Threads.search`` never
+**Its job is one thing: a conversation survives a restart.** ``Threads.search`` never
 reaches a checkpointer -- the source of ``langgraph_runtime_inmem.ops.Threads.search`` contains no
 such reference (verified 2026-08-20 at ``langgraph-runtime-inmem`` 0.32.3, re-verified 2026-10-05
-at 0.35.1) -- so ``/audit/turns``
+at 0.35.1) -- so a thread search
 reads the *thread row's* ``values``, which that runtime copies out of ``checkpoint["values"]`` at
 run completion (``ops.py:1251``, ``:1349`` at 0.35.1) into ``.langgraph_api/.langgraph_ops.pckl``, a
 ``PersistentDict`` flushed by a daemon thread every ten seconds (``_persistence.py:17``, ``:53``)
 and on ``stop_pool``. Thread ``status`` and ``interrupts`` live in the same pickle, so the pending
-clarification queue reads it too. ``api/thread_turns.ThreadTurnLog.TURN_LOG_DIR`` is the account of
-this; these two must agree.
+clarification queue reads it too.
 
 **The durable half and the read half are different halves**, which is what a reader needs next.
-Measured 2026-08-20: ``runs/conversations.sqlite`` holds 88.4 MB of checkpoints nothing on the audit
+Measured 2026-08-20: ``runs/conversations.sqlite`` holds 88.4 MB of checkpoints nothing on the read
 path opens, while the 2.7 MB ``.langgraph_ops.pckl`` it does read is a *disposable cache* to its
 owner -- ``GLOBAL_STORE.load()`` deletes it on ``ModuleNotFoundError`` **and** on a bare
 ``Exception`` (``database.py:167-184``; the log text names "Renamed or moved classes"). The two
@@ -26,7 +24,7 @@ failures point opposite ways: a hard kill inside the ten-second flush window lea
 registry behind a checkpoint that is already durable here -- observed 2026-10-05 as a run restored
 ``running`` with no worker, which ``Runs.next``'s head-only scan turns into a wedged queue for every
 thread (``docs/open-work.md`` §4.4) -- and a module
-rename destroys the audit history while these checkpoints survive unread. Nothing expires either --
+rename destroys the thread list while these checkpoints survive unread. Nothing expires either --
 ``langgraph.json`` configures ``checkpointer.ttl``, but ``langgraph_runtime_inmem``'s ``sweep_ttl``
 is ``return (0, 0)`` and no caller exists in ``site-packages``, so this file grows monotonically
 (``runs/conversations.sqlite``: 0 freelist pages, measured 2026-08-20). ADR 0014 §4.

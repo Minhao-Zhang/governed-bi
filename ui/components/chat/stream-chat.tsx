@@ -2,22 +2,14 @@
 
 import { Conversation } from "@/components/chat/conversation";
 import { ConversationBar } from "@/components/chat/conversation-bar";
+import { RecentConversations } from "@/components/chat/recent-conversations";
 import { useStreamChat } from "@/hooks/use-stream-chat";
 import { useThreadId } from "@/hooks/use-thread-id";
 
 /**
- * Live streaming transport container. Owns the `useStream`-backed hook; mounted
- * only when the backend reports `can_stream: true`.
- *
- * **It also owns which conversation is open**, because that is a fact about this transport and
- * no other: threads are LangGraph Server's resource, and this is the only transport there is
- * against a real engine. Held in the
- * URL (`useThreadId`), fed to the hook as `threadId`, and written back by `onThreadId` when the
- * first turn mints one — so a reload reopens the same conversation instead of starting a fresh
- * thread beside the one already on disk.
- *
- * The *list* of conversations is not here. It is `/history`, and `?thread=<id>` is the one
- * address both pages agree on.
+ * The live transport. It owns which conversation is open, because threads are LangGraph
+ * Server's resource: held in the URL (`useThreadId`) and written back when the first turn mints
+ * one, so a reload reopens the same conversation.
  */
 export function StreamChat() {
   const { threadId, setThreadId } = useThreadId();
@@ -34,6 +26,7 @@ export function StreamChat() {
       clarification={clarification}
       respondClarification={respondClarification}
       header={<ConversationBar threadId={threadId} onNew={() => setThreadId(null)} />}
+      empty={<RecentConversations onOpen={setThreadId} />}
     />
   );
 }

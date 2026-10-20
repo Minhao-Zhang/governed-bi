@@ -33,7 +33,7 @@ routes there rather than letting it escape the graph.
 
 `record` writes nothing itself. It returns the finished turn onto `ServeState.turns`, an
 accumulating channel, and the durable checkpointer `langgraph.json` mounts is what persists it —
-which is why the audit surface reads thread state and there is no second store
+so thread state is the only store of a turn
 ([ADR 0014](adr/0014-one-conversation-store.md)). It is the only producer of a turn record; the
 REST chat pair that was the second one is deleted.
 

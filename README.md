@@ -115,7 +115,7 @@ npm --prefix ui run dev         # client  :3000
 ```
 
 **The engine authenticates nobody.** No route asks for a credential, so anything that can reach
-`:2024` can post a turn and read every past one — including the SQL — out of `GET /audit/turns`.
+`:2024` can post a turn and read every past one — including the SQL — out of `GET /threads/{id}/state`.
 That is a deliberate choice for a single-operator engine on loopback, taken on 2026-08-13 because
 LangGraph Studio's bootstrap calls cannot carry a header; it re-opens audit findings A1 and A7,
 and [the usage guide](docs/usage.md#serve-langgraph-server) says so in full. Do not put this port

@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 def _client(get_session: Any) -> TestClient:
     from governed_bi.api.routes import _build_app
 
-    return TestClient(_build_app(get_session, object(), object()))
+    return TestClient(_build_app(get_session, object()))
 
 
 def test_readyz_is_503_when_the_session_cannot_be_built() -> None:

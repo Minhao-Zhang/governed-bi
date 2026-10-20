@@ -222,14 +222,12 @@ curl localhost:2024/capabilities
 ```
 
 **That re-opens two findings, and the honest thing is to say which.**
-A1 and A7 — every route unauthenticated, and `/audit/turns` plus
-`/audit/turns/{id}/trace` return every thread's SQL, full records, and an
-absolute path to the conversation database — were closed on 2026-08-12 by requiring a shared key. The key
+A1 and A7 — every route unauthenticated, and every thread's SQL and full records readable — were
+closed on 2026-08-12 by requiring a shared key. The key
 was removed on 2026-08-13 and both findings are live again, in exactly the terms they were written
 in: anything that can reach this port can post a turn, execute governed SQL against the configured
-database, and read every past turn out of `/audit/turns` — or out of the platform's own
-`/threads/{id}/state`, which since 2026-08-18 returns every turn of that thread rather than the
-newest one.
+database, and read past turns out of the platform's own `/threads/{id}/state`, which returns the
+thread's recent turns rather than the newest one.
 
 **Why, deliberately.** This is a single-operator engine on `127.0.0.1` under `langgraph dev`, and
 LangGraph Studio cannot hold a credential on the calls it bootstraps with. Measured 2026-08-13:
@@ -450,12 +448,5 @@ npm run build
 `npx tsc --noEmit` is not redundant with the linter, which does not type-check: a payload field
 renamed on the engine side passes lint and fails only in a browser.
 
-One more runs in CI, hermetic (no engine, no corpus, no network):
-
-| | |
-|---|---|
-| `check:answer-delivery` | every refusal reason carries a sentence, so a refusal cannot render as a bare catalog |
-
-Two stay manual: `npm run check:api` validates every route against the client's zod schemas but
-needs a live engine and a loaded corpus, and `npm run check:stream-messages` is a red/green
-reproduction of one rendering bug.
+`npm test` runs the component tests, and `npm run check:stream-messages` stays manual: it is a
+red/green reproduction of one rendering bug.

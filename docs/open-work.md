@@ -435,10 +435,7 @@ One shape keeps recurring: something is declared in the register, stamped by a n
 in a docstring, and **nothing on the other end reads it**. Each instance is individually small;
 together they are the reason numbers here have twice been quotable and wrong.
 
-A sweep found 28 and the checker now reports **5**. It stood at 6 across the 2026-08-12
-access-seam and abstention work, which added comparability knobs (among them
-`abstention_policy_enabled`), a record field (`abstention`) and a state channel of the same name,
-every one of them with a consumer on the other end; `clarifications` closed on 2026-08-19. That is
+A sweep found 28 and the checker now reports **7**. That is
 the number to watch when adding a declaration: it is easy to move, and the only thing in CI that
 moves it is `test_the_declared_but_unconsumed_set_does_not_grow`, which fails on a closure as
 loudly as on a new finding so the list cannot outlive its findings.
@@ -451,7 +448,7 @@ writes from now on — which is not the same as every row on disk; see below. Ev
 the per-field decisions are in `git-history:docs/analysis/declared-not-consumed.md`, deleted by
 `2396ca2`.
 
-Five remain, and none of them currently corrupts a number:
+Seven remain, and none of them currently corrupts a number:
 
 | | |
 |---|---|
@@ -459,12 +456,10 @@ Five remain, and none of them currently corrupts a number:
 | `negative_tau`, `facet_model`, `rewrite_model` | dead declarations |
 | `build_workers` | **deliberately still open.** The eval driver serves and does not build a corpus, so a number here would be the `embedding_provider` defect — a null reads as unmeasured, a value reads as a measurement. The knob's own note is about a worker that "holds a connection AND a long-lived agent conversation", which is the curator, and the curator is not in this repository. Wiring it from the driver would launder it under K1's blind spot rather than close it |
 
-`clarifications` was the sixth until 2026-08-19. It was a channel with two writers and no reader
-outside `state.py`, and what closed it was seeing the consequence rather than the declaration: a
-turn that paused at `ask_user`, was answered, and resumed had its SQL chosen by a *person*, and
-`/audit/turns/{id}/trace` showed no sign of it. `ThreadTurnLog.clarifications_of` now projects the
-channel onto the trace, joined on the `turn_id` the row already carries. Nothing new is stored --
-which is why turns served before the reader existed show their clarifications too.
+`clarifications` and `turns` are the sixth and seventh. `clarifications` holds the answered
+clarifications `agent_core` writes and `turns` the envelope `record_node` appends per turn; their
+readers were the audit routes and `smoke_api.py`'s audit checks, deleted in P4. Tests still read
+both. They wait on P13/P14: the chat page reads them, or the channels are deleted.
 
 The common cause is that declaring and consuming live in different files and nothing forces them
 to meet. **Two of the fixed items were invisible to any static rule by construction** — in each
@@ -921,16 +916,11 @@ therefore live again in the words they were written in:
 
 - **A1** — every route is unauthenticated, so anything that can open a socket to `:2024` can post
   a turn and execute governed SQL against the configured database.
-- **A7** — `/audit/turns` and `/audit/turns/{id}/trace` hand that caller every thread's SQL, the
-  full turn records, and an absolute path to the conversation database. Wider than that sentence
-  was written: `api/routes.py::trace_for` also returns both `clarifications` and `raised`
-  (`turn_log.clarifications_of` and `turn_log.raised_of`, keyed on the turn's own `thread_id`), so
-  the trace discloses the questions the engine asked, the answers a
-  person typed, and every reader-filed note — see the item below, which is the same
-  surface from the write side. **Wider since 2026-08-18**
-  ([ADR 0014](adr/0014-one-conversation-store.md)): the record accumulates on `ServeState.turns`,
-  so the platform's own unauthenticated `/threads/{id}/state` — and any `values` stream frame —
-  carries the thread's recent turns rather than only the newest one. **Bounded, and the magnitude
+- **A7** — the platform's own unauthenticated `/threads/{id}/state`, and any `values` stream
+  frame, hand that caller the thread's SQL and turn records. The custom audit routes that also
+  did are deleted (P4). Since [ADR 0014](adr/0014-one-conversation-store.md) the record
+  accumulates on `ServeState.turns`, so a read carries the thread's recent turns rather than only
+  the newest one. **Bounded, and the magnitude
   matters:** the same commit that widened this capped the channel at `MAX_TURNS_RETAINED = 25`
   (`src/governed_bi/serve/state.py:260-282`), so one unauthenticated read yields up to 25 whole
   turn records and the older ones only through their own checkpoints. "Every prior turn" was wrong
@@ -941,7 +931,7 @@ therefore live again in the words they were written in:
 `GET /clarifications/pending` and `POST /turns/{turn_id}/raised` — both in
 `api/feedback_routes.py` since ADR 0015 §2 replaced `api/clarification_routes.py` and
 `api/raised_write.py` — hand any caller every unanswered question, and those questions can name
-assets, which was accepted because `/audit/turns` already discloses every thread's SQL to the same
+assets, which was accepted because thread state already discloses every thread's SQL to the same
 caller. The POST is a write: any caller reaching the port can file an observation against any
 turn, so the queue an operator reads is attacker-writable. What bounds one row is
 `NOTE_MAX_CHARS` (4,000) and `QUESTION_MAX_CHARS` (8,000) in `feedback/validate.py`; **nothing
@@ -954,12 +944,6 @@ mitigations of the finding above: it does not touch graph state — the
 thread. It still persists attacker-supplied text, into `runs/feedback.sqlite` instead of a
 checkpoint channel. The rows are attributable and movable now, which is what makes the flood
 cheaper to clean up and does nothing to prevent it.
-
-**And the write feeds a read.** `api/routes.py::trace_for` returns *both* `clarifications` and
-`observations`, so `/audit/turns/{id}/trace` hands the same unauthenticated caller back the notes
-any caller could have filed, beside the clarification answers a person typed. That is one loop, not
-two findings. (The wire key was `raised` until ADR 0015 §2; a client reading the old name reads
-nothing.)
 
 Filed as its own item rather than folded into A7 because A7 is a disclosure finding and the POST is
 not. Matching corrections landed the same day at
@@ -981,7 +965,7 @@ id is the only handle on a paused clarification. A6 retired earlier with `POST /
 control against this class of exposure, the CORS origin list, and that control stops a browser
 and nothing else. Two things would have to be settled before this engine is reachable from
 anywhere but loopback: a credential Studio can carry (a query parameter or a reverse proxy that
-injects the header, neither tried), and whether `/audit/turns` should project past turns to a
+injects the header, neither tried), and whether thread state should carry past turns to a
 caller at all, which was a smaller question when it sat behind a key. Neither is scheduled.
 A2, A3 and A4 stay closed throughout: the `@auth.on` handlers that refuse a client-supplied
 state-writing `command` are untouched, and `langgraph.json` keeps `auth.path` for them.
@@ -1145,55 +1129,14 @@ so today the engine still delivers. What is genuinely still open is the narrower
 policy does not settle: whether a turn that *delivers* under a failed channel should say so on the
 answer itself, rather than only in the arm-level counter and the trace.
 
-### 5.3 Client-side references to surface the engine does not have
+### 5.3 No gate reads citations in `ui/`
 
-Three readers in `ui/lib/answer-delivery.ts` — `whyLines`, `routedSchemasLabel`,
-`corpusVersionLabel` — consume `provenance.uncertainty_flags`, `suspect_columns`,
-`routed_schemas` and `corpus_release_hash`. The load-bearing claim is about the *record*:
-`register/record.py`'s `RECORD_REGISTER` declares none of the four, and the nearest live
-equivalent to the last is its `corpus_content_hash` entry (`register/record.py:153`). "None of the
-four exists in `src/`" was too strong and is corrected: `suspect_columns` does exist as a corpus
-concept — `corpus/analyst.py:73` exposes it and `govern/check.py:97` normalises it into the
-COLUMNS layer — it simply never reaches `provenance`, which is why the reader is inert anyway.
-`uncertainty_flags` and `corpus_release_hash` are absent from `src/` outright, and `routed_schemas`
-appears only inside `eval/datalake.py`'s `tables_in_routed_schemas` counter, which is a different
-field. The functions are inert rather than wrong, and are annotated as such at each site.
-Repointing the hash is a behaviour change and wants a decision, not a patch.
-
-Separately, six UI files cited a handoff document that was deleted from this repository, at eight
-sites (`components/corpus/asset-edit-sheet.tsx`, `components/schema/column-related.tsx`,
-`hooks/use-stream-chat.ts` ×2, `lib/api-client.ts` ×2, `lib/capabilities.ts`,
-`lib/mock/fixtures.ts`) — that pair of numbers was files *and* sites, and both held when
-re-counted 2026-08-22. **Closed the same day:** all eight were repointed at the ADR that actually
-covers the claim (0007 §4/§6/§7, 0009 Amendment 1) or dropped where none does, and
-`asset-edit-sheet.tsx` was deleted outright with the unreachable edit affordance. The `D15` figure
-is the one that did not hold. `D15` is cited as a design decision at **31 sites
-across 12 files**, counted the same day over `ui/**/*.ts` and `ui/**/*.tsx` with build output
-excluded: `lib/schemas.ts` ×8, `lib/api-client.ts` ×5, `lib/mock/fixtures.ts` ×5,
-`components/schema/knowledge-graph.tsx` ×3, `hooks/queries.ts` and `lib/graph-scope.ts` ×2 each,
-and one apiece in `lib/capabilities.ts`, `lib/catalog.ts`, `lib/types.ts`, `app/schema/page.tsx`,
-`components/schema/er-diagram.tsx` and `components/schema/schema-search.tsx`. The earlier "twelve"
-was the file count written as if it were the site count.
-`docs/design-decisions.md` is an ADR index and carries no numbered D-entries, so those
-client citations are dead. Cross-schema joins themselves are still a live retrieval
-property (ADR 0005); only the D15 label is gone from `docs/`.
-
-A third client/engine divergence, found 2026-08-22 and left open because either repair is a
-behaviour change. `ui/lib/types.ts`'s `ASSET_TYPES` offers a `note` filter, but `note` is not a
-registered asset type: `register/assets.py`'s `ASSET_REGISTER` declares eight — `schema`, `table`,
-`column`, `term`, `metric`, `join`, `few_shot`, `negative_example` — and notes are inline `rules`
-on the asset that bears them (ADR 0003 was reversed in full by ADR 0005, which is where the
-standalone note asset went). So the Corpus page's `note` pill sends `type=note` to `asset_rows`,
-which validates against the register and returns `[]`: a filter that can never match anything.
-The mirror of it is that the client offers no `schema` or `column` pill, though both are real
-registered types `/corpus/assets` serves. Dropping the dead pill is a UI change; adding the two
-missing ones changes what the page lists. Neither is a prose repair, so neither was made.
-
-The split these drifted across is closed — the UI is `ui/` in this tree since `506ad9b` — but no
-gate reads it. `check_citations.py`'s `STRICT_ROOTS` is `("src", "tools", "docs", "tests")` and
-its `SEARCH_SUFFIXES` does not include `.ts` or `.tsx`, so every citation above is still
-unchecked by anything. Whether to extend the gate over `ui/` is the open call, and it is now a
-one-tree question rather than a cross-repository one.
+`check_citations.py`'s `STRICT_ROOTS` is `("src", "tools", "docs", "tests")` and its
+`SEARCH_SUFFIXES` does not include `.ts` or `.tsx`, so a citation in the client is unchecked by
+anything. The client references to engine fields nothing writes (`whyLines`,
+`routedSchemasLabel`, `corpusVersionLabel`), the dead `D15` citations and the Corpus page's `note`
+filter went with the pages and the answer-card branches deleted in P4. Whether to extend the gate
+over `ui/` is still the open call.
 
 ---
 

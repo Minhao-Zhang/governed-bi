@@ -42,9 +42,9 @@ export function AgentTimeline({
   steps: TimelineStep[];
   isRunning: boolean;
   title?: string;
-  /** Start the completed trace open (answer card). Provenance sheet leaves this false. */
+  /** Start the completed trace open, as the answer card does. */
   defaultExpanded?: boolean;
-  /** Auto-open transparency step dropdowns. Off in the provenance sheet to stay compact. */
+  /** Auto-open the rows whose detail is a decision or a failure. */
   preferOpenDetails?: boolean;
 }) {
   // Live runs stay open; the answer card can opt into starting expanded so the

@@ -151,31 +151,11 @@ def test_an_archived_row_is_still_judged_by_todays_register_at_read_time() -> No
     for name in required_keys():
         assert archived[name] == full[name], f"{name} is required and was not kept verbatim"
 
-    # And the wire columns the list view projects are untouched, so `/audit/turns` is unchanged.
+    # And the columns a one-line summary of the turn reads are untouched.
     for name in ("turn_id", "run_id", "thread_id", "question_id", "db_id", "outcome",
                  "terminal_reason", "schemas", "generated_sql", "latency_sec", "execution"):
         assert archived[name] == full[name], name
     assert len(archived["licensed"]) == len(full["licensed"]), "licensed_count would move"
-
-
-def test_the_keep_set_still_covers_every_column_the_audit_list_projects() -> None:
-    """``serve`` sits below ``api``, so the list-view columns are *copied* into ``state.py``.
-
-    A copy that nothing checks is a copy that drifts, and the drift is silent in the worst
-    direction: a column ``SUMMARY_FIELDS`` gains and ``_LIST_VIEW_KEYS`` does not becomes a
-    compactable field, and ``/audit/turns`` starts rendering a marker dict where the client's
-    schema expects a string. Importing the reader here is fine — a test may read upward.
-    """
-    from governed_bi.api.thread_turns import SUMMARY_FIELDS
-
-    protected = protected_record_keys()
-    missing = set(SUMMARY_FIELDS) - protected
-    assert not missing, (
-        f"{sorted(missing)} are audit-list columns that compaction may replace with a marker. "
-        "Add them to `state._LIST_VIEW_KEYS`."
-    )
-    # `summarise_turn` also reads `licensed`, which is not a SUMMARY_FIELDS entry.
-    assert "licensed" in protected, "licensed_count is computed from it"
 
 
 # ── what compaction does, and what it says it did ─────────────────────────────
@@ -204,7 +184,7 @@ def test_compaction_trims_the_two_bulk_keys_and_nothing_smaller() -> None:
     # correct implementation for being too good.
     survivors = {k: v for k, v in archived.items() if k in protected_record_keys()}
     assert set(survivors) >= set(protected_record_keys()) & set(full), (
-        "compaction dropped a protected key; those are the audit list's columns and the floor the "
+        "compaction dropped a protected key; those are a turn summary's columns and the floor the "
         "budget is measured against"
     )
     assert _bytes(survivors) <= after, "the protected keys are a subset of what survived"
@@ -215,12 +195,10 @@ def test_compaction_trims_the_two_bulk_keys_and_nothing_smaller() -> None:
 
 
 def test_a_trimmed_field_stays_present_and_says_so() -> None:
-    """ADR 0009 D2: a silent cap reads as full coverage. Deleting the key would read as worse.
+    """A silent cap reads as full coverage. Deleting the key would read as worse.
 
-    ``/audit/turns/{id}/trace`` renders every register field with ``present`` and the register's
-    own "why". A deleted ``facet_hits`` therefore renders ``present: false`` beside "counts alone
-    cannot attribute a finding to an asset" — which asserts the *route* stage produced nothing, a
-    false fact about the turn. So the key stays, holding a value that names itself.
+    A deleted ``facet_hits`` would read as "the route stage produced nothing", a false fact about
+    the turn. So the key stays, holding a value that names itself.
     """
     archived, dropped = compact_turn_record(_fat_record())
 
@@ -282,9 +260,8 @@ def test_the_newest_row_keeps_its_record_whole() -> None:
 def test_the_history_is_capped_and_the_gap_is_stated() -> None:
     """The bound itself, plus the count that keeps the cap from reading as full coverage.
 
-    ``/audit/turns`` has no truncation field on the wire and this change does not add one — the
-    wire shape is a contract ``npm run check:api`` holds. ``elided_turns`` on the oldest surviving
-    row is therefore the only statement that the history is partial, and it is where the gap is.
+    ``elided_turns`` on the oldest surviving row is the only statement that the history is
+    partial, and it is where the gap is.
     """
     rows: list[dict[str, Any]] = []
     for i in range(MAX_TURNS_RETAINED + 15):
@@ -306,8 +283,8 @@ def test_the_history_is_capped_and_the_gap_is_stated() -> None:
 def test_a_resumed_turn_appends_once() -> None:
     """``operator.add`` could not deduplicate, and a clarification resume re-runs ``record``.
 
-    The visible cost was an audit list showing one question answered twice, with two rows carrying
-    one ``turn_id`` — and ``get_turn`` returning whichever it scanned first. ``turn_id`` is the
+    The visible cost was one question answered twice, with two rows carrying
+    one ``turn_id``. ``turn_id`` is the
     register's declared upsert key ("a reused graph deriving it once wrote every question to the
     same id"), so the later write replaces.
     """
