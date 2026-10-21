@@ -10,14 +10,9 @@ reported the resulting null as a finding about the feature. It was a finding abo
 This module makes that arithmetic a precondition of declaring an arm.
 
 **The arithmetic is not here.** :func:`governed_bi.measure.stats.mde` is the one MDE in this
-repository -- a declared singleton (ADR 0005 §6, ``tools/check_one_implementation.py``) -- and
-this module calls it. It used to restate the same paired-McNemar formula under the name
-``minimum_detectable_effect``, with its own hardcoded z-constants, and the two copies already
-disagreed in the last digit at that run's own inputs. A synonym is how that survived: the
-singleton gate is keyed on the name ``mde``, so a second implementation spelled differently sat
-beside a declared singleton and no rule looked at it -- which is the observation `20d3df8` added
-the singleton entry for. ``eval/report.py`` reaches down into ``measure/`` for ``mcnemar`` the
-same way.
+repository (ADR 0005 §6), and this module calls it. A second spelling of the same formula
+already disagreed in the last digit, so this module does not restate it. ``eval/report.py``
+reaches down into ``measure/`` for ``mcnemar`` the same way.
 
 What is left here is the **gate**, which is a different thing from the formula: it converts a
 discordant *count* into the discordance rate ``mde`` requires, and refuses an arm whose

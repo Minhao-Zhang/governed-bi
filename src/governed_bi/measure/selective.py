@@ -363,7 +363,7 @@ class RiskCoverage:
         return DeliveryPolicy(
             # `label` is presentation only, and a caller may pass a rounded coverage
             # here that this method must not round itself -- number formatting in
-            # ``src/`` is ``Measured.render``'s alone (check_measurement_locality.py).
+            # ``src/`` is ``Measured.render``'s alone.
             label=label or f"{self.signal} <= cov {coverage}",
             population=self.population,
             delivered=frozenset(unit for unit, _, _ in self.ranked[:cut]),

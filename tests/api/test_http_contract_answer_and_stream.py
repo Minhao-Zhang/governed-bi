@@ -1,8 +1,7 @@
 """ADR 0007's second acceptance rule: the boundary invents nothing, and the stream reports only
 what it declared.
 
-**Split out of ``test_http_contract.py``** once that file came within 45 lines of ADR 0005 §6's
-hard 1,000-line cap (``tools/check_file_length.py``). That file's own module docstring states
+**Split out of ``test_http_contract.py``.** That file's own module docstring states
 the suite's two governing rules -- "a client may not write the run's claims about itself" and "a
 field the engine does not observe must not be invented at the boundary" -- and still does; this
 file is where the *second* rule's tests live now, physically moved for room and nothing else.
@@ -44,11 +43,6 @@ from test_http_contract import (  # noqa: E402
     _isolated,  # noqa: F401 -- unused by name; importing it registers it as autouse here too
     _served,
 )
-
-from contracts import needs  # noqa: E402
-
-pytestmark = [needs("J")]
-
 
 # ── nothing is invented at the boundary ──────────────────────────────────────
 # ── nothing is invented at the boundary ──────────────────────────────────────

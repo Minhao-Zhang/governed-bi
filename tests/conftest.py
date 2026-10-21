@@ -1,10 +1,9 @@
 """Suite-wide setup. Its only job is to load ``.env`` once, at process entry.
 
 **Why here and not in the fixtures.** A library must not read ``.env`` — `src/` takes a DSN
-or a client and does not decide its own configuration behind its caller's back, and
-`tools/check_imports.py` keeps that layering. So *something* has to bridge the developer's
-``.env`` to the process environment, and the honest place is the entry point of the process
-that wants it. For the test suite, that is this file.
+or a client and does not decide its own configuration. Something has to bridge the
+developer's ``.env`` to the process environment, and the honest place is the entry
+point of the process that wants it. For the test suite, that is this file.
 
 The alternative is what the suite actually had on 2026-08-03, and it is worth recording
 because the cost was invisible: three separate readers of "environment or ``.env``", one of

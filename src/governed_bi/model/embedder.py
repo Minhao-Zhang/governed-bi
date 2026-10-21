@@ -38,8 +38,7 @@ DEFAULT_BATCH_SIZE = 256
 #: Shortest non-blank probe, for adapters that can only learn their served model or their
 #: vector width from a response. Non-blank because :func:`refuse_blank` refuses one, and an
 #: adapter exempting its own probe from its own rule is exactly what that function closes.
-#: Here rather than in each adapter: two spellings of one concept is what
-#: ``tools/check_one_implementation.py`` exists to catch.
+#: Here rather than in each adapter: two spellings of one probe.
 PROBE_TEXT = "probe"
 
 

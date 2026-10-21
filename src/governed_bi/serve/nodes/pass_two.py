@@ -473,15 +473,8 @@ def _build_retrieved(
         "attributions": {k: v for k, v in attributions.items() if k in kept_ids},
         "pulled_in": {},
         "schema_ranking": list(ranking),
-        # **The live index, not the test hook.** This read `state.get("lexical_coverage")`,
-        # which nothing on the served path sets, so the field was null on every turn of every
-        # arm -- a declared measurement with a dead producer. `BM25.coverage` is the derivation
-        # and had no production caller at all; `route_retrieve._lexical_coverage` is the wrapper
-        # and its one call site passes `index=None`, which is right there (the F1 no-index path)
-        # and is why nothing ever reached the real thing. Imported rather than copied: a second
-        # implementation of "which text is measured" is what `check_one_implementation.py`
-        # exists to refuse, and the choice of the raw question over a facet rewrite is the part
-        # that must not drift.
+        # Imported rather than copied. The measured text is the raw question, not a facet
+        # rewrite, and a second copy of that choice would drift.
         "lexical_coverage": _lexical_coverage(state, index),
     }
     # **What the caps discarded, carried out rather than dropped on the floor.** The filter two

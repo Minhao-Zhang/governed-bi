@@ -420,8 +420,7 @@ def _as_state(row: TurnRow, empty_digests: frozenset[str] | set[str]) -> dict[st
     state dict in the policy" precisely so that there is one answer to "where does ``licensed``
     come from", and a replay that re-derived ``failed_channels`` and the eviction counts here
     would be the second reader that docstring forbids — one that drifts the first time a fifth
-    rule reads a sixth channel. ``tools/check_one_implementation.py`` refused the copy, which
-    is the gate working.
+    rule reads a sixth channel.
 
     Three of the four channels are renamed rather than recomputed: ``facets`` is flattened to
     ``facet_channels`` on the row and has to be nested back, ``delivery.evicted`` is projected

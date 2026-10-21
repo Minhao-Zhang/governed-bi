@@ -5,13 +5,10 @@
 
 Re-analysis only: it reads rows that already exist and spends nothing. Everything it
 prints comes from ``governed_bi.measure.selective`` / ``.abstention`` / ``.signals``, so
-this file holds no statistics of its own -- the one thing ``tools/`` has repeatedly got
-wrong is keeping a second implementation of a number (audit E1-E3, and the rival
-``mcnemar`` that ``check_one_implementation.py`` now forbids by name).
+this file holds no statistics of its own. A second implementation of a number is
+how a ladder step changes significance without a diff in the report.
 
-Not named ``check_*``: it reports, it does not gate, and
-``tests/conformance/test_register_closure.py`` requires every ``tools/check_*.py`` to
-be wired into CI or declared manual.
+Not named ``check_*``: it reports a curve, it does not gate a tree.
 
 The two comparisons at the bottom are the point of the exercise:
 

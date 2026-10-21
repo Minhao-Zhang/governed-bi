@@ -1,8 +1,7 @@
 """Six knobs whose behaviour moved while ``knobs_resolved`` stood still.
 
 Every one of these had a real consumer. The code read correctly at the reader and the wire
-back to the record was missing, which is why none of them is visible to
-``tools/check_declared_is_consumed.py`` and all five survived a static sweep — only the
+back to the record was missing, which is why a static sweep of declarations missed them — only the
 artifacts showed them. The evidence is the six arms in ``runs/eval/``, 1,351 rows each, all
 on corpus ``86ed1dbf…`` (``../BIRD-corpus`` @ ``30872d3``):
 

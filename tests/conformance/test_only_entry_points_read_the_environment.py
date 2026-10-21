@@ -12,8 +12,8 @@ first. The rule was broken in the only two places it could be broken, and nothin
 also put an unpackaged directory on an installed package's runtime path and made a module named
 ``credentials`` importable from anywhere in the process.
 
-``tools/check_imports.py`` cannot express this. Layering answers "what may this module import";
-the rule here is the other direction — who may import *it*.
+Layering answers "what may this module import". The rule here is the other direction — who
+may import *it*.
 """
 
 from __future__ import annotations

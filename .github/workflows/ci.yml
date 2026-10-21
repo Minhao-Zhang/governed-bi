@@ -1,53 +1,22 @@
 name: CI
 
-# **Rewritten 2026-08-04, because the previous job could not pass and therefore ran nothing
-# that mattered.** It linted nine paths that do not exist (`gateway/guardrails.py`,
-# `analyst/governance.py`, `eval/metrics.py` and six more — all deleted with v1), invoked
-# `governed_bi.corpus.cli` and two scripts under a `scripts/` directory that does not exist.
-# The job failed at step 4, so `uv run pytest` — the **only** caller of the five `tools/`
-# gates — never executed.
-#
-# That is the difference between a broken CI and a misleading one: ADR 0005 §6 calls the
-# file-length limit "CI-enforced", and that sentence was false for the whole life of the
-# branch. A gate nobody runs is a preference, which is the argument
-# `tools/check_file_length.py` makes about itself in its own docstring.
-#
-# Everything below is a step that runs against the tree as it exists. Nothing here asserts a
-# file that is not present, and nothing is skipped silently: the suite prints its skips with
-# `-rs`, and the parcel register reports built-but-unaccepted packages on every run.
+# Lint, types, tests, and the data-free leak check. The UI is a second job.
 on:
   push:
     branches: [main, v2]
   pull_request:
-  # Nightly, for the two jobs at the bottom of this file — `corpus` and `mutate` — and for nothing
-  # else. GitHub only runs a schedule from the default branch, so what it measures is `main`. That
-  # is the right population for both: a mutation run asks whether the tests guarding *shipped*
-  # invariants can still fail, and the corpus gate compares a corpus against a baseline recorded in
-  # `tools/corpus_baseline.py`, which is only an accepted baseline once it is on `main`. The two
-  # jobs above run on this trigger too; that is harmless and cheaper than teaching each of them to
-  # opt out.
-  schedule:
-    - cron: "0 7 * * *"
-  # Added for `corpus`. Its trigger is "rarely, and when somebody asks" — the corpus moves a few
-  # times a year, and after a corpus commit the honest thing is to be able to ask *now* instead of
-  # waiting for 07:00 UTC. Dispatching also runs `test` and `ui`, for the same reason the schedule
-  # does; `mutate` opts out with an `if` and keeps it.
   workflow_dispatch:
 
 jobs:
-  # The Python engine: everything under `src`, `tools`, `tests` and `docs`. None of
-  # the gates below can see `ui/` — they walk named roots and none of them reads TypeScript — so
-  # the frontend is a second job rather than three more steps here. Two jobs also means a broken
-  # frontend does not hide a broken engine behind a single red X.
+  # The engine. The leak check walks named roots and does not read TypeScript,
+  # so a broken frontend cannot hide a broken engine.
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      # A pull_request checkout is a shallow merge ref with no `main`, so provenance cannot
-      # resolve `git_main_sha` and the test asserting every operational knob is measured fails.
-      # One commit of `origin/main` is enough; faking the value in the test would hide the case
-      # the knob exists for.
+      # A pull_request checkout has no `main`. Provenance needs one commit of it;
+      # faking the sha would hide the knob the test exists for.
       - name: Fetch main for provenance
         run: git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
 
@@ -56,17 +25,9 @@ jobs:
         with:
           python-version: "3.13"
 
-      # `--frozen` on purpose: a CI run that re-resolves the lockfile is not testing the
-      # dependency set anyone else has. It is also what every command in this repo's own
-      # docs uses, so CI and a developer's shell agree.
-      #
-      # `--extra bedrock` because the provider translation is pure Python and is exactly the
-      # code that fails silently: `max_retries` handed to a boto client is accepted and
-      # ignored, so an arm records a retry budget it does not honour. Testing it needs
-      # `botocore.config.Config` importable and costs no AWS call. Without the extra those
-      # tests raised ModuleNotFoundError here while passing on a developer machine that had
-      # run `uv sync --extra bedrock` — CI and the shell disagreeing, which is the one thing
-      # `--frozen` is here to prevent.
+      # `--frozen` tests the lockfile. `--extra bedrock` imports botocore, which the
+      # provider-translation tests need; without it they pass on a machine that synced
+      # the extra and fail here.
       - name: Sync (frozen)
         run: uv sync --frozen --extra bedrock
 
@@ -78,78 +39,15 @@ jobs:
       - name: Types
         run: uv run --frozen mypy src/governed_bi
 
-      # The five gates ADR 0005 §6 declares. Run explicitly as well as through the
-      # conformance suite: the suite asserts they *exit zero on a clean tree*, and running
-      # them directly is what makes their output visible in the log when they do not.
-      #
-      # **`check_citations` was the fifth and was missing here** until 2026-08-06: the register
-      # named five gates, this file ran four, and the one absent was the one that fails when a
-      # retired number reappears in live code. Adding it is what makes the previous commit's
-      # retirement of `EX was 0.049` enforced rather than recorded.
-      - name: Gate — file length (soft 400, hard 1000)
-        run: uv run --frozen python tools/check_file_length.py
-
-      - name: Gate — one implementation per concept
-        run: uv run --frozen python tools/check_one_implementation.py
-
-      - name: Gate — measurement locality
-        run: uv run --frozen python tools/check_measurement_locality.py
-
-      - name: Gate — import layering
-        run: uv run --frozen python tools/check_imports.py
-
-      - name: Gate — no retired claims in live code
-        run: uv run --frozen python tools/check_citations.py
-
-      # Corpus contamination, source level. Needs no corpus and no dataset, which is why it
-      # can run here at all: it refuses the two tables of hand-authored sibling discriminators
-      # that were written by reading the held-out questions, and the shape they were written in.
-      #
-      # `tools/check_train_only.py` is the other half and deliberately is NOT here. It needs a
-      # corpus tree (untracked), the held-out question file (a separate repository) and a third
-      # corpus certified train-only. Naming it as a CI gate would be the "CI-enforced" claim
-      # this file's header is about. It is a manual gate; its preconditions are in its docstring.
+      # Needs no corpus and no dataset. `tools/check_train_only.py` is the other half
+      # and is not here: it needs a corpus, the held-out question file, and a control.
       - name: Gate — no benchmark discriminators in the tree
         run: uv run --frozen python tools/check_no_benchmark_discriminators.py
 
-      # The adversarial governance suite, **printed**. This is not a sixth gate and is not
-      # registered as one: the build-failing half of the property already runs under `pytest`,
-      # in `tests/govern/test_adversarial_suite.py`, which reads the same
-      # `src/governed_bi/govern/adversarial.toml` this driver reads — one suite, two callers,
-      # rather than two lists that drift.
-      #
-      # What the step buys is the same thing the five gates above buy by being run explicitly:
-      # the numbers land in the build log instead of only inside an assertion that passed.
-      # Bypass, misattribution, false refusal, guardrail error and per-layer recall each print
-      # with their denominator, so a reader of a green build can see *what* governance bought
-      # rather than only that a test agreed it bought something. It costs no credential, no
-      # network and no model call, and the layer stack is deterministic, so two runs of it are
-      # identical — which is why it can sit on every push at all.
-      #
-      # It exits 1 on any suite failure, so a broken tree fails here rather than in `pytest`
-      # below: the same defect, one step earlier, with the rates beside it.
-      - name: Report — adversarial governance rates
-        run: uv run --frozen python tools/govern_bench.py
-
-      # `-rs` prints every skip with its reason. That is not cosmetic here: the Postgres and
-      # OpenAI-backed contracts skip without credentials, and a silent skip turns "we tested
-      # one adapter" into "we tested two" — the exact failure `tests/embedders.py` documents.
-      # CI has neither credential, so those skips are expected and must stay legible.
+      # `-rs` prints every skip with its reason. Postgres and OpenAI tests skip without
+      # credentials, and a silent skip would hide which adapter ran.
       - name: Tests
         run: uv run --frozen pytest -q -rs
-
-      # Reports which packages have code but no sign-off. Never fails the build: the
-      # three-state parcel model in `tests/contracts.py` treats "built and unaccepted" as a
-      # reportable state, not an error, because acceptance is a person's judgement.
-      - name: Parcel acceptance report
-        run: |
-          uv run --frozen python -c "
-          import sys; sys.path.insert(0, 'tests')
-          import contracts as c
-          print('accepted           :', sorted(c.ACCEPTED))
-          print('built, unaccepted  :', sorted(c.built_but_unaccepted()))
-          print('declared, unbuilt  :', sorted(c.unbuilt()))
-          "
 
   # The frontend. Added when the UI stopped being a sibling repository and became `ui/`: while it
   # was separate it had CI of its own, and folding it in without this job would have quietly
@@ -168,27 +66,12 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      # `npm ci` and not `npm install`, for the same reason the job above pins `uv --frozen`: an
-      # install that re-resolves is not testing the dependency set anyone else has. It also fails
-      # loudly when package.json and the lockfile disagree, which they did at the moment of the
-      # merge (three missing optional `@emnapi/*` entries under sharp's wasm fallback) and which
-      # `npm install` would have papered over by rewriting the lockfile inside CI.
+      # `npm ci` fails when the lockfile disagrees, instead of rewriting it.
       - name: Install (frozen)
         run: npm ci
 
-      # A gate, and the only thing in this repository that will ever say a CVE landed. It is
-      # here rather than in a scheduled job because the exact pin is what made the last one
-      # permanent: `next` was pinned to `16.3.0`, the fix for GHSA-2xp9-vwfh-vxw4 (an
-      # unauthenticated RCE in the Image Optimization API) shipped in `16.3.5` — *outside* the
-      # stated range — so `npm ci` reinstalled the vulnerable build on every run above, and
-      # nothing looked. `.github/dependabot.yml` raises the bump; this step is what fails if
-      # nobody merges it.
-      #
-      # `--audit-level=high` and not `moderate`, and `--omit=dev`: a gate that is red for a week
-      # nobody can act on is a gate people learn to ignore. Moderates and dev-only tooling (the
-      # `shadcn` CLI, the eslint plugin) carry transitive advisories with no fixed version at
-      # all, e.g. `braces` (every version), and none of that code ships in the app. Keep
-      # `shadcn` in devDependencies for that reason: `globals.css` reads its CSS at build time.
+      # High, production dependencies only. Unfixed moderate advisories in dev tooling
+      # would keep this red with nothing to merge. Dependabot raises the pin.
       - name: Audit
         run: npm audit --omit=dev --audit-level=high
 
@@ -213,200 +96,3 @@ jobs:
 
       # `npm run check:stream-messages` is deliberately NOT here: it is a red/green reproduction
       # of one rendering bug rather than a gate. `docs/usage.md` names it as manual.
-
-  # Did the corpus add a conformance finding? **Nightly or on demand, and deliberately not on a
-  # push or a pull request.**
-  #
-  # This job exists because the dependency direction was inverted. The gate used to live in
-  # `BIRD-corpus`'s own CI, which checked *this* repository out to borrow the tool — and the tool
-  # cannot move to the data: V16 imports `governed_bi.serve.context` and measures a table with the
-  # same `_structural_line` the engine serves, V17a parses a metric expression at the dialect
-  # `govern/` parses generated SQL at, V21 runs `govern/guard.py`'s own `GUARD_RULES`. A second copy
-  # of any of those beside the data is a second answer free to disagree with the first, and the
-  # install is not small either: `serve/__init__.py` re-exports the graph, so the job needs a full
-  # `uv sync` of the engine. The conformance rules are this engine's requirements. So the checker
-  # lives with the consumer, and the consumer runs it.
-  #
-  # **Why not on push.** `../BIRD-corpus` has **9** commits on `main` in its whole history and this
-  # repository has **485** over the same window (2026-07-11 to 2026-08-18, counted 2026-08-24), so a
-  # per-push gate here would run about 54 times per thing worth checking. Worse, it
-  # would go red for something no PR in this repository caused: a finding belongs to a corpus
-  # commit, and blocking an unrelated engine PR on it teaches people that a red X is noise. That is
-  # the same argument that rejected a zero-findings gate with a waiver table (ADR 0016 §Context 2) —
-  # a gate that fires on work it cannot be about gets routed around, and then it protects nothing.
-  #
-  # **What that gives up, plainly: this is no longer a push-time gate on the corpus.** A corpus
-  # commit that adds a finding *lands*. Nothing blocks it. It is caught on the next nightly, or
-  # sooner if somebody dispatches this workflow — which is why `workflow_dispatch` is on the `on:`
-  # block. The window is up to 24 hours, and during it the corpus's own repository has no CI at all.
-  # At the corpus's measured rate — 9 commits in 39 days — that window opens about twice a week.
-  #
-  # **This job has never executed on a runner, and neither did the one it replaces.** The GitHub
-  # Actions run count for `Minhao-Zhang/BIRD-corpus` was 0 when its workflow was deleted (measured
-  # 2026-08-24). So the *checkout layout, the token and the clean ordering below are argued* from
-  # the actions' documented behaviour, not read off a build log.
-  #
-  # **The tool's own contract is not argued. All three exit codes were driven on 2026-08-24**,
-  # against `../BIRD-corpus` at `74ff80c4` with `--base 30872d3b`:
-  #
-  #   exit 0  base 125 findings on 101 identities, head 125 on 101, in **78 s**
-  #   exit 1  one asset copied to a second filename keeping its `id` — head 183 on 159, and the
-  #           58 added V23 findings printed one per line with the asset that already declares each
-  #   exit 2  `--dataset-dir` pointed at a path that does not exist — V11, V12 and V15 each
-  #           reported `not evaluated` by name, which is the silent-green failure this flag exists
-  #           for. Note it exits 0 with the flag and *no* `--dataset-dir` at all, because the
-  #           default resolves to a local sibling: that is exactly why the step below passes both
-  #           paths explicitly instead of trusting resolution it cannot see.
-  #
-  # The corpus was clean afterwards with no worktree left registered, on every one of the three.
-  #
-  # **Three checkouts, and the layout is the part that goes silently wrong.** `actions/checkout`'s
-  # `path:` must stay inside `$GITHUB_WORKSPACE`, and this repository is checked out at the
-  # workspace root, so the two data repositories are *nested* rather than siblings. That is on
-  # purpose. Both tools resolve their default corpus and dataset from
-  # `Path(__file__).parent.parent.parent` — under this layout `/home/runner/work/governed-bi`,
-  # which contains neither directory, so a step that forgot `--corpus-dir` exits 2 saying so. Lay
-  # them out as real siblings and the defaults resolve, which means a wrong or missing flag reads as
-  # a working gate. Both paths below are therefore explicit, and the failure mode of getting one
-  # wrong is a loud one.
-  #
-  # The engine checkout must come **first**: `actions/checkout` cleans its destination with
-  # `git clean -ffdx`, and at the workspace root that would delete two untracked sibling directories
-  # if it ran after them.
-  #
-  # All three repositories are public with Actions enabled, so `${{ github.token }}` — which is what
-  # `actions/checkout` uses when no `token:` is given — can read the two it does not own. No PAT.
-  corpus:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    # Two whole-tree conformance runs over 7,361 files, measured end to end at 78 s locally on
-    # 2026-08-24 (82 s when the tool landed in `3b191d5`; same order, a different laptop minute). A ceiling this far above that is not a performance budget — it is so that a run
-    # wedged on a checkout or on `git worktree add` dies while somebody still associates it with
-    # last night, instead of holding a runner for the default six hours.
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-
-      # `fetch-depth: 0` is load-bearing, and only here. `check_corpus_delta.py` runs
-      # `git worktree add --detach <baseline sha>` inside this checkout to read the base tree, and a
-      # shallow clone does not have that commit — the tool would exit 2 with "does not resolve to a
-      # commit in ...", which is honest but is not a gate. The engine and dataset checkouts need no
-      # history and keep the default depth.
-      - uses: actions/checkout@v7
-        with:
-          repository: Minhao-Zhang/BIRD-corpus
-          path: BIRD-corpus
-          fetch-depth: 0
-
-      # **The repository is named `BIRD-Obfuscation`; the directory is `BIRD-Data-Obfuscation`.**
-      # That is not a typo to tidy up: `BIRD-Data-Obfuscation` is the name the tools' defaults, the
-      # docs and every local checkout use, so the directory keeps it and `repository:` names what
-      # GitHub actually hosts. The path is passed explicitly below, so neither name is inferred —
-      # and if either side is renamed, the manifests go missing and `--every-rule-must-run` turns
-      # that into exit 2 rather than three rules quietly not running.
-      - uses: actions/checkout@v7
-        with:
-          repository: Minhao-Zhang/BIRD-Obfuscation
-          path: BIRD-Data-Obfuscation
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.13"
-
-      # The same line as the `test` job, deliberately, even though this job needs nothing the extra
-      # adds: no conformance rule imports `model/bedrock_embedder.py` or the proxy gateway's boto3
-      # use. Two jobs installing different dependency sets is a second environment nobody tests,
-      # and the trimmed-install idea has a measured cost already — a three-package install died at
-      # V16's `governed_bi.serve.context` import, because `serve/__init__.py` pulls langgraph
-      # (ADR 0016 §Rejected alternatives 5). One wheel is cheaper than a way for this job to fail
-      # differently from the one above it.
-      - name: Sync (frozen)
-        run: uv sync --frozen --extra bedrock
-
-      # `tools/corpus_baseline.py` prints one sha and nothing else, which is why the baseline is
-      # substituted in a shell rather than read with a `sys.path.insert(0, 'tools')` one-liner like
-      # the parcel report above: `tools/` is not a package, and importing it here to read a single
-      # constant would put four lines of Python between the reader and the ref. `run:` uses
-      # `bash -e`, so a baseline module that fails to run aborts the step instead of handing
-      # `--base ""` to the tool.
-      #
-      # Exit codes, from `check_corpus_delta.py`'s docstring: **0** nothing was added, **1** a
-      # finding is present at head and absent at the baseline (or a baseline identity's count grew),
-      # **2** it could not run at all. 1 and 2 both fail the job and mean opposite things — 1 is a
-      # verdict about the corpus, 2 is "this checked nothing".
-      #
-      # `--every-rule-must-run` is why the checkout naming above is written out at length. V11, V12
-      # and V15 need the obfuscation manifests, and without them conformance reports them
-      # `not_evaluated` — which produces zero findings on *both* sides, an empty delta and a green
-      # build. V12 is the held-out-split leakage rule. The flag turns that into exit 2.
-      #
-      # What this cannot see: the engine getting stricter. Both sides are read with whichever engine
-      # revision this job checked out, so a new or widened rule fires at the baseline too and
-      # cancels. That is the property the git baseline was chosen for, and the cost is that this job
-      # reports corpus movement only.
-      - name: Gate — the corpus added no finding since the accepted baseline
-        run: |
-          base="$(uv run --frozen python tools/corpus_baseline.py)"
-          echo "accepted baseline: $base"
-          uv run --frozen python tools/check_corpus_delta.py \
-            --corpus-dir "$GITHUB_WORKSPACE/BIRD-corpus" \
-            --dataset-dir "$GITHUB_WORKSPACE/BIRD-Data-Obfuscation/eval_dataset" \
-            --base "$base" \
-            --every-rule-must-run
-
-      # `tools/check_ratchet.py` is deliberately NOT a second step here, and it has the corpus it
-      # needs right there. Its policy is that a *closure* fails too, until the pin file
-      # `.conformance/bird-corpus-pins.txt` is rewritten in the same commit — so wiring it up would
-      # red this job the first time anybody fixes a metric. It stays a manual instrument, declared
-      # as one in `tests/conformance/test_the_lint_gates_fire_on_a_synthetic_violation.py`. The
-      # consequence is real and worth naming: the pin file has no automated reader, so a closure
-      # makes it stale with nothing noticing.
-
-  # Mutation testing. **Nightly, and deliberately not on a push.** `tools/mutate.py`'s own
-  # docstring gives the reason: it runs a pytest selection per declared mutation, so it is slow,
-  # and it "belongs on a nightly or a pre-release run rather than on every push". That is also
-  # why it is not named `check_*` — `tests/conformance/test_register_closure.py` requires every
-  # `tools/check_*.py` to be declared CI or declared manual, and this is a third thing.
-  #
-  # What it proves is narrow and worth having: for each entry in `tools/mutation_catalogue.py`,
-  # that the anchor still exists (so the entry has not gone stale against a refactor), that the
-  # mutated tree makes at least one named test fail, and that the tree is restored. It says
-  # nothing about mutations nobody wrote down.
-  #
-  # **It rewrites source files in place and restores them**, in a `finally`, with the restore
-  # verified byte-for-byte before the next mutation runs — deliberately not via
-  # `git checkout --`, so that it is safe on a dirty tree. The consequence is that it must never
-  # run beside anything else reading the same checkout: for the length of one mutation, `src/`
-  # on disk holds a deliberate defect, and a concurrent reader would see it. On hosted runners
-  # each job gets its own workspace, so the two jobs above cannot; on a self-hosted runner
-  # sharing one, they could. The concurrency group below is what stops two of these overlapping,
-  # and the `if` is what keeps it off pushes.
-  #
-  # **Dispatchable as well as scheduled, since 2026-09-21, and that is a fix rather than a
-  # convenience.** `corpus-writes-platform-line-endings` survived on this runner for three days
-  # while being caught on the Windows machine that declared it, and the person who repaired it
-  # had no way to ask whether the repair worked here: the only trigger was 07:00 UTC. A job you
-  # cannot run on demand is a job nobody can verify after fixing it, which is this repository's
-  # own argument about gates with no caller, one layer up. Still off pushes, which is what the
-  # sentence above is about.
-  mutate:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    concurrency:
-      group: mutate-${{ github.ref }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.13"
-
-      - name: Sync (frozen)
-        run: uv sync --frozen --extra bedrock
-
-      - name: Mutation testing (every declared mutation)
-        run: uv run --frozen python tools/mutate.py

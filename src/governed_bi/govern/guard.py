@@ -157,14 +157,8 @@ GUARD_RULES: Mapping[str, Callable[[str, GovernancePolicy], str | None]] = {
     "g_tool_forgery": _rule_tool_forgery,
 }
 
-# `BI_SCOPE_RULE_ID` used to be defined here. It moved to `policy.py` on 2026-09-18, with
-# `GUARD_RULE_IDS`, so `GovernancePolicy.__post_init__` can refuse a `guard_rules_enabled` key
-# that names no rule — which is what this comment had called "closed vocabulary" for as long as
-# nothing enforced it, while the served surface ran none of the five rules below.
-#
-# Imported above rather than re-exported: `tools/check_one_implementation.py` refuses one name
-# with two definitions, and it is right to. A re-export is a second home for a name, and the
-# four call sites that read it now say where it lives.
+# Imported from policy.py, not defined here and not re-exported. The policy refuses a
+# guard_rules_enabled key that names no rule. A re-export would be a second home for the name.
 
 _WARNED: set[str] = set()
 

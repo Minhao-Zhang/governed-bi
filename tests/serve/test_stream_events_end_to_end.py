@@ -297,7 +297,7 @@ def test_a_streamed_turn_reaches_the_audit_log() -> None:
     turns, zero rows.
 
     The recorder is injected by ``api/graph_app.make_graph`` rather than living in ``stamp``,
-    because ``tools/check_imports.py`` orders ``serve`` before ``api``. This asserts the seam,
+    because ``serve`` does not import ``api``. This asserts the seam,
     not the file: a ``record`` node placed after ``stamp`` is called once, with the finished
     answer, on a turn that ends in a refusal — the cheapest path that still produces a record.
     """

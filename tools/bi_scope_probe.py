@@ -78,7 +78,7 @@ async def _probe(
     ``serve/nodes/guard.py::_bi_scope`` is called directly rather than reimplemented: the rule
     *is* its parsing (``_clears_scope`` refuses a reply that says both yes and no, which
     ``startswith("yes")`` did not), and a second copy here would be a second rule wearing the
-    same id. ``tools/check_one_implementation.py`` is the standing objection to the copy.
+    same id. A second copy would be a second rule.
 
     Concurrent, and the rows land in completion order rather than file order. That is safe
     because every consumer joins on ``question_id`` — and it is *stated* because an artifact

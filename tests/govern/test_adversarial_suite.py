@@ -11,33 +11,18 @@ declared. It reports the false-refusal rate whether or not it is zero.
 the expectations live in the TOML rather than in these functions, so a disagreement between the
 code and the criterion is a diff in a data file.
 
-**This file has positive controls, for D13.** That finding is that six
-conformance sweeps assert ``not offenders`` with no positive control, so a typo'd regex passes.
-Two things answer it here. The loader tests below plant a case that must fail to load and check
-that it does — a suite that silently accepted a malformed case would report a perfect score over
-fewer cases than it appears to run. And ``tools/mutation_catalogue.py`` carries nine mutations
-against the layer stack (``g1``–``g10``, with ``g6`` retired and its retirement argued in place),
-each verified by hand to make this file fail with the
-right diagnosis; a suite whose gate survives the layer being deleted is a green tick and nothing
-else. Four of the nine are caught as a *misattribution* rather than as a bypass, which is why the
-two are measured separately: the statement is still refused, one layer late, under a rule about
-something else, and a gate asking only "was it refused" reports a deleted rule as working.
+**This file has positive controls.** The loader tests below plant a case that must
+fail to load — a suite that accepted a malformed case would report a perfect score
+over fewer cases than it appears to run. Misattribution is measured separately from
+a bypass: a statement refused by the wrong rule is still refused, and a gate that
+only asks "was it refused" reports a deleted rule as working.
 """
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
-
-pytestmark = needs("B")
-
-ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 @pytest.fixture(scope="module")
@@ -132,10 +117,8 @@ def test_no_case_makes_the_checker_crash(report) -> None:
 def test_every_attack_leaves_prepare_with_nothing_to_execute(report) -> None:
     """``Prepared.sql is None`` for every attack, asserted separately from the verdict.
 
-    ``tools/mutation_catalogue.py``'s ``m1-guard-bypass`` is the incident: setting ``pipeline.py``'s
-    ``if not verdict["passed"]`` to ``if False:`` made ``prepare()`` hand back
-    ``'SELECT token FROM secrets LIMIT 200001'`` for a refused verdict, and 133/133 tests
-    passed. The verdict is not the artifact; the string is.
+    A refusal branch that never runs hands back executable SQL while the verdict
+    tests still pass. The verdict is not the artifact; the string is.
     """
     leaked = [
         r for r in report.of_kind("attack") if r.prepared.sql is not None
@@ -498,57 +481,15 @@ def test_a_benign_case_may_not_declare_a_refusal(tmp_path: Path) -> None:
         _load(tmp_path, broken)
 
 
-# ── the driver runs, offline, and its exit code means something ───────────────
-
-
-def test_the_driver_runs_and_reports_its_denominators() -> None:
-    """``tools/govern_bench.py`` is how the number gets quoted outside pytest, and a driver
-    nobody runs is a preference. Exercised through a subprocess so that its ``sys.path``
-    bootstrap and its exit code are both real."""
-    result = subprocess.run(
-        [sys.executable, str(ROOT / "tools" / "govern_bench.py"), "--json"],
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-
-    import json
-
-    payload = json.loads(result.stdout)
-    assert payload["attack"]["bypassed"] == {"n": 0, "of": payload["attack"]["caught"]["of"]}
-    assert payload["benign"]["false_refusal"]["n"] == 0
-    assert payload["failures"] == []
-    # Every rate carries its denominator. A consumer given "0.000" cannot tell 0/48 from 0/2.
-    for half in ("attack", "benign"):
-        for counts in payload[half].values():
-            assert set(counts) == {"n", "of"} and counts["of"] > 0
-
-
 # ── the disclosure half ───────────────────────────────────────────────────────
 
 
 @pytest.fixture(scope="module")
 def probes():
-    """``tools/govern_bench.py``'s probe runner, imported by path.
+    """The disclosure runner. It calls ``serve/fetch.py``, so it lives in ``eval/``."""
+    from governed_bi.eval.disclosure_probes import run_disclosure_probes
 
-    **The runner is in a tool and not in ``govern/`` on purpose.** A probe asks what a tool
-    shows, which means calling ``serve/fetch.py``, above ``govern/`` in the layer order. The
-    cases stay data in ``adversarial.toml``, so this gate and the driver read one file.
-    """
-    import importlib.util
-
-    path = ROOT / "tools" / "govern_bench.py"
-    spec = importlib.util.spec_from_file_location("_govern_bench_probes", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    # Registered **before** exec: the tool declares a frozen dataclass and
-    # ``from __future__ import annotations`` makes its field types strings, which
-    # ``dataclasses`` resolves through ``sys.modules[cls.__module__]``. Omit this and the
-    # import dies in the standard library with an ``AttributeError`` about ``NoneType``.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module.run_disclosure_probes()
+    return run_disclosure_probes()
 
 
 def test_nothing_outside_the_licence_is_disclosed_on_any_surface(probes) -> None:

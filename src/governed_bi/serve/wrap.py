@@ -76,9 +76,8 @@ def _turn_clock(
     and never passes through here. No measured arm moves.
     """
     if "turn_started_at" in update:
-        # Present-and-null and absent are different signals, so membership is tested before
-        # the value. A sentinel would do it too and would collide with `eval/report.py`'s
-        # `_ABSENT`, which `tools/check_one_implementation.py` refuses and is right to.
+        # Present-and-null and absent are different signals, so membership is tested
+        # before the value. A shared sentinel would collide with `eval/report.py`'s `_ABSENT`.
         return {} if update["turn_started_at"] is not None else {"turn_started_at": entered_at}
     if state.get("turn_started_at") is None:
         return {"turn_started_at": entered_at}

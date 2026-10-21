@@ -58,16 +58,11 @@ Non-ADR judgements that still matter in code:
   by deleting one key at a time from 30 turn shapes); only 7 are declared. The other 25 are the
   register's — `project` walks `RECORD_REGISTER` and asks for each field by name — so the
   projection's read set already exists in `register/record.py`, and a dataclass restating it would
-  be the duplication `tools/check_one_implementation.py` refuses. A view is worth writing where a
+  be a second copy of a read set that already exists. A view is worth writing where a
   *decision* can have two readers who disagree, not wherever a channel is copied.
-- **Source-text mutation anchors pin their files in place.** Each entry in
-  `tools/mutation_catalogue*.py` names a path plus a literal fragment of it, and
-  `tests/conformance/test_the_mutation_catalogue_is_not_stale.py` fails when the fragment is no
-  longer in that file exactly once. So a refactor that moves anchored code must move its entry in
-  the same change: `c3-guardrail-error-is-refused` anchors two lines inside
-  `serve/nodes/stamp.py::_path_signals`, and that is why `stamp`'s derivation stayed beside the
-  record projection when its read-view moved out. The seam did not need the file boundary; the
-  catalogue would have needed the edit.
+- **Source-text mutation anchors are gone.** They pinned a path plus a literal fragment, so a
+  refactor had to move the anchor with the code. That is why `stamp`'s derivation stayed beside
+  the record projection. The seam did not need the file boundary.
 - **UI is in tree, out of the import graph.** The interactive chat UI is `ui/`. It shares the
   repository and nothing else: no module either way, and every payload it reads crosses the HTTP
   surface of ADR 0007.

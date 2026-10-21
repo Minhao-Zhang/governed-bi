@@ -140,9 +140,8 @@ old denominator in `return-path.md` fails the first the same way; and repointing
 
 **The retired spelling is gated separately, and now registered.** A *retired* figure reappearing is
 deliberately not checked in the conformance test, because the mechanism already exists:
-`register/citations.py::RETIRED_CLAIMS` plus `tools/check_citations.py` fail on a declared retired
-pattern anywhere in `src`, `tools`, `docs` or `tests`, with a `[retired]` line marker for a
-deliberate quotation. A second denylist in the conformance test would have been a second answer to a
+`register/citations.py::RETIRED_CLAIMS` still lists the patterns. The gate that grepped for them
+is deleted (P5), so a retired spelling is no longer failed by CI. A second denylist would have been a second answer to a
 question this repository already answers in one place. The entry landed 2026-08-25 — `0.7555`,  <!-- [retired]: the superseded accuracy pair, quoted as history; register/citations.py -->
 `0.7131`, `n=1,145`, `n=1,272` — and the gate immediately named all nine lines that quote the old  <!-- [retired]: the superseded accuracy pair, quoted as history; register/citations.py -->
 pair as history, five on this page, one in `return-path.md`, three across two test files. Each now
@@ -150,8 +149,8 @@ carries the marker. The populations are in the pattern and not only the accuraci
 document that updates one number and not its `n=` is the same staleness wearing a fresh-looking
 figure.
 
-Three gates now, one question: `check-review-copy.ts` for the client, the conformance test for
-`docs/`, and `check_citations.py` for the stale spelling anywhere. The general form of the defect is
+Two checks remain for one question: `check-review-copy.ts` for the client, and the conformance test for
+`docs/`. The citations scan that covered a stale spelling anywhere is deleted (P5). The general form of the defect is
 §3.10's: a figure with more than one home and no gate between them.
 
 **What is still not gated.** The anchor is a phrase, so a paraphrase that drops it and states one
@@ -415,9 +414,8 @@ passing ones on either slice.
 
 ### 3.9 The eight tests that could not fail are pinned rather than repaired-and-forgotten
 
-All eight are covered by the nine declared mutations under the `s39-` prefix, which moved on
-2026-08-19 (`77d5f9f`): `tools/mutation_catalogue.py` is a 26-line re-export shim with no `s39`
-hit left in it, and the nine live in `tools/mutation_catalogue_data_2.py`. Verified
+All eight were covered by the nine declared mutations under the `s39-` prefix (moved on
+2026-08-19, `77d5f9f`). That catalogue is deleted (P5); the pins are not a current gate. Verified
 caught on 2026-08-11: `routing_pinned` pinned to either
 constant, `corpus_content_hash` and `prompt_set_hash` set to `None`, `_attempt_trace` returning
 empty, `computed_correct` always `None`, and three anchors along the eviction chain — the
@@ -466,9 +464,8 @@ to meet. **Two of the fixed items were invisible to any static rule by construct
 the declaration had a consumer and the missing wire was on the recording side, so only the
 artifacts showed them.
 
-`tools/check_declared_is_consumed.py` closes the statically-visible part: four rules over knobs,
-record fields and state channels, mutation-verified against a fixture tree. It reported 27
-violations when written and reports **5** now — re-run 2026-08-22, exit 1, every one of them
+A static scan of knobs, record fields and state channels once closed the visible part. It reported 27
+violations when written and **5** on 2026-08-22, exit 1, every one of them
 under K1 and every one a knob: `expand_hops`, `negative_tau`, `facet_model`, `rewrite_model`,
 `build_workers`. Those are exactly the five the table above names, so the two counts in this
 section agree. The "6" this sentence used to give was the pre-2026-08-19 figure, before
@@ -515,9 +512,8 @@ their **values**, in `tests/eval/test_the_row_names_the_harness_that_produced_it
 `build_workers` is left red rather than given a number.
 
 **Two capabilities landed before their callers (2026-08-19). Both are closed as of 2026-08-23**,
-and they are kept here rather than deleted because neither is visible to
-`check_declared_is_consumed.py` — it reads the register and not the call graph — so nothing in CI
-would have noticed either one being reopened.
+and they are kept here rather than deleted because a register scan cannot see a missing caller,
+so nothing in CI would have noticed either one being reopened.
 
 - **`eval/power.py::require_power` has a caller, and until 2026-08-24 it could never receive a
   value.** This entry read *"Closed"* on the strength of `ArmProfile` gaining
@@ -553,9 +549,9 @@ would have noticed either one being reopened.
   in F8 below from the ladder path entirely. The module keeps its guard fix and its tests; the first
   path that genuinely writes a corpus during a run will still want it.
 
-**Two more of the same shape, both in the return path, both closed 2026-08-24 — and rule K1 credited
+**Two more of the same shape, both in the return path, both closed 2026-08-24 — and a name scan credited
 one of them as consumed.** Neither is a knob, a record field or a state channel, so
-`check_declared_is_consumed.py` sees neither, and the second is the sharper lesson: K1's evidence is
+that scan saw neither, and the second is the sharper lesson: its evidence is
 "the name occurs outside `register/`", which cannot tell a **consumer** from a **producer**.
 
 - **`Source.agent` had no producer.** `feedback/events.py` declared a fourth filing population and
@@ -610,25 +606,10 @@ drafted a corpus change from a complaint are gone ([ADR 0015](adr/0015-the-retur
 `/clarifications/pending` reads interrupt state only. The measurements in the old §3.10a–§3.10d
 described that loop and are not open work.
 
-### 3.10e The corpus gate is wired to a nightly, and its baseline still equals the corpus tip
+### 3.10e The nightly corpus gate is deleted
 
-[ADR 0016](adr/0016-gating-the-corpus-repository.md), 2026-08-24. `tools/check_corpus_delta.py`
-answers "did the corpus add a conformance finding since somebody last looked", against a corpus
-revision recorded here in `tools/corpus_baseline.py` (`74ff80c4842410e54fc81964b30bbe6d4a91f872`).
-The findings it is grandfathering are **125 on 101 identities** — different nouns, and the difference
-of 24 is why every baseline carries a count per identity — measured 2026-08-24 on `../BIRD-corpus` at
-`main` = `74ff80c4` with `tools/check_corpus_conformance.py --json`: V17a 107 findings on 85 of the
-478 metric assets, V17b 17 on 15, V21 1 on 1, and the other 19 of 22 rules zero.
-
-| finding | status |
-|---|---|
-| **No runner had ever run this gate, in either shape.** The first design put the workflow in `BIRD-corpus`; its two commits were never pushed, the GitHub Actions run count there is **0**, and its `main` tree contains zero paths under `.github/` or `.conformance/` | **closed for the wiring, 2026-08-25.** The branch merged, so `ci.yml`'s `corpus` job is on the default branch with a `schedule` and a `workflow_dispatch`, which is the condition GitHub requires; this row said "starts working when `design/return-path` merges and not before" for a day after it had. The tool was already observed — all three exit codes driven by hand 2026-08-24 (0 at 78 s; 1 on a planted duplicate id, head 183 on 159 with each added finding named; 2 on a missing `--dataset-dir`, V11/V12/V15 named), corpus clean with no worktree left after each. ADR 0016 §Consequences 2 carries the table. What is **not** closed is the row below: a scheduled run against a baseline that equals the tip is a green light measuring nothing |
-| **It is not a merge gate.** A corpus commit that adds a finding lands, and is caught up to a day later | **accepted**, and the price of the dependency direction. The corpus is human-owned and moves rarely — 9 commits on `main`, 2026-07-11 to 2026-08-18, one of them in the fifteen days before this was written |
-| **The baseline equals the corpus tip**, so the delta is empty by construction and the first green run proves nothing | open; the gate becomes informative only after the corpus moves |
-| **A bump made without reading the findings is indistinguishable from one made after.** The edit to `BASELINE_SHA` *is* the acknowledgement, and nothing detects a bump that skipped the looking | open, and there is no obvious instrument for it |
-| **`check_ratchet.py` still has no automated reader.** The pins moved from the corpus into this repository as `.conformance/bird-corpus-pins.txt` (109 lines, 101 pins), which fixes the *side of the merge* — this repository's CI could read them, and a rule change and a pin edit can now land in one commit. It does not fix enforcement: the nightly runs the delta tool, which passes a closure by design | **open.** The ratchet's policy, "closing a finding must be declared", is enforced only when a person runs it |
-| Two records of one fact: `tools/corpus_baseline.py` carries 125/101 and the pin file carries the 101 identities by name | closed by `tests/conformance/test_the_corpus_gate_is_wired_to_the_nightly.py`, which asserts the two agree *and* that the workflow's own `base=` command prints `BASELINE_SHA` |
-| `docs/return-path.md` carried a **"### Corpus repository"** section describing CI that ran *there* — three commands from inside the corpus checkout, including `--pins .conformance/pins.txt` | fixed the same day: the section is now **"Corpus repository — none, and the check runs here instead"**, and it prints the `corpus` job's actual command. It was outside the ADR change's file scope and was nearly left behind, which is the whole hazard of splitting a change by file ownership |
+Closed by P5. [ADR 0016](adr/0016-gating-the-corpus-repository.md) is the reversal record.
+Quoting a held-out question stays on the train-only check, which is not a CI job.
 
 ### 3.11 Selective prediction is closed at 0.80, and the reflector closed it
 
@@ -658,9 +639,8 @@ zero rows carry the signature, so it is uncontaminated.
 
 What remains open is not a better judge. It is what governance itself buys, and **that has a
 first number instead of none**. `src/governed_bi/govern/adversarial.toml` is 95 cases as data —
-49 attacks, 46 benign statements — loaded by both `tests/govern/test_adversarial_suite.py` and
-`tools/govern_bench.py`, so the gate that fails a build and the report that prints the rates
-cannot drift apart. It needs no credential and no network, and the layer stack is deterministic,
+49 attacks, 46 benign statements — loaded by `tests/govern/test_adversarial_suite.py`,
+which is the gate that fails a build. It needs no credential and no network, and the layer stack is deterministic,
 so unlike every other measurement here it has no noise floor and two runs are identical. On the
 current tree: **bypass 0/49**, **misattribution 0/49** (refused, but by the wrong layer or the
 wrong rule), **false refusal 0/46**, and **zero guardrail errors** on either half. Per-layer
@@ -1129,14 +1109,12 @@ so today the engine still delivers. What is genuinely still open is the narrower
 policy does not settle: whether a turn that *delivers* under a failed channel should say so on the
 answer itself, rather than only in the arm-level counter and the trace.
 
-### 5.3 No gate reads citations in `ui/`
+### 5.3 Citations in `ui/`
 
-`check_citations.py`'s `STRICT_ROOTS` is `("src", "tools", "docs", "tests")` and its
-`SEARCH_SUFFIXES` does not include `.ts` or `.tsx`, so a citation in the client is unchecked by
-anything. The client references to engine fields nothing writes (`whyLines`,
-`routedSchemasLabel`, `corpusVersionLabel`), the dead `D15` citations and the Corpus page's `note`
-filter went with the pages and the answer-card branches deleted in P4. Whether to extend the gate
-over `ui/` is still the open call.
+The citations scan is deleted (P5), so there is no gate to extend over `ui/`. The client
+references to engine fields nothing writes (`whyLines`, `routedSchemasLabel`,
+`corpusVersionLabel`), the dead `D15` citations and the Corpus page's `note` filter went with
+the pages and the answer-card branches deleted in P4.
 
 ---
 

@@ -491,9 +491,8 @@ def build_tools(
         # means the leaked text has already been shown to the reader this guard exists to
         # protect, and the verdict would then need somewhere to live: `clarifications_by_call`
         # is a declared channel with a declared shape, so a new field there is a state-channel
-        # plus record-field plus projector change (`check_declared_is_consumed`'s S1 and R1),
-        # and a verdict nothing reads is the "declared, no consumer" defect that gate exists to
-        # count. `why` is checked too because it is rendered beside the question, not logged.
+        # plus record-field plus projector change, and a verdict nothing reads is a declaration
+        # with no consumer. `why` is checked too because it is rendered beside the question, not logged.
         leak = find_schema_leak(question, why)
         if leak is not None:
             return _reply(

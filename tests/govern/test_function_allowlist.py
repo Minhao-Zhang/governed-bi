@@ -29,9 +29,7 @@ import sqlglot
 from sqlglot import expressions as exp
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
 
-pytestmark = needs("B")
 
 GOLD = json.loads((Path(__file__).parent / "gold_functions.json").read_text(encoding="utf-8"))
 

@@ -50,7 +50,7 @@ def _knobs(**over):
 
 
 def test_every_key_the_harness_writes_is_a_declared_knob() -> None:
-    """The K2 rule of ``check_declared_is_consumed``, asserted at the writer.
+    """Every key the harness writes is a declared knob, asserted at the writer.
 
     An undeclared key is outside ``comparability_keys()`` and therefore outside every
     comparison, so writing one would put a configuration into the artifact that no gate can
@@ -61,9 +61,8 @@ def test_every_key_the_harness_writes_is_a_declared_knob() -> None:
 
 
 def test_the_harness_writes_a_value_for_every_resume_drift_key_it_can_answer() -> None:
-    """``check_declared_is_consumed`` rule K1 credits *any* occurrence of a knob's name, so a
-    coincidental string literal launders one — its own docstring says so. This asserts the
-    values instead.
+    """A name scan credits any occurrence of a knob's name, so a coincidental string
+    literal launders one. This asserts the values instead.
 
     ``build_workers`` is the deliberate exception and is asserted absent rather than null: this
     driver serves, it does not build a corpus, and a number for a stage that did not run is the

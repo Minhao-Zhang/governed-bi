@@ -41,8 +41,7 @@ class WouldHaveBeenWrong:
     the difference between a type that *documents* a denominator and one that carries it.
 
     :meth:`render` is the ordinary way to display this, and it prints both numbers beside
-    the rate. Formatting goes through ``Measured.render``, which is the only permitted
-    formatting site in ``src/`` (``tools/check_measurement_locality.py``).
+    the rate. Formatting goes through ``Measured.render``, the only formatting site in ``src/``.
     """
 
     #: Priced declines whose re-executed statement missed gold. ``None`` when unmeasured.

@@ -29,10 +29,6 @@ from __future__ import annotations
 
 import pytest
 
-from contracts import needs
-
-pytestmark = needs("B")
-
 
 @pytest.fixture(scope="module")
 def guard_report():

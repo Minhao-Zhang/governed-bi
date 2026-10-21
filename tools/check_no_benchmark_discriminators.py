@@ -136,9 +136,8 @@ ASSET_TYPE = re.compile(r"^\s*\"?asset_type\"?\s*:\s*\"?([A-Za-z_]+)", re.MULTIL
 #: promises a misspelling is still scanned and the equality test broke that promise: with
 #: ``== "schema"``, ``asset_type: schmea`` and ``asset_type: schema_v2`` both went silently
 #: exempt. Unrecognised now means scanned, which is the fail-closed direction. Kept as a literal
-#: rather than imported from ``register.assets`` because ``tools/`` may not import the package
-#: (``check_imports``), and because this gate must keep working against a corpus whose vocabulary
-#: has moved on from this tree's.
+#: rather than imported from ``register.assets``, so this gate still runs against a corpus
+#: whose vocabulary has moved on from this tree's.
 EXEMPT_ASSET_TYPES: frozenset[str] = frozenset(
     {"table", "column", "join", "metric", "term", "few_shot", "negative_example"}
 )
@@ -177,7 +176,7 @@ SKIP_DIRS: frozenset[str] = frozenset({"__pycache__", ".venv", ".git", ".ruff_ca
 EXEMPT: frozenset[str] = frozenset(
     {
         "tools/check_no_benchmark_discriminators.py",
-        "tests/conformance/test_no_benchmark_discriminators.py",
+        "tests/eval/test_no_benchmark_discriminators.py",
     }
 )
 

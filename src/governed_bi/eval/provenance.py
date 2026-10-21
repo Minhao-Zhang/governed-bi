@@ -18,8 +18,7 @@ and which questions and schemas were served.
 
 **Not a knob home.** ``register/knobs.py`` owns every knob's *declaration* and default; this
 module only resolves the ones whose value is a fact about the running process — a git sha
-cannot have a register default. Every name written here is declared there, and
-``tools/check_declared_is_consumed.py`` rule K2 fails the build if one is not.
+cannot have a register default. Every name written here is declared there.
 """
 
 from __future__ import annotations

@@ -54,9 +54,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
 
-pytestmark = [needs("C")]
 
 #: SQLSTATEs that must classify as a **query fault**, with the statement that produces
 #: each. Every one of these was misclassified as infrastructure by the predecessor.

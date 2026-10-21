@@ -8,6 +8,7 @@ is found, and clean prose that merely shares vocabulary is not.
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 import sys
 
@@ -66,6 +67,30 @@ def _corpus(root: pathlib.Path, *, table_body: str) -> pathlib.Path:
         encoding="utf-8",
     )
     return root
+
+
+def test_v12_fails_a_corpus_asset_quoting_a_held_out_question(tmp_path: pathlib.Path) -> None:
+    """The moved split rule, on a question taken from ``test_final.jsonl``."""
+    dataset = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset" / "test_final.jsonl"
+    question = ""
+    for line in dataset.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        text = str(json.loads(line).get("question") or "")
+        if len(" ".join(text.lower().split())) > 25:
+            question = text
+            break
+    assert question, f"{dataset} has no question long enough for V12"
+
+    tool = _tool()
+    path = tmp_path / "t.yaml"
+    leaked = ("table", {"id": "t.households", "summary": "s", "body": f"For example: {question}"}, path)
+    findings = tool.check_split_leak([leaked], dataset)
+    assert findings, "a corpus asset quoting a held-out question must fail V12"
+    assert "quotes a test-split question" in findings[0]
+
+    clean = ("table", {"id": "t.households", "summary": "household counts", "body": "One row per county."}, path)
+    assert tool.check_split_leak([clean], dataset) == []
 
 
 def test_a_planted_question_is_found(tmp_path: pathlib.Path) -> None:

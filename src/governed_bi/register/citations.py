@@ -1,11 +1,10 @@
 """World-describing numbers with provenance, plus retired-literal patterns.
 
 Rule: every number that describes the world carries an artifact path and a
-date. Retired claims carry a regex :data:`RETIRED_CLAIMS` that
-``tools/check_citations.py`` greps for. :attr:`Citation.artifact` is never
-empty — use ``git-history:<path>`` when the producing code is gone.
-:data:`GREP_EXEMPT_PATHS` is data the gate reads (this file must quote retired
-patterns). Nothing imports this module at runtime.
+date. Retired claims carry a regex :data:`RETIRED_CLAIMS`. :attr:`Citation.artifact`
+is never empty — use ``git-history:<path>`` when the producing code is gone.
+:data:`GREP_EXEMPT_PATHS` lists files that quote retired patterns on purpose.
+Nothing imports this module at runtime.
 """
 
 from __future__ import annotations

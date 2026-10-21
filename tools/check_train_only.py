@@ -1,19 +1,17 @@
 """Detect held-out test question text leaking into a corpus.
 
-Checks: provenance citing test split; verbatim containment (min NGRAM content
-words; few_shots exempt with stricter provenance); n-gram rate vs a train-only
-control. Paraphrase leaks are undetectable — a pass is not cleanliness.
+Checks: provenance citing the test split; verbatim containment (min NGRAM
+content words; few_shots exempt, with stricter provenance); n-gram rate versus
+a train-only control; and V12, a held-out question quoted in summary or body.
 
-``--control`` is required with no default, as of 2026-08-06. It defaulted to
-``corpora/gold-semantic-layer-20260804`` — the corpus ``.env`` served at the
-time — so the ordinary invocation compared that corpus against itself, printed ``ratio to
-control: 1.00x (tolerance 2.0x)``, and the rate arm was arithmetically incapable
-of failing. A control equal to the corpus under test is now refused, not compared.
+``--control`` is required. A control that is the corpus under test is refused:
+that comparison has ratio 1, so the rate arm cannot fail.
 
-This gate cannot run in CI by construction: it needs a corpus tree (untracked), a
-held-out question file (a separate repository), and a third corpus certified
-train-only. The CI-able half of corpus contamination is
-``tools/check_no_benchmark_discriminators.py``, which needs no data at all.
+This gate cannot run in CI: it needs a corpus tree, the held-out question file,
+and a third corpus certified train-only. The data-free half is
+``tools/check_no_benchmark_discriminators.py``.
+
+Paraphrase leaks are undetectable. A pass is not cleanliness.
 """
 
 
@@ -162,6 +160,50 @@ def scan(root: pathlib.Path, questions: list[dict]) -> dict:
     }
 
 
+def check_split_leak(assets, test_split: pathlib.Path) -> list[str]:
+    """Fail when summary or body quotes a held-out question (V12).
+
+    Folded and case-folded. Questions of 25 characters or fewer are ignored.
+    Few-shots are included: the n-gram check exempts them, and this one does not.
+    """
+    questions = {
+        " ".join(json.loads(line).get("question", "").lower().split())
+        for line in test_split.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+    questions.discard("")
+    bad: list[str] = []
+    for kind, asset, path in assets:
+        blob = " ".join(
+            " ".join(str(asset.get(field) or "").lower().split()) for field in ("summary", "body")
+        )
+        label = asset.get("id") or kind
+        for question in questions:
+            if len(question) > 25 and question in blob:
+                bad.append(f"{path.name}:{label}: quotes a test-split question")
+                break
+    return bad
+
+
+def _quote_views(root: pathlib.Path) -> list[tuple[str, dict[str, object], pathlib.Path]]:
+    """``(kind, {id, summary, body}, path)`` for V12. The n-gram scan is separate."""
+    from governed_bi.corpus.store import load
+
+    assets, _problems = load(root)
+    return [
+        (
+            asset.asset_type.value,
+            {
+                "id": asset.id,
+                "summary": getattr(asset, "summary", None),
+                "body": getattr(asset, "body", None),
+            },
+            pathlib.Path(f"{asset.id}.yaml"),
+        )
+        for asset in assets
+    ]
+
+
 def _same_tree(corpus: str, control: str) -> bool:
     """Whether two corpus arguments name the same directory.
 
@@ -181,10 +223,8 @@ def main(argv: list[str] | None = None) -> int:
         "--control",
         required=True,
         help="a corpus certified train-only, measured alongside as the reference rate. "
-        "REQUIRED, with no default: the default used to be the corpus this repository "
-        "actually serves, so the ordinary invocation compared it against itself and the "
-        "rate arm could not fail. Pass '' to skip, which makes the result uninterpretable "
-        "and is for debugging only.",
+        "Required, with no default: a control equal to the corpus under test is refused, "
+        "because that ratio is 1 and the rate arm cannot fail. Pass '' to skip.",
     )
     parser.add_argument("--dataset", type=pathlib.Path, default=DEFAULT_DATASET)
     parser.add_argument(
@@ -234,6 +274,14 @@ def main(argv: list[str] | None = None) -> int:
             f"\nFAIL: {under_test['exact_containments']} authored field(s) contain a held-out "
             f"question verbatim ({NGRAM}+ content words, few_shot excluded). This is not a rate "
             "to compare -- it is the leak itself.",
+            file=sys.stderr,
+        )
+        return 1
+
+    quoted = check_split_leak(_quote_views(REPO / args.corpus), args.dataset)
+    if quoted:
+        print(
+            f"\nFAIL: {len(quoted)} asset(s) quote a held-out question ({quoted[0]}).",
             file=sys.stderr,
         )
         return 1

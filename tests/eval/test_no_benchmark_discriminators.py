@@ -38,6 +38,17 @@ def _run(root: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_the_repository_tree_passes() -> None:
+    """The check exits 0 on this tree. A skip would look the same as a pass."""
+    result = subprocess.run(
+        [sys.executable, str(GATE)],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_rule_a_fires_on_a_retired_prefix_phrase(tmp_path: Path) -> None:
     """The exact phrase, back in a corpus. This is what already happened once.
 

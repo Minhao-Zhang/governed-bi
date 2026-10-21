@@ -75,7 +75,7 @@ def test_the_refusal_says_the_discordance_is_an_estimate() -> None:
 def test_the_prior_is_the_one_pair_on_disk_and_not_a_round_number() -> None:
     """20 of 131, kept as two integers. A decimal `0.153` reads like a rate somebody measured on
     this tree; the fraction reads like what it is, which is the distinction `eval/power.py`'s
-    docstring exists for. `check_measurement_locality.py` refuses the decimal outright."""
+    docstring exists for. A decimal here would read like a measured rate."""
     assert (PRIOR_DISCORDANT, PRIOR_OF) == (20, 131)
 
 

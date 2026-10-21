@@ -16,9 +16,7 @@ from typing import Any
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
 
-pytestmark = [needs("J")]
 
 #: `src/governed_bi`, for the structural assertions. Some of these must be structural: a
 #: behavioural test that "the server does not synthesize a tier" passes for every input the

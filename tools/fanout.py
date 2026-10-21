@@ -275,9 +275,7 @@ def main() -> int:
         return 1
     if args.write:
         print(
-            "Now run the gates and read the diff: check_imports, check_citations, "
-            "check_file_length, check_one_implementation, check_measurement_locality, "
-            "and the test suite. Delegating is safe *because* of them.",
+            "Now run the test suite and read the diff.",
             file=sys.stderr,
         )
     return 0

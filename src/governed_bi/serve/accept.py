@@ -1,17 +1,8 @@
-"""The served graph's entry node, bound to the session that mints its turns (ADR 0007 §2).
+"""The served graph's entry node, bound to the session that mints its turns.
 
-A client submits one key — ``{messages: [{type: "human", content}]}`` — and the record requires
-fifteen fields. This node derives them from the last human message through
-:meth:`~governed_bi.serve.session.Session.turn`, so nothing a client sends in a provenance field
-is merged: ``run_id``, ``turn_id``, ``corpus_content_hash``, ``prompt_set_hash`` and
-``knobs_resolved`` are the run's own claims about itself, and every quotability gate reads them.
-
-**Here rather than in ``api/graph_app.py``, and taking its session as an argument.** It lived
-there as a closure over a module-level ``_SESSION``, which is why no test ever executed it: the
-only way to reach the node was to build a Postgres-backed session from the environment. It is
-``serve/`` code — it writes ``ServeState`` and reads nothing from the HTTP layer — and
-``tools/check_imports.py`` orders ``serve`` before ``api``, so the dependency ran the wrong way
-as well.
+A client submits messages. Provenance fields are the run's own claims, derived
+here through the session, so a client-supplied value is not merged. It lives in
+``serve/`` because it writes ``ServeState`` and reads nothing from HTTP.
 """
 
 from __future__ import annotations

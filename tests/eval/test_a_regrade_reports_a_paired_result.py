@@ -27,9 +27,7 @@ from typing import Any
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
 
-pytestmark = needs("G")
 
 TOOL = Path(__file__).resolve().parents[2] / "tools" / "regrade.py"
 
@@ -80,11 +78,10 @@ def test_a_fully_measured_regrade_reports_the_paired_test() -> None:
 
 
 def test_the_report_does_not_round_a_rate_into_a_claim() -> None:
-    """``measure/`` owns rendering, so ``check_measurement_locality``'s rule reaches this too.
+    """``measure/`` owns rendering.
 
-    The old line was ``f"{before / total:.3f}"`` — a format spec with a precision, which is what
-    that gate exists to reject inside the package. It sat in ``tools/``, which the gate does not
-    scan.
+    The old line was ``f"{before / total:.3f}"`` — a format spec with a precision, which
+    ``Measured.render`` exists to replace. It sat in ``tools/``.
     """
     source = TOOL.read_text(encoding="utf-8")
     assert ":.3f}" not in source, "a rate is being rounded at the print boundary"

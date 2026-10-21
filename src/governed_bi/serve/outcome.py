@@ -1,39 +1,8 @@
-"""What ``stamp`` reads and what it concludes — the declared interface of the turn's verdict.
+"""The channels ``stamp`` reads when it decides what happened to the turn.
 
-**Why a node needs one.** ``(state, config) -> dict`` is a small-looking signature over a
-47-channel dict, so a node's real interface — which channels it reads, which it writes, and what
-clears them — is nowhere a caller or a test can see it. That is not hypothetical here:
-``measure/gates.py`` read ``Outcome.clarification`` as a witness of "reached ``stamp``" and
-silently dropped every row carrying the corpus hash out of a gate's denominator. A second reader
-of a channel, disagreeing with the first, in a place nothing pointed at.
-
-**``stamp``'s read set, measured rather than predicted.** 32 channels are read *and effective* —
-delete any one of them from a populated turn and the emitted record changes — plus
-``failure_cause``, which is read through the register fall-through and is not a ``ServeState``
-channel at all, so it is always null. (Method: delete one key at a time from each of 20 turn
-shapes and compare ``json.dumps`` of the output.) That is more than twice ``abstain``'s eight.
-
-**Seven of the 32 are here, and the other 25 deliberately are not.** ``stamp`` does two things:
-it *decides* what happened to the turn, and it *projects* the turn into the register's 42-field
-record. The decision turns on the seven channels :class:`OutcomeInputs` declares. The projection's
-read set **is** ``register/record.py``'s field list — ``project`` walks ``RECORD_REGISTER`` and
-asks for each field by name — so restating those 25 as dataclass fields would be a second copy of
-a declaration that already exists, which is the duplication
-``tools/check_one_implementation.py`` is for. The seam is worth drawing where a *decision* can
-have two readers who disagree, and that is the seven.
-
-**Written by the node:** ``answer``, and nothing else. Plus one ``final`` stage event, which
-``stamp`` emits itself because it is the one node deliberately left unwrapped.
-
-**Why the derivation is not in this file.** It reads only :class:`OutcomeInputs` — that is the
-point of the split — but it stays in ``serve/nodes/stamp.py`` beside the record projection,
-because ``tools/mutation_catalogue_data_1.py``'s ``c3-guardrail-error-is-refused`` anchors two
-lines of *source text* inside it to that path, and
-``tests/conformance/test_the_mutation_catalogue_is_not_stale.py`` now fails when an anchor moves.
-That is a real constraint and a new one: source-text anchors make the files they name immovable
-until the entry moves with them, and the entry is not this change's to edit. The seam does not
-need the boundary — a declared read-set and a derivation that takes it are the whole of it — so
-the interface moved here and the logic stayed there.
+The projection's other fields are ``register/record.py``, walked by name, so they
+are not copied here. The derivation stays in ``serve/nodes/stamp.py`` beside that
+projection. The node writes ``answer`` and one ``final`` stage event.
 """
 
 from __future__ import annotations

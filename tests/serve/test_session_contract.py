@@ -30,12 +30,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from turn_contract_fixtures import dsn, probe  # noqa: E402, F401 -- pytest fixtures, by name
 
-from contracts import needs  # noqa: E402
-
 #: A specification with no body. Per test, never module-level.
 UNWRITTEN = pytest.mark.xfail(strict=True, reason="contract specified, body not yet written")
 
-pytestmark = [needs("F")]
 
 
 # ── the session is the only way to wire a turn ────────────────────────────────

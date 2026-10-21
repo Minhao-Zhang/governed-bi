@@ -405,7 +405,7 @@ def test_the_declared_question_set_is_the_dataset_commit_it_names() -> None:
     """The literal above, checked against the repository it claims to come from.
 
     Skipped where ``../BIRD-Data-Obfuscation`` is absent, which is the same precondition that
-    keeps ``tools/check_corpus_conformance.py`` out of CI -- so this proves the pin only on a
+    the dataset is a sibling checkout and is absent in CI -- so this proves the pin only on a
     machine that holds the dataset. That is still worth having: ``SUBSET`` and ``dataset`` are
     two claims about one fact, and nothing else in the tree can catch them drifting apart.
 

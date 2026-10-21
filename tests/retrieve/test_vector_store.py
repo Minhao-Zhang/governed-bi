@@ -30,9 +30,7 @@ import pyarrow as pa
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
 
-pytestmark = needs("E")
 
 #: Wide enough that float32 rounding has somewhere to accumulate, narrow enough to stay fast.
 WIDTH = 256

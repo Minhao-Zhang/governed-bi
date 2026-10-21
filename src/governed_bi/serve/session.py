@@ -214,8 +214,7 @@ def _excluded_closure(assets: Sequence[Asset]) -> frozenset[str]:
     A fixpoint rather than one pass. Today no required reference points at a join or a metric,
     so a single round would do; a bounded loop cannot be wrong when one is added.
 
-    ``asset_type`` is read inline rather than through a local helper: ``structure.py`` already
-    owns ``_type_of``, and ``tools/check_one_implementation.py`` is right to refuse a second one.
+    ``asset_type`` is read inline: ``structure.py`` already owns ``_type_of``.
     """
     lookup = table_lookup({a.id: a for a in assets if a.asset_type is AssetType.table})
     out = {asset.id for asset in assets if _is_excluded(asset)}

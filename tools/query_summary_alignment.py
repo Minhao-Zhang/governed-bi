@@ -45,24 +45,8 @@ DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset" / "test
 def paired(reference: dict[str, bool], arm: dict[str, bool], *, ref_label: str, arm_label: str):
     """The paired test, through ``measure.stats.mcnemar``.
 
-    **This module used to carry its own McNemar** (audit D5), and
-    ``tools/check_one_implementation.py`` declares ``mcnemar`` a singleton whose stated reason is
-    that "v1 had two McNemars ... which one ran changes whether a ladder step is significant".
-    The gate did not see this one because it scanned ``src/governed_bi`` only; it scans the
-    singletons in ``tools/`` too now.
-
-    The copy was not merely duplicated, it was weaker in three ways that all point the same
-    direction — toward reporting a result as more informative than it is:
-
-    * it **silently intersected** the two unit sets (``set(reference) & set(arm)``) where
-      ``stats.mcnemar`` refuses, so a question missing from one arm quietly left the comparison
-      instead of stopping it;
-    * it returned **no minimum detectable effect**, and printed ``p=1.0`` on zero discordant
-      pairs with nothing carrying how uninformative that is — ``stats.mde`` exists for exactly
-      that case;
-    * it ``round()``ed, which is the thing ``check_measurement_locality`` is about.
-
-    Returns the ``McNemarResult`` so the caller reads named fields rather than a dict.
+    A local copy silently intersected the two populations, omitted the minimum
+    detectable effect, and rounded. Those three made a thin comparison look decided.
     """
     # Imported inside the function, as every other ``governed_bi`` import in this file is: the
     # module has to be importable for ``--help`` without the package resolving.

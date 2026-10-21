@@ -1,20 +1,9 @@
-"""Run the adversarial governance suite and publish its rates.
+"""Run the adversarial suite and publish its rates.
 
-The cases and the world are :mod:`.adversarial`; this is the instrument. It exists as its own
-module because the two have different lifecycles — cases are added weekly, the metric
-definitions almost never — and because a driver and a test both need the instrument while only
-the loader needs the schema.
-
-Two entry points are exercised for every case. ``check()`` is the layer stack; ``prepare()`` is
-the pipeline around it, and it is the one that produces an executable string. They are not
-interchangeable: ``tools/mutation_catalogue.py``'s ``m1-guard-bypass`` records that ``prepare()``
-once handed back runnable SQL for a refused verdict while 133/133 tests passed. So an attack
-that leaves ``Prepared.sql`` non-``None`` is a bypass whatever the verdict said.
-
-Every rate is a :class:`~governed_bi.register.quantity.Measured`, so a rate with no denominator
-renders as *not measured* rather than as ``1.000``. ``COST`` owns no attacks — the layer ships
-disabled — and reporting perfect recall for it would be the shape that made v1's unmeasured
-quantities read as clean.
+Cases live in :mod:`.adversarial`. ``check()`` is the layer stack; ``prepare()``
+can still emit SQL after a refusal, so an attack with ``Prepared.sql`` set is a
+bypass whatever the verdict said. A layer that owns no attacks is unmeasured,
+not a perfect score.
 """
 
 from __future__ import annotations

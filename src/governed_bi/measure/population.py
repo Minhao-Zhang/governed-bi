@@ -17,8 +17,7 @@ from ..register.quantity import Measured
 __all__ = ["Population", "TurnRow"]
 
 #: One recorded turn. Named apart from ``ports.Row`` (a database result row,
-#: ``tuple[Any, ...]``): two different types under one import name is the defect
-#: ``tools/check_one_implementation.py`` exists to catch.
+#: ``tuple[Any, ...]``): two different types must not share one import name.
 TurnRow = Mapping[str, object]
 
 

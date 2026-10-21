@@ -151,22 +151,11 @@ class AdversarialWorld:
 
 @dataclass(frozen=True, slots=True)
 class GuardCase:
-    """One prompt-injection case: a *question*, not a statement.
+    """One prompt-injection case: a question, not a statement.
 
-    **A separate table type rather than a third ``enforced_by``**, following the disclosure
-    probes' precedent in this same file. An :class:`AdversarialCase` is statement-shaped all
-    the way down — it carries ``sql``, it is run through ``check()`` *and* ``prepare()``, and
-    an attack must name the ``Layer`` that owns its rule. A guard case has no statement, no
-    layer (``guard()`` runs before the layer stack exists) and nothing for ``prepare()`` to
-    return. Folding it in would have meant an optional ``sql``, an ``expect_layer`` that is
-    required except when it is not, a tenth :data:`CASE_FAMILIES` member, and forty-odd
-    benign statements written only to keep
-    :func:`_assert_the_suite_has_both_halves`'s 2:1 ratio from tipping over a half that is
-    not about statements at all.
-
-    Unlike the probes, these are parsed **here** and not re-read raw from the TOML by the
-    driver: ``tools/govern_bench.py`` reaches past the loader for ``[[probe]]``, which is the
-    one thing about that precedent worth not copying.
+    A separate table, because a guard case has no SQL and no layer. Folding it
+    into the statement cases would make every field optional. Parsed here; the
+    disclosure probes are read from the file by their own runner.
     """
 
     id: str

@@ -38,8 +38,7 @@ from typing import Any
 def _chat_model_var() -> str:
     """The variable that names the agent's model — ``model.provider``'s, not a copy.
 
-    Deliberately not a constant here. ``api/graph_app.py`` reads the same variable, and two entry
-    points naming it separately is the duplicate ``tools/check_one_implementation.py`` refuses; the
+    Deliberately not a constant here. ``api/graph_app.py`` reads the same variable, and the
     shared declaration lives one layer in, beside the provider variables it belongs with.
 
     There is also deliberately no literal fallback any more. ``--model`` used to default to

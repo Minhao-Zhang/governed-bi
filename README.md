@@ -189,7 +189,7 @@ as data in [`govern/adversarial.toml`](src/governed_bi/govern/adversarial.toml).
 Read that with its bound, which is not small: 49 is the number of attacks somebody sat down and
 wrote, so zero bypasses is a fact about those 49, not a claim about attacks nobody thought of. The
 same holds in reverse for the 46 benign statements. Reproduce with
-`uv run --frozen python tools/govern_bench.py`.
+`uv run --frozen pytest tests/govern/test_adversarial_suite.py`.
 
 ## Documentation
 

@@ -491,8 +491,7 @@ def test_only_the_projection_reads_the_state_dict() -> None:
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 assert node.name not in functions, (
-                    f"{node.name} is defined in two of the policy's files; "
-                    "tools/check_one_implementation.py has more to say about that"
+                    f"{node.name} is defined in two of the policy's files"
                 )
                 functions[node.name] = node
             elif isinstance(node, ast.Lambda):

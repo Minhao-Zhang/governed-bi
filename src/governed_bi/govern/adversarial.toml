@@ -1045,14 +1045,9 @@ sql = '''SELECT c.email FROM sales.customers AS c'''
 why = "One excluded column must not condemn its table; if it did, the exclusion mechanism would be indistinguishable from de-licensing."
 origin = "ADR 0006 §1 COLUMNS"
 
-# ── disclosure probes ─────────────────────────────────────────────────────────
-#
-# A `[[probe]]` asks what a tool shows the model, where a `[[case]]` asks whether a statement was
-# refused. `inspect_schema` and `sample_rows` build no statement, so the licence bound in
-# `ToolBounds` is the only thing in front of them. Surfaces: `inspect_schema` (a text payload,
-# checked against `forbidden` and `required`) and `may_sample` (a bound, checked against `expect`).
-# The attacks aim at `sales.payroll`, a table the world declares and does not license.
-# `tools/govern_bench.py` runs these and `tests/govern/test_adversarial_suite.py` gates them.
+# A [[probe]] asks what a tool shows, where a [[case]] asks whether a statement was refused.
+# inspect_schema and may_sample build no statement, so ToolBounds is the only check.
+# Attacks aim at sales.payroll, declared in the world and not licensed.
 
 # ── attacks: what a turn must not be shown ──
 

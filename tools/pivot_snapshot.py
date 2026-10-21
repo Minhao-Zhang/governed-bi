@@ -8,7 +8,7 @@ reproduce byte for byte. Rows:
   SHA-256 of the rendered context.
 * ``statement`` one per ``[[case]]`` and ``[[guard_case]]`` in ``govern/adversarial.toml``:
   the verdict, layer and rule id from ``check()`` and ``prepare()``, and whether SQL was produced.
-* ``probe``     one per ``[[probe]]``, run through ``tools/govern_bench.py::run_disclosure_probes``.
+* ``probe``     one per ``[[probe]]``, run through ``eval.disclosure_probes.run_disclosure_probes``.
 * ``meta``      one row naming the corpus digest, the embedder, the sqlglot version and the seed.
 
 What it runs: a session over ``--corpus-dir`` with the deterministic embedder built in code,
@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import os
 import pathlib
@@ -62,21 +61,6 @@ _TRACING_OFF = {
     name: "false"
     for name in ("LANGSMITH_TRACING_V2", "LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING", "LANGCHAIN_TRACING")
 }
-
-
-def _load_govern_bench() -> Any:
-    """``tools/govern_bench.py`` by path, as ``tests/govern/test_adversarial_suite.py`` does.
-
-    Registered in ``sys.modules`` before ``exec_module``: its frozen dataclass resolves string
-    annotations through ``sys.modules[cls.__module__]``.
-    """
-    path = REPO / "tools" / "govern_bench.py"
-    spec = importlib.util.spec_from_file_location("_pivot_govern_bench", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 def _layer(verdict: Mapping[str, Any]) -> str | None:
@@ -181,7 +165,9 @@ def statement_rows() -> list[dict[str, Any]]:
 
 
 def probe_rows() -> list[dict[str, Any]]:
-    """One row per ``[[probe]]``, through the one runner there is."""
+    """One row per ``[[probe]]``, through the disclosure runner."""
+    from governed_bi.eval.disclosure_probes import run_disclosure_probes
+
     return [
         {
             "kind": "probe",
@@ -191,7 +177,7 @@ def probe_rows() -> list[dict[str, Any]]:
             "status": probe.status,
             "detail": probe.detail,
         }
-        for probe in _load_govern_bench().run_disclosure_probes()
+        for probe in run_disclosure_probes()
     ]
 
 

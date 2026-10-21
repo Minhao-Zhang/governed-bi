@@ -65,8 +65,7 @@ def _latency_sec(state: Mapping[str, Any]) -> float | Measured[float]:
     test calling ``stamp`` directly), and it says so rather than reporting 0.0. A clarified turn
     includes the human's thinking time deliberately — the field is how long the user waited.
 
-    Unrounded: ``tools/check_measurement_locality.py`` refuses formatting outside
-    ``register/quantity.py``. Presentation is ``Measured.render``'s job.
+    Unrounded. Presentation is ``Measured.render``'s job, in ``register/quantity.py``.
     """
     started = state.get("turn_started_at")
     if not isinstance(started, (int, float)) or isinstance(started, bool):

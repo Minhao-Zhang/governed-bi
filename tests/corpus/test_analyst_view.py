@@ -6,9 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
 
-pytestmark = needs("D")
 
 
 def test_excluded_assets_leave_the_analyst_view_but_stay_in_the_raw_load() -> None:

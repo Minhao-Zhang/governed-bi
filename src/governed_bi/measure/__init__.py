@@ -2,7 +2,7 @@
 
 Declaration lives in ``register``; this layer returns
 :class:`~governed_bi.register.quantity.Measured` or says why it could not.
-Formatting only via ``Measured.render`` (``tools/check_measurement_locality.py``).
+Formatting only via ``Measured.render``.
 """
 
 

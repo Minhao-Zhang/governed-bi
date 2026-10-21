@@ -128,26 +128,12 @@ operator tunes), **unmeasured** (a knob override no arm has ever varied). "Read 
 | `GOVERNED_BI_AGENT_RECURSION_LIMIT` | `register/knobs.py`, `serve/nodes/agent_core.py` | unmeasured | remove: the knob default is the only value ever run |
 | `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | `register/knobs.py`, `serve/graph.py` | unmeasured | remove: the knob default is the only value ever run |
 
-### Gate audit (M9, 2026-09)
+### Leak checks
 
-Documentation only; M10 decides moves and deletions. "Catch" is a commit or CI log recording the
-gate refusing real work. CI has 49 failed runs on record (`gh run list --status failure`, read
-2026-09-25). They failed on lint, tests, mutation testing, a dependency sync and a docs-generation
-check, and none on a gate step.
-
-| Gate | Protects | Runs | Catch found |
-|---|---|---|---|
-| `check_file_length` | the 400/1000-line tiers | per push | none found |
-| `check_one_implementation` | one definition per top-level name | per push | yes: a second `make_router` (`29068aa`), two `_session` definitions (`05c0f9d`) |
-| `check_measurement_locality` | number formatting only through `Measured.render` | per push | none found |
-| `check_imports` | layering in `governed_bi/__init__.py` | per push | none found |
-| `check_citations` | retired figures not reappearing | per push | none found |
-| `check_no_benchmark_discriminators` | hand-written sibling discriminators staying out of the tree | per push | none found |
-| `check_declared_is_consumed` | declared machinery having a reader | per push through pytest, as a ratchet on five known findings | none found |
-| `check_corpus_delta` | the corpus adding no conformance finding | nightly | none found |
-| `check_corpus_conformance` | a corpus tree obeying ADR 0005's field spec | manual | none found |
-| `check_ratchet` | conformance findings only shrinking | manual | none found |
-| `check_train_only` | held-out question text staying out of a corpus | manual | none found |
+| Gate | Protects | Runs |
+|---|---|---|
+| `check_no_benchmark_discriminators` | hand-written sibling discriminators staying out of the tree | per push |
+| `check_train_only` | held-out question text, including a quoted question, staying out of a corpus | manual: needs a corpus, the question file, and a train-only control |
 
 ## A stack that will actually answer
 

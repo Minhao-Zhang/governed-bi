@@ -50,9 +50,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
 
-pytestmark = needs("E")
 
 #: A tiny corpus as ``(id, summary)``. Deliberately built so "customer" is common and
 #: "voltage" is rare, which is what makes the IDF tests below discriminating.

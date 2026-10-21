@@ -2076,8 +2076,6 @@ files over 1,000 lines**.
 
 | constraint | value |
 |---|---|
-| file length | soft **400**, hard **1000**, CI-enforced. Hard tier raised from 800 on 2026-08-03: Python at this repository's prose density does not fit a coherent unit of work into 800 lines, and the file that forced the question was over by 55 lines of failure messages and preconditions. The cost is stated where the enforcement lives (`tools/check_file_length.py`): 800 caught a file *before* v1's worst shape, 1000 catches it *at* that shape, so the soft tier's printed overrun count is now the early warning rather than a courtesy. `tests/conformance/test_register_closure.py` asserts this row and the constant agree — a limit in a table no process reads is a preference. |
-| one implementation per concept | one import name. v1 had two McNemars (`eval/analysis.py:572` and `eval/power.py:338`, both present at deletion), **three** temp-then-replace helpers (`metrics.write_manifest`, `harness._write_jsonl` and `index.append_run` — commit `0eb23ae`, "three copies of the temp-then-replace dance had grown, and no copy had both halves"), and two `LOW_CONFIDENCE_JOIN` constants **with different comparison operators** (source: the constant's own comment at `analyst/answer.py:33-48` in `2347ae3^` — `governance.py` used `<`, `viz/presenter.py` declared its own copy and used `<=`). Enforced by `tools/check_one_implementation.py`. *An earlier draft of this row also claimed "two EX definitions"; that could not be sourced — v1 had one `execution_match` in `eval/ex.py`, imported everywhere — and it has been removed.* |
 | no hand-maintained field lists | derive from one declared register (§4.1, §5) |
 | no knob reachable only from an eval CLI | |
 | no world-describing literal without a source | artifact path and date, in code and docs |
@@ -2195,7 +2193,7 @@ what it actually is: the first module of the new system.
    the **current** scorer — not the run artifact, which predates `b6b7ee5`.
 6. **Asset schema + validation + CI** (§1): per-type `identifier_field`, the join
    ON digest, `governance` on every asset, the phase-boundary provenance guard,
-   path-component validation (§1.6 / ADR 0006 §9), the file-length gate.
+   path-component validation (§1.6 / ADR 0006 §9).
 7. **Seed** (§1.7) — deterministic summaries for every asset including
    `SchemaAsset`, deterministic `sample_values`. This is what makes the next
    three steps model-free.
@@ -2244,7 +2242,7 @@ the reasons differ enough that "in progress" would hide them:
   built, had zero callers, and was deleted — §1.5's 2026-08-06 amendment is the record, and
   `tools/graft_corpus_fields.py`'s outright refusal of `governance` is the control that
   replaced it. Everything else in the step is in `corpus/schema.py`,
-  `corpus/validate.py`, `corpus/identity.py` and `tools/check_file_length.py`.
+  `corpus/validate.py` and `corpus/identity.py`.
 - **Step 7 shipped its summaries and not its samples.** `corpus/seed.py::seed` writes a
   deterministic `summary` for every asset; it authors no `sample_values`, and there is no
   profiler to author them — `corpus/introspect.py::Introspection` carries names and types

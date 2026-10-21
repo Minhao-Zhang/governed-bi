@@ -45,8 +45,6 @@ from turn_contract_fixtures import (  # noqa: E402
     probe,  # noqa: F401 -- pytest fixture, used by name
 )
 
-from contracts import needs  # noqa: E402
-
 #: Most of this file began as a **specification with no body**, each a strict xfail. One
 #: marker is left today — the ``@CONVICTS`` on the last test — and ``UNWRITTEN`` is declared
 #: below with no current user, kept as the vocabulary the next specification written here uses.
@@ -69,10 +67,9 @@ from contracts import needs  # noqa: E402
 #: turns the newly-passing test red and the module-level marker is the only thing in reach.
 #: A tripwire whose removal is the documented next step is not a tripwire.
 #:
-#: Nothing enforces any of this. ``tools/check_declared_is_consumed.py`` does not scan
-#: ``tests/``, which is how the count above went from ten markers to one without a gate
-#: saying so, and how ``UNWRITTEN`` came to be declared here and never applied.
-pytestmark = [needs("F")]
+#: Nothing enforces any of this. No scan reads ``tests/``, which is how the count above
+#: went from ten markers to one without a gate saying so, and how ``UNWRITTEN`` came to
+#: be declared here and never applied.
 
 #: A specification with no body. The assertion has not been written yet. Unapplied at
 #: present: ``@CONVICTS`` below is the only marker this file uses.

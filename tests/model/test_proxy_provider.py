@@ -23,9 +23,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
 
-pytestmark = [needs("I")]
 
 #: Every variable the adapter reads. Cleared per test so a developer's own shell cannot make
 #: the refusal assertions pass or fail for the wrong reason.

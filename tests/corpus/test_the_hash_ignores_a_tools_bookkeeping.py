@@ -63,9 +63,8 @@ def test_a_workflow_file_does_not_move_the_treatment_identity(tmp_path: Path) ->
 
 
 def test_a_lints_state_directory_does_not_move_the_treatment_identity(tmp_path: Path) -> None:
-    """``.conformance/pins.txt`` is what ``tools/check_ratchet.py`` reads. The pins are a
-    property of the tree, so they live beside it; they are a record *about* the corpus and
-    counting them would make every ratchet update a new treatment."""
+    """A pins file beside the corpus is a record *about* the tree, not an asset. Counting
+    it would make every pin edit a new treatment."""
     root = _corpus(tmp_path / "corpus")
     before = corpus_content_hash(root)
 

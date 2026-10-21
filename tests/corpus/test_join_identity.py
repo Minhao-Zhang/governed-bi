@@ -6,9 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
 
-pytestmark = needs("D")
 
 
 def test_operand_order_inside_a_predicate_does_not_change_the_digest() -> None:

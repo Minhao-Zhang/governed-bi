@@ -45,7 +45,7 @@ build in the present tense after that build was deleted.
 | [0013](adr/0013-the-declared-abstention-policy.md) | The declared abstention policy |
 | [0014](adr/0014-one-conversation-store.md) | One conversation store, on a durable LangGraph checkpointer — **supersedes 0004 §5** |
 | [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **reversed**; the loop is deleted and the waiting list reads interrupts only |
-| [0016](adr/0016-gating-the-corpus-repository.md) | Gating the served corpus: "did the corpus add a finding since somebody last looked?" — **Accepted; the nightly is now on `main`** (a job **here**, not in the corpus: the rules are statements about this engine, so the consumer runs the check. `ci.yml`'s `corpus` job, `schedule` plus `workflow_dispatch`. Baseline is a corpus SHA in `tools/corpus_baseline.py`; bumping it is the acknowledgement. Answers 0015's open "who owns the corpus repository's CI" — nobody, by design. What is still open is that the baseline equals the corpus tip, so the first green run proves nothing: [open work](open-work.md) §3.10e) |
+| [0016](adr/0016-gating-the-corpus-repository.md) | Gating the served corpus — **reversed**; the conformance rules and the nightly job are deleted, and the held-out quote check stays on the train-only gate |
 | [0017](adr/0017-a-served-chat-app-over-a-layer-the-user-brings.md) | A served chat app over a semantic layer the user brings — **Proposed**; deletes access, the return path, the extra pages and most repository gates |
 | [0018](adr/0018-every-answer-states-its-assumptions.md) | Every answer states its assumptions, and the server checks them — **Proposed** |
 | [0019](adr/0019-one-plain-chat-page.md) | One plain chat page — **Proposed** |

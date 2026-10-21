@@ -31,13 +31,11 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from contracts import needs  # noqa: E402
 
 #: A specification with no body. Per test, never module-level — see
 #: ``tests/serve/test_turn_contract.py`` for the incident that established that.
 UNWRITTEN = pytest.mark.xfail(strict=True, reason="contract specified, body not yet written")
 
-pytestmark = [needs("I")]
 
 #: The two adapters this file drives, by import path — **not** all four: `bedrock` and `proxy`
 #: each need a provider tree and a credential to construct, and their identity surface is

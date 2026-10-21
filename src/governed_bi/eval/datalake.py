@@ -715,8 +715,7 @@ def retrieval_funnel(
         artifact: ``json.dumps(..., default=str)`` would render an absence as the *string*
         ``"unmeasured"``, which sorts and compares like a value.
         """
-        # ``.rounded`` and not ``round()``: ``tools/check_measurement_locality.py`` forbids the
-        # builtin in ``src/`` because a rounding helper turns an unmeasured quantity into
+        # ``.rounded`` and not ``round()``. A rounding helper turns an unmeasured quantity into
         # ``0.0``. ``rounded`` carries the absence through instead of defaulting it.
         measured = Measured.rate(numerator, denominator, what=what).rounded(4)
         return {

@@ -1,10 +1,7 @@
-"""Readers over the ``messages`` channel. One implementation each, at the layer that owns it.
+"""Readers over the ``messages`` channel, beside the declaration in ``serve/state.py``.
 
-:func:`last_ai_text` lived in the deleted ``api/trace_store.py`` where its first two callers were, but
-``tools/check_imports.py`` orders ``serve`` before ``api``, so its third caller
-(``serve/nodes/narrate.py``) could not reach it. The ``messages`` channel is declared in
-``serve/state.py``; a reader of it belongs beside the declaration, and ``api`` may import
-``serve``.
+``api`` may import ``serve``. The other direction does not: ``narrate`` is a caller
+and it lives in ``serve``.
 """
 
 from __future__ import annotations

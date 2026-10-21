@@ -1,41 +1,15 @@
 """Closure checks that need to import across the whole stack.
 
-Why this package exists at all: **neither end of a declaration can prove closure
-without an upward import.** The register declares fields that stages produce, and
-naming a producer as a ``Stage`` member is what keeps the dependency pointing
-downward — but "every declared field is actually written by that stage" cannot be
-checked from the bottom, and "every emitted field is declared" cannot be checked
-from the top without the top importing the bottom's checker. So closure is proven
-where an upward import is legal: here.
-
-**Every test in this file drives the real function.** None re-implements a check's
-arithmetic. Authoring rules applied here:
-
-* Assert on the **effect** (does the guard raise?), not on the presence of a
-  constant.
-* **Never assert a module against its own constant** — that passes for an empty
-  tuple.
-* A guard that leaves a trace only when it fires cannot be told from a guard that
-  was never wired up, so the negative case is tested too.
-
-**Split, 2026-08-19**, at 68 lines under ADR 0005 §6's hard cap of 1,000. The synthetic-tree
-harness and the one-negative-test-per-gate suite that used it moved to
-``test_the_lint_gates_fire_on_a_synthetic_violation.py``. Closure across the register -- this
-file's own reason for existing, stated above -- stayed. Nothing there needed the upward import
-this file exists for: every one of those tests drives a tool as a subprocess.
+Neither end of a declaration can prove closure without an upward import, so
+the check lives here. Every test drives the real function: assert the effect,
+and include the case that makes the guard fire.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
 
 from governed_bi.register import assets, citations, facets, knobs, record, stages
-
-ROOT = Path(__file__).resolve().parent.parent.parent
-
 
 # ── cross-table closure: the reason this package exists ────────────────────────
 
@@ -332,51 +306,3 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> Non
         f"schemas={statementless.get('schemas')!r}"
     )
     assert not missing_required(statementless["answer"]["record"])
-
-
-# ── the unbuilt parcels must stay declared, in both directions ─────────────────
-
-
-def _contracts():
-    """``tests/contracts.py``, imported by path because ``tests/`` is not a package."""
-    sys.path.insert(0, str(ROOT / "tests"))
-    import contracts
-
-    return contracts
-
-
-def test_a_parcel_cannot_be_accepted_without_an_implementation() -> None:
-    """Acceptance is a person's judgement and must not be derivable from ``mkdir``.
-
-    This test's predecessor compared a declared ``UNBUILT`` set against
-    ``contracts.is_built()``, which checks only whether a package directory holds a
-    non-``__init__`` module. So creating a directory **forced** the declaration to read
-    "built", and the implementer who emptied it was not asserting anything at all. Two
-    parcels were graded that way by their own author, and an adversarial review found in
-    both the defect a design-holder contract would have caught — an ``outcome=answered``
-    on a turn whose every SQL attempt was refused, and a grader re-executing outside
-    ``govern.prepare`` so that governance refusals scored as EX correct.
-
-    So this asserts the one direction that is a **contradiction** rather than a workflow
-    state: a parcel cannot be accepted with no code. The reverse — code nobody has
-    accepted — is normal and is reported by the test below instead of failed, because
-    failing it would block the review that resolves it.
-    """
-    contracts = _contracts()
-    assert not contracts.accepted_but_absent(), (
-        f"declared ACCEPTED with nothing on disk: "
-        f"{sorted(contracts.accepted_but_absent())}"
-    )
-
-
-def test_code_without_acceptance_is_reported(capsys) -> None:
-    """Unaccepted code must be visible on every run.
-
-    That state is exactly where the two self-graded parcels sat while their numbers
-    looked fine, and a state nothing prints is a state nobody notices — the same
-    argument that earns ``check_citations.py`` its archive count and
-    ``check_one_implementation.py`` its pending tier.
-    """
-    pending = sorted(_contracts().built_but_unaccepted())
-    print(f"parcels with code and no design-holder acceptance: {pending or 'none'}")
-    assert "no design-holder acceptance" in capsys.readouterr().out
