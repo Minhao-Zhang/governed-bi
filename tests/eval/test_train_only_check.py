@@ -73,8 +73,7 @@ def test_v12_fails_a_corpus_asset_quoting_a_held_out_question(tmp_path: pathlib.
     """The moved split rule, on a held-out file written here so the test runs where CI runs."""
     question = "How many households in Arecibo county earn more than the state median?"
     dataset = tmp_path / "test_final.jsonl"
-    dataset.write_text(json.dumps({"question_id": "q1", "question": question}) + "
-", encoding="utf-8")
+    dataset.write_text(json.dumps({"question_id": "q1", "question": question}) + "\n", encoding="utf-8")
 
     tool = _tool()
     path = tmp_path / "t.yaml"
