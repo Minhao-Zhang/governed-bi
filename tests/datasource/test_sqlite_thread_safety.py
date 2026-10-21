@@ -7,7 +7,7 @@ under ``wrap_node``'s ``asyncio.to_thread``). ``_connect()`` memoized ``self._co
 *instance*, not per *thread*, so the first call's thread owns the handle and every later call
 from a different thread hit Python's own guard: ``sqlite3.ProgrammingError: SQLite objects
 created in a thread can only be used in that same thread.`` Reproduced live against the real
-serve graph on both OpenAI and Bedrock (RESUME.md, 2026-08-06) — not a hypothetical, the actual
+serve graph (RESUME.md, 2026-08-06) — not a hypothetical, the actual
 cause of two independent 15+-minute hangs before the agent's retry loop (a separate, since-fixed
 defect, upstream `c8b570d`) turned the crash into an infinite loop instead of a clean error.
 

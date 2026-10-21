@@ -9,10 +9,8 @@ histogram", and ``eval/report.py``. Measured on 2026-08-12:
   ``Outcome.refused``, so ``test_the_abstention_policy_is_declared``'s assertion on it holds for
   ``'banana_not_declared_anywhere'`` too — a test that could not fail for any member of a
   vocabulary is not evidence the vocabulary is read.
-* The one histogram that existed, ``tools/datalake_report.py::_refusal_layers``, counts
-  ``attempt.reason_code`` off the **ledger**. A withheld turn writes no ledger row at all — ADR
-  0013's own acceptance criterion 3 — so the four abstention reasons were structurally
-  invisible to it, and it has never touched ``REFUSED_BY_TO_STAGE``.
+* A ledger histogram counts ``attempt.reason_code``. A withheld turn writes no ledger row —
+  ADR 0013's acceptance criterion 3 — so the four abstention reasons are invisible to it.
 * ``eval/report.py`` had zero references to ``refused_by``, ``terminal_reason`` or the
   vocabulary.
 

@@ -36,17 +36,7 @@ from typing import Any
 
 
 def _chat_model_var() -> str:
-    """The variable that names the agent's model — ``model.provider``'s, not a copy.
-
-    Deliberately not a constant here. ``api/graph_app.py`` reads the same variable, and the
-    shared declaration lives one layer in, beside the provider variables it belongs with.
-
-    There is also deliberately no literal fallback any more. ``--model`` used to default to
-    ``gpt-4o-mini``, a second place deciding a comparability knob -- the thing :func:`_model`'s own
-    docstring argues against -- and it was silently *wrong* rather than merely redundant: under
-    ``GOVERNED_BI_PROVIDER=bedrock`` it sent an OpenAI id to Bedrock and the turn came back
-    ``outcome: crashed`` naming nothing that pointed at the model.
-    """
+    """The variable that names the agent's model. Shared with the server, not copied."""
     from ..model.provider import SURFACE_MODEL_VARS
 
     return SURFACE_MODEL_VARS["agent"]
@@ -65,40 +55,22 @@ def _credentials() -> Any:
     return credentials
 
 
-def _model(name: str, creds: Any, effort: str | None = None) -> Any:
-    """A real chat model, constructed **here** rather than behind a port.
-
-    Decision #1: LangChain's ``BaseChatModel`` already *is* that port, and v1's three layers
-    over it are recorded as a mistake. This is the only place *this entry point* chooses one.
-
-    Which gateway serves it, and how effort/timeout/retries are spelled for that gateway,
-    is :mod:`governed_bi.model.provider` -- shared with ``api/graph_app.py`` and the eval
-    driver. Two entry points constructing a model differently are two answers to "what did
-    this run use" on a comparability knob, and the previous copy of the OpenAI spelling here
-    was exactly that waiting to happen: it went stale the moment Bedrock landed in the other
-    one. ``creds`` is no longer consulted for the key -- the provider module asks whichever
-    gateway was selected, and Bedrock authenticates from a role with no variable set.
-    """
+def _model(name: str, effort: str | None = None) -> Any:
+    """The OpenAI chat model, built the same way as the server."""
     from ..model import provider as provider_mod
 
-    chosen = provider_mod.provider_for("agent")
-    if not provider_mod.credentials_present(chosen):
-        names = " / ".join(provider_mod.credential_names(chosen)) or "none known"
+    if not provider_mod.credentials_present():
+        names = " / ".join(provider_mod.credential_names())
         raise SystemExit(
-            f"no credential for the {chosen} provider ({names}); set one in the environment "
+            f"no credential for the openai gateway ({names}); set one in the environment "
             "or .env, or pass --no-model to serve the stub path"
         )
-    # tools=True: this agent binds tools, which on OpenAI selects the Responses API -- the
-    # only transport there that carries tools and reasoning_effort together.
     from ..register.knobs import knob_default
 
     return provider_mod.chat_model(
         name,
         surface="agent",
-        provider=chosen,
         effort=effort or None,
-        # Same ceiling the server uses. Unset, ChatBedrockConverse's own 4096 truncates an
-        # xhigh turn inside its thinking block and prints an empty answer.
         max_output_tokens=int(knob_default("llm_max_output_tokens")),
         tools=True,
     )
@@ -138,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
     dsn = creds.secret(*creds.PG_DSN_NAMES)
     if not dsn:
         print(
-            f"no database: set one of {' / '.join(creds.PG_DSN_NAMES)} in the environment or .env",
+            f"no database: set {creds.PG_DSN_NAMES[0]} in the environment or .env",
             file=sys.stderr,
         )
         return 2
@@ -173,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     effort = args.effort or settings["llm_reasoning_effort"] or None
-    model = None if args.no_model else _model(model_name, creds, effort)
+    model = None if args.no_model else _model(model_name, effort)
 
     kwargs: dict[str, Any] = {
         "connector": connector,

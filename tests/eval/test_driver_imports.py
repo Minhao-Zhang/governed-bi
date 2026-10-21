@@ -37,7 +37,7 @@ EVAL_MODULES = (
 )
 
 #: The scripts a person actually runs. Both were broken by a deletion and neither had a test.
-DRIVERS = ("run_datalake_eval.py", "routing_recall.py", "regrade.py")
+DRIVERS = ("run_datalake_eval.py", "regrade.py", "datalake_report.py")
 
 
 @pytest.mark.parametrize("name", EVAL_MODULES)

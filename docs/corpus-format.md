@@ -15,7 +15,7 @@ is live rather than assuming:
 
 | | |
 |---|---|
-| **Served today** (since 2026-08-23) | [`../BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus), paired with `PG_RENAME_DECOY_DSN` on port 5435 — `docker compose up pg_rename_decoy` in `../BIRD-Data-Obfuscation`. 13,304 assets, 0 problems, content hash `6e5c7b4be83d5682` at that repo's HEAD |
+| **Served today** (since 2026-08-23) | [`../BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus), paired with `GOVERNED_BI_PG_DSN` on port 5435 — `docker compose up pg_rename_decoy` in `../BIRD-Data-Obfuscation`. 13,304 assets, 0 problems, content hash `6e5c7b4be83d5682` at that repo's HEAD |
 | **Retired as the served tree** | `../MS Fabric Facilities/corpus` — the facilities warehouse's flattened serving layer, one namespace, the `facilities` Postgres on 5432. Both `.env` lines are commented out and they are one switch |
 
 **Why the swap, because it is a standing choice and not a benchmark detour.**

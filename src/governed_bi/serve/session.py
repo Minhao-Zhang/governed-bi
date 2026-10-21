@@ -13,7 +13,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
 
 from governed_bi.register.prompts import prompt_set_hash
 from governed_bi.register.prompts import select as selected_variants
@@ -300,28 +299,6 @@ def visible_assets(assets: Sequence[Asset]) -> list[Asset]:
     ]
 
 
-def _provider_of(model: Any) -> str:
-    """Which gateway served the model — ``"openai"``, ``"bedrock"``, or ``"custom:<digest>"``.
-
-    A digest of the base URL's host rather than the host: it separates two gateways in the
-    config hash, which is the whole job, without writing an internal endpoint into every audit
-    row.
-
-    Bedrock is asked separately because it has no base URL at all. Falling through to
-    ``"openai"`` for it would be the defect this function is used to close, one gateway over:
-    a wrong provider on a comparability field reads as a measurement, where a null reads as an
-    absence. Absent both, the vendor's own endpoint is the library default.
-    """
-    base = getattr(model, "openai_api_base", None) or getattr(model, "base_url", None)
-    if not base:
-        # `_llm_type` is LangChain's own label; `ChatBedrockConverse` reports
-        # "chat-bedrock-converse" and carries no URL to digest.
-        label = str(getattr(model, "_llm_type", "") or "")
-        return "bedrock" if "bedrock" in label.lower() else "openai"
-    host = urlsplit(str(base)).netloc or str(base)
-    return "custom:" + hashlib.sha256(host.encode("utf-8")).hexdigest()[:8]
-
-
 def _model_name(model: Any) -> str:
     """The id to record for ``model``. One derivation, used by every model knob.
 
@@ -402,15 +379,8 @@ def from_assets(
         # arms apart was outside the comparability set. One spelling, and it is the declared
         # one.
         knobs["chat_model"] = _model_name(agent_model)
-        # Whichever of the three spellings this client wears. `getattr(model,
-        # "reasoning_effort")` was here and is only OpenAI's, so the proxy arms recorded null
-        # while running at `high` -- see `model/provider.py::reasoning_effort_of`.
         effort = reasoning_effort_of(agent_model)
         knobs["llm_reasoning_effort"] = str(effort) if effort else None
-        # The gateway, not the model. Read off the client's base URL because that is the one
-        # place a proxy differs from the vendor while `model_id` returns the same string for
-        # both -- see the knob's own note for what that cost.
-        knobs["llm_provider"] = _provider_of(agent_model)
         for knob, attr, cast in (
             ("llm_max_retries", "max_retries", int),
             ("llm_timeout_s", "request_timeout", float),
@@ -422,10 +392,6 @@ def from_assets(
         # Written even when it falls back to the agent model, per the knob's note: "shared one
         # model" and "split them" are two treatments.
         knobs["llm_utility_model"] = _model_name(resolved_utility)
-        # Same argument as `llm_provider`, one surface over, and it had no writer at all: six
-        # proxy-served arms published the register default "openai" on this field while
-        # `llm_provider` on the same row said "custom:007df842".
-        knobs["llm_utility_provider"] = _provider_of(resolved_utility)
         utility_effort = reasoning_effort_of(resolved_utility)
         knobs["llm_utility_reasoning_effort"] = str(utility_effort) if utility_effort else None
         timeout = getattr(resolved_utility, "request_timeout", None)

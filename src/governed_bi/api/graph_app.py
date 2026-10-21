@@ -74,17 +74,13 @@ UTILITY_MODEL_EFFORT_VAR = "GOVERNED_BI_UTILITY_MODEL_EFFORT"
 #: Embedding model id. Setting it turns the semantic channel on.
 EMBEDDING_MODEL_VAR = SURFACE_MODEL_VARS["embedding"]
 
-#: Provider SDK retry count. Reaches the agent, the utility model, and the OpenAI and Bedrock
-#: embedders. **The proxy embedder drops it**: ``provider.embedder`` constructs
-#: ``ProxyEmbedder`` from the model id and the width alone, so an arm on that gateway records
-#: this knob in ``knobs_resolved`` and runs on the SDK's own default (audit N6).
+#: Provider SDK retry count. Reaches the agent, the utility model, and the embedder.
 RETRIES_VAR = "GOVERNED_BI_LLM_MAX_RETRIES"
 
 #: Wall clock (seconds) for one agent call.
 TIMEOUT_VAR = "GOVERNED_BI_LLM_TIMEOUT_S"
 
-#: Wall clock for guard, rewriters, and embedder. Dropped by the proxy embedder, with
-#: :data:`RETRIES_VAR` and for the same reason.
+#: Wall clock for guard, rewriters, and the embedder.
 UTILITY_TIMEOUT_VAR = "GOVERNED_BI_UTILITY_TIMEOUT_S"
 
 #: Reasoning effort for the agent model (comparability knob).
@@ -125,7 +121,7 @@ def _build_session_from_environment() -> Session:
     dsn = credentials.secret(*credentials.PG_DSN_NAMES)
     if not dsn:
         raise RuntimeError(
-            f"no database: set one of {' / '.join(credentials.PG_DSN_NAMES)}. The server "
+            f"no database: set {credentials.PG_DSN_NAMES[0]}. The server "
             "serves a corpus over a live connector; there is no offline mode."
         )
 
@@ -145,21 +141,17 @@ def _build_session_from_environment() -> Session:
     if model_id:
         from governed_bi.model import provider as provider_mod
 
-        name = provider_mod.provider_for("agent")
-        if not provider_mod.credentials_present(name):
+        if not provider_mod.credentials_present():
             raise RuntimeError(
-                f"{MODEL_VAR} is set to {model_id!r} and the agent surface resolves to "
-                f"provider {name!r}, but no credential for it is available "
-                f"({' / '.join(provider_mod.credential_names(name)) or 'none found'}). "
+                f"{MODEL_VAR} is set to {model_id!r} but "
+                f"{' / '.join(provider_mod.credential_names())} is not set. "
                 f"Unset {MODEL_VAR} to serve without a model rather than starting a server "
                 "that cannot answer."
             )
-        # tools=True: agent_core binds tools, which on OpenAI selects the Responses API —
-        # the only transport carrying tools and reasoning_effort together.
+        # tools=True selects the Responses API, which carries tools and reasoning effort.
         model = provider_mod.chat_model(
             model_id,
             surface="agent",
-            provider=name,
             effort=settings["llm_reasoning_effort"] or None,
             timeout=float(settings["llm_timeout_s"]),
             max_retries=int(settings["llm_max_retries"]),
@@ -212,18 +204,15 @@ def _utility_model(settings: Mapping[str, Any]) -> Any:
         return None
     from governed_bi.model import provider as provider_mod
 
-    name = provider_mod.provider_for("utility")
-    if not provider_mod.credentials_present(name):
+    if not provider_mod.credentials_present():
         raise RuntimeError(
-            f"{UTILITY_MODEL_VAR} is set to {model_id!r} and the utility surface resolves to "
-            f"provider {name!r}, but no credential for it is available "
-            f"({' / '.join(provider_mod.credential_names(name)) or 'none found'}). "
+            f"{UTILITY_MODEL_VAR} is set to {model_id!r} but "
+            f"{' / '.join(provider_mod.credential_names())} is not set. "
             "Unset it to share the agent's model."
         )
     return provider_mod.chat_model(
         model_id,
         surface="utility",
-        provider=name,
         effort=settings["llm_utility_reasoning_effort"] or None,
         timeout=float(settings["llm_utility_timeout_s"]),
         max_retries=int(settings["llm_max_retries"]),
@@ -237,12 +226,10 @@ def _embedder_into(kwargs: dict[str, Any], settings: Mapping[str, Any]) -> Any:
         return None
     from governed_bi.model import provider as provider_mod
 
-    name = provider_mod.provider_for("embedding")
-    if not provider_mod.credentials_present(name):
+    if not provider_mod.credentials_present():
         raise RuntimeError(
-            f"{EMBEDDING_MODEL_VAR} is set to {model_id!r} and the embedding surface resolves "
-            f"to provider {name!r}, but no credential for it is available "
-            f"({' / '.join(provider_mod.credential_names(name)) or 'none found'}). Unset it "
+            f"{EMBEDDING_MODEL_VAR} is set to {model_id!r} but "
+            f"{' / '.join(provider_mod.credential_names())} is not set. Unset it "
             "to serve with lexical retrieval only, rather than starting a server whose "
             "semantic channel reports failed on every turn."
         )
@@ -250,7 +237,6 @@ def _embedder_into(kwargs: dict[str, Any], settings: Mapping[str, Any]) -> Any:
 
     embedder = provider_mod.embedder(
         model_id,
-        provider=name,
         max_retries=int(settings["llm_max_retries"]),
         timeout=float(settings["llm_utility_timeout_s"]),
     )

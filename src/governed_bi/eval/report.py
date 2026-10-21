@@ -7,10 +7,9 @@ module already read that table. Measured on 2026-08-12, all three were false:
 
 * ``classify_outcome`` never consults it. Any truthy ``refused_by`` returns
   ``Outcome.refused``, declared or not.
-* The one histogram that exists, ``tools/datalake_report.py::_refusal_layers``, counts
-  ``attempt.reason_code`` off the **ledger** and has never touched the table. A withheld turn
-  writes no ledger row at all — ADR 0013's own acceptance criterion 3 — so the four abstention
-  reasons were not merely uncounted there, they were unreachable.
+* A ledger histogram counts ``attempt.reason_code`` and never touches the table. A withheld
+  turn writes no ledger row — ADR 0013's acceptance criterion 3 — so the four abstention
+  reasons are unreachable from the ledger.
 * This module had zero references to ``refused_by``, ``terminal_reason`` or the vocabulary.
 
 Three named consumers, none of them real: the declared-machinery-with-no-reader shape the

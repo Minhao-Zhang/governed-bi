@@ -241,19 +241,11 @@ def prompt_variants(config: Mapping[str, Any] | None) -> dict[str, str]:
 
 
 def model_id(model: Any) -> str | None:
-    """Provider model id, or ``None``. Prefer ``model_name`` / ``model`` over ``_llm_type``.
+    """Provider model id, or ``None``. Prefer ``model_name`` over the class label.
 
-    ``model_id`` is in the tuple because ``ChatBedrockConverse`` spells it that way and spells
-    none of the others, so every Bedrock turn fell through to ``_model_name``'s ``_llm_type``
-    branch and recorded the **class** name ``amazon_bedrock_converse_chat`` as its model. That
-    is not a display bug: ``chat_model`` and ``llm_utility_model`` are ``a recorded setting``
-    knobs, so two Bedrock arms serving *different* Anthropic models published the same value
-    and ``measure/gates.py``'s drift gate compared them equal. Measured on
-    ``runs/serve/2026-08-18.jsonl (an untracked local sink, deleted under ADR 0014)``: both turns recorded
-    ``amazon_bedrock_converse_chat`` while actually running ``us.anthropic.claude-sonnet-5``.
-
-    Last in the tuple, not first: it is the fallback spelling, and a client that offers both
-    ``model_name`` and ``model_id`` should keep the meaning the earlier arms recorded.
+    ``model_id`` is last because some clients spell the id only that way. Falling
+    through to ``_llm_type`` records the class, so two models publish one value and
+    the drift gate compares them equal. A client that offers both keeps ``model_name``.
     """
     for attr in ("model_name", "model", "deployment_name", "model_id"):
         value = getattr(model, attr, None)

@@ -131,8 +131,8 @@ def _refuse_a_mixed_vector_space(
     """Refuse to build from a store whose existing rows came from a different embedder.
 
     **The cache key cannot catch this** (audit I9). It is ``model|dimensions|text``, so a gateway
-    repointed at a different model behind the same id — the normal shape of a self-hosted LiteLLM
-    or Bedrock proxy — produces cache *hits* on every old row while anything new is embedded by
+    repointed at a different model behind the same id — a self-hosted gateway that keeps the
+    id and changes the weights — produces cache *hits* on every old row while anything new is embedded by
     the new model. Width matches, ``corpus_content_hash`` does not move, ``embedder_model`` reads
     the same string, and one index then holds two vector spaces in which cosine between them is
     noise. That is the v1 incident this file's sealed contract opens with, in the one form the key
@@ -326,7 +326,7 @@ def build_index(
         raise ValueError(
             "vector_cache requires an embedder: the key is (model, dimensions, text), "
             "so without one there is no identity to read the cache under "
-            "(register/knobs.py, the embedding_provider knob)"
+            "(register/knobs.py, the embedding_model setting)"
         )
 
     vectors: VectorStore | None = None

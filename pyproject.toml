@@ -6,15 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
 authors = [{ name = "Minhao Zhang" }]
-# Core + agent deps live here: a plain `uv sync` installs everything the default
-# OpenAI-backed stack needs, so dev never hits a "feature silently off because its
-# extra wasn't installed" bug. There is exactly **one** extra, `bedrock`, and it is
-# the only thing a base install leaves out; see [project.optional-dependencies].
-#
-# `bedrock` fronts `model/bedrock_embedder.py` and the proxy gateway's `boto3` use.
-# CI installs it (`uv sync --frozen --extra bedrock`), so a setup document that omits
-# it makes the provider translation tests skip locally and run on CI — say it
-# everywhere the install is described.
+# A plain `uv sync` installs everything the app and the eval need.
 #
 # Every entry below is imported by something under `src/` or `tests/`. See the git log
 # for the reasoning on `deepagents` in particular, which is retired rather than
@@ -69,11 +61,6 @@ dependencies = [
     # only bites on a deliberate `uv lock`/`uv sync -U` — which is exactly when it should.
     "langchain>=1.0,<2",
     "langchain-openai>=1.0,<2",
-    # No `langchain-aws` here: it pulls a boto3/botocore tree that the OpenAI and proxy arms
-    # never touch, and the base install is what every model-free test runs against. It is an
-    # extra — `uv sync --extra bedrock` — and every import of it is inside the function that
-    # needs it, so selecting a non-Bedrock provider never pays for it. See
-    # [project.optional-dependencies].
     # `langgraph-checkpoint-sqlite` is declared because it is now **imported**:
     # `serve/checkpointer.py::conversation_checkpointer` yields the `AsyncSqliteSaver` that
     # `langgraph.json`'s `checkpointer.path` mounts on the streamed path, and
@@ -120,17 +107,6 @@ dependencies = [
     "pyarrow>=25.0",
     # No `numpy`. It arrives under `lancedb` and nothing in `src/` or `tests/` imports it;
     # the dev group's note on why it was removed is about declared dependencies and holds.
-]
-
-[project.optional-dependencies]
-# AWS Bedrock, for both the chat surfaces and the embedder. `uv sync --extra bedrock`.
-# `langchain-aws` brings boto3/botocore transitively; both are named so the floor is visible
-# to a reader — `botocore.config.Config` is what carries the timeout and retry knobs onto a
-# Bedrock client, and `model/provider.py` imports it directly.
-bedrock = [
-    # Same bound and the same reason as `langchain` above; this is the Bedrock gateway.
-    "langchain-aws>=1.0,<2",
-    "boto3>=1.34",
 ]
 
 [dependency-groups]

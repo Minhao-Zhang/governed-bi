@@ -57,9 +57,6 @@ _ENV_NAMES: Final[Mapping[str, str]] = {
     "llm_reasoning_effort": "GOVERNED_BI_MODEL_EFFORT",
     "llm_utility_model": "GOVERNED_BI_UTILITY_MODEL",
     "llm_utility_reasoning_effort": "GOVERNED_BI_UTILITY_MODEL_EFFORT",
-    "llm_provider": "GOVERNED_BI_MODEL_PROVIDER",
-    "llm_utility_provider": "GOVERNED_BI_UTILITY_PROVIDER",
-    "embedding_provider": "GOVERNED_BI_EMBEDDING_PROVIDER",
     "llm_max_retries": "GOVERNED_BI_LLM_MAX_RETRIES",
     "llm_timeout_s": "GOVERNED_BI_LLM_TIMEOUT_S",
     "llm_utility_timeout_s": "GOVERNED_BI_UTILITY_TIMEOUT_S",
@@ -69,16 +66,6 @@ _ENV_NAMES: Final[Mapping[str, str]] = {
     "agent_recursion_limit": "GOVERNED_BI_AGENT_RECURSION_LIMIT",
     "corpus_release": "GOVERNED_BI_CORPUS_RELEASE",
 }
-
-_PROVIDER_KNOBS: Final[frozenset[str]] = frozenset(
-    {"llm_provider", "llm_utility_provider", "embedding_provider"}
-)
-_PROVIDER_FALLBACK: Final[tuple[tuple[str, str], ...]] = (
-    ("llm_provider", "GOVERNED_BI_MODEL_PROVIDER"),
-    ("llm_utility_provider", "GOVERNED_BI_UTILITY_PROVIDER"),
-    ("embedding_provider", "GOVERNED_BI_EMBEDDING_PROVIDER"),
-)
-
 
 @dataclass(frozen=True, slots=True)
 class Knob:
@@ -126,9 +113,6 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("llm_reasoning_effort", "xhigh"),
     _k("llm_utility_model", "gpt-6-luna"),
     _k("llm_utility_reasoning_effort", "medium"),
-    _k("llm_provider", "openai"),
-    _k("llm_utility_provider", "openai"),
-    _k("embedding_provider", "openai"),
     _k("llm_max_retries", 3),
     _k("llm_max_output_tokens", 32_000),
     _k("llm_timeout_s", 300.0),
@@ -164,10 +148,6 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("conversation_db", "runs/conversations.sqlite"),
     _k("harness_db", "runs/harness-checkpoints.sqlite"),
     _k("vector_cache", "runs/vectors"),
-    _k("aws_region", ""),
-    _k("proxy_secret", ""),
-    _k("proxy_region", ""),
-    _k("proxy_ca_bundle", ""),
 )
 
 
@@ -199,8 +179,6 @@ def _coerce(knob: Knob, raw: str) -> Any:
     if text == "":
         return _MISSING
     default = knob.default
-    if knob.name in _PROVIDER_KNOBS:
-        return text.lower()
     if isinstance(default, bool):
         lowered = text.lower()
         if lowered not in ("true", "false"):
@@ -282,17 +260,6 @@ def resolve_settings(environ: Mapping[str, str] | None = None) -> dict[str, Any]
             continue
         value = _coerce(knob, str(raw))
         resolved[knob.name] = _recorded_default(knob) if value is _MISSING else value
-    shared = (env.get("GOVERNED_BI_PROVIDER") or "").strip()
-    if shared:
-        for name, var in _PROVIDER_FALLBACK:
-            if not (env.get(var) or "").strip():
-                resolved[name] = shared.lower()
-    if not (env.get("GOVERNED_BI_AWS_REGION") or "").strip():
-        for var in ("AWS_REGION", "AWS_DEFAULT_REGION"):
-            raw = (env.get(var) or "").strip()
-            if raw:
-                resolved["aws_region"] = raw
-                break
     resolved["config_hash"] = config_hash(resolved)
     return resolved
 

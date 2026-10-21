@@ -28,10 +28,9 @@ _UNSAFE_IN_PATH = '<>:"/\\|?*'
 def _directory_name(model: str) -> str:
     """``model`` reduced to something that can be a single path component.
 
-    **Bedrock ids are versioned with a colon** -- ``amazon.titan-embed-text-v2:0`` -- and that
-    is not a legal directory name on Windows: it raises ``NotADirectoryError`` (WinError 267).
-    Nothing degraded, the server simply could not boot the first time the embedding surface
-    moved to Bedrock, and the traceback named LanceDB rather than the model id.
+    Some model ids contain a colon, and that is not a legal directory name on Windows:
+    ``mkdir`` raises ``NotADirectoryError`` (WinError 267). The server then cannot boot,
+    and the traceback names the store rather than the model id.
 
     Only illegal characters are replaced, so every name that already works is byte-identical
     and ``text-embedding-3-large`` keeps resolving to the directory already holding its rows.
@@ -99,8 +98,8 @@ def vector_cache_from_environment(*, model: str) -> VectorCache:
     cold ``OpenAIEmbedder`` issues a network probe, and a directory name is not worth a
     request at boot.
 
-    The name is passed through :func:`_directory_name` because a Bedrock id is not a legal
-    directory on Windows. Sanitising here rather than at the call sites keeps the server, the
+    The name is passed through :func:`_directory_name` because a model id may contain a
+    colon, which is not a legal directory on Windows. Sanitising here keeps the server, the
     CLI and the eval driver pointing at one directory per model.
     """
     from governed_bi.register.knobs import effective_settings

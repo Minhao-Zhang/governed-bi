@@ -90,8 +90,7 @@ def problems_with(asset: object) -> list[str]:
     if len(summary.strip()) < low:
         out.append(
             f"{where}: summary is empty. A blank document is a live provider hazard -- "
-            "OpenAI returns a vector for it that pollutes the ranking, Bedrock Titan "
-            "rejects it and kills the turn"
+            "the embedder returns a vector for it that pollutes the ranking"
         )
     elif len(summary) > high:
         out.append(

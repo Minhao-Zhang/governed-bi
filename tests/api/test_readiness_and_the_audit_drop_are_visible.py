@@ -27,13 +27,13 @@ def _client(get_session: Any) -> TestClient:
 
 def test_readyz_is_503_when_the_session_cannot_be_built() -> None:
     def missing_dsn() -> Any:
-        raise RuntimeError("no database: set one of GOVERNED_BI_PG_DSN / PG_RENAME_DECOY_DSN")
+        raise RuntimeError("no database: set GOVERNED_BI_PG_DSN")
 
     response = _client(missing_dsn).get("/readyz")
     assert response.status_code == 503
     assert response.json() == {
         "ready": False,
-        "reason": "no database: set one of GOVERNED_BI_PG_DSN / PG_RENAME_DECOY_DSN",
+        "reason": "no database: set GOVERNED_BI_PG_DSN",
     }
 
 
@@ -69,11 +69,11 @@ def test_a_model_without_its_credential_is_not_ready(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(credentials, "secret", lambda *names: "host=127.0.0.1 dbname=x")
     monkeypatch.setattr(graph_app, "_resolve_corpus_dir", lambda *a: "corpus")
     monkeypatch.setenv(graph_app.MODEL_VAR, "some-model")
-    monkeypatch.setattr(provider, "credentials_present", lambda name: False)
+    monkeypatch.setattr(provider, "credentials_present", lambda: False)
 
     response = _client(graph_app.session_from_environment).get("/readyz")
     assert response.status_code == 503
-    assert "no credential" in response.json()["reason"]
+    assert "OPENAI_API_KEY is not set" in response.json()["reason"]
 
 
 def test_readyz_is_200_when_configured() -> None:

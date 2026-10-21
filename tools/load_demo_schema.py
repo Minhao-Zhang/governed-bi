@@ -23,20 +23,15 @@ Usage::
     uv run --frozen python tools/load_demo_schema.py            # default schema name
     uv run --frozen python tools/load_demo_schema.py --schema my_demo
 
-The DSN comes from ``GOVERNED_BI_PG_DSN`` or ``PG_RENAME_DECOY_DSN``, in the environment or the
-git-ignored ``.env``. Never printed: an echoed DSN is a credential in a scrollback.
+The DSN comes from ``GOVERNED_BI_PG_DSN``, in the environment or the git-ignored ``.env``.
+Never printed: an echoed DSN is a credential in a scrollback.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
-import pathlib
 import random
 import sys
-
-#: The two variables that may carry the DSN, in precedence order.
-DSN_KEYS = ("GOVERNED_BI_PG_DSN", "PG_RENAME_DECOY_DSN")
 
 #: Default schema name. Prefixed so it is obvious this is not production data and obvious which
 #: tool owns it -- an unlabelled `demo` in a shared database is one someone has to guess about.
@@ -115,18 +110,9 @@ STATUSES = ("placed", "shipped", "delivered", "cancelled")
 
 def _dsn() -> str:
     """The DSN from the environment or ``.env``. Never logged."""
-    for key in DSN_KEYS:
-        if os.environ.get(key):
-            return str(os.environ[key])
-    env = pathlib.Path(__file__).resolve().parent.parent / ".env"
-    if env.exists():
-        for line in env.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            if key.strip() in DSN_KEYS:
-                return value.strip().strip("\"'")
-    return ""
+    from governed_bi.credentials import PG_DSN_NAMES, secret
+
+    return secret(*PG_DSN_NAMES)
 
 
 def _rows(rng: random.Random) -> dict[str, list[tuple]]:
@@ -177,7 +163,7 @@ def main() -> int:
 
     dsn = _dsn()
     if not dsn:
-        print(f"no DSN: set one of {' / '.join(DSN_KEYS)} in the environment or .env", file=sys.stderr)
+        print("no DSN: set GOVERNED_BI_PG_DSN in the environment or .env", file=sys.stderr)
         return 2
 
     try:

@@ -111,16 +111,6 @@ def test_n_re_served_is_not_a_quotability_gate() -> None:
     assert "n_re_served" not in gates.GATE_IMPLEMENTATIONS
 
 
-def test_proxy_chat_model_retries_default_matches_knob() -> None:
-    import inspect
-
-    from governed_bi.model.proxy_gateway import build_chat_model
-    from governed_bi.register.knobs import knob_default
-
-    default = inspect.signature(build_chat_model).parameters["max_retries"].default
-    assert default == int(knob_default("llm_max_retries"))
-
-
 def test_capabilities_report_durability_by_observing_the_config_not_a_literal() -> None:
     """The value is **derived**: a capability flag is flipped by building the thing, never by
     editing the line (ADR 0007 §7), so the test removes the declaration and requires the flag to

@@ -21,9 +21,8 @@ checkout `.env` points at would have exited 5 before the first paid question. Wh
 the *content*, and that is now measurable rather than asserted: with the 57 schema subtrees given
 as the manifest, **both commits hash `5a556b3c7936ddc3…`**. `register/arms.toml`'s `luna_v4_embed`
 carries the tip's digest and that equivalence. What this tree *loads* is BIRD, and has since 2026-08-23: `.env` sets
-`GOVERNED_BI_CORPUS_DIR=../BIRD-corpus` and leaves `GOVERNED_BI_PG_DSN` unset, so
-`credentials.PG_DSN_NAMES` falls through to `PG_RENAME_DECOY_DSN` on port 5435 — the obfuscated
-lake. The facilities pair (`../MS Fabric Facilities/corpus`, the 5432 warehouse) is commented out
+`GOVERNED_BI_CORPUS_DIR=../BIRD-corpus` and the warehouse is `GOVERNED_BI_PG_DSN`, the obfuscated
+lake on port 5435. The facilities pair (`../MS Fabric Facilities/corpus`, the 5432 warehouse) is commented out
 beside it. A run started here today is on BIRD without touching anything.
 
 Binding design lives in the [ADRs](adr/). This is a work list, not a decision record.

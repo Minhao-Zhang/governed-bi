@@ -1,286 +1,96 @@
-"""One intent, three gateways, and the places a wrong spelling would pass unnoticed.
+"""The OpenAI gateway spells effort, timeout and retries in one place.
 
-The dangerous half of multi-provider config is not the branch that raises. It is the one
-that is *accepted and ignored*: ``max_retries`` handed to a boto client is silently dropped,
-so the run keeps the knob in ``knobs_resolved`` and does not honour it, and two arms record
-the same retry budget while only one has it. Every assertion here is on a translation whose
-failure mode is silence.
+Call sites pass a surface and an intent. This module is what turns that into the
+client constructor, so a second spelling at a call site cannot drift.
 """
 
 from __future__ import annotations
-
-import importlib.util
-from pathlib import Path
 
 import pytest
 
 from governed_bi.model import provider as P
 
-#: Bedrock's half of the translation needs ``botocore.config.Config`` to build a real object
-#: to assert on. CI installs it (`uv sync --frozen --extra bedrock`) so these run there; a
-#: base install skips them rather than erroring, because `langchain-aws` is an extra on
-#: purpose — it pulls a boto3 tree the OpenAI and proxy arms never touch.
-needs_bedrock = pytest.mark.skipif(
-    importlib.util.find_spec("botocore") is None,
-    reason="needs the bedrock extra: uv sync --extra bedrock",
-)
 
-@pytest.fixture(autouse=True)
-def _no_inherited_provider_vars(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Start every test from "no provider configured anywhere".
+def test_chat_model_uses_the_openai_spelling(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
 
-    ``provider_for`` reads a precedence chain, so a test that sets one link asserts nothing
-    unless the others are known to be empty. These tests set :data:`P.PROVIDER_VAR` and were
-    silently relying on the per-surface variables being unset in the developer's shell — true
-    until ``.env`` gained ``GOVERNED_BI_EMBEDDING_PROVIDER=openai`` (2026-08-10, to keep the
-    embedder on OpenAI while the two chat surfaces moved to Bedrock). The whole-suite run then
-    failed on the embedding surface while ``pytest tests/model`` alone still passed, because
-    the leak arrives via another test's ``credentials.load_into_environ()`` and so depends on
-    test order. Clearing here rather than in each test: the precondition is the file's, and the
-    next variable added to ``SURFACE_PROVIDER_VARS`` is covered without touching the tests.
-    """
-    for name in (P.PROVIDER_VAR, *P.SURFACE_PROVIDER_VARS.values()):
-        monkeypatch.delenv(name, raising=False)
+    def fake(model_id: str, **kwargs: object) -> object:
+        captured["model_id"] = model_id
+        captured["kwargs"] = kwargs
+        return object()
 
-
-# ── which gateway serves a surface ────────────────────────────────────────────
-
-
-def test_one_variable_sets_every_surface(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(P.PROVIDER_VAR, "bedrock")
-    assert [P.provider_for(s) for s in ("agent", "utility", "embedding")] == ["bedrock"] * 3
-
-
-def test_a_surface_can_differ_from_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The configuration this exists for: a cheap rewriter beside an expensive agent."""
-    monkeypatch.setenv(P.PROVIDER_VAR, "bedrock")
-    monkeypatch.setenv(P.SURFACE_PROVIDER_VARS["utility"], "openai")
-    assert P.provider_for("agent") == "bedrock"
-    assert P.provider_for("utility") == "openai"
-    assert P.provider_for("embedding") == "bedrock"
-
-
-def test_an_explicit_argument_beats_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A driver's recorded arm must not be changeable by an exported variable."""
-    monkeypatch.setenv(P.PROVIDER_VAR, "bedrock")
-    assert P.provider_for("agent", override="openai") == "openai"
-
-
-def test_the_default_matches_the_knob_default() -> None:
-    """``llm_provider`` records what this module decides; disagreement mislabels every arm."""
-    from governed_bi.register.knobs import knob_default
-
-    assert P.DEFAULT_PROVIDER == knob_default("llm_provider")
-
-
-# ── one intent, two spellings ─────────────────────────────────────────────────
-
-
-def test_openai_keeps_its_own_spelling() -> None:
-    kwargs = P._openai_kwargs(
-        effort="high", timeout=300.0, max_retries=3, max_output_tokens=32_000, tools=True
+    monkeypatch.setattr("langchain.chat_models.init_chat_model", fake)
+    P.chat_model(
+        "gpt-6-luna",
+        surface="agent",
+        effort="xhigh",
+        timeout=300.0,
+        max_retries=3,
+        max_output_tokens=32_000,
+        tools=True,
     )
-    assert kwargs == {
+    assert captured["model_id"] == "gpt-6-luna"
+    assert captured["kwargs"] == {
+        "model_provider": "openai",
         "use_responses_api": True,
-        "reasoning_effort": "high",
+        "reasoning_effort": "xhigh",
         "timeout": 300.0,
         "max_retries": 3,
         "max_tokens": 32_000,
     }
 
 
-@needs_bedrock
-def test_bedrock_never_receives_openai_keywords() -> None:
-    """``use_responses_api`` raises on ``ChatBedrockConverse``; the other two are dropped."""
-    kwargs = P._bedrock_kwargs(
-        effort="high", timeout=300.0, max_retries=3, max_output_tokens=32_000, tools=True
-    )
-    assert not {"use_responses_api", "reasoning_effort", "timeout", "max_retries"} & set(kwargs)
+def test_a_non_openai_provider_is_refused() -> None:
+    with pytest.raises(ValueError, match="openai"):
+        P.chat_model("gpt-6-luna", provider="other")
+    with pytest.raises(ValueError, match="openai"):
+        P.embedder("text-embedding-3-large", provider="other")
 
 
-@needs_bedrock
-def test_bedrock_retries_count_the_first_attempt() -> None:
-    """``max_attempts`` includes the first try; the knob counts retries after it.
+def test_tools_are_what_selects_the_responses_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
 
-    Off by one here silently halves or doubles a comparability knob, which is the whole
-    reason the translation is centralised.
-    """
-    config = P._bedrock_kwargs(
-        effort=None, timeout=90.0, max_retries=3, max_output_tokens=None, tools=False
-    )["config"]
-    assert config.retries["max_attempts"] == 4
-    assert config.read_timeout == 90.0 and config.connect_timeout == 90.0
+    def fake(model_id: str, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
 
-
-@pytest.mark.parametrize(
-    "model_id,expected_key",
-    [
-        ("us.anthropic.claude-sonnet-5", "thinking"),
-        ("amazon.nova-2-lite-v1:0", "reasoningConfig"),
-    ],
-)
-def test_reasoning_is_spelled_per_model_family(model_id: str, expected_key: str) -> None:
-    """Anthropic takes adaptive thinking, Nova a named effort. There is no shared field."""
-    assert expected_key in P._bedrock_reasoning("high", model_id)
+    monkeypatch.setattr("langchain.chat_models.init_chat_model", fake)
+    P.chat_model("gpt-6-luna", tools=False, effort="medium")
+    assert "use_responses_api" not in captured
+    assert captured["reasoning_effort"] == "medium"
 
 
-def test_anthropic_on_bedrock_asks_for_adaptive_thinking_not_a_token_budget() -> None:
-    """The spelling ``us.anthropic.claude-sonnet-5`` actually accepts.
+def test_reasoning_effort_of_reads_the_attribute() -> None:
+    class Client:
+        reasoning_effort = "xhigh"
 
-    Pinned because the wrong one was fully documented and looked measured. Converse answers a
-    ``budget_tokens`` request with *"thinking.type.enabled is not supported for this model. Use
-    thinking.type.adaptive and output_config"* -- a ``ValidationException`` on every turn, not a
-    degraded one. Asserting the absence of ``budget_tokens`` is the half that would have caught
-    it; asserting only that a ``thinking`` key exists does not.
-    """
-    fields = P._bedrock_reasoning("xhigh", "us.anthropic.claude-sonnet-5")
-    assert fields["thinking"] == {"type": "adaptive"}
-    assert fields["output_config"] == {"effort": "xhigh"}
-    assert "budget_tokens" not in fields["thinking"]
+    class Silent:
+        reasoning_effort = "  "
+
+    assert P.reasoning_effort_of(Client()) == "xhigh"
+    assert P.reasoning_effort_of(Silent()) is None
+    assert P.reasoning_effort_of(object()) is None
 
 
-def test_an_effort_bedrock_cannot_express_raises() -> None:
-    """Rather than reaching the API as a 400 halfway through a paid run.
-
-    Bedrock does reject an unknown effort (*"unknown variant `enormous`"*), so the local check
-    buys the failure earlier rather than at all.
-    """
-    with pytest.raises(ValueError, match="no Bedrock spelling"):
-        P._bedrock_reasoning("enormous", "us.anthropic.claude-sonnet-5")
+def test_credentials_follow_the_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert P.credential_names() == ("OPENAI_API_KEY",)
+    assert P.credentials_present() is False
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    assert P.credentials_present() is True
 
 
-# ── refusals that name the fix ────────────────────────────────────────────────
-
-
-def test_an_unknown_provider_names_the_variable_to_set() -> None:
-    with pytest.raises(ValueError, match=P.SURFACE_PROVIDER_VARS["agent"]):
-        P.chat_model("some-model", surface="agent", provider="vertex")
-
-
-def test_the_proxy_is_not_built_here() -> None:
-    """It needs credentials resolved before the client exists, so it has its own builder."""
-    with pytest.raises(ValueError, match="proxy_gateway"):
-        P.chat_model("some-model", surface="agent", provider="proxy")
-
-
-# ── the cache-key contract every adapter owes ─────────────────────────────────
-
-
-def test_every_embedder_qualifies_its_model_with_its_provider() -> None:
-    """``cache_key`` is ``model|dimensions|text`` and carries no provider of its own.
-
-    The prefix is the only thing keeping two gateways serving one nominal id out of each
-    other's cached vectors, and nothing downstream can catch a collision between two
-    same-width gateways: ``cosine`` raises only when the widths *differ*, and these agree.
-
-    Only Bedrock is asserted here, because only Bedrock can answer offline.
-    ``OpenAIEmbedder.model`` reports the *served* id and probes to learn it, and
-    ``ProxyEmbedder`` refuses to construct without a secret name — both are network facts,
-    not assertions. Their prefixes are covered by their own adapters' tests.
-    """
-    from governed_bi.model.bedrock_embedder import BedrockEmbedder
-
-    assert BedrockEmbedder(model="amazon.titan-embed-text-v2:0").model == (
-        "bedrock:amazon.titan-embed-text-v2:0"
-    )
-
-
-def _adapters() -> list[type]:
-    from governed_bi.model.bedrock_embedder import BedrockEmbedder
-    from governed_bi.model.openai_embedder import OpenAIEmbedder
-    from governed_bi.model.proxy_embedder import ProxyEmbedder
-
-    return [OpenAIEmbedder, BedrockEmbedder, ProxyEmbedder]
-
-
-@pytest.mark.parametrize("name", ["requested_model", "model", "dimensions"])
-def test_every_adapter_carries_the_whole_identity_surface(name: str) -> None:
-    """Across **all three**, not whichever one the test author happened to construct.
-
-    ``ProxyEmbedder`` shipped without ``requested_model`` while the other two had it. Nothing
-    noticed until the eval driver's proxy path was routed through the shared builder and
-    raised ``AttributeError`` on the first embed. The earlier version of this file asserted
-    the property on ``BedrockEmbedder`` alone, so it could not have caught that -- checking
-    one implementation of a shared contract is the same blind spot in miniature.
-
-    Asserted on the class, not an instance: two of the three need credentials to construct.
-    """
-    missing = [c.__name__ for c in _adapters() if not hasattr(c, name)]
-    assert not missing, f"{missing} do not expose {name!r}, which every caller may rely on"
-
-
-def test_the_cache_directory_uses_the_requested_name_not_the_probing_one() -> None:
-    """``vector_cache_from_environment`` documents this: reading ``model`` can cost a request."""
-    from governed_bi.model.bedrock_embedder import BedrockEmbedder
-
-    embedder = BedrockEmbedder(model="amazon.titan-embed-text-v2:0")
-    assert embedder.requested_model == "amazon.titan-embed-text-v2:0"
-
-
-def test_a_bedrock_models_cache_directory_can_actually_be_created(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The half the assertion above is missing: the requested name must be *usable* as a path.
-
-    Every Bedrock id is versioned with a colon, and a colon cannot appear in a Windows path
-    component -- NTFS reads ``name:stream`` as an alternate data stream, so ``mkdir`` raises
-    ``NotADirectoryError`` (WinError 267). The test above names this exact model and checks
-    only that the string survives a round trip, so nothing caught it and the server could not
-    boot the first time the embedding surface moved to Bedrock.
-
-    ``mkdir`` is the assertion, not the absence of a colon: the point is the filesystem
-    accepting it, and asserting on the sanitised spelling would pass for a name that still
-    cannot be created.
-    """
-    from governed_bi.retrieve.vector_cache import (
-        VECTOR_CACHE_VAR,
-        _directory_name,
-        vector_cache_from_environment,
-    )
-
-    monkeypatch.setenv(VECTOR_CACHE_VAR, str(tmp_path))
-    cache = vector_cache_from_environment(model="amazon.titan-embed-text-v2:0")
-    Path(cache.uri).mkdir(parents=True)
-    assert Path(cache.uri).is_dir()
-
-    # And a name that already works must not move -- that directory holds rows already, so
-    # sanitising it would silently abandon a paid-for store rather than reuse it.
-    assert _directory_name("text-embedding-3-large") == "text-embedding-3-large"
-
-
-def test_the_default_embedding_model_differs_by_provider() -> None:
-    """A shared default would silently embed a Bedrock arm with an id Bedrock does not serve."""
-    assert P.default_embedding_model("bedrock") != P.default_embedding_model("openai")
-
-
-def test_both_gateways_carry_the_output_ceiling() -> None:
-    """The knob has to reach the client, and both spellings of it are ``max_tokens``.
-
-    Measured on 2026-08-19: unset, ``ChatBedrockConverse`` defaults to 4096, and an agent at
-    effort ``xhigh`` spent all 4096 inside an adaptive-thinking block whose text is omitted --
-    ``stopReason: max_tokens``, one ``reasoning_content`` block, no visible character, and an
-    empty answer card. Two of eleven served questions ended that way. The parameter is
-    required rather than defaulted so a gateway added later cannot quietly omit it.
-    """
-    for translate in (P._openai_kwargs, P._bedrock_kwargs):
-        kwargs = translate(
-            effort=None, timeout=None, max_retries=None, max_output_tokens=32_000, tools=False
-        )
-        assert kwargs["max_tokens"] == 32_000, translate.__name__
-        # None means "leave the client's own default alone", which is a different statement
-        # from 0 and must not send the key at all.
-        bare = translate(
-            effort=None, timeout=None, max_retries=None, max_output_tokens=None, tools=False
-        )
-        assert "max_tokens" not in bare, translate.__name__
-
-
-def test_the_output_ceiling_is_above_what_truncated_a_turn() -> None:
-    """A regression on the *value*, not just the wiring.
-
-    4096 is the number that truncated a real turn. A knob default at or under it would pass
-    the wiring test above and reproduce the defect, so the floor is asserted here.
-    """
+def test_the_embedding_default_is_the_openai_model() -> None:
+    from governed_bi.model.openai_embedder import OPENAI_EMBEDDING_MODEL
     from governed_bi.register.knobs import knob_default
 
-    assert int(knob_default("llm_max_output_tokens")) > 4096
+    assert P.default_embedding_model() == OPENAI_EMBEDDING_MODEL == knob_default("embedding_model")
+
+
+def test_embedder_is_the_openai_adapter() -> None:
+    from governed_bi.model.openai_embedder import OpenAIEmbedder
+
+    built = P.embedder("text-embedding-3-large", dimensions=64, max_retries=2, timeout=5.0)
+    assert isinstance(built, OpenAIEmbedder)
+    assert built.requested_model == "text-embedding-3-large"
+    assert built.dimensions == 64

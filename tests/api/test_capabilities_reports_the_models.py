@@ -1,13 +1,8 @@
 """`/capabilities` must report the model each surface actually resolved.
 
-The regression these guard is not cosmetic. ``chat_model`` and ``llm_utility_model`` are
-``a recorded setting`` knobs, and on Bedrock every turn recorded the LangChain *class* name
-``amazon_bedrock_converse_chat`` instead of the model id — so two arms serving different
-Anthropic models published the same value and the drift gate compared them equal (observed
-2026-08-18 on both turns of that day's served turn log, while actually running
-``us.anthropic.claude-sonnet-5``). The artifact is gone and cannot be reopened: ``runs/serve/``
-was an untracked local log, deleted with ``api/trace_store.py`` by ADR 0014, so it is not in
-git history either. This test is what replaced it.
+``chat_model`` and ``llm_utility_model`` are recorded settings. A client that spells
+its id only as ``model_id`` used to fall through to the class name, so two models
+published one value and the drift gate compared them equal. This test is that probe.
 """
 
 from __future__ import annotations
@@ -24,35 +19,34 @@ from governed_bi.serve.session import _model_name
 _DSN = "host=127.0.0.1 port=5432 dbname=facilities user=facilities password=super_secret_pw"
 
 
-class _Bedrock:
-    """``ChatBedrockConverse``'s shape: it spells the id ``model_id`` and nothing else.
+class _IdOnly:
+    """A client that spells the id ``model_id`` and nothing else.
 
-    Deliberately not a mock of the real class — the point is the *attribute spelling*, and a
-    fake that offered ``model_name`` too would pass while the real client failed.
+    A fake that also offered ``model_name`` would pass while that client failed.
     """
 
-    model_id = "us.anthropic.claude-sonnet-5"
-    _llm_type = "amazon_bedrock_converse_chat"
+    model_id = "gpt-6-luna"
+    _llm_type = "chat-class-name"
 
 
 class _OpenAI:
-    model_name = "gpt-4o-mini"
+    model_name = "gpt-6-luna"
     _llm_type = "openai-chat"
 
 
-def test_model_id_reads_the_bedrock_spelling() -> None:
-    assert model_id(_Bedrock()) == "us.anthropic.claude-sonnet-5"
+def test_model_id_reads_the_id_attribute() -> None:
+    assert model_id(_IdOnly()) == "gpt-6-luna"
 
 
 def test_model_name_does_not_fall_back_to_the_class_name() -> None:
     """The `_llm_type` branch must not be reached when an id is available."""
-    assert _model_name(_Bedrock()) == "us.anthropic.claude-sonnet-5"
-    assert _model_name(_Bedrock()) != "amazon_bedrock_converse_chat"
+    assert _model_name(_IdOnly()) == "gpt-6-luna"
+    assert _model_name(_IdOnly()) != "chat-class-name"
 
 
 def test_model_name_still_prefers_model_name_over_model_id() -> None:
     """`model_id` is last in the probe order, so earlier arms keep their recorded meaning."""
-    assert _model_name(_OpenAI()) == "gpt-4o-mini"
+    assert _model_name(_OpenAI()) == "gpt-6-luna"
 
 
 class _Session:
@@ -60,13 +54,13 @@ class _Session:
     agent_model = object()
     utility_model = None
     knobs_resolved: dict[str, Any] = {
-        "chat_model": "us.anthropic.claude-sonnet-5",
-        "llm_provider": "bedrock",
+        "chat_model": "gpt-6-luna",
+        "llm_provider": "openai",
         "llm_reasoning_effort": "xhigh",
-        "llm_utility_model": "us.anthropic.claude-sonnet-5",
-        "llm_utility_provider": "bedrock",
-        "embedding_model": "bedrock:amazon.titan-embed-text-v2:0",
-        "embedding_provider": "bedrock",
+        "llm_utility_model": "gpt-6-luna",
+        "llm_utility_provider": "openai",
+        "embedding_model": "openai:vendor.embed-text:0",
+        "embedding_provider": "openai",
         "embedding_dimensions": 1024,
     }
 
@@ -75,12 +69,12 @@ def test_models_reports_all_three_surfaces() -> None:
     models = models_for(_Session())
     assert set(models) == {"agent", "utility", "embedding"}
     assert models["agent"] == {
-        "id": "us.anthropic.claude-sonnet-5",
-        "provider": "bedrock",
+        "id": "gpt-6-luna",
+        "provider": "openai",
         "effort": "xhigh",
     }
-    assert models["utility"]["id"] == "us.anthropic.claude-sonnet-5"
-    assert models["utility"]["provider"] == "bedrock"
+    assert models["utility"]["id"] == "gpt-6-luna"
+    assert models["utility"]["provider"] == "openai"
     # No live utility client on this session, and no knob records the effort, so it is null
     # rather than silently borrowing the agent surface's value.
     assert models["utility"]["effort"] is None
@@ -89,20 +83,20 @@ def test_models_reports_all_three_surfaces() -> None:
 def test_embedding_id_keeps_its_provider_qualifier() -> None:
     """The qualifier is cache-key identity, and the id itself contains a colon.
 
-    Splitting on ``:`` would yield ``amazon.titan-embed-text-v2`` and lose the ``0``, which is a
-    different model id — and dropping the qualifier would let two gateways serving one nominal
-    id share cached vectors (``retrieve.semantic.cache_key`` is ``model|dimensions|text``).
+    Splitting on ``:`` would yield ``vendor.embed-text`` and lose the ``0``, which is a
+    different model id. The qualifier is part of the cache key
+    (``retrieve.semantic.cache_key`` is ``model|dimensions|text``).
     """
     embedding = models_for(_Session())["embedding"]
-    assert embedding["id"] == "bedrock:amazon.titan-embed-text-v2:0"
-    assert embedding["provider"] == "bedrock"
+    assert embedding["id"] == "openai:vendor.embed-text:0"
+    assert embedding["provider"] == "openai"
     assert embedding["dimensions"] == 1024
 
 
 def test_capabilities_carries_models_and_keeps_the_legacy_model_field() -> None:
     """The header chip reads `model`; removing it would blank the chip."""
     caps = capabilities_for(_Session())
-    assert caps["model"] == "us.anthropic.claude-sonnet-5"
+    assert caps["model"] == "gpt-6-luna"
     assert caps["models"] == models_for(_Session())
 
 

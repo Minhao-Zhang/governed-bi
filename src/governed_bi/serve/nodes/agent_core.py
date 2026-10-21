@@ -391,10 +391,9 @@ def _context_middleware(state: dict, model: Any = None) -> list[AgentMiddleware[
 def _cache_point(model: Any) -> dict[str, Any] | None:
     """A provider's "cache everything up to here" marker, or ``None`` if it needs none.
 
-    Only the Converse API takes an explicit breakpoint, and ``ChatBedrockConverse`` exposes the
-    factory for it, so this duck-types on the method rather than on a class name. OpenAI and the
-    OpenAI-compatible internal proxy cache a long prefix automatically and accept no such block
-    — sending one there would put an unknown dict in the content list.
+    Only a client that exposes a cache-point factory takes an explicit breakpoint, so this
+    duck-types on the method rather than on a class name. OpenAI caches a long prefix
+    automatically and accepts no such block.
 
     **This is the only half of caching that is ours.** The block below is byte-identical on
     every call of a turn, which is what makes it cacheable at all; whether a gateway acts on
@@ -537,10 +536,9 @@ def _unanswered_tool_calls(state: Any, answered: Container[str]) -> list[Any]:
     because it was a ``run_query`` too.
 
     Measured on thread ``01a01bb8`` (2026-08-19): 12 ``tool_use`` blocks against 11
-    ``tool_result``. Bedrock rejects a history with an unanswered ``tool_use``, and these
-    messages are replayed at the head of every later turn, so **the thread was permanently
-    unusable** — each subsequent turn raised ``ValidationException`` before reaching a single
-    attempt. The name was the accident; being unanswered is the property that matters.
+    ``tool_result``. A history with an unanswered ``tool_use`` is rejected, and these
+    messages are replayed at the head of every later turn, so the thread was permanently
+    unusable. The name was the accident; being unanswered is the property that matters.
     """
     for message in reversed(list((state or {}).get("messages") or ())):
         if isinstance(message, AIMessage):
@@ -581,8 +579,8 @@ def _sealed(fresh: list[Any], failure: Mapping[str, Any] | None, *, paused: bool
     is very often a post-model one: an ``AIMessage`` carrying ``tool_calls`` with no
     ``ToolMessage`` yet. ``agent_core_node`` commits it to the outer ``messages`` channel, and
     the *next* turn's inbound is that channel, so the dangling block is replayed at the head of
-    every later turn, forever. Bedrock rejects a history with an unanswered ``tool_use``, which
-    means the failure is not the turn but the **thread**.
+    every later turn, forever. A history with an unanswered ``tool_use`` is rejected, which
+    means the failure is not the turn but the thread.
 
     This repo has already paid for that once by the other route into it: measured on thread
     ``01a01bb8`` (2026-08-19), 12 ``tool_use`` against 11 ``tool_result``, and every subsequent

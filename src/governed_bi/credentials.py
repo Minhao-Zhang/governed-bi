@@ -101,7 +101,7 @@ def load_into_environ(*, refuse: bool = True) -> int:
 
 #: The Postgres DSN's names, in precedence order. Declared once rather than at each call site:
 #: an alias list is the kind of thing that grows in one copy and not the other.
-PG_DSN_NAMES = ("GOVERNED_BI_PG_DSN", "PG_RENAME_DECOY_DSN")
+PG_DSN_NAMES = ("GOVERNED_BI_PG_DSN",)
 
 #: The OpenAI key's name. A tuple for symmetry with :data:`PG_DSN_NAMES`.
 OPENAI_KEY_NAMES = ("OPENAI_API_KEY",)

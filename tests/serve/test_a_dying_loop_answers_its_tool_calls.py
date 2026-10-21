@@ -4,8 +4,8 @@
 the outer ``messages`` channel whatever happened — and when the loop died between the model
 asking for a tool and the tools super-step yielding a frame, that frame is an ``AIMessage``
 carrying ``tool_calls`` and no ``ToolMessage``. The next turn's inbound **is** that channel, so
-the dangling ``tool_use`` is replayed at the head of every later turn, forever. Bedrock rejects
-a history with an unanswered ``tool_use``, so the casualty is the conversation, not the turn.
+the dangling ``tool_use`` is replayed at the head of every later turn, forever. The gateway
+rejects a history with an unanswered ``tool_use``, so the casualty is the conversation, not the turn.
 
 This repo has already paid for it once by the other route in: thread ``01a01bb8`` (2026-08-19),
 12 ``tool_use`` against 11 ``tool_result``, every subsequent turn raising ``ValidationException``

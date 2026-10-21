@@ -12,10 +12,10 @@ Caching removes that repeat without touching any of those three constraints. Onl
 it are ours:
 
 * the prefix must be **byte-identical** on every call, or no gateway can cache it;
-* the Converse API takes an explicit breakpoint, so ``ChatBedrockConverse`` gets one.
+* a client that exposes a cache-point factory gets an explicit breakpoint.
 
-OpenAI and the OpenAI-compatible internal proxy cache a long prefix automatically and accept no
-breakpoint. The proxy reports no ``cache_read_tokens`` in any run so far, so the repeated share
+OpenAI caches a long prefix automatically and accepts no breakpoint. It reports no
+``cache_read_tokens`` unless the provider sends them, so the repeated share
 is computed from ``usage.model_calls`` rather than from the provider — which is why that field
 exists and is tested here too.
 """
@@ -69,7 +69,7 @@ def test_the_block_precedes_the_question_so_the_prefix_is_a_prefix() -> None:
 
 
 class _Converse:
-    """A model exposing the Converse factory, as ``ChatBedrockConverse`` does."""
+    """A model exposing a cache-point factory."""
 
     @classmethod
     def create_cache_point(cls, cache_type: str = "default") -> dict[str, Any]:

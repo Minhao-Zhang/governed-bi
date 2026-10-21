@@ -96,8 +96,8 @@ def _call_sites_in_src(name: str, *, defined_in: str) -> list[str]:
     ]
 
 
-#: The two env vars / `.env` keys that may hold the DSN, in order of precedence.
-DSN_KEYS = ("GOVERNED_BI_PG_DSN", "PG_RENAME_DECOY_DSN")
+#: The env var / `.env` key that holds the DSN.
+DSN_KEYS = ("GOVERNED_BI_PG_DSN",)
 
 
 def _dsn() -> str:
@@ -121,7 +121,7 @@ def dsn() -> str:
     value = _dsn()
     if not value:
         pytest.skip(
-            "no Postgres DSN: set GOVERNED_BI_PG_DSN or PG_RENAME_DECOY_DSN. With connector=None a "
+            "no Postgres DSN: set GOVERNED_BI_PG_DSN. With connector=None a "
             "governed refusal is a wiring failure, so these two tests are not optional but pending."
         )
     import psycopg

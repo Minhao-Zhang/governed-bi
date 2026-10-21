@@ -49,13 +49,8 @@ imply is in [open work](open-work.md).
 
 ## Before you run
 
-- A Postgres DSN in `GOVERNED_BI_PG_DSN` or `PG_RENAME_DECOY_DSN`. See
-  [usage](usage.md#environment).
-- A credential for each model surface you use. The driver checks the agent
-  surface, the utility surface, and — with `--embed` — the embedding surface,
-  and exits before spending anything if one is missing. The `proxy` provider is
-  skipped in that check, because it authenticates itself from a secret it looks
-  up at call time.
+- A Postgres DSN in `GOVERNED_BI_PG_DSN`. See [usage](usage.md#environment).
+- `OPENAI_API_KEY`. The driver exits before spending anything if it is missing.
 - A corpus. The default is the sibling checkout `../BIRD-corpus`, resolved from
   the driver's own location rather than from your working directory.
 - The dataset. The default is `../BIRD-Data-Obfuscation/eval_dataset`, and the
@@ -81,10 +76,6 @@ Each was measured on a smoke on 2026-09-20 rather than reasoned about:
 - **Do not change `--limit`, `--timeout` or `--max-retries` across a resume.**
   They are comparability knobs and the guard refuses, correctly. `--limit` moves
   `question_subset`, which is the same refusal one field over.
-- **Run [`tools/bi_scope_probe.py`](../tools/bi_scope_probe.py) first**, so the
-  projection can price the one gate that is not replayable. It needs no database
-  and no corpus, so it can run while you are still deciding.
-
 Two more things exist for this step and are **not** called by the driver — you
 invoke them, or they do nothing:
 
@@ -598,23 +589,10 @@ number. Revisit at the 2026-11-20 retrospective.
 
 ## The prod projection
 
-The arm measures an engine with the input guard off. What the *served* configuration
-would have done to that arm is a separate pass over the finished artifact:
-
-```bash
-uv run --frozen python tools/shadow_replay.py runs/eval/<arm>.jsonl \
-  --scope-verdicts runs/eval/bi_scope_<model>.jsonl
-```
-
-Replay rather than enforcement, for the reason at the top of this page: enforcing a
-gate during the run destroys the counterfactual the projection needs. This is the
-general form of something the instrument already does for one gate —
-`computed_fingerprint` / `computed_correct` exist only to reconstruct what enforcing
-abstention would have hidden.
-
-It costs nothing and runs against arms already on disk, because every gate but one is
-a pure function of fields the row carries. Three tiers, and
-[`eval/shadow.py`](../src/governed_bi/eval/shadow.py) carries the argument for each:
+The arm measures an engine with the input guard off. Replaying the served gates over a
+finished artifact used to be a separate pass. That pass is deleted. What remains in the
+artifact is `computed_fingerprint` / `computed_correct`, which reconstruct what enforcing
+abstention would have hidden. The tiers that pass reported:
 
 | Tier | Gates | What the number is |
 |---|---|---|
@@ -632,16 +610,8 @@ The trade is reported as a count of right answers lost and never as a p-value:
 
 ### `g_bi_scope` needs its own pass, and needs it *before* the arm
 
-Five of the six rules replay for free. The sixth asks a model, so it is not
-recoverable from a row:
-
-```bash
-uv run --frozen python tools/bi_scope_probe.py --out runs/eval/bi_scope_<model>.jsonl
-```
-
-No database, no corpus, no agent model, ~136 tokens a call. Run it first, because it
-is the one prod gate whose behaviour on benign traffic was never measured and it is
-cheap enough to be an afterthought only until you see the number. **Measured
+Five of the six rules replayed from the row. The sixth asked a model, so it was not
+recoverable from a row. That probe is deleted. **Measured
 2026-09-20 on `gpt-5.6-luna` over all 1,351 questions: 180 refused, 1,171
 cleared, none failed open.** Projected onto the v4 arm's own rows that is 128
 right answers lost — 913 against 785. See

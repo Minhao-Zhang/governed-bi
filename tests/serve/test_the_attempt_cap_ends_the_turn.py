@@ -297,8 +297,8 @@ def test_a_cap_reached_inside_one_batch_of_the_capped_tool_answers_both_calls(tm
 
     The stranded-call filter was keyed on ``name != tool_name``, so it looked past a sibling
     that shared the capped tool's name and the call was never answered at all. Measured on
-    thread ``01a01bb8`` (2026-08-19): 12 ``tool_use`` blocks, 11 ``tool_result``. Bedrock
-    requires every ``tool_use`` to be answered, so **every subsequent turn on that thread
+    thread ``01a01bb8`` (2026-08-19): 12 ``tool_use`` blocks, 11 ``tool_result``. The gateway
+    requires every ``tool_use`` to be answered, so every subsequent turn on that thread
     raised ``ValidationException``** — 0 attempts, no answer, permanently. A dangling id is not
     a cosmetic defect in a message list; it is a conversation that cannot be continued.
     """

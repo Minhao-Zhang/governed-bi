@@ -483,8 +483,8 @@ def build_tools(
         # the same pass -- the identical shape as the one-outstanding refusal directly above --
         # so nothing is stranded: the latch has not been taken, `interrupt()` has not run, and
         # the model can rephrase immediately. That ordering is the whole reason retry is
-        # affordable here; a thread carrying a dangling `tool_use` is permanently unreplayable
-        # on Bedrock, which is the most expensive mistake available in this function.
+        # affordable here; a thread carrying a dangling `tool_use` is permanently unreplayable,
+        # which is the most expensive mistake available in this function.
         #
         # The alternative -- pause anyway and *record* the leak -- is what the code does not
         # support, and not merely what we preferred. It would have to interrupt first, which

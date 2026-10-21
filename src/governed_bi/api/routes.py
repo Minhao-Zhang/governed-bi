@@ -124,25 +124,34 @@ def models_for(session: Any) -> dict[str, Any]:
     colon. ``utility.effort`` is observed off the live client because no knob records it.
     """
     knobs = session.knobs_resolved
-    # `getattr`, so a test fake without the handle reports no effort rather than failing.
     utility = getattr(session, "utility_model", None)
     return {
         "agent": {
             "id": knobs.get("chat_model"),
-            "provider": knobs.get("llm_provider"),
+            "provider": _gateway(knobs.get("chat_model")),
             "effort": knobs.get("llm_reasoning_effort"),
         },
         "utility": {
             "id": knobs.get("llm_utility_model"),
-            "provider": knobs.get("llm_utility_provider"),
+            "provider": _gateway(knobs.get("llm_utility_model")),
             "effort": reasoning_effort_of(utility) if utility is not None else None,
         },
         "embedding": {
             "id": knobs.get("embedding_model"),
-            "provider": knobs.get("embedding_provider"),
+            "provider": _gateway(knobs.get("embedding_model")),
             "dimensions": knobs.get("embedding_dimensions"),
         },
     }
+
+
+def _gateway(model_id: Any) -> str | None:
+    """The gateway a model id names. A qualified id uses its prefix; a bare id is OpenAI."""
+    if not isinstance(model_id, str) or not model_id.strip():
+        return None
+    prefix, separator, rest = model_id.partition(":")
+    if separator and prefix.strip() and rest.strip():
+        return prefix.strip()
+    return "openai"
 
 
 def connection_for(session: Any) -> dict[str, Any]:

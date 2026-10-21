@@ -123,48 +123,30 @@ class BaseEmbedder(Embedder, ABC):
 
 
 def embedding_provider(model: str) -> str:
-    """The gateway named by an :class:`~governed_bi.ports.Embedder`'s qualification prefix.
+    """The prefix of a provider-qualified embedder model, or a refusal if it has none.
 
-    ``Embedder.model`` is required to be *provider-qualified* (``openai:…``, ``proxy:…``,
-    ``bedrock:…``, ``deterministic:…``) — ``ports.py`` states it and all four adapters honour
-    it — so the prefix is a fact the port already guarantees rather than something inferred
-    here.
-
-    **Refuses rather than guessing.** An unqualified id would otherwise be reported as
-    whatever looked plausible, and the defect this closes is exactly that: nothing wrote
-    ``embedding_provider`` at all, so all six proxy-served arms in ``runs/eval/`` published
-    the register default ``"openai"`` beside ``embedding_model:
-    "proxy:text-embedding-3-large"``. Each row contradicted itself, and a wrong value reads
-    as a measurement where a null reads as an absence.
+    Guessing a gateway for an unqualified id records a measurement that did not happen.
     """
     prefix, separator, _rest = model.partition(":")
     if not separator or not prefix.strip():
         raise ValueError(
             f"embedder model {model!r} is not provider-qualified, so the gateway behind it "
-            "cannot be recorded. ports.py requires 'openai:<id>' / 'proxy:<id>' / "
-            "'bedrock:<id>'; naming a plausible provider here is how six arms came to say "
-            "they embedded through OpenAI when they embedded through the proxy"
+            "cannot be recorded. ports.py requires a 'gateway:id' prefix"
         )
     return prefix.strip()
 
 
 def embedding_knobs(embedder: Any) -> dict[str, Any]:
-    """The three declared knobs an embedder contributes to ``knobs_resolved``.
+    """The embedder's model and width, both declared settings.
 
-    ``embedding_model``, ``embedding_dimensions`` and ``embedding_provider`` are all
-    ``a recorded setting``; without them two ladders differing only in embedder compare as
-    one experiment. Names are checked against
-    :func:`~governed_bi.register.knobs.knob_names` because a typo'd name ships a literal no
-    knob backs, so the config hash does not move when the real knob does.
-
-    ``embedding_provider``'s own note calls this function's output "the reporting half" and
-    it was not reported. See :func:`embedding_provider`.
+    An unqualified model is refused: the prefix is the only thing that keeps two
+    gateways out of one cache, and it already lives on ``embedding_model``.
     """
     model = str(embedder.model)
+    embedding_provider(model)
     values: dict[str, Any] = {
         "embedding_model": model,
         "embedding_dimensions": int(embedder.dimensions),
-        "embedding_provider": embedding_provider(model),
     }
     undeclared = sorted(set(values) - knob_names())
     if undeclared:

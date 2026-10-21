@@ -25,11 +25,9 @@ jobs:
         with:
           python-version: "3.13"
 
-      # `--frozen` tests the lockfile. `--extra bedrock` imports botocore, which the
-      # provider-translation tests need; without it they pass on a machine that synced
-      # the extra and fail here.
+      # `--frozen` tests the lockfile.
       - name: Sync (frozen)
-        run: uv sync --frozen --extra bedrock
+        run: uv sync --frozen
 
       - name: Lint
         run: uv run --frozen ruff check .

@@ -9,25 +9,10 @@ Install, configure, and run the current tree. Design background:
 - Python 3.13 (pinned in `.python-version`)
 
 ```bash
-uv sync                  # OpenAI arm
-uv sync --extra bedrock  # + langchain-aws / boto3, for the Bedrock and proxy arms
+uv sync
 ```
 
-One extra exists, `bedrock`. It brings the `langchain-aws` and `boto3` trees, and
-three things need it:
-
-- **The Bedrock chat and embedding path.** `model/provider.py` imports
-  `botocore.config.Config` to carry timeout and retry onto the client, and
-  `model/bedrock_embedder.py` raises naming this command when `langchain-aws` is
-  absent.
-- **The proxy gateway.** `model/proxy_gateway.py` reads its API key and base URL
-  from AWS Secrets Manager, so `_require_boto3` raises naming this command when
-  `boto3` is absent. The extra is where `boto3` comes from; the proxy arm does not
-  run on a base install.
-- **The provider-translation tests** in `tests/model/test_provider_selection.py`,
-  which skip without it.
-
-CI runs `uv sync --frozen --extra bedrock`.
+CI runs `uv sync --frozen`. The app and the eval use OpenAI.
 
 ## Configuration
 
@@ -36,7 +21,7 @@ A `GOVERNED_BI_*` variable in the process environment overrides one for a run an
 config hash. Settings are not read from `.env`. A `.env` that sets anything other than a secret
 stops startup and names the key.
 
-Secrets — `OPENAI_API_KEY`, `GOVERNED_BI_PG_DSN`, `PG_RENAME_DECOY_DSN`, and `LANGSMITH_*` —
+Secrets — `OPENAI_API_KEY`, `GOVERNED_BI_PG_DSN`, and `LANGSMITH_*` —
 are read from the environment and then `.env`. They never enter the config hash or the turn
 record. LangSmith reads its own variables. Copy [`.env.example`](../.env.example) and keep only
 those names.
@@ -51,7 +36,6 @@ The code defaults, matching the owner's environment on 2026-10-20:
 | `GOVERNED_BI_UTILITY_MODEL` | `gpt-6-luna` |
 | `GOVERNED_BI_UTILITY_MODEL_EFFORT` | `medium` |
 | `GOVERNED_BI_EMBEDDING_MODEL` | `text-embedding-3-large` |
-| `GOVERNED_BI_MODEL_PROVIDER`, `GOVERNED_BI_UTILITY_PROVIDER`, `GOVERNED_BI_EMBEDDING_PROVIDER` | `openai` |
 | `GOVERNED_BI_LLM_MAX_RETRIES` | `3` |
 | `GOVERNED_BI_LLM_TIMEOUT_S` | `300` |
 | `GOVERNED_BI_UTILITY_TIMEOUT_S` | `30` |
@@ -63,15 +47,8 @@ declared claims the test suite holds the code to, not configuration you edit.
 
 | Variable | Role |
 |---|---|
-| `GOVERNED_BI_PG_DSN`, else `PG_RENAME_DECOY_DSN` | Postgres DSN — required for LangGraph serve and for the eval driver. Those two names in that precedence, from `credentials.PG_DSN_NAMES` in `src/governed_bi/` |
-| `OPENAI_API_KEY` | Model access on the `openai` gateway — the default one |
-| `GOVERNED_BI_PROVIDER` | Gateway for every surface: `openai` (default), `bedrock`, `proxy` |
-| `GOVERNED_BI_MODEL_PROVIDER`, `GOVERNED_BI_UTILITY_PROVIDER`, `GOVERNED_BI_EMBEDDING_PROVIDER` | Per-surface override of the above. The three surfaces resolve independently |
-| `GOVERNED_BI_AWS_REGION`, else `AWS_REGION`, else `AWS_DEFAULT_REGION` | Bedrock region, in that precedence — the engine's own name wins over whatever the shell exports for other tooling |
-| `AWS_ACCESS_KEY_ID` / `AWS_PROFILE` / `AWS_ROLE_ARN` / `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` | Bedrock credentials. None is required by name: `provider.credentials_present` asks botocore's resolver, so an instance or task role with nothing set here authenticates |
-| `GOVERNED_BI_PROXY_SECRET` | Name of the Secrets Manager secret holding the `proxy` gateway's API key and base URL — the name, never the value. Unset means the proxy provider refuses |
-| `GOVERNED_BI_PROXY_REGION` | AWS region for that secret lookup. Unset falls through to boto3's own resolution chain |
-| `GOVERNED_BI_PROXY_CA_BUNDLE` | Path to a CA bundle for the proxy's TLS chain. Unset disables verification |
+| `GOVERNED_BI_PG_DSN` | Postgres DSN — required for LangGraph serve and for the eval driver. The one name is `credentials.PG_DSN_NAMES` in `src/governed_bi/` |
+| `OPENAI_API_KEY` | Model access. The app and the eval use OpenAI |
 | `GOVERNED_BI_CORPUS_DIR` | Corpus directory. Default `../BIRD-corpus`, resolved against the repo root |
 | `GOVERNED_BI_SCHEMA` | Optional: seed / pin schema from the live database |
 | `GOVERNED_BI_MODEL` | Main chat model. Default `gpt-6-luna`. The CLI still accepts `--model` and `--no-model` |
@@ -91,11 +68,11 @@ declared claims the test suite holds the code to, not configuration you edit.
 | `GOVERNED_BI_AGENT_RECURSION_LIMIT` | Superstep ceiling for the nested `create_agent` graph, overriding the `agent_recursion_limit` knob (default 40) |
 | `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | Wall clock for one cancellable utility rail — today only `guard` — overriding the `rail_node_timeout_s` knob (default 120.0) |
 | `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` | Tracing, off by default. **Read by LangChain itself — nothing in `src/` reads them and there is no callback to wire.** One trace per root invocation, so a whole agentic turn costs one and a 20-question debug run costs 20. When on, traces carry run inputs and outputs in full: tool messages, row previews, governed context. That is intended here and would need a masking layer at the tracer seam in production; there is none |
-| `OPENAI_BASE_URL` | **Do not set.** Read by the OpenAI SDK, so it redirects the chat client and the embedder *together* — a gateway serving a chat model but not an embedding model cannot be expressed this way. Use `GOVERNED_BI_*_PROVIDER` instead |
+| `OPENAI_BASE_URL` | **Do not set.** Read by the OpenAI SDK, so it redirects the chat client and the embedder together |
 
-**Nothing in that table is a credential a caller presents.** `OPENAI_API_KEY`, the AWS names and
-the proxy's three buy *this process* access to a model provider; none of them is asked of anything
-that calls this server. `GOVERNED_BI_API_KEY` was a row here until 2026-08-13 and is now read by
+**Nothing in that table is a credential a caller presents.** `OPENAI_API_KEY` buys this process
+access to the model; nothing is asked of a caller of this server. `GOVERNED_BI_API_KEY` was a row
+here until 2026-08-13 and is now read by
 nothing — delete it from an old `.env` rather than assuming it still gates something. What its
 absence costs is in [Serve](#serve-langgraph-server).
 
@@ -113,7 +90,6 @@ operator tunes), **unmeasured** (a knob override no arm has ever varied). "Read 
 | Variable | Read in | Class | Recommendation |
 |---|---|---|---|
 | `GOVERNED_BI_PG_DSN` | `credentials.py` | secret | keep |
-| `GOVERNED_BI_PROXY_SECRET` | `model/provider.py`, `model/proxy_gateway.py` | secret | keep while the proxy gateway is used; remove with it |
 | `GOVERNED_BI_API_KEY` | nothing; docstrings in `api/auth.py`, `api/routes.py` | none | remove the mentions |
 | `GOVERNED_BI_CORPUS_DIR` | `api/graph_app.py` | location | keep |
 | `GOVERNED_BI_SCHEMA` | `api/graph_app.py` | location | keep |
@@ -121,13 +97,6 @@ operator tunes), **unmeasured** (a knob override no arm has ever varied). "Read 
 | `GOVERNED_BI_CONVERSATION_DB` | `serve/checkpointer.py` | location | keep |
 | `GOVERNED_BI_HARNESS_DB` | `serve/checkpointer.py` | location | keep |
 | `GOVERNED_BI_VECTOR_CACHE` | `retrieve/vector_cache.py` | location | keep |
-| `GOVERNED_BI_AWS_REGION` | `model/provider.py` | location | keep |
-| `GOVERNED_BI_PROXY_REGION` | `model/proxy_gateway.py` | location | remove with the proxy gateway |
-| `GOVERNED_BI_PROXY_CA_BUNDLE` | `model/proxy_gateway.py` | location | remove with the proxy gateway |
-| `GOVERNED_BI_PROVIDER` | `model/provider.py`, `serve/__main__.py` | model selection | keep |
-| `GOVERNED_BI_MODEL_PROVIDER` | `model/provider.py` | model selection | merge into `GOVERNED_BI_PROVIDER` unless a split deployment is planned |
-| `GOVERNED_BI_UTILITY_PROVIDER` | `model/provider.py` | model selection | same as above |
-| `GOVERNED_BI_EMBEDDING_PROVIDER` | `model/provider.py` | model selection | keep: the embedder can need a different gateway |
 | `GOVERNED_BI_MODEL` | `api/graph_app.py`, `model/provider.py` | model selection | keep |
 | `GOVERNED_BI_MODEL_EFFORT` | `api/graph_app.py` | model selection | keep |
 | `GOVERNED_BI_UTILITY_MODEL` | `api/graph_app.py`, `model/provider.py` | model selection | keep |
@@ -184,14 +153,6 @@ uv run python tools/load_demo_schema.py
 
 Then leave `GOVERNED_BI_CORPUS_DIR` unset and set `GOVERNED_BI_SCHEMA=gbi_demo_sales`. The engine
 seeds a corpus from the live schema at startup, so the two halves cannot disagree.
-
-**`uv sync` alone does not cover a Bedrock `.env`.** `GOVERNED_BI_PROVIDER=bedrock` needs the extra,
-and the failure is a `ModuleNotFoundError` for `langchain_aws` at the first model call rather than at
-startup:
-
-```bash
-uv sync --extra bedrock
-```
 
 Confirm the whole thing from one request, before opening a browser. `/capabilities` reports what the
 process resolved, so it names the model, the gateway and the database it is actually pointed at:
@@ -370,14 +331,9 @@ checkpoint nobody can name is not durability, it is a leak. Measured 2026-08-20:
 `runs/harness-checkpoints.sqlite` had grown to 4.6 MB holding two such orphans, roughly 1.8 MB
 per question asked. Nothing about the answer, the record or the exit code changes.
 
-The model comes from `GOVERNED_BI_MODEL`, the same variable the server reads, and `--model`
-overrides it for one run. There is no default: with neither set the command exits 2 naming the
-variable, rather than picking a model for you.
-
-That default used to be `gpt-4o-mini`, and it overrode the variable. Under
-`GOVERNED_BI_PROVIDER=bedrock` it sent an OpenAI id to Bedrock and the turn came back
-`outcome: crashed`, naming nothing that pointed at the model, while the same question answered
-normally through the server. Fixed 2026-08-19.
+The model comes from the settings module (`chat_model`), the same default the server reads.
+`GOVERNED_BI_MODEL` overrides it for the process, and `--model` overrides it for one run.
+`--no-model` serves the stub path.
 
 ## Tests
 

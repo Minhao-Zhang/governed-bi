@@ -27,9 +27,8 @@ below is compared against something this file supplied — a base URL it chose, 
 requested, a number it exported — or against an independent resolution of the same fact
 (``importlib.metadata`` for the sqlglot version), never against the expression under test.
 
-Network-free. ``get_proxy_credentials`` is stubbed so the *real* ``build_chat_model`` runs:
-a hand-built stand-in for the client would assert our idea of what the gateway returns, and
-the whole defect was that the real client does not look the way the reader assumed.
+Network-free: the chat models in this file are scripted stand-ins with the attributes
+the record reads.
 """
 
 from __future__ import annotations
@@ -42,10 +41,6 @@ import pytest
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.register.knobs import knob_default, knob_names
 from governed_bi.serve.session import from_assets
-
-#: A host this file owns, so ``llm_provider``'s digest is a fact the test supplied rather
-#: than a constant copied out of the implementation.
-PROXY_BASE = "https://proxy.invalid"
 
 #: Every variable the recording side now consults, cleared per test — a developer's own
 #: shell must not be able to make these pass or fail for the wrong reason.
@@ -62,20 +57,6 @@ def _no_ambient_env(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv(name, raising=False)
 
 
-@pytest.fixture
-def proxy(monkeypatch: pytest.MonkeyPatch):
-    """The real proxy builders, with only the Secrets Manager lookup stubbed."""
-    from governed_bi.model import proxy_gateway
-
-    monkeypatch.setenv("GOVERNED_BI_PROXY_SECRET", "a-name-the-test-supplied")
-    monkeypatch.setattr(
-        proxy_gateway, "get_proxy_credentials", lambda *a, **k: ("not-a-key", PROXY_BASE)
-    )
-    proxy_gateway._reset_caches()
-    yield proxy_gateway
-    proxy_gateway._reset_caches()
-
-
 def _session(assets: dict[str, Any], **kwargs: Any):
     return from_assets(
         list(assets.values()),
@@ -87,191 +68,7 @@ def _session(assets: dict[str, Any], **kwargs: Any):
     )
 
 
-# ── 1. the effort the client will actually send ───────────────────────────────
-
-
-def test_the_recorded_effort_is_the_one_the_proxy_client_carries(proxy, two_schema_assets):
-    """``high`` requested, ``high`` recorded — on the client the eval driver actually builds.
-
-    ``session`` resolved this with ``getattr(agent_model, "reasoning_effort", None)``, which
-    is only OpenAI's spelling. ``build_chat_model`` folds the effort into ``extra_body`` and
-    returns a plain ``ChatOpenAI``, so the attribute is ``None`` and the ``if effort:`` branch
-    never ran.
-    """
-    model = proxy.build_chat_model(llm_model="Claude-Opus-4.8", reasoning_effort="high")
-
-    # The premise, stated so this cannot quietly become a test of the easy path: the client
-    # really does carry no such attribute, and the envelope really does carry the effort.
-    assert not getattr(model, "reasoning_effort", None)
-
-    knobs = _session(two_schema_assets, agent_model=model).knobs_resolved
-    assert knobs["llm_reasoning_effort"] == "high"
-
-
-def test_two_efforts_on_the_proxy_are_two_comparability_sets(proxy, two_schema_assets):
-    """The incident the knob's own note describes, reproduced end to end.
-
-    *"Two v1 ladders differed ONLY in this and compared as one experiment; it moved the
-    baseline arm past that ladder's detection threshold."* With the writer dead, a
-    high-vs-low A/B on the proxy produced two artifacts whose comparability sets were
-    **identical** — so the two treatments compared as one.
-    """
-    def comparability_of(effort: str) -> dict[str, Any]:
-        model = proxy.build_chat_model(llm_model="Claude-Opus-4.8", reasoning_effort=effort)
-        knobs = _session(two_schema_assets, agent_model=model).knobs_resolved
-        return {k: v for k, v in knobs.items() if k in knob_names()}
-
-    high, low = comparability_of("high"), comparability_of("low")
-    assert high["llm_reasoning_effort"] == "high"
-    assert low["llm_reasoning_effort"] == "low"
-    assert high != low, (
-        "a high-vs-low effort A/B on the proxy resolves to one comparability set, so the "
-        "two arms carry one config hash and compare as one experiment"
-    )
-    # ...and the difference is *only* the effort, or the assertion above would pass for a
-    # resolver that made every session unique. A lone agent model is also the utility model,
-    # so the utility surface's effort moves with it.
-    assert {k for k in high if high[k] != low.get(k)} == {
-        "llm_reasoning_effort",
-        "llm_utility_reasoning_effort",
-    }
-
-
-def test_an_effort_the_proxy_drops_is_recorded_as_dropped(proxy, two_schema_assets):
-    """``effort=none`` sends no thinking block, so the record must not claim one.
-
-    The record reports what goes on the wire, not what was asked for. Rounding this to
-    ``"none"`` would make a GPT-on-proxy arm and a Claude-at-low arm look like different
-    treatments of the same knob when only one of them configured reasoning at all.
-    """
-    model = proxy.build_chat_model(llm_model="gpt-5.6-luna", reasoning_effort="none")
-    knobs = _session(two_schema_assets, agent_model=model).knobs_resolved
-    assert knobs["llm_reasoning_effort"] is None
-
-
-def test_every_gateways_spelling_of_effort_reads_back(proxy):
-    """One intent, three spellings, one string out. ``model/provider.py``'s table, backwards.
-
-    Stand-ins here rather than built clients, because ``ChatBedrockConverse`` needs ``boto3``
-    and a region — and the property under test is the decoding, which is the half that was
-    missing.
-    """
-    from governed_bi.model.provider import reasoning_effort_of
-
-    class Direct:  # OpenAI: a plain attribute
-        reasoning_effort = "medium"
-
-    class Proxied:  # the internal proxy: inside the request envelope
-        extra_body = proxy.build_extra_body("s", "high")
-
-    class Anthropic:  # Bedrock: beside the thinking block, not inside it
-        additional_model_request_fields = {
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": "high"},
-        }
-
-    class Nova:  # Bedrock: a named effort under another key
-        additional_model_request_fields = {
-            "reasoningConfig": {"type": "enabled", "maxReasoningEffort": "low"}
-        }
-
-    class Nothing:
-        pass
-
-    assert reasoning_effort_of(Direct()) == "medium"
-    assert reasoning_effort_of(Proxied()) == "high"
-    assert reasoning_effort_of(Anthropic()) == "high"
-    assert reasoning_effort_of(Nova()) == "low"
-    assert reasoning_effort_of(Nothing()) is None
-
-    # Round-tripped through the encoder rather than against a hand-written dict, so a change
-    # to the Bedrock spelling that forgets the reporting half fails here instead of landing a
-    # run whose `llm_reasoning_effort` is null.
-    from governed_bi.model.provider import _ANTHROPIC_EFFORTS, _bedrock_reasoning
-
-    for effort in _ANTHROPIC_EFFORTS:
-        class Round:
-            additional_model_request_fields = _bedrock_reasoning(effort)
-
-        assert reasoning_effort_of(Round()) == effort
-
-
-# ── 2. which gateway served which surface ─────────────────────────────────────
-
-
-def test_the_utility_and_embedding_gateways_are_recorded_not_assumed(proxy):
-    """Three surfaces on the proxy, three fields that say so.
-
-    Neither ``llm_utility_provider`` nor ``embedding_provider`` had a writer anywhere, so both
-    sat at the register default ``"openai"`` while the row beside them said
-    ``llm_provider: "custom:007df842"``. Each row contradicted itself, and a wrong value on a
-    ``a recorded setting`` field reads as a measurement where a null reads as an absence.
-
-    An empty asset set, because ``from_assets`` embeds every summary it is given and the
-    proxy behind this embedder does not exist. The knobs under test are run constants; they
-    do not depend on what was indexed.
-    """
-    from governed_bi.model import ProxyEmbedder
-
-    agent = proxy.build_chat_model(llm_model="Claude-Opus-4.8")
-    utility = proxy.build_chat_model(llm_model="Claude-Sonnet-5")
-    embedder = ProxyEmbedder(embedding_dimensions=64)
-
-    knobs = _session(
-        {}, agent_model=agent, utility_model=utility, embedder=embedder
-    ).knobs_resolved
-
-    # The defaults these used to publish. Named, so the assertions below cannot pass by
-    # happening to agree with the register.
-    assert knob_default("llm_utility_provider") == "openai"
-    assert knob_default("embedding_provider") == "openai"
-
-    assert knobs["llm_utility_provider"] == knobs["llm_provider"] != "openai"
-    assert knobs["embedding_provider"] == "proxy"
-    # ...and the agent's gateway is a digest of the host *this file* chose, not of anything
-    # the implementation names.
-    import hashlib
-    from urllib.parse import urlsplit
-
-    host = urlsplit(PROXY_BASE).netloc
-    expected = "custom:" + hashlib.sha256(host.encode("utf-8")).hexdigest()[:8]
-    assert knobs["llm_provider"] == expected
-
-
-def test_a_split_gateway_configuration_is_two_values(proxy, two_schema_assets):
-    """The configuration the per-surface knobs exist for: a cheap utility elsewhere.
-
-    A shared knob would hash "proxy agent + proxy utility" and "proxy agent + OpenAI utility"
-    as one treatment, which is the argument ``llm_utility_provider``'s own note makes.
-    """
-    from governed_bi.serve.scripted_model import ScriptedChatModel
-
-    agent = proxy.build_chat_model(llm_model="Claude-Opus-4.8")
-    # No base URL: the vendor's own endpoint, which is the library default.
-    utility: Any = ScriptedChatModel(responses=[])
-
-    knobs = _session(
-        two_schema_assets, agent_model=agent, utility_model=utility
-    ).knobs_resolved
-    assert knobs["llm_provider"].startswith("custom:")
-    assert knobs["llm_utility_provider"] == "openai"
-    assert knobs["llm_provider"] != knobs["llm_utility_provider"]
-
-
-def test_bedrock_is_not_reported_as_openai(two_schema_assets):
-    """A gateway with no base URL is not therefore the vendor's.
-
-    ``_provider_of`` returned ``"openai"`` for anything without a URL to digest, which on the
-    Bedrock arm is the same lie one gateway over — a comparability field asserting a gateway
-    the run did not use.
-    """
-    class Converse:
-        _llm_type = "chat-bedrock-converse"
-        model_name = "anthropic.claude-opus-4-8-v1:0"
-
-    knobs = _session(two_schema_assets, agent_model=Converse()).knobs_resolved
-    assert knobs["llm_provider"] == "bedrock"
-    assert knobs["chat_model"] == "anthropic.claude-opus-4-8-v1:0"
+# ── 1. an embedder id names its gateway ───────────────────────────────────────
 
 
 def test_an_unqualified_embedder_refuses_rather_than_naming_a_gateway():
@@ -282,8 +79,8 @@ def test_an_unqualified_embedder_refuses_rather_than_naming_a_gateway():
     """
     from governed_bi.model.embedder import embedding_knobs, embedding_provider
 
-    assert embedding_provider("proxy:text-embedding-3-large") == "proxy"
-    assert embedding_provider("bedrock:amazon.titan-embed-text-v2:0") == "bedrock"
+    assert embedding_provider("openai:text-embedding-3-large") == "openai"
+    assert embedding_provider("deterministic:probe") == "deterministic"
 
     class Unqualified:
         model = "text-embedding-3-large"

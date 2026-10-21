@@ -69,7 +69,7 @@ QUERY_FAULTS: tuple[tuple[str, str, str], ...] = (
 
 def _dsn() -> str:
     """The DSN, from the environment or `.env`. Never logged — it carries credentials."""
-    dsn = os.environ.get("GOVERNED_BI_PG_DSN") or os.environ.get("PG_RENAME_DECOY_DSN")
+    dsn = os.environ.get("GOVERNED_BI_PG_DSN")
     if dsn:
         return dsn
     env = pathlib.Path(__file__).resolve().parent.parent.parent / ".env"
@@ -78,7 +78,7 @@ def _dsn() -> str:
             if line.strip().startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
-            if key.strip() in ("GOVERNED_BI_PG_DSN", "PG_RENAME_DECOY_DSN"):
+            if key.strip() == "GOVERNED_BI_PG_DSN":
                 return value.strip().strip("\"'")
     return ""
 
@@ -89,7 +89,7 @@ def dsn() -> str:
     value = _dsn()
     if not value:
         pytest.skip(
-            "no Postgres DSN: set GOVERNED_BI_PG_DSN or PG_RENAME_DECOY_DSN. "
+            "no Postgres DSN: set GOVERNED_BI_PG_DSN. "
             "Parcel C is Postgres-only (decision #40) and a connector cannot be "
             "tested without a server; these tests are not optional, they are pending."
         )

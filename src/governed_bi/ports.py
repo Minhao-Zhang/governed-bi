@@ -54,9 +54,8 @@ class TableInfo(Protocol):
 class Embedder(Protocol):
     """Turn text into vectors. Exposes ``model`` and ``dimensions`` for cache keys.
 
-    Adapters: ``model/openai_embedder.py``, ``model/bedrock_embedder.py``,
-    ``model/proxy_embedder.py`` (the three ``model/provider.py::embedder`` builds) and
-    ``model/deterministic_embedder.py``. All four subclass ``model/embedder.py::BaseEmbedder``,
+    Adapters: ``model/openai_embedder.py`` (what ``model/provider.py::embedder`` builds) and
+    ``model/deterministic_embedder.py``. Both subclass ``model/embedder.py::BaseEmbedder``,
     which subclasses **this**.
 
     **This is the seam's only declaration.** ``BaseEmbedder`` used to restate ``model``,

@@ -363,7 +363,7 @@ def test_the_spec_declares_the_not_ready_body(wire: dict[str, Any]) -> None:
     from governed_bi.api.routes import _build_app
 
     def missing_dsn() -> Any:
-        raise RuntimeError("no database: set one of GOVERNED_BI_PG_DSN / PG_RENAME_DECOY_DSN")
+        raise RuntimeError("no database: set GOVERNED_BI_PG_DSN")
 
     response = TestClient(_build_app(missing_dsn, object())).get("/readyz")
     assert response.status_code == 503
