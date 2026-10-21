@@ -56,7 +56,7 @@ def _policy(*, rules: dict[str, bool] | None = None, attempt_cap: int | None = N
 
 
 def _scripted_run_query(sql: str, *, calls: int = 1) -> Any:
-    """Calls ``run_query`` ``calls`` times, then answers. Tool calls copied from ``eval/arms.py``;
+    """Calls ``run_query`` ``calls`` times, then answers. Tool calls copied from ``eval/configs.py``;
     ``ScriptedChatModel`` replies by counting ``AIMessage``s, so ``calls`` calls means that many attempts."""
     from langchain_core.messages import AIMessage
 
@@ -189,11 +189,11 @@ def probe(dsn):
         con.execute(f'CREATE SCHEMA "{name}"')
         con.execute(f'CREATE TABLE "{name}".customers (id integer PRIMARY KEY, email text)')
         # A table **no join reaches**, added 2026-08-03 after execution falsified the
-        # fixture note below. `customers` and `orders` cannot serve as the unlicensed table:
+        # fixture note below. `customers` and `orders` cannot serve as the not_retrieved table:
         # the seeded corpus mints `join_..._orders_customers` whose summary reads "orders
         # joins customers on cid", so the question "customers" hits the *join* lexically and
         # `resolve`'s closure licenses both endpoints -- which ADR 0006 §8 requires
-        # (`licensed` includes every table pulled in by resolve). No change to `serve/` could
+        # (`retrieved_tables` includes every table pulled in by resolve). No change to `serve/` could
         # have made the old fixture pass without breaking join licensing.
         con.execute(f'CREATE TABLE "{name}".audit_log (id integer PRIMARY KEY, note text)')
         con.execute(f'CREATE TABLE "{name}".orders (id integer PRIMARY KEY, cid integer '

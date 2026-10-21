@@ -89,7 +89,7 @@ def load_into_environ(*, refuse: bool = True) -> int:
         shown = ", ".join(foreign)
         raise RuntimeError(
             f".env sets {shown}, which is not a secret. Settings live in "
-            "register/knobs.py; a GOVERNED_BI_* override belongs in the environment."
+            "registry/settings.py; a GOVERNED_BI_* override belongs in the environment."
         )
     filled = 0
     for key, value in _dotenv().items():

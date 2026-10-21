@@ -18,7 +18,7 @@ from sqlglot.errors import SqlglotError
 
 from governed_bi.corpus.identity import table_id as table_id_of
 from governed_bi.corpus.validate import Problem
-from governed_bi.register.assets import AssetType
+from governed_bi.registry.assets import AssetType
 
 from .connect import canon_edge
 from .index import schema_tag_for
@@ -49,7 +49,7 @@ class CorpusStructure:
     #: ``table asset id -> schema``. Read for ``crossings`` accounting.
     table_schemas: Mapping[str, str]
     #: ``asset id -> the schema it votes for in route``, from the declared
-    #: :class:`~governed_bi.register.assets.TagRule` table via
+    #: :class:`~governed_bi.registry.assets.TagRule` table via
     #: :func:`~governed_bi.retrieve.index.schema_tag_for` -- not a second local rule.
     schema_tags: Mapping[str, str]
     #: ``canonical edge -> the join asset ids on it``, sorted. Several relationships per
@@ -114,15 +114,15 @@ def build_structure(
     return structure, problems
 
 
-def complete_joins(licensed: Set[Any], structure: CorpusStructure) -> frozenset[str]:
-    """Every join whose **both** endpoints are in ``licensed`` (§2.8's last row).
+def complete_joins(retrieved_tables: Set[Any], structure: CorpusStructure) -> frozenset[str]:
+    """Every join whose **both** endpoints are in ``retrieved_tables`` (§2.8's last row).
 
     Runs **after** ``connect``, not inside ``resolve`` (§2.8.1): a Steiner point exists to
     sit on a join path, so the pairs that most need their ``on`` clause in the prompt are
     created after ``resolve`` runs. Returned joins are ``pulled_in`` and exempt from the
     join budget — they never pass through ``apply_budgets``, which caps ranked hits only.
     """
-    ids = {str(x) for x in licensed}
+    ids = {str(x) for x in retrieved_tables}
     out: set[str] = set()
     for (left, right), joins in structure.joins_by_edge.items():
         if left in ids and right in ids:

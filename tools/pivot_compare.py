@@ -5,9 +5,9 @@ expected-differences file names its row, field and reason; anything else is *une
 exit code is 1 if there is one. Exit 0 means every difference was listed. Exit 2 means a file
 could not be read.
 
-Facet rewriting is off in the snapshot, and it uses the deterministic embedder and no agent model.
+Retrieval-channel rewriting is off in the snapshot, and it uses the deterministic embedder and no agent model.
 So a match proves that routing, retrieval, join planning, context rendering and the SQL checks did
-not move. It cannot prove anything about the production embedder, the facet rewriters, the prompts,
+not move. It cannot prove anything about the production embedder, the channel rewriters, the prompts,
 the agent loop, abstention, clarification or the UI; those rest on the test suite and the baseline.
 
 The expected-differences file is TOML, written before the run::
@@ -21,7 +21,7 @@ The expected-differences file is TOML, written before the run::
 
     [[rename]]                        # a renamed field: base rows are read under the new name,
     kind = "question"                 # and the value must still match
-    from = "licensed"
+    from = "retrieved_tables"
     to   = "retrieved_tables"
 
 ``reason`` is required: a difference with no stated reason is the thing this tool exists to refuse.

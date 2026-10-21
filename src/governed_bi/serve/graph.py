@@ -14,91 +14,91 @@ from langgraph.graph import END, START, StateGraph
 from governed_bi.serve.nodes.abstain import abstain_node
 from governed_bi.serve.nodes.agent_core import agent_core_node
 from governed_bi.serve.nodes.assemble import assemble_node
-from governed_bi.serve.nodes.facets import (
-    facet_entity_node,
-    facet_example_node,
-    facet_metric_node,
-    facet_schema_node,
-    facet_term_node,
+from governed_bi.serve.nodes.channels import (
+    channel_entity_node,
+    channel_example_node,
+    channel_metric_node,
+    channel_schema_node,
+    channel_term_node,
 )
+from governed_bi.serve.nodes.finish import finish
 from governed_bi.serve.nodes.guard import guard_node
 from governed_bi.serve.nodes.narrate import narrate_node
 from governed_bi.serve.nodes.rewrite import rewrite_node
 from governed_bi.serve.nodes.route_retrieve import connect_node, resolve_node, route_node
-from governed_bi.serve.nodes.stamp import stamp
 from governed_bi.serve.nodes.terminal import decline_node, refuse_node
 from governed_bi.serve.state import ServeInput, ServeOutput, ServeState
 from governed_bi.serve.wrap import wrap_node
 
 __all__ = ["build_graph", "compile_graph"]
 
-_FACET_NODES = (
-    ("facet_schema", facet_schema_node),
-    ("facet_term", facet_term_node),
-    ("facet_metric", facet_metric_node),
-    ("facet_entity", facet_entity_node),
-    ("facet_example", facet_example_node),
+_CHANNEL_NODES = (
+    ("channel_schema", channel_schema_node),
+    ("channel_term", channel_term_node),
+    ("channel_metric", channel_metric_node),
+    ("channel_entity", channel_entity_node),
+    ("channel_example", channel_example_node),
 )
 
 
-def _after_accept(state: ServeState) -> Literal["guard", "stamp"]:
+def _after_accept(state: ServeState) -> Literal["guard", "finish"]:
     """Accept soft-crashes must not enter ``guard`` on a prior turn's leftover channels."""
     if state.get("path_kind") == "crashed":
-        return "stamp"
+        return "finish"
     return "guard"
 
 
-def _after_guard(state: ServeState) -> Literal["refuse", "rewrite", "stamp"]:
+def _after_guard(state: ServeState) -> Literal["refuse", "rewrite", "finish"]:
     if state.get("path_kind") == "crashed":
-        return "stamp"
+        return "finish"
     guard: Mapping[str, Any] = state.get("guard") or {}
     if guard.get("outcome") == "blocked":
         return "refuse"
     return "rewrite"
 
 
-def _after_rewrite(state: ServeState) -> Literal["fanout", "stamp"]:
-    """A wrap crash skips retrieval. Otherwise the facets run."""
+def _after_rewrite(state: ServeState) -> Literal["fanout", "finish"]:
+    """A wrap crash skips retrieval. Otherwise the channels run."""
     if state.get("path_kind") == "crashed":
-        return "stamp"
+        return "finish"
     return "fanout"
 
 
-def _after_route(state: ServeState) -> Literal["decline", "resolve", "stamp"]:
+def _after_route(state: ServeState) -> Literal["decline", "resolve", "finish"]:
     if state.get("path_kind") == "crashed":
-        return "stamp"
+        return "finish"
     if state.get("path_kind") == "decline":
         return "decline"
     return "resolve"
 
 
-def _after_connect(state: ServeState) -> Literal["decline", "assemble", "stamp"]:
+def _after_connect(state: ServeState) -> Literal["decline", "assemble", "finish"]:
     if state.get("path_kind") == "crashed":
-        return "stamp"
+        return "finish"
     if state.get("path_kind") == "decline":
         return "decline"
     return "assemble"
 
 
-def _after_abstain(state: ServeState) -> Literal["decline", "agent_core", "stamp"]:
+def _after_abstain(state: ServeState) -> Literal["decline", "agent_core", "finish"]:
     """The declared abstention policy's edge (ADR 0013).
 
     Reads ``path_kind`` and not ``abstention``, deliberately: the node writes the decline the
     same way ``route`` and ``connect`` do, so there is one answer to "did this turn end here"
     rather than a second channel this edge would have to agree with. Off by default, in which
-    case the node writes a ``disabled`` verdict and no ``path_kind``, and this returns
+    case the node writes a ``disabled`` result and no ``path_kind``, and this returns
     ``agent_core`` exactly as the ``assemble -> agent_core`` edge did before it existed.
     """
     if state.get("path_kind") == "crashed":
-        return "stamp"
+        return "finish"
     if state.get("path_kind") == "decline":
         return "decline"
     return "agent_core"
 
 
-def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
+def _skip_if_terminal(state: ServeState) -> Literal["finish", "continue"]:
     if state.get("path_kind") in ("refuse", "decline", "crashed"):
-        return "stamp"
+        return "finish"
     return "continue"
 
 
@@ -109,7 +109,7 @@ def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
 #: ``narrate`` is excluded: a timeout marks the turn ``crashed``, and by then
 #: ``agent_core`` may already have answered. Model failures inside narrate are swallowed.
 #:
-#: The five facets are excluded by **decision, not constraint**: five concurrent bounds interact
+#: The five channels are excluded by **decision, not constraint**: five concurrent bounds interact
 #: with the shared provider quota in a way nobody has measured, and turning them on is a
 #: comparability change that belongs to its own experiment. Adding them is a one-line edit here.
 _CANCELLABLE = frozenset({"guard"})
@@ -121,7 +121,7 @@ def _node_timeout(name: str) -> float | None:
     Read from the bound settings, not the environment. ``agent_core`` keeps its own
     clock so a timeout can still project the ledger.
     """
-    from governed_bi.register.knobs import effective_settings
+    from governed_bi.registry.settings import effective_settings
 
     if name not in _CANCELLABLE:
         return None
@@ -133,7 +133,7 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
 
     Nested agent is checkpointed via the outer graph's saver through ``config``.
     ``accept`` (optional, before ``guard``) derives a turn from a client message.
-    ``record`` (optional, after ``stamp``) appends to the audit log.
+    ``record`` (optional, after ``finish``) appends to the audit log.
     """
 
     # `input_schema` / `output_schema` only when `accept` is present. That flag *is* the trust
@@ -164,7 +164,7 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
 
     rail("guard", guard_node)
     rail("rewrite", rewrite_node)
-    for name, fn in _FACET_NODES:
+    for name, fn in _CHANNEL_NODES:
         rail(name, fn)
     rail("route", route_node)
     rail("resolve", resolve_node)
@@ -179,23 +179,23 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     # Through `rail` like every other wrapped node, and it gets no timeout because it is absent
     # from `_CANCELLABLE` — which is the single place that decision is written down. Registering
     # it with a bare `add_node` said the same thing twice and made `_CANCELLABLE` a liar: adding
-    # `narrate` back to that set would arm a bound `_node_timeout` reports and `rail` never
+    # `narrate` back to that set would config a bound `_node_timeout` reports and `rail` never
     # applies. Model call failures are swallowed inside the node; the utility `request_timeout`
     # still bounds the provider call.
     rail("narrate", narrate_node)
     rail("refuse", refuse_node)
     rail("decline", decline_node)
-    # Unwrapped: nothing after stamp can record a wrap crash.
-    graph.add_node("stamp", stamp)  # type: ignore[type-var]  # langgraph bounds node input to TypedDict-likes
+    # Unwrapped: nothing after finish can record a wrap crash.
+    graph.add_node("finish", finish)  # type: ignore[type-var]  # langgraph bounds node input to TypedDict-likes
     # No unattached write node. A node with no edge from START is a write path the
     # graph's own topology does not describe.
 
     def _fanout_passthrough(state: ServeState) -> dict[str, Any]:
         return {}
 
-    # Not through `rail`: the node is `fanout` but its *stage* is `facet_schema`, and `rail`
+    # Not through `rail`: the node is `fanout` but its *stage* is `channel_schema`, and `rail`
     # uses one name for both. It does no work, so it needs no timeout.
-    graph.add_node("fanout", wrap_node("facet_schema", _fanout_passthrough, stream=False))
+    graph.add_node("fanout", wrap_node("channel_schema", _fanout_passthrough, stream=False))
 
     if accept is not None:
         graph.add_node("accept", wrap_node("accept", accept))
@@ -203,60 +203,60 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         graph.add_conditional_edges(
             "accept",
             _after_accept,
-            {"guard": "guard", "stamp": "stamp"},
+            {"guard": "guard", "finish": "finish"},
         )
     else:
         graph.add_edge(START, "guard")
     graph.add_conditional_edges(
         "guard",
         _after_guard,
-        {"refuse": "refuse", "rewrite": "rewrite", "stamp": "stamp"},
+        {"refuse": "refuse", "rewrite": "rewrite", "finish": "finish"},
     )
     graph.add_conditional_edges(
         "rewrite",
         _after_rewrite,
-        {"fanout": "fanout", "stamp": "stamp"},
+        {"fanout": "fanout", "finish": "finish"},
     )
-    for name, _ in _FACET_NODES:
+    for name, _ in _CHANNEL_NODES:
         graph.add_edge("fanout", name)
         graph.add_edge(name, "route")
 
     graph.add_conditional_edges(
         "route",
         _after_route,
-        {"decline": "decline", "resolve": "resolve", "stamp": "stamp"},
+        {"decline": "decline", "resolve": "resolve", "finish": "finish"},
     )
     graph.add_conditional_edges(
         "resolve",
         _skip_if_terminal,
-        {"stamp": "stamp", "continue": "connect"},
+        {"finish": "finish", "continue": "connect"},
     )
     graph.add_conditional_edges(
         "connect",
         _after_connect,
-        {"decline": "decline", "assemble": "assemble", "stamp": "stamp"},
+        {"decline": "decline", "assemble": "assemble", "finish": "finish"},
     )
     graph.add_conditional_edges(
         "assemble",
         _skip_if_terminal,
-        {"stamp": "stamp", "continue": "abstain"},
+        {"finish": "finish", "continue": "abstain"},
     )
     graph.add_conditional_edges(
         "abstain",
         _after_abstain,
-        {"decline": "decline", "agent_core": "agent_core", "stamp": "stamp"},
+        {"decline": "decline", "agent_core": "agent_core", "finish": "finish"},
     )
     # Terminals skip narrate: refusal and decline wording is system copy.
     graph.add_edge("agent_core", "narrate")
-    graph.add_edge("narrate", "stamp")
-    graph.add_edge("refuse", "stamp")
-    graph.add_edge("decline", "stamp")
+    graph.add_edge("narrate", "finish")
+    graph.add_edge("refuse", "finish")
+    graph.add_edge("decline", "finish")
     if record is not None:
         graph.add_node("record", record)
-        graph.add_edge("stamp", "record")
+        graph.add_edge("finish", "record")
         graph.add_edge("record", END)
     else:
-        graph.add_edge("stamp", END)
+        graph.add_edge("finish", END)
     return graph
 
 
@@ -270,7 +270,7 @@ class _SyncApp:
 
     **That ``TypeError`` must keep being raised.** While the rails carried LangGraph node
     timeouts it was swallowed and ``.invoke()`` returned a complete ``outcome: "crashed"``
-    record instead, so forgetting ``as_sync`` produced a whole arm of fabricated measurements.
+    record instead, so forgetting ``as_sync`` produced a whole config of fabricated measurements.
     ``tests/serve/test_node_timeout_is_enforced_inside_the_wrapper.py`` pins it.
 
     ``/chat``'s handlers are sync ``def``, so Starlette runs them in a worker thread with no
@@ -371,11 +371,11 @@ def compile_graph(*, checkpointer: Any | None = None) -> _SyncApp:
     **The default saver grows for as long as it lives and nothing evicts it.** Measured on a
     two-schema corpus: 101 KB after one turn, 844 KB after six, because ``usage`` and ``answer``
     accumulate and every superstep re-serialises them with ``knobs_resolved``. ``eval/harness.py``
-    holds one compiled graph per worker for a whole arm, so a 1,351-question run retains on the
+    holds one compiled graph per worker for a whole config, so a 1,351-question run retains on the
     order of 135 MB per worker unless something evicts per question.
 
     **That worker does not reach this saver, and the sentence above used to imply it did.**
-    ``eval/harness.py::run_arm`` compiles through :func:`compile_durable`, so its eviction
+    ``eval/harness.py::run_config`` compiles through :func:`compile_durable`, so its eviction
     goes through ``AsyncSqliteSaver.adelete_thread`` and never through
     ``InMemorySaver.delete_thread``. The bound still describes *this* function's saver, and
     the caller that actually has it is ``eval/datalake.py``'s routing loop — which had no

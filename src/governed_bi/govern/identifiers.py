@@ -66,7 +66,7 @@ def table_key(schema: str | None, name: str) -> str:
 
     Slugged because the allowlist it is compared against is keyed on asset ids, which
     carry the slug (ADR 0008 D1): a statement writes ``FROM airline."Air Carriers"``
-    while ``licensed`` holds ``airline.Air_Carriers_66c534``. Idempotent on an
+    while ``retrieved_tables`` holds ``airline.Air_Carriers_66c534``. Idempotent on an
     already-slugged name, so :func:`normalise_table_key` can push a caller's *key*
     through the same function as a statement's *reference* — the only reason a
     two-part allowlist entry and a three-part reference compare at all.

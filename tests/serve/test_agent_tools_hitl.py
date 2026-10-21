@@ -70,7 +70,7 @@ def _state(**overrides: Any) -> dict[str, Any]:
         "question": "how many customers",
         "turn_id": "turn-f3",
         "turn_index": 1,
-        "licensed": ["sales.customers"],
+        "retrieved_tables": ["sales.customers"],
         "retrieved": {
             "by_type": {"table": ["sales.customers"]},
             "selected": {
@@ -186,7 +186,7 @@ def test_an_out_of_scope_refusal_is_not_recorded_as_a_delivery() -> None:
         assert "tool_delivered" not in update, f"{tool_name} recorded a refusal as a delivery"
 
 
-def test_inspect_schema_licensed_succeeds() -> None:
+def test_inspect_schema_retrieved_tables_succeeds() -> None:
     payload, update = _call(_tools()["inspect_schema"], table_id="sales.customers")
     assert "sales.customers" in payload
     assert "physical_type" in payload
@@ -223,7 +223,7 @@ def test_read_body_records_delivery_and_hash_changes_with_payload() -> None:
     assert delivery_hash_for("a" * 64, d1) == h1
 
 
-def test_run_query_blocks_unlicensed_table(tmp_path: Path) -> None:
+def test_run_query_blocks_not_retrieved_table(tmp_path: Path) -> None:
     db = tmp_path / "t.db"
     conn = sqlite3.connect(db)
     conn.execute("CREATE TABLE customers (id INTEGER, name TEXT)")
@@ -234,7 +234,7 @@ def test_run_query_blocks_unlicensed_table(tmp_path: Path) -> None:
     from governed_bi.datasource.sqlite import SqliteConnector
 
     connector = SqliteConnector(db)
-    tools = _tools(_state(licensed=["sales.other"]), _config(connector=connector))
+    tools = _tools(_state(retrieved_tables=["sales.other"]), _config(connector=connector))
     out, update = _call(tools["run_query"], sql="SELECT id FROM customers")
     assert "refused" in out.lower() or "not" in out.lower()
     assert "attempt 1 of" in out, f"the model cannot see the budget: {out!r}"
@@ -254,7 +254,7 @@ def test_run_query_attempt_cap(tmp_path: Path) -> None:
     connector = SqliteConnector(db)
     policy = GovernancePolicy(guard_rules_enabled={}, run_query_attempt_cap=2)
     tools = _tools(
-        _state(licensed=["main.customers", "customers"]),
+        _state(retrieved_tables=["main.customers", "customers"]),
         _config(connector=connector, policy=policy),
     )
     # Force failures that still count as attempts. Distinct call ids, because the cap is now
@@ -354,16 +354,16 @@ def test_a_checker_that_raises_is_recorded_rather_than_returned_as_a_string() ->
     """Audit C1 — the worst measurement defect found, and the one with no coverage at all.
 
     An exception escaping ``prepare()`` was caught on the tool surface, refunded, and handed to
-    the model as a string with **no ledger row**. ``stamp`` reads an empty ledger as "answered
+    the model as a string with **no ledger row**. ``finish`` reads an empty ledger as "answered
     from the delivered context", so the turn recorded ``outcome: answered``,
-    ``guardrail_errors: 0``, every quotability gate green, and ``generated_sql`` holding a
+    ``guardrail_errors: 0``, every quotability check green, and ``generated_sql`` holding a
     statement that never reached ``prepare()``. A systematically broken ``check()`` presented as
-    a clean, quotable arm.
+    a clean, quotable config.
 
     The escape is reached the way it happens in production: a malformed key in the corpus.
     ``check()`` normalises its key arguments *outside* its own ``try`` on purpose
     (the ``normalise_*_key`` block above ``check()``'s own ``try``) — "a security parameter was
-    not wired up" must not become a blocked verdict — and ``normalise_column_key`` raises
+    not wired up" must not become a blocked result — and ``normalise_column_key`` raises
     ``ValueError`` on a four-part key. The governance side is right; the recording side had
     nowhere for the raise to land.
 
@@ -384,7 +384,7 @@ def test_a_checker_that_raises_is_recorded_rather_than_returned_as_a_string() ->
 
     rows = list((update.get("attempts_by_call") or {}).values())
     assert rows, (
-        f"the checker raised and nothing was recorded: {out!r}. An empty ledger is what stamp "
+        f"the checker raised and nothing was recorded: {out!r}. An empty ledger is what finish "
         "reads as 'answered from context', so this turn would be quotable and wrong."
     )
     assert rows[0]["reason_code"] == GUARDRAIL_ERROR
@@ -393,7 +393,7 @@ def test_a_checker_that_raises_is_recorded_rather_than_returned_as_a_string() ->
 
     execution = execution_from_attempts(rows)
     assert execution["guardrail_errors"] == 1, (
-        "the failure is not countable, so the `guardrail_errors == 0` quotability gate cannot "
+        "the failure is not countable, so the `guardrail_errors == 0` quotability check cannot "
         "see it"
     )
 
@@ -436,7 +436,7 @@ def test_ask_user_interrupt_and_resume() -> None:
         "prompt_set_hash": "p",
         "knobs_resolved": {},
         "n_re_served": 0,
-        "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "channel_route_hits": [("channel_schema", "sales", 1.0)],
         "messages": [],
         "usage": [],
         "clarifications": [],
@@ -503,8 +503,8 @@ def test_the_ledger_survives_the_interrupt() -> None:
         "question": "revenue?", "thread_id": "t-ledger", "turn_index": 1,
         "turn_id": "turn-ledger", "run_id": "r", "question_id": "q", "db_id": "sales",
         "attempt_id": "a", "corpus_content_hash": "c", "prompt_set_hash": "p",
-        "knobs_resolved": {}, "n_re_served": 0, "licensed": ["sales.customers"],
-        "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "knobs_resolved": {}, "n_re_served": 0, "retrieved_tables": ["sales.customers"],
+        "channel_route_hits": [("channel_schema", "sales", 1.0)],
         "messages": [], "usage": [],
     }
 
@@ -525,7 +525,7 @@ def test_the_ledger_survives_the_interrupt() -> None:
         f"terminal={execution.get('terminal')!r} on a turn that attempted a statement"
     )
     # The ledger is checkpointed now, so its rows have to be serialisable *without* a
-    # `default=str` escape hatch. They were not: `verdict_layer` held a `Layer` enum, and
+    # `default=str` escape hatch. They were not: `result_layer` held a `Layer` enum, and
     # LangGraph's serde said so out loud -- "Deserializing unregistered type
     # governed_bi.govern.layers.Layer from checkpoint. This will be blocked in a future
     # version." A row a future LangGraph refuses to load is a ledger that stops existing on
@@ -603,7 +603,7 @@ def _clarify_turn(*, thread: str, turn: str) -> dict[str, Any]:
         "question": "revenue?", "thread_id": thread, "turn_index": 1, "turn_id": turn,
         "run_id": "r", "question_id": "q", "db_id": "sales", "attempt_id": "a",
         "corpus_content_hash": "c", "prompt_set_hash": "p", "knobs_resolved": {},
-        "n_re_served": 0, "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "n_re_served": 0, "channel_route_hits": [("channel_schema", "sales", 1.0)],
         "messages": [], "usage": [], "clarifications": [],
     }
 

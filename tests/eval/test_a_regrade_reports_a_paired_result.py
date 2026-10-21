@@ -55,7 +55,7 @@ def test_a_row_the_regrade_cannot_judge_is_not_counted_as_wrong() -> None:
         "the unjudgeable row was counted as wrong, which is how a regrade invents a 25-point "
         f"improvement:\n{out}"
     )
-    assert "not measured" in out, f"an absent verdict must read as unmeasured:\n{out}"
+    assert "not measured" in out, f"an absent result must read as unmeasured:\n{out}"
     assert "unmeasured: 1 row" in out, f"the count must be stated, not implied:\n{out}"
 
 

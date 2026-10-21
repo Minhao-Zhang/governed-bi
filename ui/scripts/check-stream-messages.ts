@@ -271,7 +271,7 @@ const turnRow = (opts: {
   question: string;
   answerText: string;
   outcome?: string | null;
-  /** The 1-based question number the record states, via its usage rows (see `stamp`). */
+  /** The 1-based question number the record states, via its usage rows (see `finish`). */
   turnIndex?: number;
 }) => ({
   asked_at: "2026-08-18T00:00:00+00:00",

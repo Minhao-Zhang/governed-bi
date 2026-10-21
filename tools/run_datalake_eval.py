@@ -2,7 +2,7 @@
 
     uv run --frozen python tools/run_datalake_eval.py --workers 2 --effort xhigh --resume
 
-In ``tools/`` rather than a scratchpad because the 1 351-question arm takes hours: it will be
+In ``tools/`` rather than a scratchpad because the 1 351-question config takes hours: it will be
 interrupted, resumed, and re-read by someone who did not start it.
 
 Three properties the earlier scratchpad driver lacked, each of which cost a run:
@@ -12,7 +12,7 @@ Three properties the earlier scratchpad driver lacked, each of which cost a run:
 * **``--resume`` keeps what was measured and *retries what crashed*.** A crashed row is not a
   measurement, so skipping it bakes a permanent hole into the artifact and computes the final
   score over a denominator that silently included it.
-* **Concurrency is bounded and declared.** ``--workers`` maps to ``harness.run_arm(workers=...)``,
+* **Concurrency is bounded and declared.** ``--workers`` maps to ``harness.run_config(workers=...)``,
   which gives each thread its own graph and connector. Default 2: three workers at ``xhigh``
   lost 30 of the first 194 questions to ``RateLimitError`` against a 500 k TPM ceiling, and a
   429 raised inside a node is caught by the graph wrapper and marked ``crashed`` — a lost
@@ -54,7 +54,7 @@ def apply_served_model_defaults(args: argparse.Namespace) -> None:
     An explicit flag wins, including ``--effort ''`` which means no reasoning effort.
     The settings module is the only place a default model id lives.
     """
-    from governed_bi.register.knobs import effective_settings
+    from governed_bi.registry.settings import effective_settings
 
     settings = effective_settings()
     if not args.model:
@@ -72,11 +72,11 @@ def apply_served_utility_default(args: argparse.Namespace) -> str | None:
 
     The served app builds its utility model from ``GOVERNED_BI_UTILITY_MODEL`` and
     ``GOVERNED_BI_UTILITY_MODEL_EFFORT`` (``api/graph_app.py``); without this the driver reused
-    the agent model and effort for the scope gate and the facet rewriters, so an arm meant to
+    the agent model and effort for the scope check and the channel rewriters, so a config meant to
     measure the shipped config measured a different one. An explicit flag always wins. Returns
     the variable the model came from, or ``None`` when nothing was filled.
     """
-    from governed_bi.register.knobs import effective_settings
+    from governed_bi.registry.settings import effective_settings
 
     if args.utility_model:
         return None
@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--utility-model",
         default=None,
-        help="separate model id for the guard's scope gate and the facet rewriters. Defaults to "
+        help="separate model id for the guard's scope check and the retrieval-channel rewriters. Defaults to "
         "the settings module, then to --model.",
     )
     parser.add_argument(
@@ -136,9 +136,9 @@ def main(argv: list[str] | None = None) -> int:
         help="turn on the declared abstention policy (abstention_policy_enabled, ADR 0013). "
         "This is not an observer: it decides, before the agent spends a "
         "run_query attempt, whether the turn should be answered, so EX and coverage both move "
-        "and the arm is only readable against an unabstained pair. Costs no model call. It is a "
-        "comparability knob and enters the artifact tag, because an abstaining arm and a "
-        "committing one are two arms -- and a resume that merged them would report the "
+        "and the config is only readable against an unabstained pair. Costs no model call. It is a "
+        "comparability setting and enters the artifact tag, because an abstaining config and a "
+        "committing one are two configs -- and a resume that merged them would report the "
         "coverage of one with the accuracy of the other.",
     )
     parser.add_argument("--workers", type=int, default=2)
@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="build the index with an embedder. Costs ~420k embedding tokens (about $0.01) "
         "and raises the gold-table-coverage ceiling by an amount whose measurement is "
-        "retired. Off by default so the lexical arm stays the reproducible baseline.",
+        "retired. Off by default so the lexical config stays the reproducible baseline.",
     )
     parser.add_argument(
         "--timeout",
@@ -183,10 +183,10 @@ def main(argv: list[str] | None = None) -> int:
         type=pathlib.Path,
         default=None,
         help="a prior run's JSONL whose `schemas` shortlist this run reuses instead of routing "
-        "for itself. `route` is deterministic, but the four facet rewriters above it are model "
+        "for itself. `route` is deterministic, but the four retrieval-channel rewriters above it are model "
         "calls, so an unpinned A/B cannot tell its own effect from a shortlist that moved. "
         "Pass two still re-searches inside the pinned schemas -- the residual is measured and "
-        "printed as licensed drift, not assumed away.",
+        "printed as retrieved-table drift, not assumed away.",
     )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
@@ -202,19 +202,19 @@ def main(argv: list[str] | None = None) -> int:
         "--truncate",
         action="store_true",
         help="DESTRUCTIVE. Discard the artifact at --out and start over. This is the only flag "
-        "that deletes a measured run, and an arm on this dataset is hours of paid model calls, "
+        "that deletes a measured run, and a config on this dataset is hours of paid model calls, "
         "so it is separate from --force-fresh (which for a while did this silently) and it "
         "prints the row count it is discarding first. Contradicts --resume.",
     )
     parser.add_argument(
-        "--arm",
+        "--config",
         default=None,
-        help="the arm this run is, by name, from register/arms.toml. Naming it makes the "
-        "committed claim about what this arm changed checkable against what the run records: "
+        help="the config this run is, by name, from registry/configs.toml. Naming it makes the "
+        "committed claim about what this config changed checkable against what the run records: "
         "the declared corpus is reconciled against the session's corpus_content_hash BEFORE "
         "the first paid question, and every row is reconciled again in the report. Unnamed "
         "runs are still allowed and are simply unreconciled -- but a comparison against an "
-        "arm with no profile is `cannot_evaluate`, by audit D9.",
+        "config with no profile is `cannot_evaluate`, by audit D9.",
     )
     args = parser.parse_args(argv)
 
@@ -253,21 +253,21 @@ def main(argv: list[str] | None = None) -> int:
         print("no database credential reachable", file=sys.stderr)
         return 2
 
-    # The profile is loaded *before* the models are built, so a typo in --arm or a malformed
-    # arms.toml costs nothing. `arm_profile` raises on an unknown name rather than returning an
+    # The profile is loaded *before* the models are built, so a typo in --config or a malformed
+    # configs.toml costs nothing. `config_profile` raises on an unknown name rather than returning an
     # empty treatment, which is the whole point of the file.
     profile = None
-    if args.arm:
-        from governed_bi.register.arm_profiles import arm_profile
+    if args.config:
+        from governed_bi.registry.config_profiles import config_profile
 
         try:
-            profile = arm_profile(args.arm)
+            profile = config_profile(args.config)
         except (KeyError, OSError, ValueError) as err:
-            print(f"--arm: {err}", file=sys.stderr)
+            print(f"--config: {err}", file=sys.stderr)
             return 2
 
     from governed_bi.datasource.postgres import PostgresConnector
-    from governed_bi.eval.arms import live_arm
+    from governed_bi.eval.configs import live_config
     from governed_bi.eval.datalake import (
         attach_gold_fingerprints,
         attach_quality_flags,
@@ -276,18 +276,18 @@ def main(argv: list[str] | None = None) -> int:
         load_questions,
         table_coverage,
     )
-    from governed_bi.eval.harness import run_arm
+    from governed_bi.eval.harness import run_config
     from governed_bi.eval.provenance import (
         append_refusal,
-        arm_power_refusal,
-        arm_startup_refusal,
-        harness_knobs,
+        config_power_refusal,
+        config_startup_refusal,
+        harness_settings,
         resume_identity_problem,
         scope_identity,
         truncation_notice,
     )
     from governed_bi.govern.policy import GovernancePolicy
-    from governed_bi.register.knobs import env_override as _knobs_env_override
+    from governed_bi.registry.settings import env_override as _settings_env_override
     from governed_bi.serve import session as session_mod
 
     model, utility_model, embedder, vector_cache = _build_models(args)
@@ -295,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     # One connector for the session and the graph; each worker gets its own below.
     # `utility_model` is passed only when there is one: `session` writes `llm_utility_model`
     # from the agent model when it is absent, and "shared one model" and "split them" are two
-    # treatments that must not resolve to the same knob set.
+    # treatments that must not resolve to the same setting set.
     session_kwargs: dict = {
         "connector": PostgresConnector(dsn),
         "policy": GovernancePolicy(guard_rules_enabled={}),
@@ -306,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     if utility_model is not None:
         session_kwargs["utility_model"] = utility_model
     if args.prompt_variant:
-        from governed_bi.register.prompts import select
+        from governed_bi.registry.prompts import select
 
         variants = dict(pair.split("=", 1) for pair in args.prompt_variant)
         # `select` raises on an unknown prompt *or* an unknown variant, here rather than three
@@ -334,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
     # corpus that is not v4's is a mislabelled artifact, and mislabelled artifacts are how a
     # number ends up quoted against the wrong treatment.
     if profile is not None:
-        print(f"arm {profile.name}: {profile.description}", flush=True)
+        print(f"config {profile.name}: {profile.description}", flush=True)
         if profile.compare_to:
             print(f"  compares against: {profile.compare_to}", flush=True)
         if profile.notes:
@@ -361,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     # ends up unchecked. This is still ahead of everything that costs or destroys anything --
     # `append_refusal` and `--truncate` are below, and the first paid question is far below.
     #
-    # Until this line existed the pre-flight passed the corpus alone, so `--arm v4` against a
+    # Until this line existed the pre-flight passed the corpus alone, so `--config v4` against a
     # different `--dataset` agreed with the profile on everything compared and was caught at
     # *report* time, over the finished artifact, which is after the money is spent. The two keys
     # go in one mapping with no `knobs_resolved`, which is the shape `recorded_question_subset`
@@ -372,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
     # exactly the value the rows will carry, and the only way to guarantee that is to derive it
     # from the same function on the same three arguments.
     if profile is not None:
-        mislabelled = arm_startup_refusal(
+        mislabelled = config_startup_refusal(
             profile,
             {
                 "corpus_content_hash": session.corpus_content_hash,
@@ -381,19 +381,19 @@ def main(argv: list[str] | None = None) -> int:
                     question_ids=covered_qids,
                     dataset_file=dataset_file,
                 )["question_subset"],
-                # The one comparability knob that names the *treatment*: measured 2026-08-23, not
-                # one of the other 50 contains "corpus", so an arm whose treatment is the corpus
-                # could not declare it and `arm_profiles.reconcile` returned agreement.
+                # The one comparability setting that names the *treatment*: measured 2026-08-23, not
+                # one of the other 50 contains "corpus", so a config whose treatment is the corpus
+                # could not declare it and `config_profiles.reconcile` returned agreement.
                 #
-                # **Flat, not nested under `knobs_resolved`.** A real row carries it in the knob
+                # **Flat, not nested under `knobs_resolved`.** A real row carries it in the setting
                 # mapping and `recorded_corpus_release` reads it from there; this identity is not a
                 # row, and putting a nested mapping here is how the question-set check went vacuous
-                # once already -- `recorded_question_subset` looks in the knob mapping first. The
+                # once already -- `recorded_question_subset` looks in the setting mapping first. The
                 # top-level fallback exists for this caller.
                 #
                 # `None` means this run declined to name a release, which `reconcile` reads as "did
-                # not say" rather than as a mismatch: every arm on disk predates the knob.
-                "corpus_release": _knobs_env_override("corpus_release") or None,
+                # not say" rather than as a mismatch: every config on disk predates the setting.
+                "corpus_release": _settings_env_override("corpus_release") or None,
             },
         )
         if mislabelled:
@@ -402,29 +402,29 @@ def main(argv: list[str] | None = None) -> int:
 
         # Power, asked here for the same reason the label is: before the first paid question is the
         # only point where refusing costs nothing. Silent unless the profile declares a hypothesis
-        # -- every arm on disk predates the field, and inventing one so the gate has something to
-        # check would put this file's number into somebody's later quotation of the arm's.
-        underpowered = arm_power_refusal(profile, len(covered_qids))
+        # -- every config on disk predates the field, and inventing one so the check has something to
+        # check would put this file's number into somebody's later quotation of the config's.
+        underpowered = config_power_refusal(profile, len(covered_qids))
         if underpowered:
             print(underpowered, file=sys.stderr)
             return 5
 
-    # The retrieval channel is in the tag because it is an arm, not a detail: lexical and
+    # The retrieval channel is in the tag because it is a config, not a detail: lexical and
     # embedded runs have different coverage ceilings, so a tag that hid which one ran would
     # let two incomparable runs read as replicates.
     # The prompt selection belongs in the tag for exactly the reason the retrieval channel
     # does, and more sharply: an A/B differing *only* in --prompt-variant would otherwise
-    # auto-name both arms to one path, and --resume would read the first arm's rows as this
+    # auto-name both configs to one path, and --resume would read the first config's rows as this
     # one's and skip the questions. Two treatments, one artifact, no error anywhere.
     variant_tag = "".join(
         f"_{pair.replace('=', '')}" for pair in sorted(args.prompt_variant or ())
     )
     # The abstention policy moves
     # *coverage*, so a resume that merged an abstaining run into a committing artifact would
-    # report one arm's delivered set with the other's declines and every selective-accuracy
+    # report one config's delivered set with the other's declines and every selective-accuracy
     # figure over the file would be a blend of two operating points.
     abstain_tag = "_abstain" if args.abstain else ""
-    # A pinned arm and an unpinned one are two treatments: v3-fold vs v4 is discordant on 9.3%
+    # A pinned config and an unpinned one are two treatments: v3-fold vs v4 is discordant on 9.3%
     # of questions with the pin and 12.7% without it, which is the difference between an MDE of
     # 2.3pp and 2.7pp (`measure.stats.mde`, n=1351). It was the one treatment input with no tag
     # segment and no readable row, so `--resume` could merge a pinned run into an unpinned one.
@@ -479,13 +479,13 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 4
 
-    # Per-question knob overrides, composed into one dict. Two separate blocks each writing
+    # Per-question setting overrides, composed into one dict. Two separate blocks each writing
     # `knobs_resolved` would mean the second silently dropped the first's override, which is the
     # defect `Session.turn` already caused once for `--top-n`.
     #
     # Built here rather than after the resume block, because the resume guard compares the
-    # artifact's recorded comparability knobs against the ones this run is about to write.
-    knob_overrides: dict[str, Any] = harness_knobs(
+    # artifact's recorded comparability settings against the ones this run is about to write.
+    setting_overrides: dict[str, Any] = harness_settings(
         repo=REPO,
         schemas=schemas,
         question_ids=covered_qids,
@@ -493,15 +493,15 @@ def main(argv: list[str] | None = None) -> int:
         serve_workers=args.workers,
     )
     if args.top_n is not None:
-        knob_overrides["route_top_n"] = args.top_n
+        setting_overrides["route_top_n"] = args.top_n
     if args.abstain:
-        knob_overrides["abstention_policy_enabled"] = True
-    run_knobs = {**session.knobs_resolved, **knob_overrides}
+        setting_overrides["abstention_policy_enabled"] = True
+    run_settings = {**session.knobs_resolved, **setting_overrides}
 
     done: set[str] = set()
     retrying = 0
     if args.resume and out_path.exists():
-        from governed_bi.register.knobs import knob_names
+        from governed_bi.registry.settings import setting_names
 
         kept_lines: list[str] = []
         kept_rows: list[dict] = []
@@ -523,8 +523,8 @@ def main(argv: list[str] | None = None) -> int:
             kept_rows,
             corpus_content_hash=session.corpus_content_hash,
             prompt_set_hash=session.prompt_set_hash,
-            knobs_resolved=run_knobs,
-            comparability=knob_names(),
+            knobs_resolved=run_settings,
+            comparability=setting_names(),
             question_ids=covered_qids,
             replay_routing=args.replay_routing is not None,
         )
@@ -545,7 +545,7 @@ def main(argv: list[str] | None = None) -> int:
     # ── what the dataset already knows, and the harness used to ignore ────────────
     #
     # Both files ship with the dataset and had no reader. `attach_gold_fingerprints` supplies the
-    # published digest, without which every oracle-arm row is `correct=None`. `attach_quality_flags`
+    # published digest, without which every oracle-config row is `correct=None`. `attach_quality_flags`
     # marks the questions the dataset warns about, so the headline can be recomputed under a
     # different exclusion policy without paying for the run twice. Both counts are printed: a
     # wiring that silently attaches nothing looks exactly like one that was never called.
@@ -578,21 +578,21 @@ def main(argv: list[str] | None = None) -> int:
             f"routing pinned from {args.replay_routing}: "
             f"{pin_counts['pinned']} pinned, {pin_counts['unpinned']} routed live "
             "(a question the artifact does not cover routes for itself and is counted here, "
-            "because an arm labelled pinned always has some fraction that is not)",
+            "because a config labelled pinned always has some fraction that is not)",
             flush=True,
         )
 
-    # Composed above, applied here: `Session.turn` writes the session's own knobs over the
+    # Composed above, applied here: `Session.turn` writes the session's own settings over the
     # turn, and `harness._turn_knobs` prefers the question's mapping, so this is where the
     # harness half of the identity reaches the row.
     for question in questions:
-        question["knobs_resolved"] = dict(run_knobs)
+        question["knobs_resolved"] = dict(run_settings)
 
     total = len(questions)
     print(
         "harness: "
         + ", ".join(
-            f"{k}={run_knobs[k]}"
+            f"{k}={run_settings[k]}"
             for k in (
                 "git_sha",
                 "working_tree_dirty",
@@ -638,9 +638,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
     try:
-        run_arm(
+        run_config(
             questions,
-            live_arm(session, name=f"live_{tag}"),
+            live_config(session, name=f"live_{tag}"),
             order_sensitive_qids=frozenset(order_sensitive),
             session=session,
             run_id=f"live-{tag}",

@@ -3,7 +3,7 @@
 ``ui/lib/answer-delivery.ts``'s ``REFUSED_BY_SENTENCE`` turns each ``refused_by`` value into one
 plain sentence, for the display mode built for a reader who cannot act on
 ``refused_by: no_schema_matched``. It cannot import
-:data:`~governed_bi.register.stages.REFUSED_BY_TO_STAGE` — the client shares this repository and
+:data:`~governed_bi.registry.stages.REFUSED_BY_TO_STAGE` — the client shares this repository and
 nothing else (ADR 0007) — so the keys are copied by hand.
 
 **This is the arrangement ``tests/api/test_provenance_groups_match_the_register.py`` already
@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from governed_bi.register.stages import CRASH_REFUSED_BY, REFUSED_BY_TO_STAGE
+from governed_bi.registry.stages import CRASH_REFUSED_BY, REFUSED_BY_TO_STAGE
 
 DELIVERY_TS = Path(__file__).resolve().parents[2] / "ui" / "lib" / "answer-delivery.ts"
 
@@ -81,7 +81,7 @@ def test_no_sentence_describes_a_refusal_the_engine_cannot_emit() -> None:
 def test_our_own_faults_are_not_phrased_as_the_readers_data_problem() -> None:
     """``CRASH_REFUSED_BY`` is us, not them, and the sentence has to say so.
 
-    ``register/stages.py`` keeps this separation deliberately — *"Declining on purpose is the
+    ``registry/stages.py`` keeps this separation deliberately — *"Declining on purpose is the
     product working; ``Outcome`` requires it stay apart from our own bugs"* — and it survives all
     the way to the record. It would be undone here by a sentence that sent someone to look at their
     corpus for a crash in ours, so the two crash reasons must own the failure in words.

@@ -1,10 +1,10 @@
 """What the engine's declines would have been worth, over the subset that can be priced.
 
 Separated from :mod:`.selective` because the denominators are different, and this one
-is not the arm. ``open-work.md`` §4.1: of v4's 73 declines, **62 can be priced and 11
+is not the config. ``open-work.md`` §4.1: of v4's 73 declines, **62 can be priced and 11
 cannot** -- the dataset ships no gold fingerprint for those, so what the engine would
 have got is *unknowable*, not zero. Abstention precision is therefore a figure about a
-subset the dataset selected, and quoting it as though the denominator were the arm is
+subset the dataset selected, and quoting it as though the denominator were the config is
 the mistake this module is shaped to prevent.
 
 The shape: :class:`PricedAbstention` stores two populations and no float, and the one
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..register.quantity import Measured
+from ..registry.quantity import Measured
 from .population import Population
 from .selective import DECLINED
 
@@ -124,9 +124,9 @@ class PricedAbstention:
             )
 
     @classmethod
-    def of(cls, arm: Population) -> PricedAbstention:
-        """Split a graded arm into its declines and the priceable subset of them."""
-        declined = arm.restrict(lambda r: r.get("outcome") in DECLINED, "declined turns only")
+    def of(cls, config: Population) -> PricedAbstention:
+        """Split a graded config into its declines and the priceable subset of them."""
+        declined = config.restrict(lambda r: r.get("outcome") in DECLINED, "declined turns only")
         return cls(
             declined=declined,
             priced=declined.restrict(

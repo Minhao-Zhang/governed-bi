@@ -6,7 +6,7 @@ attempt ended in a swallowed exception inside ``check()`` recorded ``outcome: re
 value as a turn the layer stack legitimately objected to.
 
 ``govern.layers.GUARDRAIL_ERROR`` had already written down what that costs: *"a systematically
-broken ``check()`` otherwise presents as an arm that refuses everything, with ``crash_rate == 0``
+broken ``check()`` otherwise presents as a config that refuses everything, with ``crash_rate == 0``
 and every register key present."* The count existed (``guardrail_errors``, derived by
 ``execution_from_attempts``) and was gated; ``outcome`` contradicted it, and a reader comparing the
 two fields could not tell which to trust.
@@ -20,15 +20,15 @@ from __future__ import annotations
 from typing import Any
 
 from governed_bi.govern.layers import GUARDRAIL_ERROR, GUARDRAIL_REFUSED_BY
-from governed_bi.register.stages import CRASH_REFUSED_BY, REFUSED_BY_TO_STAGE, Outcome, Stage
+from governed_bi.registry.stages import CRASH_REFUSED_BY, REFUSED_BY_TO_STAGE, Outcome, Stage
 from governed_bi.serve.ledger import execution_from_attempts
-from governed_bi.serve.nodes.stamp import stamp
+from governed_bi.serve.nodes.finish import finish
 
 
 def _attempt(reason_code: str) -> dict[str, Any]:
-    """A failed attempt. ``verdict_layer`` is contextual for a swallowed exception, hence None."""
+    """A failed attempt. ``result_layer`` is contextual for a swallowed exception, hence None."""
     return {
-        "verdict_layer": None if reason_code == GUARDRAIL_ERROR else "TABLES",
+        "result_layer": None if reason_code == GUARDRAIL_ERROR else "TABLES",
         "passed": False,
         "reason_code": reason_code,
         "path": "agent",
@@ -36,9 +36,9 @@ def _attempt(reason_code: str) -> dict[str, Any]:
     }
 
 
-def _stamp(reason_code: str) -> dict[str, Any]:
+def _finish(reason_code: str) -> dict[str, Any]:
     execution = execution_from_attempts([_attempt(reason_code)])
-    out = stamp(
+    out = finish(
         {
             "path_kind": "answered",
             "execution": execution,
@@ -53,7 +53,7 @@ def _stamp(reason_code: str) -> dict[str, Any]:
 
 
 def test_a_swallowed_check_exception_records_as_crashed() -> None:
-    answer = _stamp(GUARDRAIL_ERROR)
+    answer = _finish(GUARDRAIL_ERROR)
 
     assert answer["guardrail_errors"] == 1, "the ledger stopped counting; this test proves nothing"
     assert answer["outcome"] == Outcome.crashed.value, (
@@ -66,7 +66,7 @@ def test_a_swallowed_check_exception_records_as_crashed() -> None:
 
 def test_a_layer_refusal_is_still_a_refusal() -> None:
     """The paired non-firing case: the fix must not turn every failed attempt into a crash."""
-    answer = _stamp("r_table_not_licensed")
+    answer = _finish("r_table_not_retrieved")
 
     assert answer["guardrail_errors"] == 0
     assert answer["outcome"] == Outcome.refused.value
@@ -77,7 +77,7 @@ def test_a_layer_refusal_is_still_a_refusal() -> None:
 def test_the_two_outcomes_are_actually_different() -> None:
     """Guards the pair above against a future change that collapses them again — including one
     that collapses them the *other* way, by making a plain refusal crash too."""
-    assert _stamp(GUARDRAIL_ERROR)["outcome"] != _stamp("r_table_not_licensed")["outcome"]
+    assert _finish(GUARDRAIL_ERROR)["outcome"] != _finish("r_table_not_retrieved")["outcome"]
 
 
 def test_the_crash_vocabulary_carries_the_producer() -> None:

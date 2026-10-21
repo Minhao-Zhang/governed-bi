@@ -8,7 +8,7 @@ import pytest
 
 from governed_bi.corpus.schema import SchemaAsset, TableAsset
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.register.assets import AssetType
+from governed_bi.registry.assets import AssetType
 from governed_bi.retrieve.index import IndexEntry, UnifiedIndex, build_index
 
 SCHEMA_A = "sales_a"

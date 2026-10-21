@@ -1,15 +1,15 @@
 """Facet fan-out nodes (ADR 0005 §2–3).
 
-Five nodes, one per :data:`~governed_bi.register.stages.FACET_STAGES` member.
-Each writes only ``{"facets": {stage_value: FacetResult}}`` so the graph's
-``merge_facets`` reducer can replace by key under concurrent fan-out.
+Five nodes, one per :data:`~governed_bi.registry.stages.CHANNEL_STAGES` member.
+Each writes only ``{"channels": {stage_value: FacetResult}}`` so the graph's
+``merge_channels`` reducer can replace by key under concurrent fan-out.
 
 With a :class:`~governed_bi.retrieve.index.UnifiedIndex` on ``config["configurable"]["index"]``,
-pass one searches each facet's declared channels within
-:data:`~governed_bi.register.facets.FACET_TARGETS` types (top ``candidate_depth``, default 50).
-Without an index hits stay empty so F1 tests injecting ``facet_route_hits`` keep working — but
+pass one searches each channel's declared channels within
+:data:`~governed_bi.registry.channels.CHANNEL_TARGETS` types (top ``candidate_depth``, default 50).
+Without an index hits stay empty so F1 tests injecting ``channel_route_hits`` keep working — but
 ``channels`` then says ``failed``, because reporting ``ran`` for a channel that consulted no
-index is what made the degradation gate inert (ADR 0005 §2.3).
+index is what made the degradation check inert (ADR 0005 §2.3).
 """
 
 from __future__ import annotations
@@ -19,15 +19,15 @@ from typing import Any, Callable, Mapping, Sequence
 
 from langchain_core.runnables import RunnableConfig
 
-from governed_bi.register.facets import (
-    FACET_CHANNELS,
-    FACET_TARGETS,
+from governed_bi.registry.channels import (
+    CHANNEL_TARGETS,
+    DECLARED_CHANNELS,
     SCORING_CHANNELS,
     Channel,
     ChannelState,
     expected_channel_state,
 )
-from governed_bi.register.stages import Stage
+from governed_bi.registry.stages import Stage
 from governed_bi.retrieve.index import UnifiedIndex
 from governed_bi.retrieve.semantic import semantic_search
 from governed_bi.serve.runtime import (
@@ -41,11 +41,11 @@ from governed_bi.serve.runtime import (
 from governed_bi.serve.runtime import configurable as runtime_config
 
 __all__ = [
-    "facet_schema_node",
-    "facet_term_node",
-    "facet_metric_node",
-    "facet_entity_node",
-    "facet_example_node",
+    "channel_schema_node",
+    "channel_term_node",
+    "channel_metric_node",
+    "channel_entity_node",
+    "channel_example_node",
 ]
 
 def _effective_question(state: Mapping[str, Any]) -> str:
@@ -65,17 +65,17 @@ def _channels_for(
     ran: frozenset[Channel],
     observed: Mapping[Channel, ChannelState],
 ) -> dict[str, str]:
-    """What each channel **did** for this facet, against what the table declares.
+    """What each channel **did** for this channel, against what the table declares.
 
     Never :func:`expected_channel_state` verbatim — that reports the configuration, which is
-    the degradation gate's only input. The declaration decides one thing and the observation
-    the other: a channel this facet does not declare is ``not_configured``, **taken from the
+    the degradation check's only input. The declaration decides one thing and the observation
+    the other: a channel this channel does not declare is ``not_configured``, **taken from the
     table** and never from the producer (ADR 0005 §2.3). ``ran`` is collected where the call
     happens, so it cannot claim a channel the code did not reach.
 
     ``observed`` is how a *declared* channel says why it did not run. Without it every such
-    channel read ``failed``, so "this arm wired no embedder" and "the embedder died" were one
-    word, and ``Anomaly.unconfigured`` — declared in ``register/facets.py`` for exactly this —
+    channel read ``failed``, so "this config wired no embedder" and "the embedder died" were one
+    word, and ``Anomaly.unconfigured`` — declared in ``registry/channels.py`` for exactly this —
     was unreachable from the only producer of channel state. Both remain degradation under
     ``is_degraded``; the distinction is diagnostic, and ``pass_two`` still consults only ``ran``.
     """
@@ -93,12 +93,12 @@ def _channels_for(
 
 
 def _hook_name(stage: Stage) -> str:
-    """``facet_schema`` → ``schema`` for ``retrieve_hooks`` lookup."""
-    return stage.value.removeprefix("facet_")
+    """``channel_schema`` → ``schema`` for ``retrieve_hooks`` lookup."""
+    return stage.value.removeprefix("channel_")
 
 
 def _hooked(state: Mapping[str, Any], stage: Stage) -> bool:
-    """Whether a test hook is supplied for this facet.
+    """Whether a test hook is supplied for this channel.
 
     Separate from :func:`_hits_from_hook` because the caller must *branch* on it: "a hook
     returned nothing" and "there is no hook" are different states.
@@ -139,32 +139,32 @@ def _pass_one_hits(
     query_vector: Sequence[float] | None = None,
     query_vector_state: ChannelState = ChannelState.ran,
 ) -> list[dict[str, Any]]:
-    """Top-``depth`` over this facet's target types, on every channel it declares.
+    """Top-``depth`` over this channel's target types, on every channel it declares.
 
     ``ran`` is an out-parameter: every channel this function consults adds itself at the line
     where the consultation happens, which is what lets ``_channels_for`` report the truth rather
     than the configuration.
 
-    The semantic channel must be scored here and not only in pass two: ``facet_example``
-    declares **only** the semantic channel, so without it the past-SQL-example facet retrieves
+    The semantic channel must be scored here and not only in pass two: ``channel_example``
+    declares **only** the semantic channel, so without it the past-SQL-example channel retrieves
     nothing at all.
 
     **The two channels are blended by :func:`~governed_bi.serve.runtime.combine_channels`,
     which owns the scale**, and never by ``max``: BM25-after-saturation starts roughly where
     cosine ends, so ``max`` is a lexical-only rule by construction. The audit that caught it is
     retired (register/citations.py). ``fuse`` renormalises by *active* weight, so an asset missed
-    by one channel is not penalised and a facet declaring one channel does not score structurally
+    by one channel is not penalised and a channel declaring one channel does not score structurally
     below one declaring two.
 
     Raw scores go in. Each pass used to min-max its channels over its own scored population
-    first, which made every facet's favourite score exactly 1.0 however weak it was — see
+    first, which made every channel's favourite score exactly 1.0 however weak it was — see
     :func:`~governed_bi.retrieve.fuse.scale_to_ceiling` (audit I1).
     """
-    declared = FACET_CHANNELS[stage]
+    declared = DECLARED_CHANNELS[stage]
     if not question:
         return []
 
-    targets = FACET_TARGETS[stage]
+    targets = CHANNEL_TARGETS[stage]
     candidate_ids = {
         entry_id
         for entry_id, entry in index.entries.items()
@@ -192,7 +192,7 @@ def _pass_one_hits(
             # substituted vector is just a vector.
             observed[Channel.semantic] = ChannelState.failed
         else:
-            # Marked `ran` from `semantic_search`'s own verdict (it returns `not_configured` when
+            # Marked `ran` from `semantic_search`'s own result (it returns `not_configured` when
             # the index holds no vectors or the query has none), not from this branch having been
             # entered.
             ranked, state = semantic_search(index, query_vector, candidates=candidate_ids or None)
@@ -202,7 +202,7 @@ def _pass_one_hits(
                     if float(score) > 0.0:
                         semantic_scores[str(asset_id)] = float(score)
             else:
-                # Its own verdict, carried to the record rather than flattened to `failed`.
+                # Its own result, carried to the record rather than flattened to `failed`.
                 observed[Channel.semantic] = state
 
     if not candidate_ids:
@@ -215,7 +215,7 @@ def _pass_one_hits(
     # its own scored population was that, quietly: the two passes score different candidate sets,
     # so the same raw pair scaled to two different numbers (audit I1).
 
-    # `fuse` needs this to tell "this facet has no semantic channel" from "the semantic channel
+    # `fuse` needs this to tell "this channel has no semantic channel" from "the semantic channel
     # returned nothing for this asset"; conflating them scores an asset found by both channels
     # below one found by only one. Restricted to `SCORING_CHANNELS` because `ran` also carries
     # `extraction` — the rewriter call — which has no weight to fuse with.
@@ -264,7 +264,7 @@ def _pass_one_hits(
     return hits
 
 
-def _facet_result(
+def _channel_result(
     stage: Stage,
     question: str,
     *,
@@ -272,11 +272,11 @@ def _facet_result(
     ran: frozenset[Channel],
     observed: Mapping[Channel, ChannelState],
 ) -> dict[str, Any]:
-    # One query per facet, always. There is no `max_queries_per_facet` bound because there is
-    # no per-facet fan-out; a real multi-query facet brings its own.
+    # One query per channel, always. There is no `max_queries_per_facet` bound because there is
+    # no per-channel fan-out; a real multi-query channel brings its own.
     queries = [question] if question else []
     return {
-        "facet": stage.value,
+        "channel": stage.value,
         "queries": queries,
         "hits": list(hits) if hits is not None else [],
         "channels": _channels_for(stage, ran, observed),
@@ -292,26 +292,26 @@ async def _rewritten_query(
     spent: list[dict],
     turn_index: Any,
 ) -> str:
-    """The question, restated as search text for this facet. Falls back to the question.
+    """The question, restated as search text for this channel. Falls back to the question.
 
-    Each facet looks for a different kind of object, so each gets its own restatement: a
+    Each channel looks for a different kind of object, so each gets its own restatement: a
     question's wording and a schema summary's wording often share nothing for either channel to
     match on.
 
     ``spent`` is an out-parameter carrying this call's cost — four rewrites are four model calls
-    a turn (``FACET_QUERY_PROMPTS`` has four entries; ``facet_schema`` is the fifth facet node
+    a turn (``CHANNEL_QUERY_PROMPTS`` has four entries; ``channel_schema`` is the fifth channel node
     and returns early above), and a call the ledger does not know about is a turn priced below
     what it spent.
 
     ``Channel.extraction`` is added to ``ran`` **only when a rewrite actually came back**. A
     model that errors or returns nothing falls back to the raw question and the channel reports
-    ``failed``: a fallback that reports as a run is how an arm quietly becomes v1's single-pass
+    ``failed``: a fallback that reports as a run is how a config quietly becomes v1's single-pass
     retrieval while every channel claims to be working (ADR 0005 §2.3). Every failure returns
     the question rather than raising.
     """
-    from governed_bi.register.prompts import FACET_QUERY_PROMPTS, prompt_text
+    from governed_bi.registry.prompts import CHANNEL_QUERY_PROMPTS, prompt_text
 
-    prompt_name = FACET_QUERY_PROMPTS.get(stage.value)
+    prompt_name = CHANNEL_QUERY_PROMPTS.get(stage.value)
     model = runtime_config(config).get("utility_model")
     if not question or prompt_name is None or model is None:
         return question
@@ -348,7 +348,7 @@ def _query_vector(
 ) -> tuple[Sequence[float] | None, ChannelState]:
     """The vector to score against — **of the rewritten query when there is one**.
 
-    The cached ``query_vector`` is the *raw question's*, so a facet that restates the question
+    The cached ``query_vector`` is the *raw question's*, so a channel that restates the question
     and then scores the original's vector has paid for the rewrite and discarded half of it.
     :func:`~governed_bi.serve.runtime.vector_for_query` embeds the rewrite; this function is the
     state/config lookup producing its fallback.
@@ -360,7 +360,7 @@ def _query_vector(
     simply absent and the semantic channel reports ``failed`` however many vectors the index
     holds. ``accept`` writes it into state per turn, so state must win.
 
-    Returns the channel's verdict beside the vector: a rewrite whose embed raised must reach
+    Returns the channel's result beside the vector: a rewrite whose embed raised must reach
     :func:`_pass_one_hits` as ``failed``, not as some other text's vector (audit I7).
     """
     cfg = runtime_config(config)
@@ -370,7 +370,7 @@ def _query_vector(
     )
 
 
-async def _run_facet(
+async def _run_channel(
     state: Mapping[str, Any],
     config: RunnableConfig,
     stage: Stage,
@@ -381,9 +381,9 @@ async def _run_facet(
     #: Declared channels that did not run, with the reason they gave. See `_channels_for`.
     observed: dict[Channel, ChannelState] = {}
     # Filled by the rewriter, appended to the `usage` channel below. A list because that is
-    # the channel's shape and `operator.add` merges the five concurrent facets for free.
+    # the channel's shape and `operator.add` merges the five concurrent channels for free.
     spent: list[dict] = []
-    # `queries` is what the record publishes as "what this facet searched for", so it must be
+    # `queries` is what the record publishes as "what this channel searched for", so it must be
     # the text that actually went to the index.
     query = question
 
@@ -398,12 +398,12 @@ async def _run_facet(
         # rewritten query with the *synchronous* OpenAI client, so calling it directly ran a
         # TLS handshake on the loop. Under `langgraph dev` blockbuster raises `BlockingError`
         # on `socket.connect`, the SDK retries, its `time.sleep` raises too, and
-        # `vector_for_query` swallows the lot as `semantic: failed` — four of five facets
+        # `vector_for_query` swallows the lot as `semantic: failed` — four of five channels
         # degraded on every turn, silently, because a degraded channel is not a failed turn.
         #
         # The sync nodes never showed this: LangGraph runs a `def` node in a worker thread
-        # where blockbuster is not armed. Only the `async def` facets touch the loop, and only
-        # `facet_schema` escaped, because it is the one facet that does not rewrite and so
+        # where blockbuster is not armed. Only the `async def` channels touch the loop, and only
+        # `channel_schema` escaped, because it is the one channel that does not rewrite and so
         # reuses the call-level vector instead of embedding.
         query_vector, query_vector_state = await asyncio.to_thread(
             _query_vector, state, config, query=query, question=question
@@ -420,52 +420,52 @@ async def _run_facet(
             query_vector_state=query_vector_state,
         )
     elif _hooked(state, stage):
-        # An explicit "is a hook supplied for this facet", never a branch keyed on which facets
-        # rewrite. This line's predecessor keyed on `FACET_EXTRACTS` membership, and when ADR
-        # 0011 put every facet inside that set the branch went unreachable and `retrieve_hooks`
-        # died with no test failing. `facet_schema` has since left the set again, so it holds
+        # An explicit "is a hook supplied for this channel", never a branch keyed on which channels
+        # rewrite. This line's predecessor keyed on `CHANNEL_EXTRACTS` membership, and when ADR
+        # 0011 put every channel inside that set the branch went unreachable and `retrieve_hooks`
+        # died with no test failing. `channel_schema` has since left the set again, so it holds
         # four — the same drift arriving from the other direction.
         hits = _hits_from_hook(state, stage, question)
     else:
-        # No index, no hook. `ran` stays empty, so every channel this facet declares reports
+        # No index, no hook. `ran` stays empty, so every channel this channel declares reports
         # `failed` rather than the raw-question fallback passing for a run (ADR 0005 §2.3).
         hits = []
 
     update: dict[str, Any] = {
-        "facets": {
-            stage.value: _facet_result(
+        "channels": {
+            stage.value: _channel_result(
                 stage, query, hits=hits, ran=frozenset(ran), observed=observed
             )
         }
     }
     # Omitted when empty rather than written as `[]`: the reducer is `operator.add`, so both are
-    # no-ops, but leaving the key out keeps "this facet called no model" readable to
+    # no-ops, but leaving the key out keeps "this channel called no model" readable to
     # `rail_observation`, which reads the node's update.
     if spent:
         update["usage"] = spent
     return update
 
 
-async def facet_schema_node(state: dict, config: RunnableConfig) -> dict:
-    """Schema facet: pass one over schema assets when an index is configured."""
-    return await _run_facet(state, config, Stage.facet_schema)
+async def channel_schema_node(state: dict, config: RunnableConfig) -> dict:
+    """Schema channel: pass one over schema assets when an index is configured."""
+    return await _run_channel(state, config, Stage.channel_schema)
 
 
-async def facet_term_node(state: dict, config: RunnableConfig) -> dict:
-    """Term facet: rewritten query + type-scoped pass one when indexed."""
-    return await _run_facet(state, config, Stage.facet_term)
+async def channel_term_node(state: dict, config: RunnableConfig) -> dict:
+    """Term channel: rewritten query + type-scoped pass one when indexed."""
+    return await _run_channel(state, config, Stage.channel_term)
 
 
-async def facet_metric_node(state: dict, config: RunnableConfig) -> dict:
-    """Metric facet: rewritten query + type-scoped pass one when indexed."""
-    return await _run_facet(state, config, Stage.facet_metric)
+async def channel_metric_node(state: dict, config: RunnableConfig) -> dict:
+    """Metric channel: rewritten query + type-scoped pass one when indexed."""
+    return await _run_channel(state, config, Stage.channel_metric)
 
 
-async def facet_entity_node(state: dict, config: RunnableConfig) -> dict:
-    """Entity facet: rewritten query + table/column/join pass one when indexed."""
-    return await _run_facet(state, config, Stage.facet_entity)
+async def channel_entity_node(state: dict, config: RunnableConfig) -> dict:
+    """Entity channel: rewritten query + table/column/join pass one when indexed."""
+    return await _run_channel(state, config, Stage.channel_entity)
 
 
-async def facet_example_node(state: dict, config: RunnableConfig) -> dict:
-    """Example facet: semantic channel only — it declares no lexical channel."""
-    return await _run_facet(state, config, Stage.facet_example)
+async def channel_example_node(state: dict, config: RunnableConfig) -> dict:
+    """Example channel: semantic channel only — it declares no lexical channel."""
+    return await _run_channel(state, config, Stage.channel_example)

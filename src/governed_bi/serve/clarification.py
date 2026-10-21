@@ -89,7 +89,7 @@ def parse_resume(resume: Any, *, why: str, expected_id: str | None = None) -> tu
 
     * ``{answer}`` / ``{choice_id}`` / a bare non-empty string — proceed, ``answered``
     * ``{declined: true}`` — fail closed
-    * ``{deferred: true}`` — proceed under ``why``; row stamped deferred
+    * ``{deferred: true}`` — proceed under ``why``; row written deferred
     * ``{cancelled: true}`` — ranking only, same as decline (fail closed)
 
     Definition "cancel" is UI-only and never reaches here: the client does not resume.
@@ -101,7 +101,7 @@ def parse_resume(resume: Any, *, why: str, expected_id: str | None = None) -> tu
     * ``None`` told it the answer was the literal ``"None"``
     * ``123`` and ``[1, 2, 3]`` became ``"123"`` and ``"[1, 2, 3]"``
 
-    and each was stamped ``resolution: "answered"`` in the record, next to the real ones.
+    and each was written ``resolution: "answered"`` in the record, next to the real ones.
     The turn then proceeded to ``run_query`` on the strength of a reply nobody gave. The
     ``declined`` branch above was already fail-closed, so the two halves of this function
     disagreed about what an uninterpretable payload means; ``malformed`` is the same closure

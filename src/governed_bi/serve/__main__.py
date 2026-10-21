@@ -65,13 +65,13 @@ def _model(name: str, effort: str | None = None) -> Any:
             f"no credential for the openai gateway ({names}); set one in the environment "
             "or .env, or pass --no-model to serve the stub path"
         )
-    from ..register.knobs import knob_default
+    from ..registry.settings import setting_default
 
     return provider_mod.chat_model(
         name,
         surface="agent",
         effort=effort or None,
-        max_output_tokens=int(knob_default("llm_max_output_tokens")),
+        max_output_tokens=int(setting_default("llm_max_output_tokens")),
         tools=True,
     )
 
@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("one of --schema or --corpus-dir is required")
 
     creds = _credentials()
-    from ..register.knobs import effective_settings
+    from ..registry.settings import effective_settings
 
     settings = effective_settings()
     dsn = creds.secret(*creds.PG_DSN_NAMES)
@@ -117,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from ..datasource.postgres import PostgresConnector
     from ..govern.policy import GovernancePolicy
-    from ..register.record import missing_required
+    from ..registry.record import missing_required
     from . import session as session_mod
     from .graph import compile_durable
 

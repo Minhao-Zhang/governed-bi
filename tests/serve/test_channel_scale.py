@@ -9,10 +9,10 @@ different ways.
    than strength and the semantic channel was decorative. (The figure this once quoted, 0 wins in
    32,244 scored documents, is [retired] — ``register/citations.py`` records why it is not usable.
    The ranges above replace it and were measured after the tokenizer changed.)
-2. A min-max over each channel's own scored population within the facet. Commensurate, and
+2. A min-max over each channel's own scored population within the channel. Commensurate, and
    query-relative: the top-scoring document became exactly 1.0 whatever its absolute strength,
-   the weakest became exactly 0.0, and ``route`` **sums those per-facet votes across facets** —
-   so a facet that found nothing convincing voted as loudly as one that found the right table.
+   the weakest became exactly 0.0, and ``route`` **sums those per-channel votes across channels** —
+   so a channel that found nothing convincing voted as loudly as one that found the right table.
    ``tests/retrieve/test_scoring_contract.py`` states the violated property in the design
    holder's own words and tests it one layer below where the division happened.
 3. A fixed ceiling per channel (audit I1), which is what is asserted here. The lexical channel
@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import pytest
 
-from governed_bi.register.assets import AssetType
+from governed_bi.registry.assets import AssetType
 from governed_bi.serve.runtime import channel_scale
 
 QUERY = "customers id email"
@@ -154,15 +154,15 @@ def test_pass_one_compares_the_two_channels_on_a_fixed_scale() -> None:
     ever exercised in. ``max(lexical or 0.0, semantic or 0.0)`` could have been ``min``, or
     ``lexical``, or a constant, and the suite would have stayed green.
     """
-    from governed_bi.register.stages import Stage
-    from governed_bi.serve.nodes.facets import _pass_one_hits
+    from governed_bi.registry.stages import Stage
+    from governed_bi.serve.nodes.channels import _pass_one_hits
 
     index = _index()
     hits = {
         h["asset_id"]: h
         for h in _pass_one_hits(
             index,
-            Stage.facet_entity,
+            Stage.channel_entity,
             QUERY,
             depth=10,
             scale=channel_scale({}),
@@ -174,11 +174,11 @@ def test_pass_one_compares_the_two_channels_on_a_fixed_scale() -> None:
     assert set(hits) == set(DOCS), sorted(hits)
     _assert_the_scale_is_fixed_not_relative(hits["sales.lex_mid"], hits["sales.vector_only"])
 
-    # Only pass one can assert this: it is the pass that ranks within the facet, and `route`
-    # reads the per-facet maximum. A facet whose best evidence is mediocre must say so.
+    # Only pass one can assert this: it is the pass that ranks within the channel, and `route`
+    # reads the per-channel maximum. A channel whose best evidence is mediocre must say so.
     assert max(h["score"] for h in hits.values()) < 0.75, (
-        "this facet's best hit is a 0.627 BM25 and a 0.10 cosine, and it reported near the top "
-        "of the scale; `route` then cannot weigh it against a facet that found the right table"
+        "this retrieval channel's best hit is a 0.627 BM25 and a 0.10 cosine, and it reported near the top "
+        "of the scale; `route` then cannot weigh it against a retrieval channel that found the right table"
     )
 
 
@@ -196,8 +196,8 @@ def test_pass_two_uses_the_same_fixed_scale() -> None:
         state={
             "question": QUERY,
             "knobs_resolved": {},
-            "facets": {
-                "facet_entity": {"facet": "facet_entity", "queries": [QUERY], "hits": []}
+            "channels": {
+                "channel_entity": {"channel": "channel_entity", "queries": [QUERY], "hits": []}
             },
         },
         index=_index(),
@@ -221,15 +221,15 @@ def test_the_two_passes_score_one_asset_identically() -> None:
     together in a single global sort. With a fixed ceiling the pair determines the score, which
     is what makes the two comparable at all.
     """
-    from governed_bi.register.stages import Stage
-    from governed_bi.serve.nodes.facets import _pass_one_hits
+    from governed_bi.registry.stages import Stage
+    from governed_bi.serve.nodes.channels import _pass_one_hits
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 
     index = _index()
     one = {
         h["asset_id"]: h["score"]
         for h in _pass_one_hits(
-            index, Stage.facet_entity, QUERY, depth=10, ran=set(), observed={},
+            index, Stage.channel_entity, QUERY, depth=10, ran=set(), observed={},
             scale=channel_scale({}),
             query_vector=QUERY_VECTOR,
         )
@@ -238,8 +238,8 @@ def test_the_two_passes_score_one_asset_identically() -> None:
         state={
             "question": QUERY,
             "knobs_resolved": {},
-            "facets": {
-                "facet_entity": {"facet": "facet_entity", "queries": [QUERY], "hits": []}
+            "channels": {
+                "channel_entity": {"channel": "channel_entity", "queries": [QUERY], "hits": []}
             },
         },
         index=index,
@@ -256,36 +256,36 @@ def test_the_two_passes_score_one_asset_identically() -> None:
         )
 
 
-def test_a_run_can_move_the_fusion_knobs_and_the_score_follows() -> None:
+def test_a_run_can_move_the_fusion_settings_and_the_score_follows() -> None:
     """Audit I10. All three were read at **import** and no request could move them.
 
     That is not a missing feature, it is a false claim about a run: `w_lexical`, `w_semantic` and
     `semantic_scale_ceiling` are declared ``a recorded setting``, so they enter
-    ``knob_names()`` and ``knobs_resolved``. A run could publish ``w_semantic: 0.9``, move its
+    ``setting_names()`` and ``knobs_resolved``. A run could publish ``w_semantic: 0.9``, move its
     config hash, and score exactly like the default — the inverse of the defect
-    ``register/knobs.py`` opens by describing, and the same shape as the four knobs
+    ``registry/settings.py`` opens by describing, and the same shape as the four settings
     ``tests/serve/test_comparability_knobs.py`` was written for.
 
     Asserted through ``_pass_one_hits`` rather than on ``channel_scale``, because the resolver
     returning the right numbers says nothing about whether the scoring path uses them — which is
-    exactly how the import-time constants survived. Two knob settings, two different scores, on one
+    exactly how the import-time constants survived. Two setting settings, two different scores, on one
     index and one query.
     """
-    from governed_bi.register.stages import Stage
-    from governed_bi.serve.nodes.facets import _pass_one_hits
+    from governed_bi.registry.stages import Stage
+    from governed_bi.serve.nodes.channels import _pass_one_hits
     from governed_bi.serve.runtime import channel_scale
 
     index = _index()
 
-    def score_of(asset_id: str, **knobs) -> float:
+    def score_of(asset_id: str, **settings) -> float:
         hits = {
             h["asset_id"]: h
             for h in _pass_one_hits(
                 index,
-                Stage.facet_entity,
+                Stage.channel_entity,
                 QUERY,
                 depth=10,
-                scale=channel_scale(knobs),
+                scale=channel_scale(settings),
                 ran=set(),
                 observed={},
                 query_vector=QUERY_VECTOR,
@@ -305,5 +305,5 @@ def test_a_run_can_move_the_fusion_knobs_and_the_score_follows() -> None:
     assert lower_ceiling > default, (
         f"lowering the ceiling did not raise a cosine's contribution ({default} -> {lower_ceiling})"
     )
-    # And a knob the turn did not set still resolves from the register.
+    # And a setting the turn did not set still resolves from the register.
     assert channel_scale({}).semantic_ceiling == channel_scale({}).semantic_ceiling

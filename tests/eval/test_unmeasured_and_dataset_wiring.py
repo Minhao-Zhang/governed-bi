@@ -9,8 +9,8 @@ has already paid for once:
   the coercion happened upstream of the guard, so a gold that would not execute was recorded as
   a question the system got wrong.
 * ``gold_result_hashes_<dsn>.jsonl`` and ``leakage_test_qids.json`` ship with the dataset and had
-  no reader. The first is why the grader-ceiling arm measured nothing; the second is 9 of the
-  pooled arm's 1,351 questions being scored despite the dataset flagging them.
+  no reader. The first is why the grader-ceiling config measured nothing; the second is 9 of the
+  pooled config's 1,351 questions being scored despite the dataset flagging them.
 
 The tests that matter most here are the **guards** on the digest wiring. Attaching a published
 digest to an order-sensitive question would turn a fix into a 23-question regression, because
@@ -61,7 +61,7 @@ def test_population_refuses_a_rate_over_an_unmeasured_row() -> None:
         {"question_id": "b", "correct": grade_turn(outcome="answered", pred_columns=["a"],
                                                    pred_rows=[[1]])["correct"]},
     ]
-    measured = Population.of("arm", rows).rate("correct")
+    measured = Population.of("config", rows).rate("correct")
     assert not measured.is_measured
     assert "not a negative one" in measured.why
 
@@ -71,7 +71,7 @@ def _funnel_rows(correct: object) -> list[dict]:
         {
             "question_id": "q1",
             "db_id": "s",
-            "licensed_schemas": ["s"],
+            "retrieved_tables_schemas": ["s"],
             "licensed": ["s.t"],
             "outcome": "answered",
             "correct": correct,
@@ -118,7 +118,7 @@ def _dataset(tmp_path: Path, *, gold_sql: str, **overrides: object) -> Path:
 
 
 def test_the_published_digest_is_attached() -> None:
-    """The plain case: this is what makes the grader-ceiling arm measurable."""
+    """The plain case: this is what makes the grader-ceiling config measurable."""
     gold = 'SELECT "x" FROM "s"."t"'
     questions = [{"question_id": "q1", "gold_sql": gold}]
     counts = attach_gold_fingerprints(
@@ -132,7 +132,7 @@ def test_an_order_sensitive_question_is_never_given_the_sorted_digest() -> None:
     """``hash_lenient`` is ``normalise_result``, which sorts. These questions are graded unsorted.
 
     Attaching it anyway would compare an order-preserving prediction digest against an
-    order-insensitive gold digest and fail every one of them — 23 questions in the pooled arm.
+    order-insensitive gold digest and fail every one of them — 23 questions in the pooled config.
     """
     gold = 'SELECT "x" FROM "s"."t"'
     questions = [{"question_id": "q1", "gold_sql": gold}]

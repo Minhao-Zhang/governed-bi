@@ -60,7 +60,7 @@ def connect(
     # **Sorted, not ``next(iter(...))``.** ``remaining`` holds table-id strings and Python
     # randomises string hashing per process, so the greedy builder started from a different
     # terminal each process and added different (equally minimal) Steiner points -- which go
-    # into ``licensed``, which ``eval.datalake.table_coverage`` reads. Measured on one corpus:
+    # into ``retrieved_tables``, which ``eval.datalake.table_coverage`` reads. Measured on one corpus:
     # one process, coverage delta 0.0000; two processes, 0.6316 vs 0.6228 [retired] on one of
     # 114 questions. Both levels are void; the cross-process gap is the whole finding.
     # ``key=str`` because terminals are ``Hashable``; the sort must be stable, not meaningful.
@@ -98,7 +98,7 @@ def components[T: Hashable](
 ) -> tuple[frozenset[T], ...]:
     """Partition ``nodes`` by which connected component of ``edges`` each one sits in.
 
-    The same graph walk as :func:`connect`, reported as a partition instead of a verdict.
+    The same graph walk as :func:`connect`, reported as a partition instead of a result.
     Needed because ``connect``'s single "no" cannot distinguish a genuinely missing path
     from a terminal set that spans shortlisted schemas and is therefore disconnected *by
     construction* — which is why pooled turns declined ``missing_join_path``. A node with
@@ -162,7 +162,7 @@ def _nearest_path(
     # **Sorted at both traversal points, and both were needed.** ``sources``, ``goals`` and
     # ``adj`` values are sets of table-id strings under per-process hash randomisation, so
     # which equal-length shortest path BFS finds decided which Steiner points landed in
-    # ``licensed``. Sorting only the seed in ``connect`` was measured and did not fix it:
+    # ``retrieved_tables``. Sorting only the seed in ``connect`` was measured and did not fix it:
     # queue order and neighbour order are two more places the tie is broken by hash.
     parent: dict[Hashable, Hashable | None] = {s: None for s in sources}
     queue: deque[Hashable] = deque(sorted(sources, key=str))

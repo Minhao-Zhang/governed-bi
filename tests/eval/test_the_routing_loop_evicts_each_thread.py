@@ -65,7 +65,7 @@ class _FakeGraph:
         return {
             "schemas": ["beer_factory"],
             "retrieved": {"schema_ranking": [("beer_factory", 1.0)]},
-            "licensed": ["beer_factory.customers"],
+            "retrieved_tables": ["beer_factory.customers"],
             "path_kind": "answered",
             "terminal_reason": None,
         }

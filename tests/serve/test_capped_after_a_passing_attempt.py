@@ -2,15 +2,15 @@
 
 **Observed live.** An agent with two passing and two blocked attempts hit the cap and closed
 with *"The query tool reached its execution-attempt limit before returning the winning
-district, so I can't reliably state the result"* — and the record stamped ``outcome:
+district, so I can't reliably state the result"* — and the record wrote ``outcome:
 answered`` beside ``terminal: "answered"``. The user was told nothing and the artifact said
 they had been told the answer.
 
 The cause was an ordering, in two places that had to agree and did:
 ``execution_from_attempts`` tested "did any attempt pass" *before* "did the cap fire", so
-``"capped"`` was unreachable on any turn that had ever succeeded; and ``stamp._path_signals``
+``"capped"`` was unreachable on any turn that had ever succeeded; and ``finish._path_signals``
 read the cap out of a ternary nested inside its own "no attempt passed" branch, so its capped
-arm was unreachable for the same reason. ADR 0006 §5 says the cap **terminates the turn** and
+config was unreachable for the same reason. ADR 0006 §5 says the cap **terminates the turn** and
 that a cap-terminated turn gets its own ``Outcome`` member; an earlier success does not undo
 the termination.
 
@@ -23,14 +23,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY, Outcome
+from governed_bi.registry.stages import ATTEMPT_CAP_REFUSED_BY, Outcome
 from governed_bi.serve.ledger import cap_attempt, execution_from_attempts
-from governed_bi.serve.nodes.stamp import stamp
+from governed_bi.serve.nodes.finish import finish
 
 
 def _attempt(passed: bool, reason_code: str, path: str = "agent") -> dict[str, Any]:
     return {
-        "verdict_layer": None if passed else "TABLES",
+        "result_layer": None if passed else "TABLES",
         "passed": passed,
         "reason_code": reason_code,
         "path": path,
@@ -41,9 +41,9 @@ def _attempt(passed: bool, reason_code: str, path: str = "agent") -> dict[str, A
 #: The live shape: two statements ran, two were blocked, and the cap ended the turn.
 _MIXED = [
     _attempt(True, "passed"),
-    _attempt(False, "r_table_not_licensed"),
+    _attempt(False, "r_table_not_retrieved"),
     _attempt(True, "passed"),
-    _attempt(False, "r_table_not_licensed"),
+    _attempt(False, "r_table_not_retrieved"),
     cap_attempt(),
 ]
 
@@ -61,11 +61,11 @@ def test_a_pass_with_no_cap_row_still_reads_answered() -> None:
 
 
 def test_the_record_of_a_capped_turn_says_capped_not_answered() -> None:
-    """``stamp`` reads the ledger's verdict rather than re-deriving it, so the two cannot
+    """``finish`` reads the ledger's result rather than re-deriving it, so the two cannot
     disagree about the same attempts — which is how ``outcome`` and ``execution.terminal``
     came to contradict each other in the first place."""
     execution = execution_from_attempts(_MIXED)
-    out = stamp(
+    out = finish(
         {
             "path_kind": "answered",
             "execution": execution,
@@ -88,8 +88,8 @@ def test_the_record_of_a_capped_turn_says_capped_not_answered() -> None:
 def test_a_turn_whose_every_attempt_was_blocked_is_still_a_guardrail_refusal() -> None:
     """The branch the cap check now sits in front of. It must keep its own reason: 'the
     guardrails refused everything' and 'the cap ran out' are different engineering problems."""
-    blocked = [_attempt(False, "r_table_not_licensed"), _attempt(False, "r_binding")]
-    out = stamp(
+    blocked = [_attempt(False, "r_table_not_retrieved"), _attempt(False, "r_binding")]
+    out = finish(
         {
             "path_kind": "answered",
             "execution": execution_from_attempts(blocked),
@@ -106,10 +106,10 @@ def test_a_turn_whose_every_attempt_was_blocked_is_still_a_guardrail_refusal() -
 
 def test_a_crashed_turn_does_not_keep_execution_terminal_answered() -> None:
     """``outcome=crashed`` beside ``execution.terminal=answered`` invites readers to treat
-    a failed turn as answered. Stamp rewrites the projected terminal; attempts stay."""
+    a failed turn as answered. Finish rewrites the projected terminal; attempts stay."""
     execution = execution_from_attempts([_attempt(True, "passed")])
     assert execution["terminal"] == "answered"
-    out = stamp(
+    out = finish(
         {
             "path_kind": "crashed",
             "failure": {"stage": "agent_core", "error_type": "TimeoutError"},

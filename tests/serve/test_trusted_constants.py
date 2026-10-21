@@ -183,7 +183,7 @@ def test_model_id_prefers_the_provider_id_over_the_langchain_class_label():
     """``usage[].model`` and ``knobs_resolved["chat_model"]`` are compared, so they must agree.
 
     The usage row asked ``_llm_type`` first and recorded ``"openai-chat"`` for every OpenAI
-    model ever served, while the knob beside it held the real id. One turn reporting two
+    model ever served, while the setting beside it held the real id. One turn reporting two
     different models, on a ``a recorded setting`` field.
     """
     from governed_bi.serve.runtime import model_id
@@ -203,7 +203,7 @@ def test_model_id_prefers_the_provider_id_over_the_langchain_class_label():
     )
 
 
-def test_the_usage_row_and_the_knob_report_the_same_model(
+def test_the_usage_row_and_the_setting_report_the_same_model(
     two_schema_index, two_schema_assets, guard_off_policy
 ):
     """End to end: one turn, one model, one answer to what it was."""
@@ -218,8 +218,8 @@ def test_the_usage_row_and_the_knob_report_the_same_model(
 
     model: Any = Named(responses=[AIMessage(content="one sensor")])
     # Through `from_assets`, not by constructing `Session` directly: `chat_model` is set
-    # there, and the property under test is that the two writers agree. The knob used to be
-    # spelled `llm_model`, which `KNOB_REGISTER` never declared.
+    # there, and the property under test is that the two writers agree. The setting used to be
+    # spelled `llm_model`, which `SETTING_REGISTER` never declared.
     session = from_assets(
         list(two_schema_assets.values()), connector=None, policy=guard_off_policy,
         db_id="ops_b", corpus_content_hash_="c", agent_model=model,
@@ -242,7 +242,7 @@ def test_the_usage_row_and_the_knob_report_the_same_model(
 #
 # `trust()` above closes `configurable`. It was the only one closed. `langgraph_api` forwards
 # the client's `input` dict to the graph unfiltered, `PER_TURN_RESET` does not clear
-# `TEST_HOOKS`, and `int_knob` reads state before `knobs_resolved` -- so a request could set
+# `TEST_HOOKS`, and `int_setting` reads state before `knobs_resolved` -- so a request could set
 # its own `route_top_n` and the record would then publish the default it did not use.
 
 
@@ -263,7 +263,7 @@ def _stop_at(seen: dict) -> Any:
     return accept
 
 
-def test_a_request_cannot_write_a_knob_into_graph_state():
+def test_a_request_cannot_write_a_setting_into_graph_state():
     """The served graph declares `input_schema`, so undeclared keys never enter state.
 
     Dropped at the entry rather than policed: an allowlist has to be maintained against every

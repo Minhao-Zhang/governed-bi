@@ -16,9 +16,9 @@ from governed_bi.corpus.introspect import (
 )
 from governed_bi.corpus.seed import fit_summary, seed
 from governed_bi.corpus.validate import problems_with
-from governed_bi.register.knobs import knob_default
+from governed_bi.registry.settings import setting_default
 
-CAP = int(knob_default("summary_max_chars"))
+CAP = int(setting_default("summary_max_chars"))
 
 
 def _wide_table(name: str, columns: int) -> IntrospectedTable:

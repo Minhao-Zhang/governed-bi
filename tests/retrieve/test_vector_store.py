@@ -52,7 +52,7 @@ CORPUS: list[tuple[str, str]] = [
 
 
 def _entries(corpus: list[tuple[str, str]] | None = None) -> list:
-    from governed_bi.register.assets import AssetType
+    from governed_bi.registry.assets import AssetType
     from governed_bi.retrieve.index import IndexEntry
 
     return [
@@ -216,7 +216,7 @@ def test_ties_break_by_asset_id_and_not_by_insertion_order() -> None:
     a reopen, and different for two indexes built from the same assets in a different order.
     The contract is that two runs over one index cannot disagree, so the sort is redone in
     Python. Built in descending id order, so a store that leaked its own order would fail."""
-    from governed_bi.register.facets import ChannelState
+    from governed_bi.registry.channels import ChannelState
     from governed_bi.retrieve.semantic import semantic_search
 
     shared = "identical summary shared by every one of these assets"
@@ -239,7 +239,7 @@ def test_an_empty_candidate_set_ran_and_an_unconfigured_channel_did_not() -> Non
     "the channel found nothing" and "the channel was never wired up" became one observation,
     which is the shape half this repository's retired numbers have.
     """
-    from governed_bi.register.facets import ChannelState
+    from governed_bi.registry.channels import ChannelState
     from governed_bi.retrieve.index import build_index
     from governed_bi.retrieve.semantic import semantic_search
 

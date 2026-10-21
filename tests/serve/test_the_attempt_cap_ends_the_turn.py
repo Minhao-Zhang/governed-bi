@@ -1,6 +1,6 @@
 """The attempt cap must end the loop, not just refuse the statement.
 
-**The defect, reproduced before the fix.** ``register/knobs.py`` said "the cap TERMINATES the
+**The defect, reproduced before the fix.** ``registry/settings.py`` said "the cap TERMINATES the
 turn. v1's returned a 'capped' tool message and the agent kept going, burning unbounded
 round-trips against a cap it could never clear" — describing v2. ``run_query`` returned exactly
 that message, in a ``Command`` with no ``goto``, so control went back to the model with one more
@@ -33,7 +33,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from governed_bi.corpus.analyst import for_analyst
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY, Outcome
+from governed_bi.registry.stages import ATTEMPT_CAP_REFUSED_BY, Outcome
 from governed_bi.serve.agent_state import CAP_LEDGER_KEY, AttemptBook
 from governed_bi.serve.graph import compile_graph
 from governed_bi.serve.ledger import answering_attempts
@@ -157,7 +157,7 @@ def _turn_state() -> dict[str, Any]:
         "question": "how many customers",
         "turn_id": "turn-cap",
         "turn_index": 1,
-        "licensed": ["main.customers", "customers"],
+        "retrieved_tables": ["main.customers", "customers"],
         "messages": [],
         "usage": [],
     }
@@ -238,8 +238,8 @@ def test_a_capped_turn_reaches_the_record_as_capped(tmp_path: Path) -> None:
                 "turn_id": f"turn-cap-{turn_index}",
                 "run_id": "r", "question_id": "q", "db_id": "main", "attempt_id": "a",
                 "corpus_content_hash": "c", "prompt_set_hash": "p", "knobs_resolved": {},
-                "n_re_served": 0, "licensed": ["main.customers", "customers"],
-                "facet_route_hits": [("facet_schema", "main", 1.0)],
+                "n_re_served": 0, "retrieved_tables": ["main.customers", "customers"],
+                "channel_route_hits": [("channel_schema", "main", 1.0)],
                 "messages": [], "usage": [], "identity": {"token": "tok"},
             },
             config,
@@ -341,7 +341,7 @@ def test_sampling_a_column_does_not_spend_a_statement(tmp_path: Path) -> None:
     executed, caps = _rows(out)
 
     assert len(executed) == 5, (
-        f"three sample_rows calls left {len(executed)} of 5 statements; the knob is named "
+        f"three sample_rows calls left {len(executed)} of 5 statements; the setting is named "
         "run_query_attempt_cap and sampling is not a run_query attempt"
     )
     assert len(caps) == 1

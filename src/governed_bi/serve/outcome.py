@@ -1,7 +1,7 @@
-"""The channels ``stamp`` reads when it decides what happened to the turn.
+"""The channels ``finish`` reads when it decides what happened to the turn.
 
-The projection's other fields are ``register/record.py``, walked by name, so they
-are not copied here. The derivation stays in ``serve/nodes/stamp.py`` beside that
+The projection's other fields are ``registry/record.py``, walked by name, so they
+are not copied here. The derivation stays in ``serve/nodes/finish.py`` beside that
 projection. The node writes ``answer`` and one ``final`` stage event.
 """
 
@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from governed_bi.govern.ledger import ExecutionRecord
-from governed_bi.register.stages import Outcome
+from governed_bi.registry.stages import Outcome
 from governed_bi.serve.ledger import execution_from_attempts
 from governed_bi.serve.state import cleared
 
@@ -26,26 +26,26 @@ __all__ = [
 #: The three channels :data:`~governed_bi.serve.state.PER_TURN_RESET` writes
 #: :data:`~governed_bi.serve.state.RESET` into, which :func:`normalised` clears before anything
 #: interprets them.
-RESET_NORMALISED: tuple[str, ...] = ("path_kind", "failure", "facets")
+RESET_NORMALISED: tuple[str, ...] = ("path_kind", "failure", "channels")
 
 
 def normalised(state: Mapping[str, Any]) -> dict[str, Any]:
     """``state`` with the reset sentinels turned back into absence.
 
     ``Session.turn`` writes :data:`~governed_bi.serve.state.RESET` to ``path_kind``, ``failure``
-    and ``facets``, and the first two must be normalised before they are read: their annotations
+    and ``channels``, and the first two must be normalised before they are read: their annotations
     are Unions, so the channel seeds ``MISSING`` and LangGraph assigns the first write raw (see
     :func:`~governed_bi.serve.state.cleared`). ``failure`` is the one that bites — a successful
     turn never writes it, so the bare sentinel made ``state.get("failure") is not None`` true on
-    every successful first turn of a fresh thread. ``facets`` strips to ``dict`` and is never at
+    every successful first turn of a fresh thread. ``channels`` strips to ``dict`` and is never at
     risk; it stays in the tuple for symmetry.
 
-    Normalised for ``stamp`` rather than in each reader because ``stamp`` is the only node that
+    Normalised for ``finish`` rather than in each reader because ``finish`` is the only node that
     *interprets* these channels — every other reader compares them against known values, where
     an unrecognised string already behaves as "not terminal".
 
     **Idempotent**, which is what lets :meth:`OutcomeInputs.from_state` call it on its own input
-    while ``stamp`` also calls it for the record projection: :func:`~.state.cleared` maps an
+    while ``finish`` also calls it for the record projection: :func:`~.state.cleared` maps an
     already-cleared value to itself. Two callers, one normalisation, and neither has to trust
     that the other ran first.
     """
@@ -71,14 +71,14 @@ class OutcomeInputs:
 
     Seven: ``path_kind``, ``failure`` (as the three facts anything asks of it), ``generated_sql``
     (as ``has_sql``), ``terminal_reason``, ``guard``, ``clarification_requested``, and
-    ``execution``. The module docstring says why the other 25 of ``stamp``'s 32 reads are not
+    ``execution``. The module docstring says why the other 25 of ``finish``'s 32 reads are not
     here and must not be.
 
     **Every field has a default**, so a test states the two or three facts its case is about
     rather than assembling a turn — the property this seam exists for. Every default is the value
     an absent channel projects to, so ``OutcomeInputs()`` is the unmarked turn: no path, no
     failure, no statement, no ledger. That is the case
-    :func:`~governed_bi.register.stages.classify_outcome` reads as ``crashed``, and it is the
+    :func:`~governed_bi.registry.stages.classify_outcome` reads as ``crashed``, and it is the
     honest reading of a turn nothing observed ending.
 
     Not a ``TypedDict`` beside ``ServeState``: this is a *read* view, so the projection has to
@@ -123,7 +123,7 @@ class OutcomeInputs:
 
         One projection, so there is one answer to "where does ``terminal`` come from". Two
         functions that both knew is the defect this seam is against: a second reader of a channel
-        is where ``measure/gates.py`` came to witness "reached stamp" on
+        is where ``measure/checks.py`` came to witness "reached finish" on
         ``Outcome.clarification`` and silently drop rows from a denominator.
 
         Calls :func:`normalised` on its input, which is idempotent, so the view is right whether
@@ -158,7 +158,7 @@ class OutcomeInputs:
 class TurnOutcome:
     """What the decision concluded — one field per thing the record or the timeline reports.
 
-    ``stamp`` translates this into the ``answer``, the register projection and the ``final``
+    ``finish`` translates this into the ``answer``, the register projection and the ``final``
     stage row; it decides nothing, so no branch of the derivation is reachable only by building
     a turn.
 
@@ -177,10 +177,10 @@ class TurnOutcome:
     #: The exception class, on a crash. ``None`` everywhere else.
     error_type: str | None = None
     #: **System** copy for the answer card — the guard's public message on a refusal, ``None``
-    #: otherwise. Distinct from the model's ``answer_text``, which ``stamp`` copies off state.
+    #: otherwise. Distinct from the model's ``answer_text``, which ``finish`` copies off state.
     text: str | None = None
     #: The ledger as the record should carry it, which is not always the ledger as it arrived:
-    #: ``stamp``'s ``classify_turn`` rewrites ``terminal`` on a crash.
+    #: ``finish``'s ``classify_turn`` rewrites ``terminal`` on a crash.
     execution: Mapping[str, Any] = field(default_factory=dict)
     #: Status for the turn's one ``final`` row.
     rail_status: str = "ok"

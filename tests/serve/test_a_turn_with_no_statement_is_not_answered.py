@@ -8,12 +8,12 @@ said::
     outcome    answered      terminal_reason None      generated_sql None
     execution  {"attempts": [], "terminal": "no_sql", "guardrail_errors": 0}
 
-``stamp._path_signals``'s ``path_kind == "answered"`` branch fell through to
+``finish._path_signals``'s ``path_kind == "answered"`` branch fell through to
 ``return None, None, None, None, True`` — ``has_sql`` **hardcoded**, ``state["generated_sql"]``
 never read — and ``classify_outcome``'s ``if has_sql: return Outcome.answered`` did the rest.
 
 The ``True`` was load-bearing rather than a typo, which is why the fix is a new
-:class:`~governed_bi.register.stages.Outcome` member and not a deleted line: with ``has_sql=False``
+:class:`~governed_bi.registry.stages.Outcome` member and not a deleted line: with ``has_sql=False``
 and no ``refused_by`` the classifier's last line returned ``crashed``, and a turn that produced
 prose is not a crash. So the four tests below are a *pair of pairs*. Two pin the outcome on either
 side of the statement question (:func:`test_a_prose_decline_with_no_statement_is_not_answered`,
@@ -29,8 +29,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from governed_bi.register.stages import Outcome, classify_outcome
-from governed_bi.serve.nodes.stamp import stamp
+from governed_bi.registry.stages import Outcome, classify_outcome
+from governed_bi.serve.nodes.finish import finish
 
 #: The prose from the live turn, verbatim. Not asserted *on* — the fix reads the ledger, never the
 #: text — but carried so a reader can see what the record called an answer.
@@ -41,7 +41,7 @@ DECLINE_PROSE = (
 )
 
 _PASSING_ATTEMPT: dict[str, Any] = {
-    "verdict_layer": None,
+    "result_layer": None,
     "passed": True,
     "reason_code": "passed",
     "path": "agent",
@@ -50,7 +50,7 @@ _PASSING_ATTEMPT: dict[str, Any] = {
 
 
 def _turn(**overrides: Any) -> dict[str, Any]:
-    """The turn as the graph leaves it for ``stamp``: agent loop finished, nothing else set."""
+    """The turn as the graph leaves it for ``finish``: agent loop finished, nothing else set."""
     state: dict[str, Any] = {
         "path_kind": "answered",
         "turn_id": "turn-under-test",
@@ -68,7 +68,7 @@ def test_a_prose_decline_with_no_statement_is_not_answered() -> None:
     the turn ``crashed`` — the other thing the old fall-through was protecting against — fails
     the second line and not the first, and says which of the two went wrong.
     """
-    answer = stamp(
+    answer = finish(
         _turn(
             execution={"attempts": [], "terminal": "no_sql", "guardrail_errors": 0},
             generated_sql=None,
@@ -78,7 +78,7 @@ def test_a_prose_decline_with_no_statement_is_not_answered() -> None:
 
     assert answer["outcome"] != Outcome.answered.value, (
         "a turn that executed no governed statement recorded `answered`. This is the 2026-08-18 "
-        "defect: `stamp._path_signals` hardcodes `has_sql=True` in the `path_kind == 'answered'` "
+        "defect: `finish._path_signals` hardcodes `has_sql=True` in the `path_kind == 'answered'` "
         f"fall-through, so `generated_sql={answer['record']['generated_sql']!r}` and "
         f"`execution.terminal={answer['record']['execution']['terminal']!r}` are ignored and the "
         "UI renders `answered` beside `ledger: no_sql` and `no SQL attempted`"
@@ -101,7 +101,7 @@ def test_a_prose_decline_with_no_statement_is_not_answered() -> None:
 
 def test_a_turn_with_a_governed_statement_is_still_answered() -> None:
     """The paired positive. Without it, "not answered" is satisfiable by never answering."""
-    answer = stamp(
+    answer = finish(
         _turn(
             execution={
                 "attempts": [_PASSING_ATTEMPT],
@@ -141,7 +141,7 @@ def test_the_no_model_stub_records_no_statement_too() -> None:
         "the stub now writes a ledger, so this test no longer covers the absent-ledger case"
     )
 
-    answer = stamp(_turn(**{k: v for k, v in update.items() if k != "messages"}))["answer"]
+    answer = finish(_turn(**{k: v for k, v in update.items() if k != "messages"}))["answer"]
 
     assert answer["outcome"] == Outcome.no_sql.value, (
         f"the stub path recorded {answer['outcome']!r}. `crashed` means the classification is "
@@ -155,11 +155,11 @@ def test_the_no_model_stub_records_no_statement_too() -> None:
     }
 
 
-def test_a_turn_with_no_ledger_verdict_at_all_is_still_a_crash() -> None:
+def test_a_turn_with_no_ledger_result_at_all_is_still_a_crash() -> None:
     """The case the hardcoded ``True`` was protecting, kept protected.
 
     ``classify_outcome`` returns :attr:`Outcome.no_sql` only when the caller hands over the
-    ledger's own verdict. A turn nothing marked and nothing wrote a ledger for has not been
+    ledger's own result. A turn nothing marked and nothing wrote a ledger for has not been
     observed ending, and ``crashed`` is what this repository calls that — collapsing it into
     ``no_sql`` would give every dropped turn a benign name, which is the 2026-07-25 defect
     (a crash counted as a refusal) in the other direction.
@@ -168,20 +168,20 @@ def test_a_turn_with_no_ledger_verdict_at_all_is_still_a_crash() -> None:
         classify_outcome(error=None, refused_by=None, has_sql=False, terminal=None)
         is Outcome.crashed
     )
-    assert stamp(_turn(path_kind=None))["answer"]["outcome"] == Outcome.crashed.value
+    assert finish(_turn(path_kind=None))["answer"]["outcome"] == Outcome.crashed.value
 
 
 def test_a_refusal_outranks_an_empty_ledger() -> None:
     """A guard block carries ``attempts: []``, so its ledger also says ``no_sql``.
 
-    ``register/stages._assert_refusal_tables_are_closed`` asserts this over the whole declared
-    vocabulary at import; this is the end-to-end half, through ``stamp``, because the import guard
-    compares declarations to declarations and never to a stamped turn. If the ledger were consulted
+    ``registry/stages._assert_refusal_tables_are_closed`` asserts this over the whole declared
+    vocabulary at import; this is the end-to-end half, through ``finish``, because the import guard
+    compares declarations to declarations and never to a written turn. If the ledger were consulted
     before ``refused_by``, the refusal would keep its reason and its stage and only ``outcome``
     would stop saying a decision was taken — and ``eval/report.refusal_histogram`` counts
     ``refused`` rows, so the reason would silently leave the histogram.
     """
-    answer = stamp(
+    answer = finish(
         _turn(
             path_kind="refuse",
             terminal_reason="guard",

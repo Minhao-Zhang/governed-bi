@@ -1,21 +1,21 @@
-"""``stamp``'s outcome decision reads seven named channels, and that is written down.
+"""``finish``'s outcome decision reads seven named channels, and that is written down.
 
-**The defect this closes.** ``stamp`` is the node that decides what happened to a turn, and
+**The defect this closes.** ``finish`` is the node that decides what happened to a turn, and
 ``(state, config) -> dict`` says nothing about which of ``ServeState``'s 47 channels it reads,
-which it writes, or what clears them. That is not an abstract complaint: ``measure/gates.py``
-read ``Outcome.clarification`` as a witness of "reached ``stamp``" and silently dropped every row
-carrying the corpus hash out of a gate's denominator. A second reader of a channel, disagreeing
+which it writes, or what clears them. That is not an abstract complaint: ``measure/checks.py``
+read ``Outcome.clarification`` as a witness of "reached ``finish``" and silently dropped every row
+carrying the corpus hash out of a check's denominator. A second reader of a channel, disagreeing
 with the first, in a place nothing pointed at.
 
-**What was measured before anything was moved.** ``stamp`` reads **32** channels *effectively* —
+**What was measured before anything was moved.** ``finish`` reads **32** channels *effectively* —
 delete any one from a populated turn and the emitted record changes — plus ``failure_cause``,
 which arrives through the register fall-through and is not a ``ServeState`` channel at all, so it
 is always null. Method: delete one key at a time from each of 30 turn shapes and compare
 ``json.dumps`` of the output.
 
 **Seven of the 32 are the decision's, and only those are declared.** The other 25 are the
-register's: ``project`` walks ``RECORD_REGISTER`` and asks ``stamp`` for each field by name, so
-that read set already exists in ``register/record.py`` and a dataclass restating it would be a
+register's: ``project`` walks ``RECORD_REGISTER`` and asks ``finish`` for each field by name, so
+that read set already exists in ``registry/record.py`` and a dataclass restating it would be a
 second copy of one declaration. The seam is worth drawing where a *decision* can have two
 readers who disagree. So this file asserts the seven, and asserts that the derivation cannot
 reach anything else — not that the whole node reads seven things, which would be false.
@@ -35,8 +35,8 @@ from typing import Any
 
 import pytest
 
-from governed_bi.register.stages import Outcome
-from governed_bi.serve.nodes.stamp import classify_turn, stamp
+from governed_bi.registry.stages import Outcome
+from governed_bi.serve.nodes.finish import classify_turn, finish
 from governed_bi.serve.outcome import OutcomeInputs, TurnOutcome, normalised
 
 #: The seven channels the outcome decision reads. Asserted against the projection below in both
@@ -75,7 +75,7 @@ def test_the_projection_names_every_channel_the_decision_reads() -> None:
         "execution": PASSED,
         # Present and never read by the decision: every one of these reaches the *record*, and
         # the record is the register's projection, not this view's.
-        "licensed": ["sales.orders"], "schemas": ["sales"], "usage": [], "turn_id": "t-1",
+        "retrieved_tables": ["sales.orders"], "schemas": ["sales"], "usage": [], "turn_id": "t-1",
     }
     assert OutcomeInputs.from_state(state) == OutcomeInputs(
         path_kind="answered",
@@ -108,12 +108,12 @@ def test_an_absent_channel_projects_to_the_field_default() -> None:
     assert classify_turn(OutcomeInputs()).outcome is Outcome.crashed
 
 
-def test_every_declared_channel_changes_a_verdict() -> None:
+def test_every_declared_channel_changes_a_result() -> None:
     """The declaration is not padded: each of the seven moves an outcome on its own.
 
     A read set is only worth writing down if every name in it is load-bearing, and the cheapest
     way for this file to become decoration is for someone to add a field the decision ignores.
-    So one pair per channel, differing in that channel alone, whose verdicts differ.
+    So one pair per channel, differing in that channel alone, whose results differ.
     """
     from dataclasses import replace
 
@@ -131,7 +131,7 @@ def test_every_declared_channel_changes_a_verdict() -> None:
     for channel, change in moves.items():
         moved = replace(base, **change)
         assert classify_turn(moved) != classify_turn(base), (
-            f"{channel} is declared as a decision input and changes no verdict"
+            f"{channel} is declared as a decision input and changes no result"
         )
     # ``guard`` needs the pair one step over: on a refuse it is what separates the two fallback
     # reasons, and nothing else in the view can say which.
@@ -143,17 +143,17 @@ def test_every_declared_channel_changes_a_verdict() -> None:
 # ── the derivation cannot reach a state dict ───────────────────────────────────
 
 
-#: Every function across the two files that takes a state mapping, and what it is for. The gate
+#: Every function across the two files that takes a state mapping, and what it is for. The check
 #: below asserts this is the whole list, so a ninth reader is a decision taken here rather than
 #: one that appears.
 STATE_READERS: dict[str, str] = {
     "normalised": "the decision's projection: clears the three reset sentinels",
     "_execution": "the decision's projection: substitutes a ledger for a turn that wrote none",
     "from_state": "the decision's projection: the one place a channel becomes a named fact",
-    "stamp": "the seam itself, and the two answer-only channels the register does not carry",
+    "finish": "the seam itself, and the two answer-only channels the register does not carry",
     "_usage_for_turn": "the register's: this turn's rows out of an accumulating channel",
     "_latency_sec": "the register's: a derived cost field, from turn_started_at",
-    "_facet_channels": "the register's: one reader for facet_channels and facet_degraded",
+    "_recorded_channels": "the register's: one reader for facet_channels and facet_degraded",
     "extract": "the register's own reader, driven by RECORD_REGISTER field name",
 }
 
@@ -165,11 +165,11 @@ DERIVATION: frozenset[str] = frozenset({
 
 def _trees() -> list[tuple[Path, ast.Module]]:
     from governed_bi.serve import outcome
-    from governed_bi.serve.nodes import stamp as stamp_module
+    from governed_bi.serve.nodes import finish as finish_module
 
     paths = [
         Path(inspect.getsourcefile(module) or "").resolve()
-        for module in (stamp_module, outcome)
+        for module in (finish_module, outcome)
     ]
     assert len(set(paths)) == 2, paths
     return [(p, ast.parse(p.read_text(encoding="utf-8"), filename=str(p))) for p in paths]
@@ -183,9 +183,9 @@ def test_the_derivation_reads_no_state_dict() -> None:
     ``state.get("path_kind")`` cannot creep back in under a local alias. And the functions that
     *do* take a state mapping are exactly :data:`STATE_READERS`, each with a stated job.
 
-    The second half is the honest one. ``abstain``'s equivalent gate can say "one projection and
+    The second half is the honest one. ``abstain``'s equivalent check can say "one projection and
     the adapter"; this one cannot, because four of the readers are the register's and the
-    register is entitled to read the state it declares fields over. What the gate buys is that
+    register is entitled to read the state it declares fields over. What the check buys is that
     the list is a list: a new reader has to be added here, with a reason, and adding one is
     where a second answer to "what happened to this turn" would come from.
     """
@@ -221,7 +221,7 @@ def _channels_looked_up(fn: ast.AST) -> set[str]:
     the refusal *reasons*: ``_path_signals`` writes ``reason = "guard"`` when a blocked guard
     refused the turn, which is a value in the ``refused_by`` vocabulary and not a read of the
     ``guard`` channel. A literal-only check reported it and would have had to be waived by name,
-    which is how a gate stops meaning anything. Matching the lookup instead catches
+    which is how a check stops meaning anything. Matching the lookup instead catches
     ``state.get("guard")`` and ``state["guard"]`` — including through a local alias, since the
     alias is still a mapping — and leaves the vocabulary alone.
     """
@@ -256,7 +256,7 @@ def test_the_seam_normalises_before_it_projects() -> None:
     ``from_state`` normalises its own input, so the view is right whether or not the caller did
     it first, and ``normalised`` is idempotent so the two callers cannot disagree.
     """
-    raw = {"path_kind": "reset", "failure": "reset", "facets": "reset", "execution": PASSED}
+    raw = {"path_kind": "reset", "failure": "reset", "channels": "reset", "execution": PASSED}
     assert OutcomeInputs.from_state(raw) == OutcomeInputs.from_state(normalised(raw))
     assert normalised(normalised(raw)) == normalised(raw)
 
@@ -274,7 +274,7 @@ def test_the_seam_normalises_before_it_projects() -> None:
     assert classify_turn(view).failed_stage is None
 
 
-# ── the verdicts, stated as facts instead of turns ────────────────────────────
+# ── the results, stated as facts instead of turns ────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -324,26 +324,26 @@ def test_the_seam_normalises_before_it_projects() -> None:
         ),
     ],
 )
-def test_the_verdict_for_each_path(
+def test_the_result_for_each_path(
     what: str, inputs: OutcomeInputs, outcome: Outcome, refused_by: str | None, rail_status: str
 ) -> None:
     """One case per path, each stated as the two or three facts it is about.
 
     That is the whole return on this seam, and it is worth being concrete about how small the
-    cases got: a decline used to need a turn dict with identity keys, a ledger and a facet map to
+    cases got: a decline used to need a turn dict with identity keys, a ledger and a channel map to
     be projectable at all, and is now ``OutcomeInputs(path_kind="decline")``. What did **not**
     get smaller is the total, because the projection became worth testing directly — the three
     tests above build state dicts, and the register projection still needs a whole turn. The seam
     relocated the setup; it did not delete it.
 
     ``rail_status`` is asserted here rather than in a stream test because it is carried on the
-    verdict on purpose: a node's effect on the timeline is a claim of its own, and ``declined``
+    result on purpose: a node's effect on the timeline is a claim of its own, and ``declined``
     against ``refused`` is the one distinction :class:`Outcome` has no member for.
     """
-    verdict = classify_turn(inputs)
-    assert verdict.outcome is outcome, what
-    assert verdict.refused_by == refused_by, what
-    assert verdict.rail_status == rail_status, what
+    result = classify_turn(inputs)
+    assert result.outcome is outcome, what
+    assert result.refused_by == refused_by, what
+    assert result.rail_status == rail_status, what
 
 
 def test_a_crash_rewrites_the_ledgers_terminal_and_keeps_its_attempts() -> None:
@@ -354,9 +354,9 @@ def test_a_crash_rewrites_the_ledgers_terminal_and_keeps_its_attempts() -> None:
     mutated under it.
     """
     inputs = OutcomeInputs(path_kind="answered", has_sql=True, failed=True, execution=PASSED)
-    verdict = classify_turn(inputs)
-    assert verdict.execution["terminal"] == "crashed"
-    assert verdict.execution["attempts"] == PASSED["attempts"]
+    result = classify_turn(inputs)
+    assert result.execution["terminal"] == "crashed"
+    assert result.execution["attempts"] == PASSED["attempts"]
     assert inputs.execution["terminal"] == "answered", "the view was mutated"
 
 
@@ -366,7 +366,7 @@ def test_a_malformed_guard_is_only_read_on_the_path_that_asks() -> None:
     ``guard`` is declared ``Absence.never``, so a non-mapping one is a wiring failure. Narrowed
     eagerly in ``from_state`` it would become ``False`` on every turn, and a refusal would then
     be attributed to ``negative_example`` — a wrong reason in place of a loud one. Carried whole,
-    the malformed value reaches only the fallback that asks, which raises, and ``stamp`` is the
+    the malformed value reaches only the fallback that asks, which raises, and ``finish`` is the
     node left unwrapped so the raise is not swallowed.
 
     Both halves: the paths that do not ask are unaffected, and the path that asks fails.
@@ -380,9 +380,9 @@ def test_a_malformed_guard_is_only_read_on_the_path_that_asks() -> None:
 
 
 def test_the_node_still_writes_one_channel_and_one_event() -> None:
-    """The seam changed no interface. ``stamp`` returns ``{"answer": ...}`` and nothing else.
+    """The seam changed no interface. ``finish`` returns ``{"answer": ...}`` and nothing else.
 
-    Asserted on the update rather than inferred from a green turn, and paired with the verdict
+    Asserted on the update rather than inferred from a green turn, and paired with the result
     the derivation reaches for the same state, so "the adapter translates and adds nothing" is a
     property and not a hope.
     """
@@ -391,14 +391,14 @@ def test_the_node_still_writes_one_channel_and_one_event() -> None:
         "answer_text": "42", "result_table": {"columns": ["n"], "rows": [[42]]},
         "turn_index": 1, "usage": [],
     }
-    update = stamp(state)
+    update = finish(state)
     assert set(update) == {"answer"}, update
 
-    verdict = classify_turn(OutcomeInputs.from_state(state))
-    assert isinstance(verdict, TurnOutcome)
-    assert update["answer"]["outcome"] == verdict.outcome.value
-    assert update["answer"]["record"]["execution"] is verdict.execution or (
-        update["answer"]["record"]["execution"] == verdict.execution
+    result = classify_turn(OutcomeInputs.from_state(state))
+    assert isinstance(result, TurnOutcome)
+    assert update["answer"]["outcome"] == result.outcome.value
+    assert update["answer"]["record"]["execution"] is result.execution or (
+        update["answer"]["record"]["execution"] == result.execution
     )
     assert update["answer"]["answer_text"] == "42"
     assert update["answer"]["result_table"] == state["result_table"]

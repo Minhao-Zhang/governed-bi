@@ -96,7 +96,7 @@ def test_an_ambiguous_endpoint_is_dropped_and_recorded() -> None:
 
     `connect`'s nodes are asset ids (`{schema}.{slug(physical)}` — the slug, not the raw
     physical name, per `corpus/identity.py::table_id`), because they must match the
-    identifiers in `licensed`. `JoinAsset` carries `left_table` / `right_table` as physical
+    identifiers in `retrieved_tables`. `JoinAsset` carries `left_table` / `right_table` as physical
     names, **bare or qualified** — `corpus/validate.py`'s `_bare()` accepts both and the ADR
     explicitly declines to settle which. So binding an edge is a lookup, and the lookup can
     find two answers.
@@ -159,7 +159,7 @@ def test_an_ambiguous_endpoint_does_not_bind_to_either_candidate() -> None:
     *Amended after review:* the body earns more than that, and the docstring should say so
     or someone will simplify it back. It asserts the refusal on **three surfaces** —
     `join_edges`, `references`, and `joins_by_edge` — because a bound endpoint leaks into
-    `licensed` by two routes, the Steiner edge and the reference closure, and only the first
+    `retrieved_tables` by two routes, the Steiner edge and the reference closure, and only the first
     is what "an edge was dropped" naturally describes. Verified non-vacuous by mutation:
     binding an ambiguous endpoint to the lowest-sorted candidate fails this test and the one
     above, and no others.
@@ -183,9 +183,9 @@ def test_an_ambiguous_endpoint_does_not_bind_to_either_candidate() -> None:
     assert bound == set(), (
         f"an ambiguous endpoint bound to {sorted(bound)}. Dropping the second match and keeping "
         "the first is the fail-open behaviour with a log line: a Steiner point in the wrong "
-        "schema, licensed, with crossings charged to the wrong pair"
+        "schema, a retrieved table, with crossings charged to the wrong pair"
     )
-    # The same statement about the closure, which is the other half of `licensed`: the join
+    # The same statement about the closure, which is the other half of `retrieved_tables`: the join
     # must not pull in either candidate as an endpoint either.
     closed = set(structure.references.get(join.id, frozenset())) & candidates
     assert closed == set(), (
@@ -251,7 +251,7 @@ def test_the_edge_endpoints_are_asset_ids_and_not_physical_names() -> None:
     """The namespace assertion, stated on its own because nothing else in the system does.
 
     `retrieve/connect.py` compares edge endpoints against `terminals` by identity, and
-    `terminals` comes from `licensed` / `by_type["table"]` — asset ids. An edge carrying
+    `terminals` comes from `retrieved_tables` / `by_type["table"]` — asset ids. An edge carrying
     `("customers", "orders")` is not wrong-looking anywhere: `_adjacency` builds happily,
     `_canon_edge` canonicalises happily, and `connect` then reports every terminal missing
     and declines. The two namespaces never meet, so nothing raises.
@@ -281,7 +281,7 @@ def test_the_edge_endpoints_are_asset_ids_and_not_physical_names() -> None:
     assert structure.join_edges == frozenset({expected}), (
         f"edge endpoints are {sorted(structure.join_edges)}, not the asset ids "
         f"{expected}. `connect` compares endpoints against terminals drawn from "
-        "`licensed`, so physical names there make every terminal look missing and the "
+        "`retrieved_tables`, so physical names there make every terminal look missing and the "
         "turn declines — and nothing raises, because the two namespaces never meet"
     )
     physical = {"customers", "orders"}
@@ -441,7 +441,7 @@ def test_a_join_reaching_context_requires_both_endpoints_not_either() -> None:
     ), "completion is idempotent — it is a total function of a set"
 
 
-def test_a_steiner_points_join_keys_reach_the_licensed_set() -> None:
+def test_a_steiner_points_join_keys_reach_the_retrieved_tables_set() -> None:
     """Why completion runs after `connect` and not inside `resolve`.
 
     A Steiner point exists to sit on a join path, so the table pairs that most need their
@@ -456,7 +456,7 @@ def test_a_steiner_points_join_keys_reach_the_licensed_set() -> None:
     `resolve`'s output — an assertion on `resolve` passes for the wrong reason here, since at
     that point `b` is not in the set at all and neither join is expected.
     """
-    from governed_bi.register.assets import AssetType
+    from governed_bi.registry.assets import AssetType
     from governed_bi.retrieve.budget import apply_budgets, budget_for
     from governed_bi.retrieve.connect import connect
     from governed_bi.retrieve.structure import build_structure, complete_joins
@@ -482,8 +482,8 @@ def test_a_steiner_points_join_keys_reach_the_licensed_set() -> None:
     assert not result.declined, "a—b—c with terminals {a, c} is connected through one point"
     assert result.added == frozenset({b}), f"b is the Steiner point; got {sorted(result.added)}"
 
-    licensed = terminals | set(result.added)
-    completed = complete_joins(licensed, structure)
+    retrieved_tables = terminals | set(result.added)
+    completed = complete_joins(retrieved_tables, structure)
     assert completed == frozenset({ab.id, bc.id}), (
         "both hops' keys must reach the final set. A Steiner point exists to sit on a join "
         "path, so completing joins before `connect` misses exactly the keys the rule is for — "
@@ -494,7 +494,7 @@ def test_a_steiner_points_join_keys_reach_the_licensed_set() -> None:
     # reconstruction of it: `configurable["structure"]` is the declared wiring (§2.8.2), and
     # `connect_node` now declares `config` so `wrap.py` forwards it.
     out = connect_node(
-        {"licensed": sorted(licensed), "schemas": ["sales_a"]},
+        {"retrieved_tables": sorted(retrieved_tables), "schemas": ["sales_a"]},
         {"configurable": {"structure": structure}},
     )
     pulled_in = out["retrieved"]["pulled_in"]
@@ -502,8 +502,8 @@ def test_a_steiner_points_join_keys_reach_the_licensed_set() -> None:
         f"the completed joins are not in pulled_in: {pulled_in}"
     )
     assert pulled_in[ab.id] == "connect" and pulled_in[bc.id] == "connect"
-    assert ab.id not in out["licensed"] and bc.id not in out["licensed"], (
-        "`licensed` is govern's table allowlist (bounds.py); a join id there is a table key "
+    assert ab.id not in out["retrieved_tables"] and bc.id not in out["retrieved_tables"], (
+        "`retrieved_tables` is govern's table allowlist (bounds.py); a join id there is a table key "
         "naming no table"
     )
 
@@ -530,7 +530,7 @@ def test_a_term_bound_to_a_metric_inherits_the_metrics_schema() -> None:
     to a metric came out **untagged** — and untagged is not inert. Pass two carries an
     untagged asset forward *unconditionally*, because it cannot restrict what it cannot
     place, so one lexical hit bridged schemas: a Shakespeare term pulled its metric,
-    which pulled ``shakespeare.parrafos`` and four of its columns into ``licensed`` on a
+    which pulled ``shakespeare.parrafos`` and four of its columns into ``retrieved_tables`` on a
     ``beer_factory`` question, and ``connect`` cannot join Shakespeare to a brewery. It
     declined ``missing_join_path`` even at ``route_top_n = 1``.
 
@@ -539,7 +539,7 @@ def test_a_term_bound_to_a_metric_inherits_the_metrics_schema() -> None:
     a legitimate state rather than a defect.
     """
     from governed_bi.corpus.schema import Binding, MetricAsset, TermAsset
-    from governed_bi.register.assets import AssetType
+    from governed_bi.registry.assets import AssetType
     from governed_bi.retrieve.structure import build_structure
 
     metric = MetricAsset(
@@ -582,7 +582,7 @@ def test_a_term_bound_to_a_metric_inherits_the_metrics_schema() -> None:
     assert structure.schema_tags.get(term.id) == "beer_factory", (
         f"a term bound to a metric is untagged: {structure.schema_tags.get(term.id)!r}. "
         "Pass two carries untagged assets forward unconditionally, so this term votes "
-        "for no schema and is licensed against every one of them"
+        "for no schema and is checked as a retrieved table against every one of them"
     )
     assert structure.schema_tags.get(chained.id) == "beer_factory", (
         "term -> term -> metric is a legitimate chain and it must resolve too, or the "
@@ -595,7 +595,7 @@ def test_a_binding_cycle_does_not_hang_the_projection() -> None:
     cycle. Two terms bound to each other must simply stay untagged — the loop makes no
     progress and stops — rather than recursing until the stack ends the turn."""
     from governed_bi.corpus.schema import Binding, TermAsset
-    from governed_bi.register.assets import AssetType
+    from governed_bi.registry.assets import AssetType
     from governed_bi.retrieve.structure import build_structure
 
     left = TermAsset(

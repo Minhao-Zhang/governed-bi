@@ -5,7 +5,7 @@ constant identity: without it LangGraph Server runs no ``@auth.on`` handler, and
 No shared key (Studio's fetches carry no custom headers): the ``127.0.0.1`` binding is the control.
 
 The denials are about payloads, not callers: ``threads.update`` and a run carrying
-``command.update`` or ``command.goto`` would write ``ServeState`` (widening ``licensed``, forging
+``command.update`` or ``command.goto`` would write ``ServeState`` (widening ``retrieved_tables``, forging
 ``corpus_content_hash``), so they are refused; ``command.resume`` passes.
 """
 
@@ -44,7 +44,7 @@ async def _no_state_writes(ctx: Auth.types.AuthContext, value: dict) -> None:
     which nothing in this system performs.
 
     A denial rather than a filter: a filter would restrict *which* threads may be written, and
-    the finding is not about ownership. `ServeState` is the engine's own record — `licensed`,
+    the finding is not about ownership. `ServeState` is the engine's own record — `retrieved_tables`,
     `knobs_resolved`, `corpus_content_hash` — and a client that can set those can forge an
     audit record and widen the tool bounds the layer stack enforces against. There is no
     value of "which thread" that makes that acceptable.
@@ -53,7 +53,7 @@ async def _no_state_writes(ctx: Auth.types.AuthContext, value: dict) -> None:
         status_code=403,
         detail=(
             "thread state is not writable over HTTP. It carries the tool bounds the layer "
-            "stack enforces against and the corpus hash every quotability gate reads; a "
+            "stack enforces against and the corpus hash every quotability check reads; a "
             "client-supplied as_node bypasses the graph's input schema entirely (audit A2/A3). "
             "State is written from inside the graph."
         ),
@@ -69,7 +69,7 @@ def _command_of(value: object) -> dict | None:
     ``langgraph_runtime_inmem/ops.py`` wraps that whole dict as ``RunsCreate(kwargs=kwargs)``. The
     real value is ``{"thread_id": …, "assistant_id": …, "kwargs": {"input": …, "command": {…}}}``.
     Verified end to end: the exact payload the audit row claimed was refused was accepted, and the
-    forged ``licensed`` reached the stored run. The gRPC/Postgres runtime nests it identically.
+    forged ``retrieved_tables`` reached the stored run. The gRPC/Postgres runtime nests it identically.
 
     **A security check that fails open on a shape it did not expect is how that happened**, so a
     ``command`` present under a type this cannot read is a refusal rather than a pass. That covers
@@ -129,13 +129,13 @@ async def _no_state_writes_on_a_new_run(ctx: Auth.types.AuthContext, value: dict
     ``POST /threads/{id}/state`` and the ``as_node`` write behind it; this is run creation, which
     dispatches ``("threads", "create_run")`` — an action no handler covered, so
     ``langgraph_api``'s default allowed it. The payload
-    ``{"command": {"update": {"licensed": ["public.salaries"], "corpus_content_hash": "forged"}}}``
+    ``{"command": {"update": {"retrieved_tables": ["public.salaries"], "corpus_content_hash": "forged"}}}``
     therefore reached ``map_command``, which writes every key it is given.
 
-    Both halves of that example matter and neither is a nuisance: ``licensed`` is the tool bound the
+    Both halves of that example matter and neither is a nuisance: ``retrieved_tables`` is the tool bound the
     layer stack enforces against, so widening it and then resuming executes SQL against tables the
-    corpus never licensed — the model does not need a database handle if the caller can hand it one.
-    And ``corpus_content_hash`` is the treatment identity every quotability gate reads, so a forged
+    corpus never retrieved_tables — the model does not need a database handle if the caller can hand it one.
+    And ``corpus_content_hash`` is the treatment identity every quotability check reads, so a forged
     one stamps an audit record with a corpus the run never served.
 
     A denial and not a filter, for the reason the state hook gives: there is no value of "which
@@ -153,7 +153,7 @@ async def _no_state_writes_on_a_new_run(ctx: Auth.types.AuthContext, value: dict
         detail=(
             f"command.{{{', '.join(offending)}}} is not accepted on run creation. `update` and "
             "`goto` write thread state, which carries the tool bounds the layer stack enforces "
-            "against and the corpus hash every quotability gate reads (audit A4, the same defect "
+            "against and the corpus hash every quotability check reads (audit A4, the same defect "
             "as A2/A3 through a different route). `command.resume` is accepted — answering a "
             "paused turn is what this endpoint is for. State is written from inside the graph."
         ),

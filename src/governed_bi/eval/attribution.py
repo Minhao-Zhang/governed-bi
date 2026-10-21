@@ -1,21 +1,21 @@
 """Why a wrong answer was wrong, decided by parsing rather than by a model.
 
 **Taken from RyanChenJung/governed-bi-utkuai@12c3e15, and the numbers in this file are theirs.**
-Every figure below was measured on that fork's own runs; this tree has published no arm that
+Every figure below was measured on that fork's own runs; this tree has published no config that
 carries a ``failure_cause`` yet. They are kept rather than stripped because each one is the
 argument for a specific check or a specific ordering, and a rule whose reason has been deleted is
 a rule the next reader deletes.
 
-The failure the instrument exists for: an arm could not tell whether its treatment helped,
+The failure the instrument exists for: a config could not tell whether its treatment helped,
 because ``error_type`` was ``None`` on all 78 of its answered-but-wrong rows. The treatment was
 aimed at decoy contact, which held 8 of those 78, and nothing said so until after the run. This
 module is what makes a target sayable in advance.
 
 **The order of the checks is the meaning of the output.** A row can satisfy several predicates at
 once; the first that fires wins, and the ranking is by how much the cause explains. Decoy contact
-leads because it is a semantic-layer failure -- the class a corpus-curation arm exists to fix --
+leads because it is a semantic-layer failure -- the class a corpus-curation config exists to fix --
 and labelling such a row ``projection_extra`` because the decoy also widened the SELECT would hide
-exactly the population such an arm needs to count.
+exactly the population such a config needs to count.
 
 **Nothing here reads or writes a grade.** ``attribute`` is a pure function of a row that is
 already graded, and it returns ``None`` for any row that is not answered-and-wrong.
@@ -24,16 +24,16 @@ already graded, and it returns ``None`` for any row that is not answered-and-wro
 rows that landed in ``unparseable`` had ``generated_sql: null`` and ``grade_detail:
 "missing_prediction"`` -- the engine returned ``answered`` with no statement at all, never having
 queried anything. That is a different failure from emitting a statement that will not parse;
-exactly one row across both arms was the latter. Conflating them reports "answered nothing" and
+exactly one row across both configs was the latter. Conflating them reports "answered nothing" and
 "answered garbage" under one name and buries the more interesting of the two.
 
 **This classifier has already decided one conclusion, and got it wrong once.** The fork published,
 then retracted, "``table_set_differs`` is the largest bucket at 23 of 78, so build a curation
-arm". The cause was ``_table_names`` counting CTE names as base tables (see its docstring): 9 rows
+config". The cause was ``_table_names`` counting CTE names as base tables (see its docstring): 9 rows
 were mislabelled, and with them corrected the distribution is ``projection_extra`` 26,
 ``unattributed`` 18, ``table_set_differs`` 14, ``missing_prediction`` 8, ``decoy_contact`` 8,
 ``filter_differs`` 2, ``projection_missing`` 2 -- which licenses a result-shape check rather than a
-curation arm. Two things follow for anyone changing the checks below.
+curation config. Two things follow for anyone changing the checks below.
 
 *A ranking needs a test per ordering decision, not per category.* Every test they had asserted
 that some row lands in some bucket, and all of them passed while the largest bucket was wrong by 9
@@ -151,7 +151,7 @@ def _table_names(tree: exp.Expr) -> frozenset[str]:
     who removes this one as a duplicate re-opens the defect. Measured on the fork's own
     artifacts: 9 of 23 ``table_set_differs`` rows had base-table sets identical to gold, which
     is enough to make ``projection_extra`` rather than ``table_set_differs`` the largest bucket
-    and to change which arm the run licensed.
+    and to change which config the run retrieved_tables.
     """
     return frozenset(
         t.name.lower() for t in tree.find_all(exp.Table) if t.name

@@ -121,25 +121,25 @@ def models_for(session: Any) -> dict[str, Any]:
 
     That mapping is what every measurement row publishes, so the screen and the artifact cannot
     disagree. ``embedding.id`` is reported verbatim: it is provider-qualified and may contain a
-    colon. ``utility.effort`` is observed off the live client because no knob records it.
+    colon. ``utility.effort`` is observed off the live client because no setting records it.
     """
-    knobs = session.knobs_resolved
+    settings = session.knobs_resolved
     utility = getattr(session, "utility_model", None)
     return {
         "agent": {
-            "id": knobs.get("chat_model"),
-            "provider": _gateway(knobs.get("chat_model")),
-            "effort": knobs.get("llm_reasoning_effort"),
+            "id": settings.get("chat_model"),
+            "provider": _gateway(settings.get("chat_model")),
+            "effort": settings.get("llm_reasoning_effort"),
         },
         "utility": {
-            "id": knobs.get("llm_utility_model"),
-            "provider": _gateway(knobs.get("llm_utility_model")),
+            "id": settings.get("llm_utility_model"),
+            "provider": _gateway(settings.get("llm_utility_model")),
             "effort": reasoning_effort_of(utility) if utility is not None else None,
         },
         "embedding": {
-            "id": knobs.get("embedding_model"),
-            "provider": _gateway(knobs.get("embedding_model")),
-            "dimensions": knobs.get("embedding_dimensions"),
+            "id": settings.get("embedding_model"),
+            "provider": _gateway(settings.get("embedding_model")),
+            "dimensions": settings.get("embedding_dimensions"),
         },
     }
 

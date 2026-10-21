@@ -1,11 +1,11 @@
-"""``prompt_set_hash`` must cover every prompt the engine sends (``register/prompts.py``).
+"""``prompt_set_hash`` must cover every prompt the engine sends (``registry/prompts.py``).
 
 **The defect this file exists to prevent has a measured precedent.** ``prompt_set_hash`` was
-``_digest(SYSTEM_PROMPT)`` — one prompt — and the engine is gaining a guard gate, five facet
+``_digest(SYSTEM_PROMPT)`` — one prompt — and the engine is gaining a guard check, five channel
 rewriters and a narrator. Two runs whose guard prompt differed would then have reported the same
 hash, and comparability would have cleared the pair the second run existed to isolate. That is
-not hypothetical: ``register/knobs.py`` records two v1 ladders that differed **only** in
-``llm_reasoning_effort``, which was recorded nowhere, and effort moved the baseline arm +2.5pp
+not hypothetical: ``registry/settings.py`` records two v1 ladders that differed **only** in
+``llm_reasoning_effort``, which was recorded nowhere, and effort moved the baseline config +2.5pp
 against a 2.3pp detection threshold.
 
 So the assertion that matters is :func:`test_the_hash_moves_when_any_prompt_moves` — every
@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import pytest
 
-from governed_bi.register import prompts as prompts_mod
-from governed_bi.register.prompts import (
+from governed_bi.registry import prompts as prompts_mod
+from governed_bi.registry.prompts import (
     DEFAULT_VARIANTS,
     PROMPT_REGISTRY,
     Prompt,
@@ -26,7 +26,7 @@ from governed_bi.register.prompts import (
     select,
     unknown_prompts,
 )
-from governed_bi.register.stages import Stage
+from governed_bi.registry.stages import Stage
 
 
 def test_every_prompt_names_a_declared_stage() -> None:
@@ -34,7 +34,7 @@ def test_every_prompt_names_a_declared_stage() -> None:
     registries must stay importable in a bare interpreter. This is the check that pays for it."""
     declared = {m.value for m in Stage}
     wrong = {n: p.stage for n, p in PROMPT_REGISTRY.items() if p.stage not in declared}
-    assert wrong == {}, f"{wrong} name stages that register/stages.py does not declare"
+    assert wrong == {}, f"{wrong} name stages that registry/stages.py does not declare"
 
 
 def test_every_prompt_states_why_it_exists() -> None:
@@ -134,11 +134,11 @@ def test_the_engine_sends_the_registered_text() -> None:
 
 
 def test_a_selected_variant_actually_reaches_the_analyst() -> None:
-    """The whole point of the knob, and the way it would fail: silently.
+    """The whole point of the setting, and the way it would fail: silently.
 
     ``analyst_prompt`` was ``SYSTEM_PROMPT = prompt_text("analyst")``, bound at import. A run
     selecting ``v1`` would have recorded ``v1``'s ``prompt_set_hash`` and sent ``v2`` — an
-    artifact naming a treatment it never received, which is worse than having no knob, because
+    artifact naming a treatment it never received, which is worse than having no setting, because
     a later reader has no way to tell.
 
     Uses ``v1`` because it is a real registered variant that differs from the default; the test
@@ -156,7 +156,7 @@ def test_a_selected_variant_actually_reaches_the_analyst() -> None:
 
 
 def test_ask_first_is_selectable_and_is_not_the_default() -> None:
-    """Serve stays v4 until a measured arm exists. Selection is ``--prompt-variant``."""
+    """Serve stays v4 until a measured config exists. Selection is ``--prompt-variant``."""
     from governed_bi.serve.tools import analyst_prompt
 
     assert select()["analyst"] == "v4"

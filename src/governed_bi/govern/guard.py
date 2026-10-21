@@ -1,11 +1,11 @@
-"""``guard``: deterministic input gate (ADR 0006 §6). No model call.
+"""``guard``: deterministic input check (ADR 0006 §6). No model call.
 
 Rules carry a ``rule_id`` to the ledger only; callers see
 :data:`GUARD_PUBLIC_MESSAGE`. ``g_encoding`` runs before NFKC (pipeline order):
 NFKC is a rewrite, so a post-rewrite rule inspects a string the caller never sent.
 
 ``guard_rules_enabled`` is ``UNSET`` until ADR 0006 OQ3 (both calibration numbers
-per rule). Out-of-scope is ADR 0005's ``negative_gate``, not a rule here.
+per rule). Out-of-scope is ADR 0005's ``negative_check``, not a rule here.
 """
 
 from __future__ import annotations
@@ -14,12 +14,12 @@ import re
 import warnings
 from typing import Callable, Literal, Mapping, TypedDict
 
-from ..register.knobs import Unset
+from ..registry.settings import Unset
 from .check import GovernanceUsageError
 from .policy import BI_SCOPE_RULE_ID, GUARD_RULE_IDS, GovernancePolicy
 
 __all__ = [
-    "GuardVerdict",
+    "GuardResult",
     "GUARD_RULES",
     "GUARD_PUBLIC_MESSAGE",
     "guard",
@@ -27,7 +27,7 @@ __all__ = [
 ]
 
 
-class GuardVerdict(TypedDict):
+class GuardResult(TypedDict):
     """ADR 0006 owns this type; ADR 0005 imports it."""
 
     outcome: Literal["clear", "blocked", "error_failed_open"]
@@ -115,30 +115,30 @@ def has_control_characters(text: str) -> bool:
     return _CONTROL.search(text) is not None
 
 
-def _rule_encoding(text: str, _knobs: GovernancePolicy) -> str | None:
+def _rule_encoding(text: str, _settings: GovernancePolicy) -> str | None:
     match = _CONTROL.search(text)
     if match is None:
         return None
     return f"U+{ord(match.group()):04X} at offset {match.start()}"
 
 
-def _rule_instruction_override(text: str, _knobs: GovernancePolicy) -> str | None:
+def _rule_instruction_override(text: str, _settings: GovernancePolicy) -> str | None:
     match = _INSTRUCTION_OVERRIDE.search(text)
     return match.group()[:80] if match else None
 
 
-def _rule_role_injection(text: str, _knobs: GovernancePolicy) -> str | None:
+def _rule_role_injection(text: str, _settings: GovernancePolicy) -> str | None:
     match = _ROLE_INJECTION.search(text)
     return match.group()[:80] if match else None
 
 
-def _rule_tool_forgery(text: str, _knobs: GovernancePolicy) -> str | None:
+def _rule_tool_forgery(text: str, _settings: GovernancePolicy) -> str | None:
     match = _TOOL_FORGERY.search(text)
     return match.group()[:80] if match else None
 
 
-def _rule_length(text: str, knobs: GovernancePolicy) -> str | None:
-    limit = knobs.g_length_max_chars
+def _rule_length(text: str, settings: GovernancePolicy) -> str | None:
+    limit = settings.g_length_max_chars
     if len(text) <= limit:
         return None
     return f"{len(text)} characters, bound is {limit}"
@@ -189,7 +189,7 @@ def _assert_the_predicates_match_the_vocabulary() -> None:
 _assert_the_predicates_match_the_vocabulary()
 
 
-def guard(question: str, knobs: GovernancePolicy) -> GuardVerdict:
+def guard(question: str, settings: GovernancePolicy) -> GuardResult:
     """Screen one input. **One call site today: ``guard_node``, on ``question``.**
 
     ADR 0006 §6 requires a second pass over ``rewrite.after`` and it is not built. That
@@ -199,10 +199,10 @@ def guard(question: str, knobs: GovernancePolicy) -> GuardVerdict:
     not the delivered artifact. This docstring used to describe the second pass in the
     present tense, which is how a reader stops looking for it.
 
-    ``knobs.guard_rules_enabled`` must be explicit — a default would be a decision
+    ``settings.guard_rules_enabled`` must be explicit — a default would be a decision
     about what is enabled, made where nobody would look for it.
     """
-    if isinstance(knobs.guard_rules_enabled, Unset):
+    if isinstance(settings.guard_rules_enabled, Unset):
         raise GovernanceUsageError(
             "guard_rules_enabled is UNSET: no rule has both of its numbers yet (ADR 0006 "
             "OQ3), so guard cannot decide what is on. Pass an explicit per-rule mapping; "
@@ -210,10 +210,10 @@ def guard(question: str, knobs: GovernancePolicy) -> GuardVerdict:
             "statement from a missing one."
         )
     for rule_id, predicate in GUARD_RULES.items():
-        if not knobs.guard_rule_enabled(rule_id):
+        if not settings.guard_rule_enabled(rule_id):
             continue
         try:
-            detail = predicate(question, knobs)
+            detail = predicate(question, settings)
         except Exception as err:  # noqa: BLE001 - a broken rule must not end the turn
             if rule_id not in _WARNED:
                 _WARNED.add(rule_id)
@@ -224,11 +224,11 @@ def guard(question: str, knobs: GovernancePolicy) -> GuardVerdict:
                     RuntimeWarning,
                     stacklevel=2,
                 )
-            return GuardVerdict(
+            return GuardResult(
                 outcome="error_failed_open",
                 rule_id=rule_id,
                 detail=f"{type(err).__name__}: {err}",
             )
         if detail is not None:
-            return GuardVerdict(outcome="blocked", rule_id=rule_id, detail=detail)
-    return GuardVerdict(outcome="clear", rule_id=None, detail=None)
+            return GuardResult(outcome="blocked", rule_id=rule_id, detail=detail)
+    return GuardResult(outcome="clear", rule_id=None, detail=None)

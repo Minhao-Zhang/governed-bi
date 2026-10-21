@@ -30,7 +30,7 @@ from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve import fetch
 
 _BOUNDS = ToolBounds(
-    licensed=frozenset({"sales.customers"}),
+    retrieved_tables=frozenset({"sales.customers"}),
     readable_assets=frozenset({"sales.customers.id"}),
 )
 _CORPUS = analyst_corpus_from_keys(allowed=["sales.customers.id"])
@@ -71,10 +71,10 @@ def test_sample_rows_without_a_connector_raises_rather_than_refusing() -> None:
     assert "connector" in str(caught.value)
 
 
-def test_no_tool_body_manufactures_a_layer_verdict_for_its_own_wiring() -> None:
+def test_no_tool_body_manufactures_a_layer_result_for_its_own_wiring() -> None:
     """The general form, so the next wiring check cannot reintroduce the pattern.
 
-    ``fetch.py`` may not call ``refuse``. Every legitimate verdict in this module comes back from
+    ``fetch.py`` may not call ``refuse``. Every legitimate result in this module comes back from
     ``prepare``/``check``, which own :data:`RULES`; a rule id constructed here is ``serve/``
     deciding which layer gets blamed, and ``layers.py`` says the layer comes from ``RULES`` and
     never from a caller. Asserted structurally because the alternative is enumerating every
@@ -92,7 +92,7 @@ def test_no_tool_body_manufactures_a_layer_verdict_for_its_own_wiring() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert "refuse" not in called, (
-        "fetch.py constructs a governance verdict. A refusal built in serve/ attributes our "
+        "fetch.py constructs a governance result. A refusal built in serve/ attributes our "
         "own misconfiguration to the model's statement; raise GovernanceUsageError instead."
     )
 
@@ -105,6 +105,6 @@ def test_no_tool_body_manufactures_a_layer_verdict_for_its_own_wiring() -> None:
     assert "refuse" not in imported, "fetch.py imports `refuse`, so it is one edit from calling it"
 
     # Anti-vacuity, both halves: the walk really does see this module's calls, and the rule id
-    # the removed verdict used is still spelled the way this test assumes.
+    # the removed result used is still spelled the way this test assumes.
     assert "prepare" in called, "the AST walk found no prepare() call; it is not reading fetch.py"
     assert "r_not_a_read" in RULES

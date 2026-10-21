@@ -1,10 +1,10 @@
 """The four resume-drift keys and the three scope keys had no writer at all.
 
 ``git_sha``, ``git_main_sha``, ``working_tree_dirty`` and ``diff_sha256`` are ``Role.operational``
-— which is to say resume-drift keys — and were ``None`` on all 8 106 rows of all six arms in
-``runs/eval/``. ``measure/gates.py::_knobs_resolved_gate`` looks for *disagreement* across an
-arm's rows, and four constants cannot disagree, so the gate that exists to stop a resume
-blending two harness versions into one arm's score was comparing each key against itself.
+— which is to say resume-drift keys — and were ``None`` on all 8 106 rows of all six configs in
+``runs/eval/``. ``measure/checks.py::_knobs_resolved_check`` looks for *disagreement* across an
+config's rows, and four constants cannot disagree, so the check that exists to stop a resume
+blending two harness versions into one config's score was comparing each key against itself.
 ``diff_sha256``'s own register note says exactly what the absence would cost.
 
 ``schemas_under_test``, ``split`` and ``question_subset`` are ``Role.scope`` — *fatal on resume*
@@ -25,16 +25,16 @@ import pytest
 
 from governed_bi.eval.provenance import (
     git_provenance,
-    harness_knobs,
+    harness_settings,
     scope_identity,
     short_digest,
 )
-from governed_bi.register.knobs import knob_names
+from governed_bi.registry.settings import setting_names
 
 REPO = Path(__file__).resolve().parents[2]
 
 
-def _knobs(**over):
+def _settings(**over):
     args = {
         "repo": REPO,
         "schemas": ["beer_factory", "works_cycles"],
@@ -43,25 +43,25 @@ def _knobs(**over):
         "serve_workers": 10,
     }
     args.update(over)
-    return harness_knobs(**args)
+    return harness_settings(**args)
 
 
 # ── the wire is real, not a name that happens to appear ──────────────────────
 
 
-def test_every_key_the_harness_writes_is_a_declared_knob() -> None:
-    """Every key the harness writes is a declared knob, asserted at the writer.
+def test_every_key_the_harness_writes_is_a_declared_setting() -> None:
+    """Every key the harness writes is a declared setting, asserted at the writer.
 
-    An undeclared key is outside ``knob_names()`` and therefore outside every
-    comparison, so writing one would put a configuration into the artifact that no gate can
-    see — which is exactly what ``knobs["llm_model"]`` did.
+    An undeclared key is outside ``setting_names()`` and therefore outside every
+    comparison, so writing one would put a configuration into the artifact that no check can
+    see — which is exactly what ``settings["llm_model"]`` did.
     """
-    undeclared = sorted(set(_knobs()) - knob_names())
-    assert not undeclared, f"{undeclared} are written but not declared in register/knobs.py"
+    undeclared = sorted(set(_settings()) - setting_names())
+    assert not undeclared, f"{undeclared} are written but not declared in registry/settings.py"
 
 
 def test_the_harness_writes_a_value_for_every_resume_drift_key_it_can_answer() -> None:
-    """A name scan credits any occurrence of a knob's name, so a coincidental string
+    """A name scan credits any occurrence of a setting's name, so a coincidental string
     literal launders one. This asserts the values instead.
 
     ``build_workers`` is the deliberate exception and is asserted absent rather than null: this
@@ -78,21 +78,21 @@ def test_the_harness_writes_a_value_for_every_resume_drift_key_it_can_answer() -
     ``git status --porcelain`` does, so a tree holding only untracked files is dirty with an empty
     diff. A digest therefore implies dirty; dirty does not imply a digest.
     """
-    knobs = _knobs()
+    settings = _settings()
     written = {
         "git_sha",
         "diff_sha256",
         "working_tree_dirty",
         "serve_workers",
-    } & set(knobs)
+    } & set(settings)
     assert {"git_sha", "diff_sha256", "working_tree_dirty", "serve_workers"} <= written
-    assert "build_workers" not in knobs
+    assert "build_workers" not in settings
 
     for name in written - {"diff_sha256"}:
-        assert knobs[name] is not None, f"{name} is written and unmeasured"
+        assert settings[name] is not None, f"{name} is written and unmeasured"
 
-    if knobs["diff_sha256"] is not None:
-        assert knobs["working_tree_dirty"] is True, (
+    if settings["diff_sha256"] is not None:
+        assert settings["working_tree_dirty"] is True, (
             "diff_sha256 digests a non-empty `git diff HEAD`, so the tree cannot be clean. "
             "A digest beside working_tree_dirty=False means the two are read from different "
             "states, which is the resume-drift blend this key exists to catch."
@@ -104,7 +104,7 @@ def test_the_harness_writes_a_value_for_every_resume_drift_key_it_can_answer() -
 
 def test_the_git_sha_is_this_checkouts_head_and_not_a_placeholder() -> None:
     """Asserted against ``git`` itself. A digest of something else would satisfy any shape
-    check and would still make the drift gate compare a constant."""
+    check and would still make the drift check compare a constant."""
     head = subprocess.run(
         ["git", "-C", str(REPO), "rev-parse", "HEAD"],
         capture_output=True,
@@ -119,7 +119,7 @@ def test_the_git_sha_is_this_checkouts_head_and_not_a_placeholder() -> None:
 
 def test_a_dirty_tree_and_a_clean_one_record_different_diffs(tmp_path: Path) -> None:
     """``git_sha`` alone lets a resume across an uncommitted edit blend two harness versions
-    with no gate firing, which is the incident ``diff_sha256`` was declared for. Two states of
+    with no check firing, which is the incident ``diff_sha256`` was declared for. Two states of
     one repository, so the assertion is on the response and not on a literal."""
     repo = tmp_path / "r"
     repo.mkdir()
@@ -172,7 +172,7 @@ def test_the_scope_digest_is_the_set_and_not_its_order_or_its_count() -> None:
 
 
 def test_dropping_one_schema_moves_schemas_under_test() -> None:
-    """The incident the knob names: "a schema dropped from one attempt leaves its YAML behind
+    """The incident the setting names: "a schema dropped from one attempt leaves its YAML behind
     and competes as a router candidate for every other schema's questions"."""
     full = scope_identity(
         schemas=["a", "b", "c"], question_ids=["q1"], dataset_file=Path("d/test_final.jsonl")
@@ -199,17 +199,17 @@ def test_split_names_the_dataset_file_that_decided_the_scope() -> None:
 # ── it reaches a measurement row ─────────────────────────────────────────────
 
 
-def test_the_harness_knobs_reach_the_measurement_row(tmp_path: Path) -> None:
+def test_the_harness_settings_reach_the_measurement_row(tmp_path: Path) -> None:
     """The half that was missing on every other declared-but-unconsumed item: a wire that
     stops one function short of the artifact is the same as no wire.
 
-    Driven through ``run_arm`` rather than ``project_turn``, because the path the driver uses
+    Driven through ``run_config`` rather than ``project_turn``, because the path the driver uses
     goes through ``_turn_knobs``, and it is that function's precedence — the question's mapping
     over the session's — that decides whether these survive.
     """
     from governed_bi.datasource.sqlite import SqliteConnector
-    from governed_bi.eval.arms import stub_arm
-    from governed_bi.eval.harness import run_arm
+    from governed_bi.eval.configs import stub_config
+    from governed_bi.eval.harness import run_config
 
     db = tmp_path / "c.db"
     conn = sqlite3.connect(db)
@@ -218,22 +218,22 @@ def test_the_harness_knobs_reach_the_measurement_row(tmp_path: Path) -> None:
     conn.close()
     connector = SqliteConnector(db)
 
-    knobs = _knobs()
-    rows = run_arm(
+    settings = _settings()
+    rows = run_config(
         [
             {
                 "question_id": "q1",
                 "question": "how many customers",
                 "db_id": "main",
-                "knobs_resolved": knobs,
+                "knobs_resolved": settings,
             }
         ],
-        stub_arm(connector=connector),
+        stub_config(connector=connector),
     )
 
     recorded = rows[0]["knobs_resolved"]
     assert recorded["serve_workers"] == 10
-    assert recorded["git_sha"] == knobs["git_sha"]
+    assert recorded["git_sha"] == settings["git_sha"]
     assert recorded["question_subset"] == "3:" + short_digest(
         ["train_1", "train_2", "train_3"]
     )

@@ -9,7 +9,7 @@ Three claims here are **ours** rather than the fork's, and each is the part a po
 * the hint is computed from the **executed** statement, not from the tool argument;
 * it never lands on a reply that no statement produced (the fork's function returns the hint
   when handed no SQL -- see ``serve/structured_check.py`` for why ours does not);
-* the knob ships **ON**, where the fork ships it off behind an in-process-only HTTP toggle.
+* the setting ships **ON**, where the fork ships it off behind an in-process-only HTTP toggle.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Any
 from governed_bi.corpus.analyst import for_analyst
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.register.knobs import knob_default, knob_names
+from governed_bi.registry.settings import setting_default, setting_names
 from governed_bi.serve.structured_check import percentage_scale_suffix
 from governed_bi.serve.tools import build_tools
 
@@ -66,27 +66,27 @@ def test_no_suffix_when_no_statement_ran() -> None:
 
     ``None`` reaches this function only from ``run_query``'s one call site, and only when
     ``executed_sql`` is ``None`` -- which means a governance refusal or a checker that broke
-    before a verdict existed. There is no answer to have been mis-scaled, and the reply the
-    model is holding is a verdict rather than a result.
+    before a result existed. There is no answer to have been mis-scaled, and the reply the
+    model is holding is a result rather than a result.
     """
     assert percentage_scale_suffix(PERCENT_QUESTION, None) == ""
     assert percentage_scale_suffix(PERCENT_QUESTION, "") == ""
 
 
-# ── the knob ───────────────────────────────────────────────────────────────────
+# ── the setting ───────────────────────────────────────────────────────────────────
 
 
-def test_the_knob_ships_on_and_is_a_comparability_key() -> None:
+def test_the_setting_ships_on_and_is_a_comparability_key() -> None:
     """Both halves, and the default is the interesting one.
 
     The fork registers this ``False`` and turns it on through ``POST /settings/toggles``, whose
     override its own handoff document records as in-process only with no environment path -- so
-    every fresh server start switched it back off. A default-off knob with nothing to persist it
+    every fresh server start switched it back off. A default-off setting with nothing to persist it
     is a feature nobody ever runs. It is a comparability key because the suffix is agent input:
     it can change which statement the turn ends on.
     """
-    assert knob_default("enable_structured_percentage_check") is True
-    assert "enable_structured_percentage_check" in knob_names()
+    assert setting_default("enable_structured_percentage_check") is True
+    assert "enable_structured_percentage_check" in setting_names()
 
 
 # ── wired to the tool, on the executed statement ───────────────────────────────
@@ -135,14 +135,14 @@ def _runtime(call_id: str = "call-1") -> Any:
     )
 
 
-def _query(sql: str, *, licensed: str = "sales.customers", **state_extra: Any) -> str:
+def _query(sql: str, *, retrieved_tables: str = "sales.customers", **state_extra: Any) -> str:
     """``run_query``'s reply text for one statement, on a turn asking for a percentage."""
     assets = _assets()
     state: dict[str, Any] = {
         "question": PERCENT_QUESTION,
         "turn_id": "turn-pct",
         "turn_index": 1,
-        "licensed": [licensed],
+        "retrieved_tables": [retrieved_tables],
         "messages": [],
         "knobs_resolved": {},
     }
@@ -167,8 +167,8 @@ def test_the_hint_reaches_the_model_on_an_unscaled_result() -> None:
     assert "[structured check]" in reply
 
 
-def test_the_knob_switches_it_off_for_the_same_turn() -> None:
-    """Reachable from the run, not only from the register (audit I10): a comparability knob
+def test_the_setting_switches_it_off_for_the_same_turn() -> None:
+    """Reachable from the run, not only from the register (audit I10): a comparability setting
     that cannot change a result is a false claim about the run that published it."""
     reply = _query(
         "SELECT COUNT(*) * 1.0 / 2 AS ratio FROM sales.customers",
@@ -178,13 +178,13 @@ def test_the_knob_switches_it_off_for_the_same_turn() -> None:
 
 
 def test_a_refusal_is_not_decorated_with_engine_advice() -> None:
-    """No statement ran, so there is no result to be mis-scaled — and this reply is a verdict.
+    """No statement ran, so there is no result to be mis-scaled — and this reply is a result.
 
     Appending advice here would change the text of a governance refusal, which other code
     compares by identity (``_fetch`` against ``OUT_OF_SCOPE_MESSAGE``) and the audit surface
     shows verbatim.
     """
-    reply = _query("SELECT 1.0 / 2 FROM sales.customers", licensed="sales.other")
+    reply = _query("SELECT 1.0 / 2 FROM sales.customers", retrieved_tables="sales.other")
     assert "refused" in reply.lower()
     assert "[structured check]" not in reply
 
@@ -209,7 +209,7 @@ def test_the_argument_and_the_executed_statement_are_two_different_strings() -> 
         "question": PERCENT_QUESTION,
         "turn_id": "turn-pct",
         "turn_index": 1,
-        "licensed": ["sales.customers"],
+        "retrieved_tables": ["sales.customers"],
         "messages": [],
         "knobs_resolved": {},
     }

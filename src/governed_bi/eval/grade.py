@@ -8,7 +8,7 @@ function, so a fingerprint produced here and one from ``pipeline/_db.py``'s
 ``hash_normalised_result`` are the same 64 hex characters for the same rows. Why it had to
 be transcribed rather than approximated is in :func:`_coerce_cell`.
 
-**The verdict is not the fingerprint.** A hash cannot carry a tolerance, and BIRD's normaliser
+**The result is not the fingerprint.** A hash cannot carry a tolerance, and BIRD's normaliser
 reads ``'00123'`` as ``123`` and compares floats exactly. So ``correct`` comes from
 :func:`results_match` whenever both row sets are in hand: numbers compare with a relative
 tolerance of :data:`REL_TOL`, and a text cell never equals a number. The fingerprint is still
@@ -133,10 +133,10 @@ def grade_turn(
         )
     if outcome == "clarification":
         # Both endings the member covers, on purpose: a turn that paused on `ask_user` and one a
-        # reader declined fail-closed, which reaches `stamp` (`register/stages.Outcome`). Neither
+        # reader declined fail-closed, which reaches `finish` (`registry/stages.Outcome`). Neither
         # delivered a governed answer and neither has a prediction, so both are `False` with the
         # same `detail` — the distinction between them is about instrumentation, not about score,
-        # and the consumer that needs it reads a stamped field (`measure/gates`).
+        # and the consumer that needs it reads a written field (`measure/checks`).
         return GradeResult(
             correct=False,
             gold_fingerprint=gold_fingerprint,

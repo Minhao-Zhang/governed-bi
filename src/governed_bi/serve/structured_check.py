@@ -43,8 +43,8 @@ def percentage_scale_suffix(question: str | None, sql: str | None) -> str:
     scaling factor is not evidence of one"). Deliberate divergence, decided by what the one
     caller can pass: ``serve/tools.py`` hands over ``attempt_field(attempt, "executed_sql")``,
     which is ``None`` exactly when **no statement ran** -- a governance refusal, or a checker
-    that broke before a verdict existed. The reply the model is holding in that case is a
-    verdict, and appending engine advice to a verdict mixes two surfaces this repository keeps
+    that broke before a result existed. The reply the model is holding in that case is a
+    result, and appending engine advice to a result mixes two surfaces this repository keeps
     apart (``_fetch`` decides a tool's status by comparing the payload against
     ``OUT_OF_SCOPE_MESSAGE`` by identity; the transcript shows the reply verbatim). There is
     also nothing to check: a statement that never ran produced no answer to be mis-scaled.

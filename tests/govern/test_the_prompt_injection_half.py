@@ -17,7 +17,7 @@ so it would have failed on the fix and passed on the regression.
 
 So the gap this file closes is not "are the rules correct" — they always were. It is "is there
 a number behind each one", which is what OQ3 asked for and what
-``tests/api/test_the_served_surface_is_not_the_benchmark_arm.py`` now holds the deployment to.
+``tests/api/test_the_served_surface_is_not_the_benchmark_config.py`` now holds the deployment to.
 
 **This file is the adversarial number. The benign number is elsewhere**, in
 ``tests/conformance/test_the_guard_does_not_refuse_the_benchmark.py``, over the 1,351
@@ -130,7 +130,7 @@ def test_no_benign_question_is_refused(guard_report) -> None:
     assert not refused, [(r.case.id, r.detail) for r in refused]
 
 
-# ── the gate, and the driver that prints it ───────────────────────────────────
+# ── the check, and the driver that prints it ───────────────────────────────────
 
 
 def test_the_report_carries_a_denominator_for_every_rate(guard_report) -> None:

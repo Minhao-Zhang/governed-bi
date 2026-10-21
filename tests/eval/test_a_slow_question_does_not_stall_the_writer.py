@@ -69,7 +69,7 @@ def test_a_later_question_reaches_on_row_before_an_earlier_slow_one(
 
     rows = harness._run_concurrently(
         questions,
-        arm=type("A", (), {"name": "a"})(),
+        config=type("A", (), {"name": "a"})(),
         base_cfg={},
         session=None,
         run_id="r",

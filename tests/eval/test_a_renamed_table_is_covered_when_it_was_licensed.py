@@ -1,7 +1,7 @@
 """Coverage compares asset ids to asset ids, not asset ids to engine spellings.
 
 ``gold_tables()`` returns the table names a benchmark statement *writes* — the engine's
-identifiers, ``airline."Air Carriers"``. ``licensed`` carries **asset ids**, and an id is a key
+identifiers, ``airline."Air Carriers"``. ``retrieved_tables`` carries **asset ids**, and an id is a key
 rather than a name (ADR 0008 D1): the corpus stores that table as
 ``id: airline.Air_Carriers_66c534`` with ``physical_name: Air Carriers``. Comparing the two
 strings, case-insensitively or otherwise, compares two different nouns.
@@ -9,7 +9,7 @@ strings, case-insensitively or otherwise, compares two different nouns.
 It agrees anyway for 655 of the 656 table assets in ``../BIRD-corpus``, because
 ``corpus.identity.slug`` returns a bare identifier unchanged — so the metric has been right by a
 property of one corpus rather than by construction. On the one table where the two spellings
-differ it is wrong in one direction only: the gold names a table that *was* licensed and the
+differ it is wrong in one direction only: the gold names a table that *was* retrieved_tables and the
 turn is scored as a coverage miss, so the published ceiling is too low, never too high. Five of
 the 1 351 rows in ``runs/eval/proxy_v4_corpus30872d3.jsonl`` are that table, and in all five it
 is the only miss.
@@ -32,11 +32,11 @@ GOLD = (
 )
 
 
-def test_a_gold_naming_a_physical_name_is_covered_when_its_asset_is_licensed() -> None:
-    """The EX ceiling must not count a licensed table as unlicensed because its id is a slug.
+def test_a_gold_naming_a_physical_name_is_covered_when_its_asset_is_retrieved_tables() -> None:
+    """The EX ceiling must not count a retrieved table as not_retrieved because its id is a slug.
 
     ``table_coverage`` is documented as *"the EX ceiling"* — the split between "was this question
-    answerable under this retrieval" and "did the model convert it". A turn that licensed
+    answerable under this retrieval" and "did the model convert it". A turn that retrieved_tables
     ``airline.Air_Carriers_66c534`` was allowed to read ``airline."Air Carriers"``; scoring it as
     a partial covers the question in the wrong bucket and lowers the ceiling below what the
     retrieval actually delivered.
@@ -49,17 +49,17 @@ def test_a_gold_naming_a_physical_name_is_covered_when_its_asset_is_licensed() -
     )
 
     assert out["n"] == 1
-    assert out["all_gold_tables_licensed"] == 1.0, (
-        "both gold tables were licensed; `Air Carriers` is the physical name of "
+    assert out["all_gold_tables_retrieved_tables"] == 1.0, (
+        "both gold tables were retrieved; `Air Carriers` is the physical name of "
         f"{AIR_CARRIERS_ID}"
     )
-    assert out["some_licensed"] == 0.0
+    assert out["some_retrieved_tables"] == 0.0
 
 
-def test_the_funnel_counts_the_same_licensed_table_the_coverage_metric_does() -> None:
+def test_the_funnel_counts_the_same_retrieved_tables_table_the_coverage_metric_does() -> None:
     """``retrieval_funnel`` compares the same two nouns at its own stage, and must agree.
 
-    Two places deciding "was this gold table licensed" by two rules is the drift this module's
+    Two places deciding "was this gold table retrieved_tables" by two rules is the drift this module's
     own prose warns about for ``degenerate``. The funnel's stage is conditional, so a false miss
     here also removes the row from the denominators of ``answered``, ``graded`` and ``correct``.
     """
@@ -69,7 +69,7 @@ def test_the_funnel_counts_the_same_licensed_table_the_coverage_metric_does() ->
         "question_id": "q",
         "db_id": "airline",
         "licensed": [AIR_CARRIERS_ID, "airline.Airlines"],
-        "licensed_schemas": ["airline"],
+        "retrieved_tables_schemas": ["airline"],
         "outcome": "answered",
         "correct": True,
     }
@@ -78,8 +78,8 @@ def test_the_funnel_counts_the_same_licensed_table_the_coverage_metric_does() ->
     counts = out["counts"]
     assert counts["scorable"] == 1
     assert counts["tables_in_routed_schemas"] == 1
-    assert counts["all_gold_tables_licensed"] == 1, (
-        "the turn licensed both gold tables, so the funnel must not lose the row here"
+    assert counts["all_gold_tables_retrieved_tables"] == 1, (
+        "the turn retrieved both gold tables, so the funnel must not lose the row here"
     )
     assert counts["correct"] == 1
 
@@ -99,5 +99,5 @@ def test_a_slug_without_its_digest_is_not_the_same_table() -> None:
         {"q": GOLD},
     )
 
-    assert out["all_gold_tables_licensed"] == 0.0
-    assert out["some_licensed"] == 1.0, "`airline.Airlines` was licensed and `Air Carriers` was not"
+    assert out["all_gold_tables_retrieved_tables"] == 0.0
+    assert out["some_retrieved_tables"] == 1.0, "`airline.Airlines` was retrieved and `Air Carriers` was not"

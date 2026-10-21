@@ -10,7 +10,7 @@ a database, a model or a key); it is not repeated here.
 
 **What this file owns.** ``test_the_api_never_synthesizes_a_reliability_field`` and
 ``test_the_answer_on_the_wire_is_the_engine_s_answer`` pin the second rule on the served answer
-itself -- no reliability verdict anywhere under ``src/``, and the wire's ``record`` is exactly
+itself -- no reliability result anywhere under ``src/``, and the wire's ``record`` is exactly
 ``project()``'s output. The three stream-event tests extend the same rule to the *custom event
 stream* ADR 0007 §5 describes: every emitted ``step`` is a declared ``Stage``, an event's
 ``status`` reports what the node actually did, and a clarification interrupt carries the id and
@@ -75,7 +75,7 @@ MIN_SOURCE_FILES = 50
 
 
 def test_the_api_never_synthesizes_a_reliability_field() -> None:
-    """ADR 0007 §3, asserted structurally: no reliability verdict is produced under `src/`.
+    """ADR 0007 §3, asserted structurally: no reliability result is produced under `src/`.
 
     A behavioural test is true only of the inputs it tried. The scan asserts it reached the tree
     (:data:`MIN_SOURCE_FILES`), and `tier` is checked as a produced key because it is also a
@@ -100,8 +100,8 @@ def test_the_api_never_synthesizes_a_reliability_field() -> None:
                 produces_a_tier.append(f"{relative}:{number}: {line.strip()}")
 
     assert not hits, (
-        "a reliability verdict appears in source. It is not derived from anything the engine "
-        "observes: `stamp` projects `outcome`, `guardrail_errors` and `terminal_reason`. If one "
+        "a reliability result appears in source. It is not derived from anything the engine "
+        "observes: `finish` projects `outcome`, `guardrail_errors` and `terminal_reason`. If one "
         "of these has earned a definition, change this test on purpose and say what measures "
         "it:\n  " + "\n  ".join(hits)
     )
@@ -115,7 +115,7 @@ def test_the_api_never_synthesizes_a_reliability_field() -> None:
 
     # The paired half: the two names must not be in the record register either, since that is
     # where a field would have to be declared before `project()` could emit one.
-    from governed_bi.register.record import record_keys
+    from governed_bi.registry.record import record_keys
 
     assert not (set(forbidden) & record_keys()), record_keys() & set(forbidden)
 
@@ -147,7 +147,7 @@ def test_the_answer_on_the_wire_is_the_engine_s_answer() -> None:
     from langchain_core.messages import HumanMessage
 
     from governed_bi.govern.policy import GovernancePolicy
-    from governed_bi.register.record import record_keys
+    from governed_bi.registry.record import record_keys
 
     answered = _served(_indexed_session()).invoke(
         {"messages": [HumanMessage(content=QUESTION)]}, {"configurable": {"thread_id": "t-wire"}}
@@ -155,7 +155,7 @@ def test_the_answer_on_the_wire_is_the_engine_s_answer() -> None:
 
     # `no_sql`, not `answered`: `_indexed_session()` configures no `agent_model`, so the loop
     # takes `agent_core._stub` and the turn executes no governed statement. It asserted
-    # `"answered"` and passed until 2026-08-18, when `stamp` stopped hardcoding `has_sql=True` for
+    # `"answered"` and passed until 2026-08-18, when `finish` stopped hardcoding `has_sql=True` for
     # a finished loop with an empty ledger. Both properties below hold on every path that took no
     # governance decision, so the test's subject is unchanged; what it no longer does is claim
     # this leg was a governed answer.
@@ -194,7 +194,7 @@ def _stream(graph: Any, payload: dict[str, Any], conf: dict[str, Any]) -> list[d
 
     ``subgraphs=True`` is not optional: the tools run inside ``agent_core``'s nested
     ``create_agent`` graph, and without it ``check``, ``execute`` and every tool row vanish
-    while ``guard`` through ``stamp`` arrive intact — a stream that is silently half a turn.
+    while ``guard`` through ``finish`` arrive intact — a stream that is silently half a turn.
     ADR 0010 M2 is the same trap one layer up, on the HTTP flag.
     """
     out: list[dict[str, Any]] = []
@@ -214,7 +214,7 @@ def test_every_emitted_step_name_is_a_declared_stage() -> None:
     `writer(...)` calls is twenty chances to forget one, and a forgotten call is a step that
     silently never appears — indistinguishable from a stage that did not run.
 
-    Assert every `step` in a turn's events is a member of `register/stages.py`'s `Stage`, and
+    Assert every `step` in a turn's events is a member of `registry/stages.py`'s `Stage`, and
     that the stages a turn actually ran all appear. The second half is the one that catches a
     missing emitter; the first catches a hand-written label drifting from the register.
 
@@ -229,7 +229,7 @@ def test_every_emitted_step_name_is_a_declared_stage() -> None:
     """
     from langchain_core.messages import HumanMessage
 
-    from governed_bi.register.stages import Stage
+    from governed_bi.registry.stages import Stage
 
     events = _stream(
         _served(_indexed_session()),
@@ -242,7 +242,7 @@ def test_every_emitted_step_name_is_a_declared_stage() -> None:
     undeclared = sorted({e["step"] for e in events} - declared)
     assert not undeclared, (
         f"{undeclared} are step names no register row declares, so the client's timeline has "
-        "a row it cannot label and `register/stages.py` is no longer the authority"
+        "a row it cannot label and `registry/stages.py` is no longer the authority"
     )
 
     # The stages this turn actually ran. Named rather than derived, because the claim is that a
@@ -251,9 +251,9 @@ def test_every_emitted_step_name_is_a_declared_stage() -> None:
     ran = {(e["step"], e["status"]) for e in events}
     steps = {step for step, _ in ran}
     for stage in ("accept", "guard", "rewrite", "route", "resolve",
-                  "connect", "assemble", "agent_core", "narrate", "stamp"):
+                  "connect", "assemble", "agent_core", "narrate", "finish"):
         assert stage in steps, f"{stage} ran and emitted nothing: {sorted(steps)}"
-    assert ("stamp", "ok") in ran, "the turn answered and the final row does not say so"
+    assert ("finish", "ok") in ran, "the turn answered and the final row does not say so"
 
     seq = [e["seq"] for e in events]
     assert seq == sorted(set(seq)) and len(seq) == len(set(seq)), (
@@ -275,7 +275,7 @@ def test_an_event_status_reports_what_the_node_did() -> None:
     `tests/serve/test_stream_events_end_to_end.py`, against a live Postgres schema, so it
     *skips* wherever no database is configured — which is CI. Here the corpus is four assets
     and the connector is a double, which is enough because the refusal happens in the layer
-    stack over `licensed` and never reaches a database. The verdict is what is under test; what
+    stack over `retrieved_tables` and never reaches a database. The result is what is under test; what
     a database returned is not.
     """
     from langchain_core.messages import AIMessage, HumanMessage
@@ -305,12 +305,12 @@ def test_an_event_status_reports_what_the_node_did() -> None:
             if e["step"] in ("check", "execute")
         ]
 
-    licensed = _statuses("SELECT count(*) FROM beer.brands", "t-status-ok")
-    pairs = [(step, status) for step, status, _ in licensed]
-    assert ("check", "ok") in pairs, f"a licensed statement was not reported ok: {pairs}"
+    retrieved_tables = _statuses("SELECT count(*) FROM beer.brands", "t-status-ok")
+    pairs = [(step, status) for step, status, _ in retrieved_tables]
+    assert ("check", "ok") in pairs, f"a statement on a retrieved table was not reported ok: {pairs}"
     assert ("execute", "ok") in pairs, f"nothing reported executing: {pairs}"
 
-    # A table the corpus does not hold, so no reading of it is licensed.
+    # A table the corpus does not hold, so no reading of it is retrieved_tables.
     refused = _statuses("SELECT count(*) FROM beer.secrets", "t-status-blocked")
     blocked = [detail for step, status, detail in refused if (step, status) == ("check", "blocked")]
     assert blocked, (

@@ -11,8 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
-from ..register.assets import ASSET_REGISTER, AssetType, TagRule
-from ..register.knobs import Unset, knob_default
+from ..registry.assets import ASSET_REGISTER, AssetType, TagRule
+from ..registry.settings import Unset, setting_default
 
 __all__ = ["Problem", "TAG_RULE_FIELDS", "problems_with"]
 
@@ -36,7 +36,7 @@ class Problem:
 #: How each tag rule is satisfied: the field the index will read, and whether that field is
 #: **required** (``True`` ⇒ a missing value is a problem). A predicate table, **not** a copy of
 #: the register — the register says which rule a type uses, this says what makes that rule
-#: answerable. Closed at import against :class:`~governed_bi.register.assets.TagRule`, which
+#: answerable. Closed at import against :class:`~governed_bi.registry.assets.TagRule`, which
 #: declares seven, so an eighth rule cannot be added without deciding what satisfies it.
 #:
 #: The two optional entries are values, not oversights: an unbound term and a system-wide
@@ -54,12 +54,12 @@ TAG_RULE_FIELDS: Mapping[TagRule, tuple[str, bool]] = {
 
 
 def _bounds() -> tuple[int, int]:
-    """The inclusive summary length bounds, read from the knob register.
+    """The inclusive summary length bounds, read from the setting register.
 
-    The values come from ``register/knobs.py``; what lives here is the refusal to accept an
-    ``UNSET`` bound, so an uncalibrated knob cannot become a threshold nobody chose.
+    The values come from ``registry/settings.py``; what lives here is the refusal to accept an
+    ``UNSET`` bound, so an uncalibrated setting cannot become a threshold nobody chose.
     """
-    low, high = knob_default("summary_min_chars"), knob_default("summary_max_chars")
+    low, high = setting_default("summary_min_chars"), setting_default("summary_max_chars")
     if isinstance(low, Unset) or isinstance(high, Unset):
         raise ValueError(
             "summary_min_chars/summary_max_chars ship UNSET, so there is no bound to "

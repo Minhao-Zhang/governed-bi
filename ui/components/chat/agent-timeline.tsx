@@ -17,14 +17,14 @@ import { cn } from "@/lib/utils";
  * action and a `check`/`execute` pair per SQL attempt. Flat, that is a wall that
  * scrolls the interesting row off the screen while the reader is still parsing the
  * boring ones. So the rails fold into the three phases a turn actually has, each
- * collapsing once it settles, and the five facets fold into one row because they
+ * collapsing once it settles, and the five channels fold into one row because they
  * are one gesture and finish in a jumble.
  *
  * **What grouping is not allowed to do is hide a decision.** A phase holding a
  * blocked `check`, a refusal, a decline, an attempt cap or a `negative_gate` hit
  * opens itself; only clean phases collapse, and a collapsed header still carries
  * the worst status inside it, so closing one by hand loses the detail and never
- * the fact. The terminals — `refuse`, `decline`, `stamp` — are not groupable at
+ * the fact. The terminals — `refuse`, `decline`, `finish` — are not groupable at
  * all and always render as their own row.
  *
  * Nothing is ever dropped: a step this file does not recognise renders at the top
@@ -127,7 +127,7 @@ export function AgentTimeline({
  * agent loop, and keying them off `kind` rather than a name list means a tool the
  * engine adds tomorrow lands in the right place without a change here.
  *
- * `refuse`, `decline` and `stamp` are deliberately absent. They are terminals —
+ * `refuse`, `decline` and `finish` are deliberately absent. They are terminals —
  * one row, at the end, at the top level — and burying a refusal inside a
  * collapsible group is the one thing this component must not do.
  */
@@ -136,11 +136,11 @@ const PHASE_OF = new Map<string, string>([
   ["guard", "intake"],
   ["rewrite", "intake"],
   ["negative_gate", "intake"],
-  ["facet_schema", "context"],
-  ["facet_term", "context"],
-  ["facet_metric", "context"],
-  ["facet_entity", "context"],
-  ["facet_example", "context"],
+  ["channel_schema", "context"],
+  ["channel_term", "context"],
+  ["channel_metric", "context"],
+  ["channel_entity", "context"],
+  ["channel_example", "context"],
   ["route", "context"],
   ["resolve", "context"],
   ["connect", "context"],
@@ -292,7 +292,7 @@ function CollapsedNote({ steps, health }: { steps: TimelineStep[]; health: Healt
 }
 
 /**
- * Render a phase's rows, with the five facets folded into one.
+ * Render a phase's rows, with the five channels folded into one.
  *
  * They fan out concurrently and resolve in whatever order the executor finishes
  * them, so as five rows they read as flicker. As one row they read as what they

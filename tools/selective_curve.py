@@ -8,7 +8,7 @@ prints comes from ``governed_bi.measure.selective`` / ``.abstention`` / ``.signa
 this file holds no statistics of its own. A second implementation of a number is
 how a ladder step changes significance without a diff in the report.
 
-Not named ``check_*``: it reports a curve, it does not gate a tree.
+Not named ``check_*``: it reports a curve, it does not check a tree.
 
 The two comparisons at the bottom are the point of the exercise:
 
@@ -79,28 +79,28 @@ def _report(
     path: pathlib.Path, coverages: list[float], accuracies: list[float], trade_at: float
 ) -> None:
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    arm = graded(Population.of(path.stem, rows))
+    config = graded(Population.of(path.stem, rows))
     print(f"\n{'=' * 100}\n{path}\n{'=' * 100}")
-    print(f"population: {arm.describe()}  (dropped {len(rows) - arm.n} of {len(rows)} rows)")
+    print(f"population: {config.describe()}  (dropped {len(rows) - config.n} of {len(rows)} rows)")
 
-    engine = engine_policy(arm)
+    engine = engine_policy(config)
     print("\n-- the engine's operating point ---------------------------------------------")
     print(f"  {engine.point().render()}")
     print(f"  useful answers (delivered and correct): {engine.useful}")
-    print(f"  {PricedAbstention.of(arm).render()}")
+    print(f"  {PricedAbstention.of(config).render()}")
 
-    curves = _curves(arm)
+    curves = _curves(config)
     _print_coincidence(engine, curves)
     _print_curve_table(curves, coverages)
     _print_targets(curves, accuracies)
-    _print_partial(arm, curves, coverages)
-    _print_trades(arm, engine, curves, trade_at)
+    _print_partial(config, curves, coverages)
+    _print_trades(config, engine, curves, trade_at)
 
 
-def _curves(arm: Population) -> dict[str, RiskCoverage]:
-    built = {"oracle": oracle(arm), "no ranking": no_ranking(arm)}
+def _curves(config: Population) -> dict[str, RiskCoverage]:
+    built = {"oracle": oracle(config), "no ranking": no_ranking(config)}
     for name, signal in SIGNALS.items():
-        built[name] = risk_coverage(arm, signal)
+        built[name] = risk_coverage(config, signal)
     return built
 
 
@@ -178,16 +178,16 @@ def _print_targets(curves: dict[str, RiskCoverage], accuracies: list[float]) -> 
         for _, point in reached:
             print(f"    {point.render()}")
         if absent:
-            # Named, not dropped. "No signal reaches 0.90" is the result on this arm, and
+            # Named, not dropped. "No signal reaches 0.90" is the result on this config, and
             # a table that only lists the winners cannot say it.
             print(f"    no operating point at k >= {MIN_OPERATING_POINT}: "
                   + ", ".join(name for name, _ in absent))
 
 
 def _print_partial(
-    arm: Population, curves: dict[str, RiskCoverage], coverages: list[float]
+    config: Population, curves: dict[str, RiskCoverage], coverages: list[float]
 ) -> None:
-    """Signals the arm carries on *some* delivered turns, re-run over just those.
+    """Signals the config carries on *some* delivered turns, re-run over just those.
 
     ``measure.selective`` refuses a curve when a signal is missing on any delivered
     turn, which is right: an AURC over 1,268 turns and one over 1,270 are not the same
@@ -200,7 +200,7 @@ def _print_partial(
     printed = False
     for name in partial:
         signal = SIGNALS[name]
-        subset = arm.restrict(
+        subset = config.restrict(
             lambda r, s=signal: r.get("outcome") != "answered" or s.read(r) is not None,
             f"delivered turns carrying {name}",
         )
@@ -208,7 +208,7 @@ def _print_partial(
         if curve.unavailable or not curve.ranked:
             continue
         if not printed:
-            print("\n-- signals present on only part of the arm ------------------------------------")
+            print("\n-- signals present on only part of the config ------------------------------------")
             printed = True
         cells = "".join(f"{_cell(c):>14}" for c in (curve.accuracy_at(x) for x in coverages))
         print(f"  {name:<22}{curve.auc.render(4):>8}{curve.aurc.render(4):>8}"
@@ -217,12 +217,12 @@ def _print_partial(
 
 
 def _print_trades(
-    arm: Population, engine: DeliveryPolicy, curves: dict[str, RiskCoverage], trade_at: float
+    config: Population, engine: DeliveryPolicy, curves: dict[str, RiskCoverage], trade_at: float
 ) -> None:
     print("\n-- what the trade costs, paired ----------------------------------------------")
     best = _best(curves)
     if best is None:
-        print("  no signal is available on this arm, so there is nothing to trade against")
+        print("  no signal is available on this config, so there is nothing to trade against")
         return
     ranked = best.policy_at_most(trade_at)
     curve_point = best.accuracy_at(trade_at)

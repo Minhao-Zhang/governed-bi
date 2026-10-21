@@ -1,6 +1,6 @@
 """``Measured[T]``: a quantity that may be absent, with an explicit reason.
 
-Lives in ``register/`` so :mod:`.record` can recognise unmeasured values in the
+Lives in ``registry/`` so :mod:`.record` can recognise unmeasured values in the
 presence test without importing upward. Three states: measured, not_measured,
 not_applicable. Truthiness and arithmetic are refused; format only via
 :meth:`Measured.render`.
@@ -256,10 +256,10 @@ _assert_absence_cannot_carry_a_value()
 #: of which exactly these 3 are ours; dynamically, walking ``checkpoint["values"]`` after real
 #: refuse / decline / no-statement turns finds exactly these 3 and nothing else. ``State`` and
 #: ``Relation`` are not extras: they are :class:`Measured`'s field types, so a pickled absence
-#: names all three. Every other declared channel type (``GuardVerdict``, ``ExecutionRecord``,
+#: names all three. Every other declared channel type (``GuardResult``, ``ExecutionRecord``,
 #: ``RetrievalResult``, ``FacetResult`` …) is a ``TypedDict`` — a plain ``dict`` at runtime, with
 #: no class name in the pickle — and the ``Any``-typed holes carry plain JSON today
-#: (``facets[*]["hits"]`` and ``retrieved["selected"]`` are dicts built with ``asset_type.value``,
+#: (``channels[*]["hits"]`` and ``retrieved["selected"]`` are dicts built with ``asset_type.value``,
 #: never :class:`~governed_bi.retrieve.result.Hit` objects).
 #:
 #: **What a rename costs.** ``langgraph.json`` mounts a custom checkpointer, so
@@ -281,7 +281,7 @@ _assert_absence_cannot_carry_a_value()
 #:
 #: The module path is **not** checked here, because a move deletes this file and takes the guard
 #: with it. ``tests/conformance/test_a_rename_deletes_the_thread_registry.py`` pins
-#: ``governed_bi.register.quantity`` from the outside and holds that half.
+#: ``governed_bi.registry.quantity`` from the outside and holds that half.
 CHECKPOINT_PICKLED_NAMES: tuple[str, ...] = ("Measured", "State", "Relation")
 
 #: Shown when the guard below fires. A comment would not have been enough: a prose rule in a
@@ -289,7 +289,7 @@ CHECKPOINT_PICKLED_NAMES: tuple[str, ...] = ("Measured", "State", "Relation")
 #: obligation needs a mechanism. This is the mechanism — the module does not import at all until
 #: the reader has dealt with the message.
 RENAME_DELETES_THE_THREAD_REGISTRY = """\
-{renamed} no longer resolves under that name in governed_bi.register.quantity, and that name is
+{renamed} no longer resolves under that name in governed_bi.registry.quantity, and that name is
 on disk: it is pickled by reference into .langgraph_api/.langgraph_ops.pckl on every served turn
 (see CHECKPOINT_PICKLED_NAMES above for the full chain and its evidence).
 

@@ -2,7 +2,7 @@
 
 Authoring rules applied throughout:
 
-* **Every test drives the real gate.** None re-derives a rule's arithmetic.
+* **Every test drives the real check.** None re-derives a rule's arithmetic.
 * **Assert the effect, not the presence of a constant**, and **never assert a module
   against its own constant** — that passes for an empty tuple.
 * **Test the negative case.** A guard that only leaves a trace when it fires cannot
@@ -30,7 +30,7 @@ def layer():
     return Layer
 
 
-# ── the verdict's own invariants ──────────────────────────────────────────────
+# ── the result's own invariants ──────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -60,25 +60,25 @@ def test_every_refusal_reports_a_declared_rule_and_its_own_layer(check, sql) -> 
     """
     from governed_bi.govern.layers import GUARDRAIL_ERROR, PASSED, RULES
 
-    verdict = check(sql, licensed=CUSTOMERS)
-    assert verdict["passed"] is False, verdict
-    assert verdict["reason_code"] not in (PASSED, GUARDRAIL_ERROR), verdict
-    assert verdict["reason_code"] in RULES, verdict["reason_code"]
-    assert verdict["failed_layer"] is RULES[verdict["reason_code"]]
-    assert verdict["layers_evaluated"][-1] is verdict["failed_layer"], verdict
+    result = check(sql, retrieved_tables=CUSTOMERS)
+    assert result["passed"] is False, result
+    assert result["reason_code"] not in (PASSED, GUARDRAIL_ERROR), result
+    assert result["reason_code"] in RULES, result["reason_code"]
+    assert result["failed_layer"] is RULES[result["reason_code"]]
+    assert result["layers_evaluated"][-1] is result["failed_layer"], result
 
 
-def test_a_passing_verdict_has_no_layer_and_the_control_still_binds(check) -> None:
+def test_a_passing_result_has_no_layer_and_the_control_still_binds(check) -> None:
     """The complement of every refusal above. Also the ``bound`` map's only positive
     assertion: a reference that resolved has to be *recorded* as resolved, or the
     column layer's input is silently empty."""
-    verdict = check(
+    result = check(
         "SELECT c.id FROM customers c",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.id"}),
     )
-    assert verdict["passed"] is True and verdict["failed_layer"] is None
-    assert verdict["bound"]["c.id"] == "customers"
+    assert result["passed"] is True and result["failed_layer"] is None
+    assert result["bound"]["c.id"] == "customers"
 
 
 def test_first_failure_wins_and_the_order_is_the_enum_order(check, layer) -> None:
@@ -86,14 +86,14 @@ def test_first_failure_wins_and_the_order_is_the_enum_order(check, layer) -> Non
 
     One statement that violates the function layer **and** the table layer reports
     ``FUNCTIONS``; repair only the function and the same statement reports ``TABLES``.
-    Two verdicts from one pair of statements, so a stack that evaluated in a different
+    Two results from one pair of statements, so a stack that evaluated in a different
     order could not produce both.
     """
-    both = check("SELECT pg_sleep(nope.x) FROM nope", licensed=CUSTOMERS)
+    both = check("SELECT pg_sleep(nope.x) FROM nope", retrieved_tables=CUSTOMERS)
     assert both["failed_layer"] is layer.FUNCTIONS
 
     table_only = check(
-        "SELECT nope.x FROM nope", licensed=CUSTOMERS, allowed_columns=frozenset({"nope.x"})
+        "SELECT nope.x FROM nope", retrieved_tables=CUSTOMERS, allowed_columns=frozenset({"nope.x"})
     )
     assert table_only["failed_layer"] is layer.TABLES
 
@@ -101,13 +101,13 @@ def test_first_failure_wins_and_the_order_is_the_enum_order(check, layer) -> Non
 def test_a_layer_that_did_not_run_has_no_entry(check, layer) -> None:
     """Absence is not agreement. The cost layer ships disabled, so a passing statement
     must **not** claim it ran."""
-    verdict = check(
+    result = check(
         "SELECT c.id FROM customers c",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.id"}),
     )
     assert "COST" not in layer.__members__
-    assert verdict["layers_evaluated"] == [
+    assert result["layers_evaluated"] == [
         layer.PARSE, layer.NO_WRITE, layer.FUNCTIONS, layer.BINDING, layer.COLUMNS, layer.TABLES
     ]
 
@@ -116,7 +116,7 @@ def test_an_exception_inside_check_blocks_and_is_countable(check, monkeypatch) -
     """ADR 0006 §12's chain: a ``NameError`` in a layer walk turns every turn into a
     refusal, ``crash_rate == 0``, every register key present, run declared quotable.
 
-    So the verdict must block **and** be distinguishable from a governance decision.
+    So the result must block **and** be distinguishable from a governance decision.
     The negative half is the second assertion: an ordinary refusal must not count.
     """
     from importlib import import_module
@@ -132,14 +132,14 @@ def test_an_exception_inside_check_blocks_and_is_countable(check, monkeypatch) -
     # the patch would land on nothing.
     check_module = import_module("governed_bi.govern.check")
     monkeypatch.setattr(check_module, "iter_scopes", boom)
-    verdict = check("SELECT c.id FROM customers c", licensed=CUSTOMERS)
-    assert verdict["passed"] is False
-    assert verdict["reason_code"] == GUARDRAIL_ERROR
-    assert verdict["failed_layer"] is not None, "a swallowed exception must still name a layer"
-    assert guardrail_errors([attempt_record(verdict, "agent")]) == 1
+    result = check("SELECT c.id FROM customers c", retrieved_tables=CUSTOMERS)
+    assert result["passed"] is False
+    assert result["reason_code"] == GUARDRAIL_ERROR
+    assert result["failed_layer"] is not None, "a swallowed exception must still name a layer"
+    assert guardrail_errors([attempt_record(result, "agent")]) == 1
 
     monkeypatch.undo()
-    ordinary = check("DROP TABLE customers", licensed=CUSTOMERS)
+    ordinary = check("DROP TABLE customers", retrieved_tables=CUSTOMERS)
     assert guardrail_errors([attempt_record(ordinary, "agent")]) == 0
 
 
@@ -149,36 +149,36 @@ def test_an_exception_inside_check_blocks_and_is_countable(check, monkeypatch) -
 def test_a_correlated_qualified_reference_binds_through_the_ancestor_scope(check) -> None:
     """The positive control for the whole binding rule. If this refused, every
     refusal below would be satisfied by a function that refuses everything."""
-    verdict = check(
+    result = check(
         "SELECT c.id FROM customers c WHERE c.id IN (SELECT o.cid FROM orders o WHERE o.cid = c.id)",
-        licensed=frozenset({"customers", "orders"}),
+        retrieved_tables=frozenset({"customers", "orders"}),
         allowed_columns=frozenset({"customers.id", "orders.cid"}),
     )
-    assert verdict["passed"] is True, verdict
+    assert result["passed"] is True, result
 
 
 def test_an_unknown_two_part_qualifier_refuses(check, layer) -> None:
     """``unknown.col`` — the shape ADR 0006 §4 records as missed by the first draft's
     list of six."""
-    verdict = check(
+    result = check(
         "SELECT unknown.token FROM customers",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"unknown.token"}),
     )
-    assert verdict["failed_layer"] is layer.BINDING
-    assert verdict["reason_code"] == "r_unbound_reference"
+    assert result["failed_layer"] is layer.BINDING
+    assert result["reason_code"] == "r_unbound_reference"
 
 
 def test_a_bare_name_in_a_mixed_base_and_derived_scope_refuses(check, layer) -> None:
     """v1's leftmost-table resolution would bind it to whichever source came first,
     and in an obfuscated corpus that can be the decoy."""
-    verdict = check(
+    result = check(
         "SELECT id FROM customers, (SELECT 1 AS n) s",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.id"}),
     )
-    assert verdict["failed_layer"] is layer.BINDING
-    assert verdict["reason_code"] == "r_ambiguous_reference"
+    assert result["failed_layer"] is layer.BINDING
+    assert result["reason_code"] == "r_ambiguous_reference"
 
 
 def test_a_cte_named_after_a_base_table_shadows_it(check) -> None:
@@ -189,26 +189,26 @@ def test_a_cte_named_after_a_base_table_shadows_it(check) -> None:
     deferred a real table's excluded column onto a reference that never touched it —
     the same map would refuse this statement for a column it does not read.
     """
-    verdict = check(
+    result = check(
         "WITH customers AS (SELECT 1 AS id) SELECT id FROM customers",
-        licensed=frozenset(),
+        retrieved_tables=frozenset(),
         allowed_columns=frozenset(),
         excluded_columns=frozenset({"customers.id"}),
     )
-    assert verdict["passed"] is True, verdict
-    assert verdict["bound"]["id"] == "derived:customers"
+    assert result["passed"] is True, result
+    assert result["bound"]["id"] == "derived:customers"
 
 
 def test_a_bare_having_reference_is_column_checked(check, layer) -> None:
     """``scope.columns`` omits bare ``HAVING`` references, so a column allowlist built
     from it never sees them. This drives the walk that replaced it."""
-    verdict = check(
+    result = check(
         "SELECT c.id FROM customers c GROUP BY c.id HAVING count(ssn) > 1",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.id"}),
     )
-    assert verdict["failed_layer"] is layer.COLUMNS
-    assert "ssn" in verdict["detail"]
+    assert result["failed_layer"] is layer.COLUMNS
+    assert "ssn" in result["detail"]
 
 
 def test_using_keys_are_column_checked_on_both_sides(check, layer) -> None:
@@ -219,16 +219,16 @@ def test_using_keys_are_column_checked_on_both_sides(check, layer) -> None:
     which is what distinguishes "the key is checked" from "USING always refuses".
     """
     both = frozenset({"customers.cid", "orders.cid"})
-    verdict = check(
+    result = check(
         "SELECT c.cid FROM customers c JOIN orders o USING (cid)",
-        licensed=frozenset({"customers", "orders"}),
+        retrieved_tables=frozenset({"customers", "orders"}),
         allowed_columns=both,
     )
-    assert verdict["passed"] is True, verdict
+    assert result["passed"] is True, result
 
     half = check(
         "SELECT c.cid FROM customers c JOIN orders o USING (cid)",
-        licensed=frozenset({"customers", "orders"}),
+        retrieved_tables=frozenset({"customers", "orders"}),
         allowed_columns=frozenset({"customers.cid"}),
     )
     assert half["failed_layer"] is layer.COLUMNS
@@ -248,16 +248,16 @@ def test_a_sibling_cte_is_not_a_source_this_scope_can_bind_to(check, layer) -> N
     (``test_a_bare_name_in_a_mixed_base_and_derived_scope_refuses``) still refuses, and the
     reference this change newly rejects is asserted below.
     """
-    verdict = check(
+    result = check(
         "WITH pm AS (SELECT c.id AS pid FROM customers c), "
         "cm AS (SELECT c.id AS cid FROM customers c), "
         "j AS (SELECT pm.pid AS jid FROM pm) "
         "SELECT jid FROM j",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.id"}),
     )
-    assert verdict["passed"] is True, verdict
-    assert verdict["bound"]["jid"] == "derived:j"
+    assert result["passed"] is True, result
+    assert result["bound"]["jid"] == "derived:j"
 
 
 def test_a_cte_outside_this_scopes_from_cannot_even_be_qualified_against(check, layer) -> None:
@@ -267,13 +267,13 @@ def test_a_cte_outside_this_scopes_from_cannot_even_be_qualified_against(check, 
     reads ``customers``, so Postgres has no ``pm`` to resolve against and neither may we.
     Under the old mapping this bound happily.
     """
-    verdict = check(
+    result = check(
         "WITH pm AS (SELECT c.id AS pid FROM customers c) SELECT pm.pid FROM customers",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.id"}),
     )
-    assert verdict["failed_layer"] is layer.BINDING
-    assert verdict["reason_code"] == "r_unbound_reference"
+    assert result["failed_layer"] is layer.BINDING
+    assert result["reason_code"] == "r_unbound_reference"
 
 
 def test_two_sources_answering_to_one_name_refuse(check, layer) -> None:
@@ -285,17 +285,17 @@ def test_two_sources_answering_to_one_name_refuse(check, layer) -> None:
     Both are bindings nobody wrote. The pair distinguishes this from "two sources always
     refuse".
     """
-    verdict = check(
+    result = check(
         "SELECT a.id FROM customers AS a, orders AS a",
-        licensed=frozenset({"customers", "orders"}),
+        retrieved_tables=frozenset({"customers", "orders"}),
         allowed_columns=frozenset({"customers.id", "orders.id"}),
     )
-    assert verdict["failed_layer"] is layer.BINDING
-    assert verdict["reason_code"] == "r_ambiguous_reference"
+    assert result["failed_layer"] is layer.BINDING
+    assert result["reason_code"] == "r_ambiguous_reference"
 
     distinct = check(
         "SELECT a.id, b.id FROM customers AS a JOIN orders AS b ON a.id = b.id",
-        licensed=frozenset({"customers", "orders"}),
+        retrieved_tables=frozenset({"customers", "orders"}),
         allowed_columns=frozenset({"customers.id", "orders.id"}),
     )
     assert distinct["passed"] is True, distinct
@@ -305,12 +305,12 @@ def test_count_star_is_the_carve_out_and_every_other_star_argument_is_not(check)
     """§2's exception, stated as a pair so the carve-out cannot swallow the rule."""
     ok = check(
         "SELECT count(*) AS n FROM customers",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset(),
     )
     assert ok["passed"] is True, ok
 
-    blocked = check("SELECT max(c.*) FROM customers c", licensed=CUSTOMERS)
+    blocked = check("SELECT max(c.*) FROM customers c", retrieved_tables=CUSTOMERS)
     assert blocked["reason_code"] == "r_whole_row_argument"
 
 
@@ -323,10 +323,10 @@ def test_a_permitted_aggregate_over_a_bare_alias_still_refuses(check) -> None:
     allowed against; with a corpus that declares no column called ``t``, it is
     positively identified as a whole-row reference and refuses one layer earlier.
     """
-    assert check("SELECT max(t) FROM customers t", licensed=CUSTOMERS)["passed"] is False
+    assert check("SELECT max(t) FROM customers t", retrieved_tables=CUSTOMERS)["passed"] is False
     informed = check(
         "SELECT max(t) FROM customers t",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.id"}),
     )
     assert informed["reason_code"] == "r_whole_row_reference"
@@ -338,25 +338,25 @@ def test_a_permitted_aggregate_over_a_bare_alias_still_refuses(check) -> None:
 def test_excluded_beats_allowed(check, layer) -> None:
     """Two definitions of "excluded" drifting apart was B10. One column, both sets,
     must refuse — the allowlist is not a licence over the exclusion."""
-    verdict = check(
+    result = check(
         "SELECT c.ssn FROM customers c",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.ssn"}),
         excluded_columns=frozenset({"customers.ssn"}),
     )
-    assert verdict["failed_layer"] is layer.COLUMNS
-    assert verdict["reason_code"] == "r_column_excluded"
+    assert result["failed_layer"] is layer.COLUMNS
+    assert result["reason_code"] == "r_column_excluded"
 
 
-def test_hard_block_suspect_is_a_knob_with_both_settings_live(check) -> None:
-    """v1 had this knob and ADR 0006's first draft dropped it. Dev and the benchmark
-    hard-block; production soft-warns. Both directions asserted, because a knob that
-    only ever takes its default is a knob nobody would notice was ignored."""
+def test_hard_block_suspect_is_a_setting_with_both_settings_live(check) -> None:
+    """v1 had this setting and ADR 0006's first draft dropped it. Dev and the benchmark
+    hard-block; production soft-warns. Both directions asserted, because a setting that
+    only ever takes its default is a setting nobody would notice was ignored."""
     from governed_bi.govern.policy import GovernancePolicy
 
     sql = "SELECT c.alias FROM customers c"
     args = dict(
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.alias"}),
         suspect_columns=frozenset({"customers.alias"}),
     )
@@ -372,11 +372,11 @@ def test_absent_column_authorization_refuses_and_present_authorization_passes(ch
     the identical statement passes once the authorization exists.
     """
     sql = "SELECT c.id FROM customers c"
-    absent = check(sql, licensed=CUSTOMERS)
+    absent = check(sql, retrieved_tables=CUSTOMERS)
     assert absent["failed_layer"] is layer.COLUMNS
     assert absent["reason_code"] == "r_column_not_allowed"
 
-    present = check(sql, licensed=CUSTOMERS, allowed_columns=frozenset({"customers.id"}))
+    present = check(sql, retrieved_tables=CUSTOMERS, allowed_columns=frozenset({"customers.id"}))
     assert present["passed"] is True
 
 
@@ -384,28 +384,28 @@ def test_keys_fold_on_both_sides_for_tables_too(check) -> None:
     """B5 is not only about columns: a ``Customers`` licence and a ``customers``
     reference are the same table, and quoting to compensate would send the engine a
     relation that does not exist."""
-    verdict = check(
+    result = check(
         "SELECT c.id FROM CUSTOMERS c",
-        licensed=frozenset({"Customers"}),
+        retrieved_tables=frozenset({"Customers"}),
         allowed_columns=frozenset({"customers.ID"}),
     )
-    assert verdict["passed"] is True, verdict
+    assert result["passed"] is True, result
 
 
 def test_default_schema_qualifies_unqualified_references_only(check, layer) -> None:
     """``default_schema`` supplies the qualification the datasource pins — and does not
     silently qualify a reference that already names a different schema."""
-    verdict = check(
+    result = check(
         "SELECT c.id FROM customers c",
-        licensed=frozenset({"public.customers"}),
+        retrieved_tables=frozenset({"public.customers"}),
         allowed_columns=frozenset({"customers.id"}),
         default_schema="public",
     )
-    assert verdict["passed"] is True, verdict
+    assert result["passed"] is True, result
 
     elsewhere = check(
         "SELECT c.id FROM other.customers c",
-        licensed=frozenset({"public.customers"}),
+        retrieved_tables=frozenset({"public.customers"}),
         allowed_columns=frozenset({"other.customers.id"}),
         default_schema="public",
     )
@@ -416,7 +416,7 @@ def test_a_column_key_without_a_table_is_a_caller_error(check) -> None:
     """A bare name in a column allowlist is not a key — it is a name that matches in
     every table, which is the lake-wide allowlist that made B4 exploitable."""
     with pytest.raises(ValueError):
-        check("SELECT c.id FROM customers c", licensed=CUSTOMERS, allowed_columns=frozenset({"id"}))
+        check("SELECT c.id FROM customers c", retrieved_tables=CUSTOMERS, allowed_columns=frozenset({"id"}))
 
 
 def test_a_bare_source_name_in_a_projection_is_a_whole_row_read(check, layer) -> None:
@@ -430,13 +430,13 @@ def test_a_bare_source_name_in_a_projection_is_a_whole_row_read(check, layer) ->
     reads the column, and so do we.
     """
     composite = check(
-        "SELECT c FROM customers c", licensed=CUSTOMERS, allowed_columns=frozenset({"customers.id"})
+        "SELECT c FROM customers c", retrieved_tables=CUSTOMERS, allowed_columns=frozenset({"customers.id"})
     )
     assert composite["failed_layer"] is layer.BINDING
     assert composite["reason_code"] == "r_whole_row_reference"
 
     real_column = check(
-        "SELECT c FROM customers c", licensed=CUSTOMERS, allowed_columns=frozenset({"customers.c"})
+        "SELECT c FROM customers c", retrieved_tables=CUSTOMERS, allowed_columns=frozenset({"customers.c"})
     )
     assert real_column["passed"] is True, real_column
     assert real_column["bound"]["c"] == "customers", "it bound as a column, not as the row"

@@ -23,15 +23,15 @@ __all__ = ["fuse", "scale_to_ceiling"]
 def scale_to_ceiling(value: float, *, ceiling: float) -> float:
     """``value / ceiling``, clamped to ``[0, 1]``. A fixed map, not a per-query one.
 
-    **This replaced a min-max over the facet's own scored population** (audit I1), which had
+    **This replaced a min-max over the channel's own scored population** (audit I1), which had
     three defects that were one defect: the top-scoring document became exactly 1.0, the weakest
     became exactly 0.0, and with a single scored document — or an all-tie — *every* document
-    became 1.0. So each facet awarded a maximal vote to its own favourite whatever that
-    favourite's absolute strength was, and ``route`` then **sums those votes across facets**: a
-    facet that found nothing convincing voted exactly as loudly as one that found the right
+    became 1.0. So each channel awarded a maximal vote to its own favourite whatever that
+    favourite's absolute strength was, and ``route`` then **sums those votes across channels**: a
+    channel that found nothing convincing voted exactly as loudly as one that found the right
     table. ``tests/retrieve/test_scoring_contract.py`` states the property being violated in its
     own words — "a score divided by the current query's best hit is only comparable *within* one
-    query, so it cannot be summed across facets in ``route``" — and it tests ``BM25.search``,
+    query, so it cannot be summed across channels in ``route``" — and it tests ``BM25.search``,
     which is absolute, one layer below where the division was happening.
 
     **Reciprocal-rank fusion was the plan and is not the fix.** RRF is immune to *scale*, but it

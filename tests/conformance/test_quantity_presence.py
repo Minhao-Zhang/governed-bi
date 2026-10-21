@@ -6,7 +6,7 @@ hole that **the fix for the previous hole opened**, and that lineage is the poin
 Three appearances of one shape in this project:
 
 1. v1's ``corpus_content_hash == "unknown"`` compared equal to itself, so two runs
-   with no recorded treatment passed the comparability gate.
+   with no recorded treatment passed the comparability check.
 2. ``missing_required`` checked key-presence only, and ``project`` writes every key —
    so a record of nulls passed. Fixed by treating ``None`` as absent.
 3. Introducing ``Measured`` reopened it: ``Measured.unmeasured(why)`` is not ``None``,
@@ -20,8 +20,8 @@ layer as the register, instead of a convention.
 
 from __future__ import annotations
 
-from governed_bi.register.quantity import Measured
-from governed_bi.register.record import (
+from governed_bi.registry.quantity import Measured
+from governed_bi.registry.record import (
     RECORD_REGISTER,
     Absence,
     missing_required,
@@ -54,7 +54,7 @@ def test_an_unmeasured_required_field_counts_as_missing() -> None:
 def test_a_measured_zero_is_a_value_and_must_not_count_as_missing() -> None:
     """The complement, and it is L-R1 read in the other direction.
 
-    A gate that rejected ``Measured.of(0)`` would make a genuine zero unreportable —
+    A check that rejected ``Measured.of(0)`` would make a genuine zero unreportable —
     which is how "absent is not zero" gets over-applied into "zero is not real", and
     then the fix gets reverted for being too strict.
     """

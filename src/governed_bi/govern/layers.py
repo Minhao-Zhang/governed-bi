@@ -1,4 +1,4 @@
-"""Layer stack, verdict, and rule table (ADR 0006 §1).
+"""Layer stack, result, and rule table (ADR 0006 §1).
 
 Ordered ``IntEnum``: reaching layer *N* proves ``1..N-1`` passed.
 ``failed_layer is None`` means passed and nothing else. ``failed_layer`` is
@@ -11,11 +11,11 @@ from __future__ import annotations
 from enum import IntEnum
 from typing import Mapping, Sequence, TypedDict
 
-from ..register.stages import REFUSED_BY_TO_STAGE, Stage
+from ..registry.stages import REFUSED_BY_TO_STAGE, Stage
 
 __all__ = [
     "Layer",
-    "CheckVerdict",
+    "CheckResult",
     "RULES",
     "PASSED",
     "GUARDRAIL_ERROR",
@@ -41,11 +41,11 @@ class Layer(IntEnum):
     BINDING = 4
     #: Every bound column is allowed, not excluded and not suspect: three rule ids.
     COLUMNS = 5
-    #: Every base table is in the licensed set.
+    #: Every base table is in the retrieved tables.
     TABLES = 6
 
 
-class CheckVerdict(TypedDict):
+class CheckResult(TypedDict):
     """What ``check()`` returns. ``failed_layer is None`` ⟺ ``passed``."""
 
     passed: bool
@@ -60,18 +60,18 @@ class CheckVerdict(TypedDict):
     bound: dict[str, str]
 
 
-#: The reason code of a passing verdict. A closed vocabulary needs a member for
+#: The reason code of a passing result. A closed vocabulary needs a member for
 #: "nothing objected", or the field is empty on the path a reader checks first.
 PASSED = "passed"
 
 #: An exception was swallowed inside ``check()``. **Not** in :data:`RULES`: its layer
 #: is wherever the exception happened, so it is the one reason code whose layer is
 #: contextual. ADR 0006 §12 requires these be *counted* as well as blocked — a
-#: systematically broken ``check()`` otherwise presents as an arm that refuses
+#: systematically broken ``check()`` otherwise presents as a config that refuses
 #: everything, with ``crash_rate == 0`` and every register key present.
 GUARDRAIL_ERROR = "guardrail_error"
 
-#: ``refused_by`` for a turn this module refused. Asserted against ``register.stages``
+#: ``refused_by`` for a turn this module refused. Asserted against ``registry.stages``
 #: at import rather than restated: a literal here that no longer matches a key there
 #: is a refusal with no stage.
 GUARDRAIL_REFUSED_BY = "guardrail"
@@ -118,20 +118,20 @@ RULES: Mapping[str, Layer] = {
     "r_column_suspect": Layer.COLUMNS,
     # ── TABLES ──
     #: Retrieval did not license this table **this turn**.
-    "r_table_not_licensed": Layer.TABLES,
+    "r_table_not_retrieved": Layer.TABLES,
 }
 
 
 def rule_layer(rule_id: str) -> Layer:
     """The layer that owns ``rule_id``. Raises on an undeclared rule.
 
-    An undeclared rule would otherwise produce a verdict with no layer, which is B3.
+    An undeclared rule would otherwise produce a result with no layer, which is B3.
     """
     try:
         return RULES[rule_id]
     except KeyError:
         raise KeyError(
-            f"{rule_id!r} is not a declared rule. A verdict must carry the layer that "
+            f"{rule_id!r} is not a declared rule. A result must carry the layer that "
             "refused; a rule with no layer would have to report None, which graded "
             "delivery reads as 'passed' (ADR 0006 B3)."
         ) from None
@@ -145,10 +145,10 @@ def _evaluated(layers: Sequence[Layer], upto: Layer) -> list[Layer]:
 
 
 def refuse(rule_id: str, detail: str, *, evaluated: Sequence[Layer] = (),
-           bound: Mapping[str, str] | None = None) -> CheckVerdict:
-    """A blocked verdict. The layer comes from :data:`RULES`, never from a caller."""
+           bound: Mapping[str, str] | None = None) -> CheckResult:
+    """A blocked result. The layer comes from :data:`RULES`, never from a caller."""
     layer = rule_layer(rule_id)
-    return CheckVerdict(
+    return CheckResult(
         passed=False,
         failed_layer=layer,
         layers_evaluated=_evaluated(evaluated, layer),
@@ -158,9 +158,9 @@ def refuse(rule_id: str, detail: str, *, evaluated: Sequence[Layer] = (),
     )
 
 
-def allow(*, evaluated: Sequence[Layer], bound: Mapping[str, str]) -> CheckVerdict:
-    """A passing verdict. There is no way to give it a layer."""
-    return CheckVerdict(
+def allow(*, evaluated: Sequence[Layer], bound: Mapping[str, str]) -> CheckResult:
+    """A passing result. There is no way to give it a layer."""
+    return CheckResult(
         passed=True,
         failed_layer=None,
         layers_evaluated=list(evaluated),
@@ -170,9 +170,9 @@ def allow(*, evaluated: Sequence[Layer], bound: Mapping[str, str]) -> CheckVerdi
     )
 
 
-def internal_error(layer: Layer, detail: str, *, evaluated: Sequence[Layer] = ()) -> CheckVerdict:
-    """Verdict for an exception inside ``check()`` (:data:`GUARDRAIL_ERROR`)."""
-    return CheckVerdict(
+def internal_error(layer: Layer, detail: str, *, evaluated: Sequence[Layer] = ()) -> CheckResult:
+    """Result for an exception inside ``check()`` (:data:`GUARDRAIL_ERROR`)."""
+    return CheckResult(
         passed=False,
         failed_layer=layer,
         layers_evaluated=_evaluated(evaluated, layer),
@@ -184,12 +184,12 @@ def internal_error(layer: Layer, detail: str, *, evaluated: Sequence[Layer] = ()
 
 def _assert_stage_vocabulary_is_shared() -> None:
     """Import-time guard: this module's ``refused_by`` literals still resolve to
-    stages in ``register.stages``. A refusal whose stage is unknown cannot be
+    stages in ``registry.stages``. A refusal whose stage is unknown cannot be
     attributed to anything.
 
     :data:`GUARDRAIL_ERROR` is checked here too, because since the 2026-08-10 audit it is a
     ``refused_by`` value and not only a ``reason_code``: it is the member of
-    ``register.stages.CRASH_REFUSED_BY`` that has a producer, so if the two spellings drift a
+    ``registry.stages.CRASH_REFUSED_BY`` that has a producer, so if the two spellings drift a
     swallowed layer exception silently becomes an ordinary refusal again.
     """
     for value, expected in (
@@ -200,7 +200,7 @@ def _assert_stage_vocabulary_is_shared() -> None:
         actual = REFUSED_BY_TO_STAGE.get(value)
         if actual is not expected:  # pragma: no cover - import-time guard
             raise AssertionError(
-                f"refused_by {value!r} maps to {actual!r} in register.stages, expected "
+                f"refused_by {value!r} maps to {actual!r} in registry.stages, expected "
                 f"{expected!r}. A governance refusal with the wrong stage is a refusal "
                 "attributed to the wrong part of the system."
             )

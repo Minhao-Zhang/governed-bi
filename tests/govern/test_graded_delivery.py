@@ -16,5 +16,5 @@ def test_six_layers_remain_and_graded_delivery_is_never_eligible() -> None:
         "COLUMNS",
         "TABLES",
     ]
-    verdict = allow(evaluated=list(Layer), bound={})
-    assert graded_delivery_eligible(verdict) is False
+    result = allow(evaluated=list(Layer), bound={})
+    assert graded_delivery_eligible(result) is False

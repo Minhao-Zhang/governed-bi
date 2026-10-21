@@ -196,7 +196,7 @@ const FACT_KEYS = new Map<string, readonly string[]>([
   // statement, so an expanded `execute` row is where a reader confirms that the
   // live view and the record are describing the same SQL.
   ["execute", ["n_columns", "truncated", "sql_sha256"]],
-  ["stamp", ["failed_stage"]],
+  ["finish", ["failed_stage"]],
 ]);
 
 /*

@@ -6,18 +6,18 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import uuid4
 
-from governed_bi.eval.arms import ArmSpec, model_for_question
+from governed_bi.eval.configs import ConfigSpec, model_for_question
 from governed_bi.eval.oracle import oracle_grade
 from governed_bi.eval.projection import project_turn
 from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
-from governed_bi.register.stages import Outcome
+from governed_bi.registry.stages import Outcome
 from governed_bi.serve.graph import compile_durable
 
-__all__ = ["EvictionWouldHang", "run_arm", "run_comparison", "project_turn"]
+__all__ = ["EvictionWouldHang", "run_config", "run_comparison", "project_turn"]
 
 
 class EvictionWouldHang(RuntimeError):
-    """Raised when the only remaining way to evict a thread would block the arm forever.
+    """Raised when the only remaining way to evict a thread would block the config forever.
 
     Named rather than swallowed because a hang is the worst failure a measurement run has: no
     rows, no traceback, no partial output, and ``except Exception`` cannot see it. See
@@ -25,9 +25,9 @@ class EvictionWouldHang(RuntimeError):
     """
 
 
-def run_arm(
+def run_config(
     questions: Sequence[Mapping[str, Any]],
-    arm: ArmSpec,
+    config: ConfigSpec,
     *,
     order_sensitive_qids: frozenset[str] | None = None,
     graph: Any | None = None,
@@ -37,7 +37,7 @@ def run_arm(
     connector_factory: Any | None = None,
     on_row: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Run every question under one arm; return graded turn rows, **in input order**.
+    """Run every question under one config; return graded turn rows, **in input order**.
 
     ``session`` is how a **quotable** run is produced: every id and run constant is minted by
     ``Session.turn``. Without it turns come from :func:`_base_turn`, which fabricates
@@ -55,19 +55,19 @@ def run_arm(
     """
     order_sensitive_qids = order_sensitive_qids or frozenset()
     run_id = run_id or f"run-{uuid4().hex[:12]}"
-    base_cfg = arm.build_configurable()
+    base_cfg = config.build_configurable()
 
-    if arm.oracle_only:
+    if config.oracle_only:
         connector = base_cfg.get("connector")
         if connector is None:
-            raise ValueError("oracle arm requires connector in configurable")
-        # Row by row with ``on_row``, like every other arm: a list comprehension here would
+            raise ValueError("oracle config requires connector in configurable")
+        # Row by row with ``on_row``, like every other config: a list comprehension here would
         # ignore ``on_row`` and let one unexecutable gold discard every row already computed.
         # ``oracle_grade`` records an execution failure as a crashed row.
         rows: list[dict[str, Any]] = []
         for index, question in enumerate(questions):
             row = oracle_grade(question, connector, order_sensitive_qids=order_sensitive_qids)
-            row["arm"] = arm.name
+            row["config"] = config.name
             row["run_id"] = run_id
             rows.append(row)
             if on_row is not None:
@@ -86,7 +86,7 @@ def run_arm(
 
     if workers == 1:
         # A caller-supplied graph is the caller's to close; one we make here is ours. Durable so
-        # that `HARNESS_DB` -- not the conversation store -- carries the arm's threads.
+        # that `HARNESS_DB` -- not the conversation store -- carries the config's threads.
         compiled = graph if graph is not None else compile_durable()
         ours = graph is None
         out: list[dict[str, Any]] = []
@@ -94,7 +94,7 @@ def run_arm(
             for index, question in enumerate(questions):
                 row = _run_one(
                     question,
-                    arm=arm,
+                    config=config,
                     base_cfg=base_cfg,
                     compiled=compiled,
                     session=session,
@@ -106,7 +106,7 @@ def run_arm(
                     on_row(index, row)
         finally:
             # `getattr`: a caller-supplied graph and the test doubles that stand in for one are
-            # not required to be closeable, and housekeeping must not turn into the arm's error.
+            # not required to be closeable, and housekeeping must not turn into the config's error.
             if ours:
                 close = getattr(compiled, "close", None)
                 if close is not None:
@@ -115,7 +115,7 @@ def run_arm(
 
     return _run_concurrently(
         questions,
-        arm=arm,
+        config=config,
         base_cfg=base_cfg,
         session=session,
         run_id=run_id,
@@ -129,7 +129,7 @@ def run_arm(
 def _run_one(
     question: Mapping[str, Any],
     *,
-    arm: ArmSpec,
+    config: ConfigSpec,
     base_cfg: Mapping[str, Any],
     compiled: Any,
     session: Any,
@@ -150,7 +150,7 @@ def _run_one(
     if model is not None:
         conf["agent_model"] = model
     conf.pop("scripted_sql_lookup", None)
-    thread_id = f"{run_id}-{arm.name}-{qid}"
+    thread_id = f"{run_id}-{config.name}-{qid}"
     conf["thread_id"] = thread_id
 
     if session is not None:
@@ -163,22 +163,22 @@ def _run_one(
             thread_id=thread_id,
             # Passing evidence is the BIRD condition for EX. The grader departs from BIRD on
             # purpose (`eval/grade.results_match`: numeric tolerance, text never a number). An
-            # arm that wants the harder no-hint condition omits the key from the question dict.
+            # config that wants the harder no-hint condition omits the key from the question dict.
             evidence=question.get("evidence"),
         )
-        # ``Session.turn`` writes the session's own knobs, so a driver that set a per-question
+        # ``Session.turn`` writes the session's own settings, so a driver that set a per-question
         # override (``tools/run_datalake_eval.py --top-n``) had it silently replaced and the
         # run served the register default under a header announcing the override. The
         # no-session path below has always honoured the question; these now agree.
-        knobs = _turn_knobs(question, session)
-        if knobs is not None:
-            turn["knobs_resolved"] = knobs
+        settings = _turn_settings(question, session)
+        if settings is not None:
+            turn["knobs_resolved"] = settings
     else:
-        turn = _base_turn(question, run_id=run_id, arm=arm.name)
+        turn = _base_turn(question, run_id=run_id, config=config.name)
     # Inject route hits when no index so answered path can reach agent.
-    if conf.get("index") is None and "facet_route_hits" not in turn:
+    if conf.get("index") is None and "channel_route_hits" not in turn:
         db = str(question.get("db_id") or "fixture")
-        turn["facet_route_hits"] = [("facet_schema", db, 1.0)]
+        turn["channel_route_hits"] = [("channel_schema", db, 1.0)]
 
     # After `Session.turn`, which resets this channel with every other per-turn key. Only
     # present when `--replay-routing` attached one; a question the artifact did not cover is
@@ -190,7 +190,7 @@ def _run_one(
     row = project_turn(
         result,
         question=question,
-        arm=arm.name,
+        config=config.name,
         order_sensitive=qid in order_sensitive_qids,
         connector=conf.get("connector"),
     )
@@ -199,11 +199,11 @@ def _run_one(
     return row
 
 
-def _turn_knobs(question: Mapping[str, Any], session: Any) -> dict[str, Any] | None:
+def _turn_settings(question: Mapping[str, Any], session: Any) -> dict[str, Any] | None:
     """The configuration this question runs under: its own override, else the session's.
 
     ``None`` when neither carries one — absent, not ``{}``, because an empty mapping reads to
-    ``measure.gates`` as "one configuration whose every knob is None".
+    ``measure.checks`` as "one configuration whose every setting is None".
     """
     for source in (question.get("knobs_resolved"), getattr(session, "knobs_resolved", None)):
         if isinstance(source, Mapping):
@@ -214,7 +214,7 @@ def _turn_knobs(question: Mapping[str, Any], session: Any) -> dict[str, Any] | N
 def _evict(compiled: Any, thread_id: str) -> None:
     """Drop this question's checkpoints. Raises only where the alternative is a hang.
 
-    A worker holds one compiled graph for the whole arm and nothing else empties its saver —
+    A worker holds one compiled graph for the whole config and nothing else empties its saver —
     roughly 100 KB of checkpoint per question (``usage`` and ``answer`` accumulate and every
     superstep re-serialises them), retained until the process exits for state no later
     question reads.
@@ -239,7 +239,7 @@ def _evict(compiled: Any, thread_id: str) -> None:
         except Exception:  # noqa: BLE001 — a saver that cannot evict is a leak, not a failed turn
             return
         return
-    # No arm reaches this today -- `run_arm` compiles durable and takes the branch above. It is
+    # No config reaches this today -- `run_config` compiles durable and takes the branch above. It is
     # the *designated* fallback, and on a loop-bound saver it is a trap:
     # `AsyncSqliteSaver.delete_thread` is a sync bridge -- `run_coroutine_threadsafe(...).result()`
     # onto `self.loop` -- and `_SyncApp`'s loop is not running between calls, so the call never
@@ -247,7 +247,7 @@ def _evict(compiled: Any, thread_id: str) -> None:
     # 5 s). An older comment here claimed it raised `NotImplementedError`; `aio.py` contains no
     # `NotImplementedError` at all -- those are on the *sync* `SqliteSaver`'s *async* methods
     # (`langgraph/checkpoint/sqlite/__init__.py:592,608,624`). So the trap is refused by name:
-    # `except Exception` cannot catch a hang, and an arm that hangs on question one produces no
+    # `except Exception` cannot catch a hang, and a config that hangs on question one produces no
     # output, no traceback and no partial rows.
     if getattr(saver, "loop", None) is not None:
         raise EvictionWouldHang(
@@ -257,7 +257,7 @@ def _evict(compiled: Any, thread_id: str) -> None:
             f"usable eviction and it was not reachable (adelete_thread="
             f"{adelete is not None}, run_coro={run_coro is not None}, "
             f"pinned_loop={getattr(compiled, '_loop', None) is not None}). Failing here rather "
-            f"than hanging: an arm that blocks on question one writes no rows and no traceback."
+            f"than hanging: a config that blocks on question one writes no rows and no traceback."
         )
     delete = getattr(saver, "delete_thread", None)
     if delete is None:
@@ -271,7 +271,7 @@ def _evict(compiled: Any, thread_id: str) -> None:
 def _run_concurrently(
     questions: Sequence[Mapping[str, Any]],
     *,
-    arm: ArmSpec,
+    config: ConfigSpec,
     base_cfg: Mapping[str, Any],
     session: Any,
     run_id: str,
@@ -285,7 +285,7 @@ def _run_concurrently(
     Thread-local rather than a pool of pre-built pairs, so a short run does not open
     ``workers`` connections it never uses.
 
-    A question that raises is recorded as a **crashed row** rather than ending the arm, with
+    A question that raises is recorded as a **crashed row** rather than ending the config, with
     the question and exception named — a systematic failure must be visible as a count, not
     as a shorter file.
     """
@@ -315,7 +315,7 @@ def _run_concurrently(
         try:
             row = _run_one(
                 question,
-                arm=arm,
+                config=config,
                 base_cfg=base_cfg,
                 compiled=compiled,
                 session=session,
@@ -323,16 +323,16 @@ def _run_concurrently(
                 order_sensitive_qids=order_sensitive_qids,
                 connector=connector,
             )
-        except Exception as err:  # noqa: BLE001 — one bad question must not end the arm
+        except Exception as err:  # noqa: BLE001 — one bad question must not end the config
             row = {
                 "question_id": str(question.get("question_id")),
-                "arm": arm.name,
+                "config": config.name,
                 "run_id": run_id,
-                # The arm's configuration and the question's gold schema are known whether or
-                # not the turn reached ``stamp``. Omitting them here would make one crash turn
-                # the whole arm's knobs gate ``cannot_evaluate`` and drop the row out of the
+                # The config's configuration and the question's gold schema are known whether or
+                # not the turn reached ``finish``. Omitting them here would make one crash turn
+                # the whole config's settings check ``cannot_evaluate`` and drop the row out of the
                 # funnel's routing stage, for a reason that has nothing to do with either.
-                "knobs_resolved": _turn_knobs(question, session),
+                "knobs_resolved": _turn_settings(question, session),
                 "db_id": question.get("db_id"),
                 "outcome": Outcome.crashed.value,
                 "correct": False,
@@ -361,7 +361,7 @@ def _run_concurrently(
                     on_row(index, row)
     finally:
         # Not housekeeping: an unclosed `aiosqlite` connection holds a non-daemon thread, and
-        # CPython joins those *before* `atexit`, so an arm that leaves one open never exits.
+        # CPython joins those *before* `atexit`, so a config that leaves one open never exits.
         for compiled in built:
             close = getattr(compiled, "close", None)
             if close is not None:
@@ -371,38 +371,38 @@ def _run_concurrently(
 
 def run_comparison(
     questions: Sequence[Mapping[str, Any]],
-    arms: Sequence[ArmSpec],
+    configs: Sequence[ConfigSpec],
     *,
     order_sensitive_qids: frozenset[str] | None = None,
     run_id: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Run each arm; return ``{arm_name: turn_rows}``."""
+    """Run each config; return ``{config_name: turn_rows}``."""
     run_id = run_id or f"run-{uuid4().hex[:12]}"
     return {
-        arm.name: run_arm(
+        config.name: run_config(
             questions,
-            arm,
+            config,
             order_sensitive_qids=order_sensitive_qids,
             run_id=run_id,
         )
-        for arm in arms
+        for config in configs
     }
 
 
-def _base_turn(question: Mapping[str, Any], *, run_id: str, arm: str) -> dict[str, Any]:
+def _base_turn(question: Mapping[str, Any], *, run_id: str, config: str) -> dict[str, Any]:
     qid = str(question["question_id"])
     db = str(question.get("db_id") or "fixture")
     return {
         "question": str(question.get("question") or question.get("utterance") or qid),
-        "thread_id": f"{run_id}-{arm}-{qid}",
+        "thread_id": f"{run_id}-{config}-{qid}",
         "turn_index": 1,
         "run_id": run_id,
-        "turn_id": f"turn-{arm}-{qid}",
+        "turn_id": f"turn-{config}-{qid}",
         "question_id": qid,
         "db_id": db,
         "evidence": str(question.get("evidence") or ""),
-        "attempt_id": f"attempt-{arm}-{qid}",
-        "corpus_content_hash": str(question.get("corpus_content_hash") or f"corpus-{arm}"),
+        "attempt_id": f"attempt-{config}-{qid}",
+        "corpus_content_hash": str(question.get("corpus_content_hash") or f"corpus-{config}"),
         "prompt_set_hash": str(question.get("prompt_set_hash") or "prompt-eval"),
         "knobs_resolved": dict(question.get("knobs_resolved") or {"route_top_n": 3}),
         "n_re_served": 0,

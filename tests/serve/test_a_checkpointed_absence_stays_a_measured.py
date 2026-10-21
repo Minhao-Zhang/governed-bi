@@ -27,14 +27,14 @@ from langgraph._internal import _serde
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-from governed_bi.register.quantity import Measured, State
+from governed_bi.registry.quantity import Measured, State
 from governed_bi.serve.state import ServeState, UsageRecord
 
 #: What the serde must be told about. ``State`` and ``Relation`` are companions, not
 #: extras: they are the field types, so a registered ``Measured`` whose enums are blocked
 #: still comes back wrong.
 QUANTITY_TYPES: frozenset[tuple[str, str]] = frozenset(
-    ("governed_bi.register.quantity", name) for name in ("Measured", "State", "Relation")
+    ("governed_bi.registry.quantity", name) for name in ("Measured", "State", "Relation")
 )
 
 

@@ -13,14 +13,14 @@ from typing import Any, Callable
 import pytest
 
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.register.assets import ASSET_REGISTER, AssetType
-from governed_bi.register.facets import Channel, ChannelState, expected_channel_state
-from governed_bi.register.stages import Stage
+from governed_bi.registry.assets import ASSET_REGISTER, AssetType
+from governed_bi.registry.channels import Channel, ChannelState, expected_channel_state
+from governed_bi.registry.stages import Stage
 from governed_bi.retrieve.index import UnifiedIndex
-from governed_bi.serve.nodes.facets import (
-    facet_entity_node,
-    facet_example_node,
-    facet_schema_node,
+from governed_bi.serve.nodes.channels import (
+    channel_entity_node,
+    channel_example_node,
+    channel_schema_node,
 )
 from governed_bi.serve.runtime import channel_scale
 
@@ -75,9 +75,9 @@ def _base_turn(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
-def _empty_facet(stage: Stage, question: str) -> dict[str, Any]:
+def _empty_channel(stage: Stage, question: str) -> dict[str, Any]:
     return {
-        "facet": stage.value,
+        "channel": stage.value,
         "queries": [question],
         "hits": [],
         "channels": {
@@ -86,14 +86,14 @@ def _empty_facet(stage: Stage, question: str) -> dict[str, Any]:
     }
 
 
-def _live_facets(state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    facets = {
-        "facet_entity": asyncio.run(facet_entity_node(state, config))["facets"]["facet_entity"],
-        "facet_schema": asyncio.run(facet_schema_node(state, config))["facets"]["facet_schema"],
+def _live_channels(state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    channels = {
+        "channel_entity": asyncio.run(channel_entity_node(state, config))["channels"]["channel_entity"],
+        "channel_schema": asyncio.run(channel_schema_node(state, config))["channels"]["channel_schema"],
     }
-    for stage in (Stage.facet_term, Stage.facet_metric, Stage.facet_example):
-        facets[stage.value] = _empty_facet(stage, state["question"])
-    return facets
+    for stage in (Stage.channel_term, Stage.channel_metric, Stage.channel_example):
+        channels[stage.value] = _empty_channel(stage, state["question"])
+    return channels
 
 
 def _count_schema_hits(hits: list[Any], schema: str) -> int:
@@ -139,17 +139,17 @@ def _a_table_count(table_ids: list[str], retrieved: dict[str, Any], index: Unifi
     return n
 
 
-# ── facet pass-one ────────────────────────────────────────────────────────────
+# ── channel pass-one ────────────────────────────────────────────────────────────
 
 
-def test_facet_schema_searches_index_within_target_types(
+def test_channel_schema_searches_index_within_target_types(
     two_schema_index: UnifiedIndex, guard_off_policy: GovernancePolicy
 ) -> None:
     state = _base_turn(question="customer commerce")
     config = _config(
-        thread_id="t-facet-schema", policy=guard_off_policy, index=two_schema_index
+        thread_id="t-channel-schema", policy=guard_off_policy, index=two_schema_index
     )
-    result = asyncio.run(facet_schema_node(state, config))["facets"]["facet_schema"]
+    result = asyncio.run(channel_schema_node(state, config))["channels"]["channel_schema"]
     assert result["queries"] == ["customer commerce"]
     assert result["hits"]
     for hit in result["hits"]:
@@ -160,9 +160,9 @@ def test_facet_schema_searches_index_within_target_types(
     # This once read ``hit["score"] == hit["lexical"]``, which is a claim about how two channels
     # combine made in the only configuration the suite ever built — no embedder, so the combiner
     # is a no-op — and it would have held equally for ``max``, ``min``, or "ignore the vector".
-    # Then a min-max normaliser made ``score`` relative to the facet's best hit and the equality
+    # Then a min-max normaliser made ``score`` relative to the channel's best hit and the equality
     # had to go. The fixed ceiling of audit I1 gives it back, and the second assertion is the
-    # reason that matters: a facet whose best hit is mediocre no longer reports top of scale.
+    # reason that matters: a channel whose best hit is mediocre no longer reports top of scale.
     by_score = [h["asset_id"] for h in sorted(result["hits"], key=lambda h: -h["score"])]
     by_lexical = [h["asset_id"] for h in sorted(result["hits"], key=lambda h: -h["lexical"])]
     assert by_score == by_lexical, "a single running channel must decide the order outright"
@@ -171,20 +171,21 @@ def test_facet_schema_searches_index_within_target_types(
             "the lexical channel is passed through unscaled: raw/(raw+k) is already in [0,1)"
         )
     assert max(h["score"] for h in result["hits"]) < 1.0, (
-        "the facet's best hit was normalised up to top of scale, so `route` cannot tell a facet "
+        "the retrieval channel's best hit was normalised up to the top of the scale, "
+        "so `route` cannot tell a retrieval channel "
         "that found the right table from one that found its favourite among poor options"
     )
     assert result["channels"][Channel.lexical.value] == ChannelState.ran.value
 
 
-def test_facet_entity_filters_to_table_column_join(
+def test_channel_entity_filters_to_table_column_join(
     two_schema_index: UnifiedIndex, guard_off_policy: GovernancePolicy
 ) -> None:
     state = _base_turn(candidate_depth=8)
     config = _config(
-        thread_id="t-facet-entity", policy=guard_off_policy, index=two_schema_index
+        thread_id="t-channel-entity", policy=guard_off_policy, index=two_schema_index
     )
-    result = asyncio.run(facet_entity_node(state, config))["facets"]["facet_entity"]
+    result = asyncio.run(channel_entity_node(state, config))["channels"]["channel_entity"]
     assert result["hits"] and len(result["hits"]) <= 8
     assert all(h["asset_type"] == AssetType.table.value for h in result["hits"])
     assert _count_schema_hits(result["hits"], SCHEMA_A) >= _count_schema_hits(
@@ -192,22 +193,22 @@ def test_facet_entity_filters_to_table_column_join(
     )
 
 
-def test_facet_example_keeps_lexical_not_configured(
+def test_channel_example_keeps_lexical_not_configured(
     two_schema_index: UnifiedIndex, guard_off_policy: GovernancePolicy
 ) -> None:
     config = _config(
-        thread_id="t-facet-example", policy=guard_off_policy, index=two_schema_index
+        thread_id="t-channel-example", policy=guard_off_policy, index=two_schema_index
     )
-    result = asyncio.run(facet_example_node(_base_turn(), config))["facets"]["facet_example"]
+    result = asyncio.run(channel_example_node(_base_turn(), config))["channels"]["channel_example"]
     assert result["hits"] == []
     assert result["channels"][Channel.lexical.value] == ChannelState.not_configured.value
 
 
-def test_facet_without_index_keeps_empty_hits_for_f1(
+def test_channel_without_index_keeps_empty_hits_for_f1(
     guard_off_policy: GovernancePolicy,
 ) -> None:
     config = _config(thread_id="t-no-index", policy=guard_off_policy)
-    assert asyncio.run(facet_entity_node(_base_turn(), config))["facets"]["facet_entity"]["hits"] == []
+    assert asyncio.run(channel_entity_node(_base_turn(), config))["channels"]["channel_entity"]["hits"] == []
 
 
 # ── pass-two / assemble / refuse / budgets ────────────────────────────────────
@@ -237,11 +238,11 @@ def test_pass_two_recovers_more_in_schema_hits_than_pass_one(
         index=two_schema_index,
         assets_by_id=two_schema_assets,
     )
-    facets = _live_facets(state_pass_one, config)
-    pass_one_a = _count_schema_hits(facets["facet_entity"]["hits"], SCHEMA_A)
+    channels = _live_channels(state_pass_one, config)
+    pass_one_a = _count_schema_hits(channels["channel_entity"]["hits"], SCHEMA_A)
     # Pass-two uses full candidate_depth; only pass-one was shallow.
     routed = route_node(
-        {**state_pass_one, "facets": facets, "candidate_depth": 50},
+        {**state_pass_one, "channels": channels, "candidate_depth": 50},
         config,
     )
     assert routed.get("path_kind") != "decline", routed
@@ -273,7 +274,7 @@ def test_context_hash_stable_for_same_inputs(
         assets_by_id=two_schema_assets,
     )
     routed = _call_node(
-        route_node, {**state, "facets": _live_facets(state, config)}, config
+        route_node, {**state, "channels": _live_channels(state, config)}, config
     )
     # An assertion, not `pytest.xfail(...)`: a conditional in-body xfail silently disarms every
     # assertion after it, and `test_turn_contract.py` names these three lines as "how this
@@ -323,7 +324,7 @@ def test_refuse_and_decline_leave_context_hash_none(
         _base_turn(
             question="how many sensors",
             turn_id="turn-decline",
-            facet_route_hits=[],
+            channel_route_hits=[],
         ),
         _config(thread_id="t-decline", policy=guard_off_policy),
     )
@@ -350,7 +351,7 @@ def test_table_hits_capped_at_register_budget(
         assets_by_id=two_schema_assets,
     )
     routed = _call_node(
-        route_node, {**state, "facets": _live_facets(state, config)}, config
+        route_node, {**state, "channels": _live_channels(state, config)}, config
     )
     # As above (audit M5): a decline makes the budget assertions vacuous, not satisfied.
     assert routed.get("path_kind") != "decline", (
@@ -366,7 +367,7 @@ def test_pass_two_scores_against_the_turns_query_vector_from_state(monkeypatch) 
 
     ``accept`` writes the per-turn vector to **state** (``serve/accept.py``), because
     ``make_graph`` binds the run constants once at load time with no question — a query
-    vector cannot be a run constant. ``facets._query_vector`` was taught to read state first
+    vector cannot be a run constant. ``channels._query_vector`` was taught to read state first
     and documents why at length; ``route_node`` was left on the other side of the same fix.
     The consequence was silent and total: ``_semantic_scores`` returns ``{}`` for a ``None``
     vector, so pass two — the pass that builds the analyst's context — fused a single
@@ -387,7 +388,7 @@ def test_pass_two_scores_against_the_turns_query_vector_from_state(monkeypatch) 
     state = {
         "question": "how many customers",
         "query_vector": [0.5, 0.5],
-        "facet_route_hits": [("facet_schema", "sales", 0.9)],
+        "channel_route_hits": [("channel_schema", "sales", 0.9)],
         "knobs_resolved": {},
     }
     config = {
@@ -439,15 +440,15 @@ def test_a_few_shot_reaches_retrieved_and_the_prompt() -> None:
     """5 000 past SQL examples — 36% of the corpus — could never reach the analyst.
 
     Two lines conspired. ``pass_two.py`` gated the whole scoring block on
-    ``_scores_lexical(name)``, and ``facet_example`` declares only ``Channel.semantic``
-    (``register/facets.py``), so the facet was skipped outright. Its pass-one hits were then
+    ``_scores_lexical(name)``, and ``channel_example`` declares only ``Channel.semantic``
+    (``registry/channels.py``), so the channel was skipped outright. Its pass-one hits were then
     dropped by the carry-forward, which keeps only hits with **no** ``schema_tag`` — and
     every few-shot carries ``TagRule.own_schema``. So ``retrieved["by_type"]["few_shot"]``
     was never populated, the declared budget of 3 was unreachable, and ``context.py``'s
-    ``## Few-shots`` section could not render. The facet voted on schema routing and then
-    delivered nothing, which is the incident ``nodes/facets.py`` says it fixed one pass
-    earlier: *"``facet_example`` declares only the semantic channel, so without it the
-    past-SQL-example facet retrieves nothing at all."*
+    ``## Few-shots`` section could not render. The channel voted on schema routing and then
+    delivered nothing, which is the incident ``nodes/channels.py`` says it fixed one pass
+    earlier: *"``channel_example`` declares only the semantic channel, so without it the
+    past-SQL-example channel retrieves nothing at all."*
     """
     from governed_bi.corpus.schema import ColumnAsset, FewShotAsset, TableAsset
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
@@ -479,9 +480,9 @@ def test_a_few_shot_reaches_retrieved_and_the_prompt() -> None:
     state = {
         "question": question,
         "knobs_resolved": {},
-        "facets": {
-            "facet_entity": {"facet": "facet_entity", "queries": [question], "hits": []},
-            "facet_example": {"facet": "facet_example", "queries": [question], "hits": []},
+        "channels": {
+            "channel_entity": {"channel": "channel_entity", "queries": [question], "hits": []},
+            "channel_example": {"channel": "channel_example", "queries": [question], "hits": []},
         },
     }
     retrieved = pass_two_retrieve(
@@ -523,7 +524,7 @@ def test_a_semantic_only_candidate_can_enter_pass_two() -> None:
     ``pass_two`` took the lexical top-``depth`` and then looked the cosine up **by id**, so
     an asset with a strong cosine and no shared query term could not enter the context at
     any depth. A caller that ranks lexically and then attaches a cosine to the survivors has
-    no semantic channel for that facet at all: it has a lexical channel wearing a cosine.
+    no semantic channel for that channel at all: it has a lexical channel wearing a cosine.
     ``nodes/pass_two.py``'s own comment states the rule — *"Each channel retrieves; their
     union is scored"* (ADR 0005 §2.4).
     """
@@ -533,7 +534,7 @@ def test_a_semantic_only_candidate_can_enter_pass_two() -> None:
     # No token of the question appears in this summary, so BM25 scores it zero. The
     # embedder is stubbed rather than hashed because `DeterministicEmbedder` puts an
     # unrelated pair at cosine exactly 0.0 — which the `> 0.0` filter drops for the same
-    # reason `nodes/facets.py` drops it, so a hash embedder cannot express "found only by
+    # reason `nodes/channels.py` drops it, so a hash embedder cannot express "found only by
     # the vector channel".
     orphan = TableAsset(
         id="sales.zzz",
@@ -571,7 +572,7 @@ def test_a_semantic_only_candidate_can_enter_pass_two() -> None:
     state = {
         "question": question,
         "knobs_resolved": {},
-        "facets": {"facet_entity": {"facet": "facet_entity", "queries": [question], "hits": []}},
+        "channels": {"channel_entity": {"channel": "channel_entity", "queries": [question], "hits": []}},
     }
     retrieved = pass_two_retrieve(
         state=state,
@@ -594,10 +595,10 @@ def test_pass_two_scores_both_channels_over_the_same_text() -> None:
     ``accept`` embeds the **raw last human message** into ``state["query_vector"]`` — it is the
     only writer of that key repo-wide — and ``route_node`` passed it straight through as one
     call-level vector for the whole of pass two. The lexical channel meanwhile searched the
-    per-facet ``queries``, which ``_run_facet`` set to the utility-model rewrite. So the two
+    per-channel ``queries``, which ``_run_facet`` set to the utility-model rewrite. So the two
     channels were scored over two different texts and then blended at 0.5/0.5.
 
-    ``facets.py`` documents the fix in the pass that already had it — *"The rewrite happens
+    ``channels.py`` documents the fix in the pass that already had it — *"The rewrite happens
     first and both channels then search with it: the point of restating the question in the
     vocabulary of the thing being searched is to move it semantically closer, so a rewrite
     reaching only BM25 misses it."* — and that fix applied to pass one only, leaving it undone
@@ -646,8 +647,8 @@ def test_pass_two_scores_both_channels_over_the_same_text() -> None:
         state={
             "question": QUESTION,
             "knobs_resolved": {},
-            "facets": {
-                "facet_entity": {"facet": "facet_entity", "queries": [REWRITE], "hits": []}
+            "channels": {
+                "channel_entity": {"channel": "channel_entity", "queries": [REWRITE], "hits": []}
             },
         },
         index=index,
@@ -660,7 +661,7 @@ def test_pass_two_scores_both_channels_over_the_same_text() -> None:
     selected = retrieved["selected"]
 
     assert "sales.rewrite_match" in selected, (
-        "the semantic channel is still scoring the raw question's vector, so the facet's "
+        "the semantic channel is still scoring the raw question's vector, so the retrieval channel's "
         f"rewrite reached BM25 only: {sorted(selected)}"
     )
     assert selected["sales.rewrite_match"]["semantic"] == pytest.approx(1.0)
@@ -679,7 +680,7 @@ def test_pass_two_scores_a_rewrite_against_its_own_vector_or_against_nothing() -
 
     **The second half is the audit finding.** With no embedder there is nothing to embed the
     rewrite with, and this used to degrade to ``query_vector`` — the *raw question's* — so the
-    facet blended BM25 over "customer count purchasers" with cosine over "how many buyers" and
+    channel blended BM25 over "customer count purchasers" with cosine over "how many buyers" and
     recorded one ``semantic`` score. This test asserted that as correct, on the reasoning that no
     embedder is a legitimate configuration and going dark would make it unusable. The
     configuration is legitimate; the substitution is not, and it is not needed to keep it usable:
@@ -711,9 +712,9 @@ def test_pass_two_scores_a_rewrite_against_its_own_vector_or_against_nothing() -
             state={
                 "question": "how many buyers",
                 "knobs_resolved": {},
-                "facets": {
-                    "facet_entity": {
-                        "facet": "facet_entity",
+                "channels": {
+                    "channel_entity": {
+                        "channel": "channel_entity",
                         "queries": ["customer count purchasers"],
                         "hits": [],
                     }
@@ -749,21 +750,21 @@ def test_both_passes_use_one_combiner() -> None:
     """
     import inspect
 
-    from governed_bi.serve.nodes import facets, pass_two
+    from governed_bi.serve.nodes import channels, pass_two
     from governed_bi.serve.runtime import combine_channels
 
     assert pass_two.combine_channels is combine_channels
-    assert facets.combine_channels is combine_channels
+    assert channels.combine_channels is combine_channels
     # Neither module may re-derive the rule locally.
-    for module in (facets, pass_two):
+    for module in (channels, pass_two):
         source = inspect.getsource(module)
         assert "max(lexical" not in source, f"{module.__name__} still has a local combiner"
     both = {"lexical", "semantic"}
     for value in (0.8, 1.0):
-        # A facet that consulted **one** channel: renormalised by that channel's weight, so a
-        # one-channel facet is not halved.
+        # A channel that consulted **one** channel: renormalised by that channel's weight, so a
+        # one-channel channel is not halved.
         assert combine_channels(value, None, consulted={"lexical"}, scale=channel_scale({})) == value, (
-            "fuse must renormalise by consulted weight, or a one-channel facet is halved"
+            "fuse must renormalise by consulted weight, or a retrieval channel on one scoring channel is halved"
         )
         # The same arguments where **both** channels ran: the semantic channel returned nothing
         # for this document, which is a measurement of 0.0 and not an absent channel. Treating
@@ -792,7 +793,7 @@ def test_carry_forward_scores_an_unscored_pass_one_hit(semantic_state, expected)
 
     Every payload the fan-out writes carries a ``score``, so only a hit built elsewhere — a
     ``retrieve_hooks`` hook, a fixture — reaches the branch, and it crashed the turn. The
-    consulted set comes from what the facet result records as ``ran``, so the recomputed score
+    consulted set comes from what the channel result records as ``ran``, so the recomputed score
     is pass one's own rather than an average over whichever components happen to be present.
     """
     from governed_bi.corpus.schema import TableAsset
@@ -808,8 +809,8 @@ def test_carry_forward_scores_an_unscored_pass_one_hit(semantic_state, expected)
         channels[Channel.semantic.value] = semantic_state
     # No `score` and no `schema_tag`, so the carry-forward keeps this hit and must score it.
     # `queries: []` keeps pass two's own scoring block out of the way.
-    facet = {
-        "facet": "facet_entity",
+    channel = {
+        "channel": "channel_entity",
         "queries": [],
         "channels": channels,
         "hits": [{
@@ -822,7 +823,7 @@ def test_carry_forward_scores_an_unscored_pass_one_hit(semantic_state, expected)
         }],
     }
     retrieved = pass_two_retrieve(
-        state={"question": question, "knobs_resolved": {}, "facets": {"facet_entity": facet}},
+        state={"question": question, "knobs_resolved": {}, "channels": {"channel_entity": channel}},
         index=index,
         schemas=["sales"],
         ranking=[("sales", 1.0)],

@@ -1,6 +1,6 @@
 """Run constants for a served turn, built once (ADR 0005 §2.8.2.2).
 
-Run-constant vs per-turn: index, structure, corpus, connector, policy, model, knobs,
+Run-constant vs per-turn: index, structure, corpus, connector, policy, model, settings,
 and hashes live on :class:`Session`. Entry points: :meth:`Session.configurable` and
 :meth:`Session.turn`. Ids are minted here, never accepted from a caller.
 """
@@ -14,15 +14,15 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from governed_bi.register.prompts import prompt_set_hash
-from governed_bi.register.prompts import select as selected_variants
+from governed_bi.registry.prompts import prompt_set_hash
+from governed_bi.registry.prompts import select as selected_variants
 
 from ..corpus.analyst import for_analyst
 from ..corpus.hash import corpus_content_hash
 from ..corpus.schema import Asset, AssetType, MetricAsset, TableAsset, TermAsset
 from ..corpus.store import load as load_corpus
 from ..corpus.store import write as write_asset
-from ..model.embedder import embedding_knobs
+from ..model.embedder import embedding_settings
 from ..model.provider import reasoning_effort_of
 from ..ports import Embedder
 from ..retrieve.index import UnifiedIndex, build_index
@@ -71,7 +71,7 @@ class Session:
     db_id: str
     run_id: str
     agent_model: Any | None = None
-    #: Model for guard + facet rewriters. Falls back to :attr:`agent_model`.
+    #: Model for guard + channel rewriters. Falls back to :attr:`agent_model`.
     utility_model: Any | None = None
     #: ``{prompt name -> variant}`` this run selected; empty means every prompt at its default.
     #: Reaches the nodes through :meth:`configurable` and **must** be the same mapping
@@ -300,7 +300,7 @@ def visible_assets(assets: Sequence[Asset]) -> list[Asset]:
 
 
 def _model_name(model: Any) -> str:
-    """The id to record for ``model``. One derivation, used by every model knob.
+    """The id to record for ``model``. One derivation, used by every model setting.
 
     Three call sites wrote this expression out; ``chat_model`` and ``llm_utility_model``
     disagreeing about what "the model" means is not a thing anyone should be able to
@@ -311,22 +311,22 @@ def _model_name(model: Any) -> str:
     )
 
 
-def _resolved_knobs(policy: Any) -> dict[str, Any]:
+def _resolved_settings(policy: Any) -> dict[str, Any]:
     """Every declared setting, with ``UNSET`` written as ``None``. No key is omitted.
 
     The policy overlays the two settings it owns. ``sqlglot_version`` is resolved from
     the installed package. The environment is already applied by ``effective_settings``.
     """
     from ..govern.functions import sqlglot_version
-    from ..register.knobs import UNSET, effective_settings
+    from ..registry.settings import UNSET, effective_settings
 
-    knobs = {k: v for k, v in effective_settings().items() if k != "config_hash"}
+    settings = {k: v for k, v in effective_settings().items() if k != "config_hash"}
     for name in ("guard_rules_enabled", "permitted_functions"):
         value = getattr(policy, name, UNSET)
         if value is not UNSET and value is not None:
-            knobs[name] = sorted(value) if isinstance(value, (set, frozenset)) else value
-    knobs["sqlglot_version"] = sqlglot_version()
-    return knobs
+            settings[name] = sorted(value) if isinstance(value, (set, frozenset)) else value
+    settings["sqlglot_version"] = sqlglot_version()
+    return settings
 
 
 def from_assets(
@@ -352,54 +352,54 @@ def from_assets(
     structure, structure_problems = build_structure(visible)
     entries = _index_entries(visible, structure)
     index = build_index(entries, embedder=embedder, vector_cache=vector_cache)
-    knobs = _resolved_knobs(policy)
+    settings = _resolved_settings(policy)
     # The variant of every prompt this run selected -- exactly the "resolved variant per
-    # stage" the knob is declared to hold. `register/prompts.select()` computed it all along
+    # stage" the setting is declared to hold. `registry/prompts.select()` computed it all along
     # and no caller wrote it down, so `prompt_set` was null on v2, v3, v4 and v5, the four
-    # arms whose entire treatment is a prompt variant. They were still *distinguishable*,
+    # configs whose entire treatment is a prompt variant. They were still *distinguishable*,
     # because `prompt_set_hash` is on the row and does differ; they were not *nameable* --
     # nothing in an artifact said which variant produced which digest.
     #
     # Here rather than in the driver, and from the same `prompt_variants` argument
-    # `prompt_set_hash` is computed from two lines below: a second knob-resolution site is
+    # `prompt_set_hash` is computed from two lines below: a second setting-resolution site is
     # the defect this repository keeps paying for, and resolving it in the harness would
     # leave the served path null. `select` raises on an undeclared prompt name, which is the
     # same refusal `prompt_set_hash` already makes on the same input.
-    knobs["prompt_set"] = selected_variants(prompt_variants)
+    settings["prompt_set"] = selected_variants(prompt_variants)
     if embedder is not None:
         # One resolution of the embedder's comparability identity. It was duplicated here
-        # (audit §10), and two copies is how one drifts from `knob_names()`.
-        knobs.update(embedding_knobs(embedder))
+        # (audit §10), and two copies is how one drifts from `setting_names()`.
+        settings.update(embedding_settings(embedder))
     resolved_utility = utility_model or agent_model
     if agent_model is not None:
         # The agent model itself, under the name the register declares. `llm_model` used to be
-        # written here beside it and is gone: `KNOB_REGISTER` never declared it, so it sat
-        # outside `knob_names()` -- and on run1, run2, v3-pinned and v3-fold it was the
+        # written here beside it and is gone: `SETTING_REGISTER` never declared it, so it sat
+        # outside `setting_names()` -- and on run1, run2, v3-pinned and v3-fold it was the
         # ONLY field carrying the model, which meant the one value that could have told those
-        # arms apart was outside the comparability set. One spelling, and it is the declared
+        # configs apart was outside the comparability set. One spelling, and it is the declared
         # one.
-        knobs["chat_model"] = _model_name(agent_model)
+        settings["chat_model"] = _model_name(agent_model)
         effort = reasoning_effort_of(agent_model)
-        knobs["llm_reasoning_effort"] = str(effort) if effort else None
-        for knob, attr, cast in (
+        settings["llm_reasoning_effort"] = str(effort) if effort else None
+        for setting, attr, cast in (
             ("llm_max_retries", "max_retries", int),
             ("llm_timeout_s", "request_timeout", float),
         ):
             value = getattr(agent_model, attr, None)
             if value is not None:
-                knobs[knob] = cast(value)
+                settings[setting] = cast(value)
     if resolved_utility is not None:
-        # Written even when it falls back to the agent model, per the knob's note: "shared one
+        # Written even when it falls back to the agent model, per the setting's note: "shared one
         # model" and "split them" are two treatments.
-        knobs["llm_utility_model"] = _model_name(resolved_utility)
+        settings["llm_utility_model"] = _model_name(resolved_utility)
         utility_effort = reasoning_effort_of(resolved_utility)
-        knobs["llm_utility_reasoning_effort"] = str(utility_effort) if utility_effort else None
+        settings["llm_utility_reasoning_effort"] = str(utility_effort) if utility_effort else None
         timeout = getattr(resolved_utility, "request_timeout", None)
         if timeout is not None:
-            knobs["llm_utility_timeout_s"] = float(timeout)
-    from ..register.knobs import config_hash
+            settings["llm_utility_timeout_s"] = float(timeout)
+    from ..registry.settings import config_hash
 
-    knobs["config_hash"] = config_hash(knobs)
+    settings["config_hash"] = config_hash(settings)
     return Session(
         index=index,
         structure=structure,
@@ -409,7 +409,7 @@ def from_assets(
         policy=policy,
         corpus_content_hash=corpus_content_hash_,
         prompt_set_hash=prompt_set_hash(prompt_variants),
-        knobs_resolved=knobs,
+        knobs_resolved=settings,
         db_id=db_id,
         run_id=run_id or uuid.uuid4().hex[:16],
         agent_model=agent_model,

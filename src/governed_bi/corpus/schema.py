@@ -15,7 +15,7 @@ from dataclasses import dataclass, field, fields
 from enum import Enum
 from typing import Any, ClassVar
 
-from ..register.assets import ASSET_REGISTER, AssetType
+from ..registry.assets import ASSET_REGISTER, AssetType
 
 __all__ = [
     "Cardinality",

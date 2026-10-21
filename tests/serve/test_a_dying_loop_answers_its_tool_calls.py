@@ -11,11 +11,11 @@ This repo has already paid for it once by the other route in: thread ``01a01bb8`
 12 ``tool_use`` against 11 ``tool_result``, every subsequent turn raising ``ValidationException``
 before reaching a single attempt. ``tests/serve/test_the_attempt_cap_ends_the_turn.py`` holds
 that route — the attempt cap — and until this file the invariant was enforced *only* there.
-What makes the routes below worse is that the damaging turn stamps an ordinary ``crashed`` and
+What makes the routes below worse is that the damaging turn writes an ordinary ``crashed`` and
 reads like any other failure.
 
 Two paths reach it, and each has a test here: the ``agent_node_timeout_s`` wall (a live
-production knob) and any exception out of the nested agent with a call pending.
+production setting) and any exception out of the nested agent with a call pending.
 
 **And the one thing the repair must not do.** A turn paused at ``interrupt()`` has an unanswered
 ``tool_use`` *by design*; answering it would break resume, which is the feature the clarification
@@ -97,11 +97,11 @@ def _state() -> dict[str, Any]:
         "knobs_resolved": {},
         "n_re_served": 0,
         # Routing has to succeed or the turn refuses before ``agent_core`` runs at all.
-        "facet_route_hits": [("facet_schema", "beer_factory", 1.0)],
+        "channel_route_hits": [("channel_schema", "beer_factory", 1.0)],
         "messages": [],
         "usage": [],
         "clarifications": [],
-        "licensed": ["beer_factory.customers"],
+        "retrieved_tables": ["beer_factory.customers"],
     }
 
 
@@ -153,7 +153,7 @@ class _SlowModel(ScriptedChatModel):
     ``agent_node_timeout_s`` is checked **between** frames (``_run`` says why it must be), so the
     check that ends this turn is the one after the post-model frame has been consumed and before
     the tools super-step yields anything. That window — model has asked, tools have not answered
-    — is the whole defect, and it is reachable from a live production knob.
+    — is the whole defect, and it is reachable from a live production setting.
     """
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[no-untyped-def]

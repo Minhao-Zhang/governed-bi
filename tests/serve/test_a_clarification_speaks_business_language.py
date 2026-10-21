@@ -102,7 +102,7 @@ def _ask_user() -> Any:
         "question": "what is revenue?",
         "turn_id": "turn-clar",
         "turn_index": 1,
-        "licensed": ["sales.customers"],
+        "retrieved_tables": ["sales.customers"],
         "messages": [],
         "knobs_resolved": {},
     }
@@ -136,7 +136,7 @@ def test_a_leaked_identifier_is_rejected_with_a_tool_reply_and_records_nothing()
 
     The reply is what makes it safe: this ``tool_use`` is answered on the same pass, so nothing
     is stranded. Recording instead would mean pausing first, which shows the reader the text the
-    guard exists to keep away from them, and then needing a channel for the verdict.
+    guard exists to keep away from them, and then needing a channel for the result.
     """
     command = asyncio.run(
         _ask_user().coroutine(question=LEAKY, basis="data_definition", runtime=_runtime("c1"))

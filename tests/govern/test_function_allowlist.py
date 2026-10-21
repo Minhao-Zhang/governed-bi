@@ -82,7 +82,7 @@ def test_the_covering_sample_clears_the_first_three_layers(govern, check) -> Non
 
     Each sample statement drives the real ``check()``. They are expected to fail
     *later* — nothing licenses their tables — so the assertion is on the layer reached,
-    which is exactly the proof the ordered enum exists to give: a verdict at BINDING or
+    which is exactly the proof the ordered enum exists to give: a result at BINDING or
     beyond is a proof that the function layer passed.
     """
     from governed_bi.govern.functions import INTENTIONALLY_ABSENT
@@ -91,17 +91,17 @@ def test_the_covering_sample_clears_the_first_three_layers(govern, check) -> Non
     too_narrow: list[tuple[str, str, str]] = []
     chosen: list[str] = []
     for case in GOLD["covering_sample"]:
-        verdict = check(case["sql"], licensed=frozenset(), default_schema=None)
-        layer = verdict["failed_layer"]
+        result = check(case["sql"], retrieved_tables=frozenset(), default_schema=None)
+        layer = result["failed_layer"]
         if layer is None or layer > Layer.FUNCTIONS:
             continue
         # The one acceptable early refusal: a function that is absent on purpose, with
         # its reason committed. Anything else is a false refusal nobody chose.
-        named = verdict["detail"].split(" ", 1)[0]
-        if verdict["reason_code"] == "r_function_not_permitted" and named in INTENTIONALLY_ABSENT:
+        named = result["detail"].split(" ", 1)[0]
+        if result["reason_code"] == "r_function_not_permitted" and named in INTENTIONALLY_ABSENT:
             chosen.append(named)
             continue
-        too_narrow.append((case["question_id"], verdict["reason_code"], verdict["detail"][:120]))
+        too_narrow.append((case["question_id"], result["reason_code"], result["detail"][:120]))
     assert not too_narrow, (
         f"{len(too_narrow)} of {len(GOLD['covering_sample'])} gold statements were "
         f"refused at or below the function layer for an unrecorded reason: {too_narrow}"
@@ -146,12 +146,12 @@ def test_every_adversarial_spelling_is_actually_refused_by_check(govern, check) 
     is not a refusal."""
     survivors = []
     for spelling in govern.ADVERSARIAL_SET:
-        verdict = check(
+        result = check(
             f"SELECT {spelling}('x') FROM customers",
-            licensed=frozenset({"customers"}),
+            retrieved_tables=frozenset({"customers"}),
             allowed_columns=frozenset({"customers.id"}),
         )
-        if verdict["passed"]:
+        if result["passed"]:
             survivors.append(spelling)
     assert not survivors, survivors
 
@@ -182,21 +182,21 @@ def test_the_allowlist_is_positive_an_unknown_function_is_refused(govern, check)
     parses as ``Anonymous``, which is what makes refusing the shape affordable.
     """
     assert _canonical(govern, "totally_invented_function") not in govern.PERMITTED_FUNCTIONS
-    verdict = check(
+    result = check(
         "SELECT totally_invented_function(1) FROM customers",
-        licensed=frozenset({"customers"}),
+        retrieved_tables=frozenset({"customers"}),
     )
-    assert verdict["reason_code"] == "r_function_not_permitted"
+    assert result["reason_code"] == "r_function_not_permitted"
 
 
 def test_schema_qualification_is_stripped_before_matching(govern, check) -> None:
     """``pg_catalog.setval`` and ``setval`` are one function; only one of them would be
     on a list somebody wrote by hand."""
     assert _canonical(govern, "pg_catalog.setval") == "setval"
-    verdict = check(
-        "SELECT pg_catalog.setval('s', 1) FROM customers", licensed=frozenset({"customers"})
+    result = check(
+        "SELECT pg_catalog.setval('s', 1) FROM customers", retrieved_tables=frozenset({"customers"})
     )
-    assert verdict["passed"] is False
+    assert result["passed"] is False
 
 
 def _canonical(govern, spelling: str) -> str:

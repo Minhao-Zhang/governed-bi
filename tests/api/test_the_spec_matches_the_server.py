@@ -3,7 +3,7 @@
 **Nothing generated the spec's response shapes and nothing checked them.** Every handler under
 ``api/`` is annotated ``-> dict[str, Any]``, so FastAPI infers no response model and
 ``app.openapi()`` emits *zero* response schemas — all of the spec's components are hand-written.
-An ``app.openapi()`` diff, the obvious gate, therefore compares the routes (which were exact)
+An ``app.openapi()`` diff, the obvious check, therefore compares the routes (which were exact)
 and is blind to the part that drifted: on 2026-08-22 an audit found ``/capabilities`` missing
 the whole of ``models`` and ``connection``, the pending row missing ``interrupt_id`` and
 ``task_id``, and two fields declared non-nullable that the server sends as null.
@@ -35,7 +35,7 @@ route, the JSON path, the component and which side is missing the field.
   not validated. ``connection.host``/``port``/``database`` and the pending row's
   ``interrupt_id``/``task_id`` are exercised on purpose for that reason; others are not.
 * **Descriptions.** Prose is unchecked, and one of the six defects this file was written for was
-  a description naming a knob that does not exist.
+  a description naming a setting that does not exist.
 """
 
 from __future__ import annotations
@@ -373,7 +373,7 @@ def test_the_spec_declares_the_not_ready_body(wire: dict[str, Any]) -> None:
 
 
 def test_every_operation_in_the_spec_is_exercised_here() -> None:
-    """The gate's own coverage, so a route added to the spec is not silently ungated.
+    """The check's own coverage, so a route added to the spec is not silently ungated.
 
     Without this, the way to make every assertion above pass is to add an operation to
     ``docs/openapi.json`` and no case to :data:`CASES` — the failure mode this file exists to

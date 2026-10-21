@@ -41,7 +41,7 @@ def _disclosure_surfaces(world: AdversarialWorld) -> dict[str, object]:
     from governed_bi.serve.fetch import inspect_schema
 
     assets = {a.id: a for a in _world_assets(world)}
-    bounds = ToolBounds(licensed=world.licensed, readable_assets=frozenset(assets))
+    bounds = ToolBounds(retrieved_tables=world.retrieved_tables, readable_assets=frozenset(assets))
     return {
         "bounds": bounds,
         "inspect_schema": lambda t: inspect_schema(t, bounds=bounds, assets=assets)[0],

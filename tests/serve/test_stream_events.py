@@ -7,7 +7,7 @@ that a broken emitter is invisible in production. These tests are what pays the 
 build payloads for steps and statuses spread across both vocabularies and assert each field
 arrives, so a payload that would have raised inside the ``try`` is caught here instead.
 
-The second reason is the vocabulary. ``register/stages.py`` is the authority for ``step``, and a
+The second reason is the vocabulary. ``registry/stages.py`` is the authority for ``step``, and a
 step name emitted from ``serve/`` that is not a ``Stage`` member is precisely the "second,
 competing vocabulary invented at the moment somebody needed it" that module exists to prevent.
 :func:`test_every_emitted_step_is_a_declared_stage` is that check, and it is the one that will
@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from governed_bi.register.stages import Stage
+from governed_bi.registry.stages import Stage
 from governed_bi.serve import events
 from governed_bi.serve.events import (
     TERMINAL_HANDLERS,
@@ -39,11 +39,11 @@ EMITTED_STEPS = (
     "accept",
     "guard",
     "rewrite",
-    "facet_schema",
-    "facet_term",
-    "facet_metric",
-    "facet_entity",
-    "facet_example",
+    "channel_schema",
+    "channel_term",
+    "channel_metric",
+    "channel_entity",
+    "channel_example",
     "route",
     "resolve",
     "connect",
@@ -64,7 +64,7 @@ EMITTED_STEPS = (
     "ask_user",
     "refuse",
     "decline",
-    "stamp",
+    "finish",
 )
 
 #: The client validates on `typeof kind === "string" && typeof seq === "number"` and drops
@@ -93,11 +93,11 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 
 def test_every_emitted_step_is_a_declared_stage() -> None:
-    """No step name may exist that ``register/stages.py`` has not declared."""
+    """No step name may exist that ``registry/stages.py`` has not declared."""
     undeclared = [s for s in EMITTED_STEPS if s not in {m.value for m in Stage}]
     assert undeclared == [], (
         f"{undeclared} are emitted but absent from Stage. Add the member to "
-        "register/stages.py — never a bare string here."
+        "registry/stages.py — never a bare string here."
     )
 
 
@@ -210,32 +210,39 @@ def test_rail_status_is_observed(stage: str, update: dict[str, Any], expected: s
 # ── the seven defects adversarial review found. Each one shipped, briefly. ──
 
 
-def test_a_gate_that_errored_open_is_not_reported_as_clear() -> None:
-    """``error_failed_open`` means the gate ran, a rule threw, and the question went through.
+def test_a_check_that_errored_open_is_not_reported_as_clear() -> None:
+    """``error_failed_open`` means the check ran, a rule threw, and the question went through.
 
-    ``register/record.py`` makes it a countable security event and gates a run on it, so
+    ``registry/record.py`` makes it a countable security event and checks a run on it, so
     reporting it as ``ok`` is the stream disagreeing with the record on the one outcome where
     "nothing happened" is the dangerous reading.
     """
     status, detail = rail_observation("guard", {"guard": {"outcome": "error_failed_open"}})
     assert status == "error"
-    assert detail == {"gate": "error_failed_open"}
+    assert detail == {"check": "error_failed_open"}
 
 
-def test_a_facet_whose_channel_never_ran_is_not_reported_as_zero_hits() -> None:
+def test_a_channel_whose_channel_never_ran_is_not_reported_as_zero_hits() -> None:
     """"0 hits" and "the channel was never wired up" are different facts.
 
     This is ``_channels_for``'s own defect one layer out: its predecessor reported the
-    configuration instead of the observation, so a facet that consulted nothing claimed it had.
+    configuration instead of the observation, so a channel that consulted nothing claimed it had.
     An operator reading "Terms: 0 hits" would conclude the corpus is empty.
     """
-    degraded = {"facets": {"facet_term": {"hits": [], "channels": {"lexical": "failed", "semantic": "not_configured"}}}}
-    status, detail = rail_observation("facet_term", degraded)
+    degraded = {
+        "channels": {
+            "channel_term": {
+                "hits": [],
+                "channels": {"lexical": "failed", "semantic": "not_configured"},
+            }
+        }
+    }
+    status, detail = rail_observation("channel_term", degraded)
     assert status == "error"
     assert detail == {"n_hits": 0, "failed_channels": ["lexical"]}
 
-    healthy = {"facets": {"facet_term": {"hits": [], "channels": {"lexical": "ran", "semantic": "not_configured"}}}}
-    status, detail = rail_observation("facet_term", healthy)
+    healthy = {"channels": {"channel_term": {"hits": [], "channels": {"lexical": "ran", "semantic": "not_configured"}}}}
+    status, detail = rail_observation("channel_term", healthy)
     assert status == "ok", "a channel that ran and found nothing really did find nothing"
     assert detail == {"n_hits": 0}
 
@@ -262,7 +269,7 @@ def test_a_declining_node_still_reports_what_it_measured() -> None:
     _, detail = rail_observation(
         "connect",
         {"path_kind": "decline", "terminal_reason": "missing_join_path",
-         "crossings": [], "licensed": ["a.t1", "a.t2"]},
+         "crossings": [], "retrieved_tables": ["a.t1", "a.t2"]},
     )
     assert detail["reason"] == "missing_join_path"
     assert detail["n_licensed"] == 2
@@ -298,7 +305,7 @@ def test_rail_detail_is_read_from_the_update() -> None:
     )
     assert detail == {"schemas": ["a", "b"], "n_candidates": 4}
 
-    _, detail = rail_observation("facet_metric", {"facets": {"facet_metric": {"hits": [1, 2]}}})
+    _, detail = rail_observation("channel_metric", {"channels": {"channel_metric": {"hits": [1, 2]}}})
     assert detail == {"n_hits": 2}
 
     _, detail = rail_observation("assemble", {"delivery": {"context_block": "abcd"}})
@@ -407,9 +414,9 @@ def test_wrap_node_emits_nothing_for_a_skipped_node(captured: list[dict[str, Any
 
 
 def test_stream_false_suppresses_both_events(captured: list[dict[str, Any]]) -> None:
-    """The ``fanout`` passthrough is registered under ``facet_schema``; emitting for it put a
-    phantom row immediately before the real facet's."""
-    asyncio.run(wrap_node("facet_schema", lambda state: {}, stream=False)({"turn_id": "t1"}))
+    """The ``fanout`` passthrough is registered under ``channel_schema``; emitting for it put a
+    phantom row immediately before the real channel's."""
+    asyncio.run(wrap_node("channel_schema", lambda state: {}, stream=False)({"turn_id": "t1"}))
     assert captured == []
 
 

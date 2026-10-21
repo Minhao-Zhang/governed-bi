@@ -3,7 +3,7 @@
 Split out of ``eval/harness.py`` by the 1,000-line cap (ADR 0005 §6), which forced the timing
 rather than the seam: that module is orchestration (drive a question through
 ``serve.compile_durable``, serially or across ``workers``) plus this file's job, which is pure —
-given the state a turn ended in and the question it answered, shape the fixed-key row every gate,
+given the state a turn ended in and the question it answered, shape the fixed-key row every check,
 grader and report reads. Nothing here calls the graph or touches a connector for anything but the
 read-only re-execution that prices an abstention.
 
@@ -20,8 +20,8 @@ from typing import Any, SupportsInt
 from governed_bi.eval.attribution import attribute
 from governed_bi.eval.grade import grade_turn, result_fingerprint
 from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
-from governed_bi.register.quantity import Measured
-from governed_bi.register.stages import Outcome
+from governed_bi.registry.quantity import Measured
+from governed_bi.registry.stages import Outcome
 from governed_bi.serve.messages import last_proposed_sql
 
 __all__ = ["project_turn"]
@@ -36,9 +36,9 @@ __all__ = ["project_turn"]
 #: ``clarification``'s exclusion used to be justified as structural ("it has no statement to
 #: re-execute"), and that has stopped being a fact. It was one while every clarification ended
 #: *before* routing -- ``eval/provenance._is_pre_routing_abstention`` measured 6, 8, 4, 5 and 13
-#: such rows across the 2026-08-09 artifacts, all with nothing licensed -- so ``last_proposed_sql``
-#: had nothing to find. A fail-closed decline of ``ask_user`` (``register/stages.Outcome``) ends a
-#: turn that may already have proposed and been refused a ``run_query``, and it is stamped
+#: such rows across the 2026-08-09 artifacts, all with nothing retrieved_tables -- so ``last_proposed_sql``
+#: had nothing to find. A fail-closed decline of ``ask_user`` (``registry/stages.Outcome``) ends a
+#: turn that may already have proposed and been refused a ``run_query``, and it is written
 #: ``clarification`` too, so a proposal can now be sitting in the transcript.
 #:
 #: It stays out anyway, as a **decision** rather than a structural fact: pricing values what the
@@ -95,11 +95,11 @@ def _abstained_fingerprint(
 def _attempt_trace(execution: Any) -> list[dict[str, Any]]:
     """Per-attempt ``(layer, reason_code, passed)`` for the measurement row.
 
-    ``CheckVerdict`` has carried ``failed_layer`` and ``reason_code`` all along and they
+    ``CheckResult`` has carried ``failed_layer`` and ``reason_code`` all along and they
     stopped at the turn record, so a refused row in an artifact said *that* governance
     declined and never *which layer*. Reading the 2026-08-09 run therefore required replaying
     every refused statement through ``check()`` offline to learn that 18 of 21 were
-    ``r_table_not_licensed`` — a retrieval failure the analysis had attributed to a
+    ``r_table_not_retrieved`` — a retrieval failure the analysis had attributed to a
     guardrail false-positive. The field that would have said so already existed.
     """
     if not isinstance(execution, Mapping):
@@ -110,7 +110,7 @@ def _attempt_trace(execution: Any) -> list[dict[str, Any]]:
             continue
         trace.append(
             {
-                "layer": attempt.get("verdict_layer"),
+                "layer": attempt.get("result_layer"),
                 "reason_code": attempt.get("reason_code"),
                 "passed": attempt.get("passed"),
                 "path": attempt.get("path"),
@@ -137,12 +137,12 @@ def _routing_was_pinned(question: Mapping[str, Any], record: Mapping[str, Any]) 
 #: Measured over the turn records in ``runs/serve/2026-08-09.jsonl`` -- an untracked local sink,
 #: deleted with ``api/trace_store.py`` under ADR 0014 and never committed, so it is not
 #: recoverable from git history either. They are the same shape
-#: a BIRD turn produces: ``facet_hits`` is **58 KB** per turn (five facets x fifty hits, each
-#: hit carrying a score triple and a copy of the facet's query) and ``schema_ranking`` 2.0 KB,
-#: against a 6.4 KB measurement row. Carried verbatim they take a 1 351-question arm from
-#: 8.6 MB to 89 MB and the seven arms in ``runs/eval/`` past half a gigabyte.
+#: a BIRD turn produces: ``facet_hits`` is **58 KB** per turn (five channels x fifty hits, each
+#: hit carrying a score triple and a copy of the channel's query) and ``schema_ranking`` 2.0 KB,
+#: against a 6.4 KB measurement row. Carried verbatim they take a 1 351-question config from
+#: 8.6 MB to 89 MB and the seven configs in ``runs/eval/`` past half a gigabyte.
 #:
-#: The truncation is defensible because the *sampled* half of retrieval is the facet
+#: The truncation is defensible because the *sampled* half of retrieval is the channel
 #: ``queries``, which the row keeps whole; below them everything is a pure function of those
 #: queries, ``corpus_content_hash`` and ``knobs_resolved``, so a replay reconstructs it with no
 #: model call. What each summary still gives up is stated at its own call site.
@@ -173,14 +173,14 @@ def _row_tokens(usage: Any) -> dict[str, int | None]:
 def _row_latency_sec(record: Mapping[str, Any]) -> float | None:
     """Wall clock for the turn, in seconds.
 
-    No artifact this repository has produced records wall clock at all: ``stamp`` has derived
+    No artifact this repository has produced records wall clock at all: ``finish`` has derived
     the field since it was declared and ``project_turn`` did not carry it, so latency was
     knowable only from a driver log's start and end times, per *run*.
 
     A :class:`Measured` absence must not reach the row. The drivers serialise with
     ``json.dumps(..., default=str)``, which writes the dataclass's repr as a **string** that
     then sorts and compares like a value -- ``eval/datalake._stage`` carries the same note.
-    ``None`` here means the turn had no ``turn_started_at``, which on a real arm means no
+    ``None`` here means the turn had no ``turn_started_at``, which on a real config means no
     wrapped node ran; the reason string is a constant and is not worth a column.
     """
     value = record.get("latency_sec")
@@ -200,7 +200,7 @@ def _schema_ranking(
 
     ``eval/datalake.routing_recall`` computes the same two numbers today by re-serving every
     question with no model. That is a **different draw**: two identical runs of this engine
-    disagree on 12.7% of turns, so the recall it reports is not the recall the measured arm
+    disagree on 12.7% of turns, so the recall it reports is not the recall the measured config
     got. This is the same number taken from the turn that was scored.
 
     ``top`` keeps scores, which is what distinguishes "the gold lost by 0.01" from "the gold
@@ -227,8 +227,8 @@ def _schema_ranking(
     }
 
 
-def _facet_hits(record: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Per facet: the query it searched, how many assets it hit, and the top ids.
+def _channel_hits(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Per channel: the query it searched, how many assets it hit, and the top ids.
 
     The register's reason is attribution -- "counts alone cannot attribute a finding to an
     asset, so no feedback loop is possible" -- so the asset ids stay. What goes is the per-hit
@@ -243,13 +243,13 @@ def _facet_hits(record: Mapping[str, Any]) -> dict[str, Any] | None:
 
     Given up: the lexical-vs-semantic score pairs, which is the evidence a study of the fusion
     rule reads. That study is a no-model replay of these queries against the corpus commit the
-    row names, so it does not need the paid arm to carry it.
+    row names, so it does not need the paid config to carry it.
     """
-    facets = record.get("facet_hits")
-    if not isinstance(facets, Mapping):
+    channels = record.get("facet_hits")
+    if not isinstance(channels, Mapping):
         return None
     out: dict[str, Any] = {}
-    for name, result in facets.items():
+    for name, result in channels.items():
         if not isinstance(result, Mapping):
             continue
         hits = [h for h in (result.get("hits") or ()) if isinstance(h, Mapping)]
@@ -265,10 +265,10 @@ def _pulled_in(record: Mapping[str, Any]) -> dict[str, Any] | None:
     """How many assets entered by reference closure, how many by the join walk, and which.
 
     The field's declared job is to answer what ``expand_hops`` is worth, and ``expand_hops``
-    today is a comparability knob with no reader at all: setting it changes no behaviour and
+    today is a comparability setting with no reader at all: setting it changes no behaviour and
     does change the config hash. This is the half of that measurement that can be built here
-    -- the knob's own question ("of the tables gold SQL uses, how many entered neither by
-    facet hit nor by Steiner path?") is a join of ``connect_ids`` against ``licensed`` and the
+    -- the setting's own question ("of the tables gold SQL uses, how many entered neither by
+    channel hit nor by Steiner path?") is a join of ``connect_ids`` against ``retrieved_tables`` and the
     gold statement, all three of which the row now carries.
 
     Summarised because the field is dominated by the closure: measured over the 2026-08-09
@@ -289,10 +289,10 @@ def _pulled_in(record: Mapping[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _guard_verdict(record: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any] | None:
-    """The guard's verdict on this turn, including ``clear``.
+def _guard_result(record: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The guard's result on this turn, including ``clear``.
 
-    Carried on every turn on purpose, which is the register's own reason: "a gate that leaves
+    Carried on every turn on purpose, which is the register's own reason: "a check that leaves
     a trace only when it fires cannot afterwards be told from one never wired up". The row
     already has ``refused_by``, which names the *stage* that ended the turn; this names the
     rule, and a cleared guard has no ``refused_by`` at all.
@@ -313,7 +313,7 @@ def _int_or_absent(value: SupportsInt | str | None) -> int | None:
 
     Not ``int(value or 0)``: for a count, ``0`` is both the clean measured value and the shape an
     absent field takes, so substituting it converts "nobody counted" into "nothing went wrong" —
-    and the quotability gates read that as a pass (audit M2).
+    and the quotability checks read that as a pass (audit M2).
     """
     if value is None:
         return None
@@ -324,7 +324,7 @@ def project_turn(
     state: Mapping[str, Any],
     *,
     question: Mapping[str, Any],
-    arm: str,
+    config: str,
     order_sensitive: bool = False,
     connector: Any = None,
 ) -> dict[str, Any]:
@@ -337,11 +337,11 @@ def project_turn(
     # so defaulting to "crashed" reports a question asked of the analyst as an engine crash
     # with no stage and no exception class. (`python -m governed_bi.serve` exit code 4.)
     #
-    # **This is the writer of the unstamped half of `Outcome.clarification`**, and the only one in
-    # `eval/`. `no answer` is exactly "no node stamped this turn", so every field below that reads
+    # **This is the writer of the unwritten half of `Outcome.clarification`**, and the only one in
+    # `eval/`. `no answer` is exactly "no node wrote this turn", so every field below that reads
     # `record` comes out null on these rows -- both treatment identities included, which is what
-    # `measure/gates._paused_before_stamp` reads to keep them out of a denominator they cannot
-    # satisfy. The other half of the member is written by `stamp` itself, on a turn whose reader
+    # `measure/checks._paused_before_finish` reads to keep them out of a denominator they cannot
+    # satisfy. The other half of the member is written by `finish` itself, on a turn whose reader
     # declined, and that row is fully populated: same `outcome`, opposite instrumentation state.
     interrupted = bool(state.get("__interrupt__")) and not answer
     if interrupted:
@@ -357,7 +357,7 @@ def project_turn(
     if context_hash is None:
         context_hash = record.get("context_hash")
 
-    # The two delivery-audit fields, record first because ``stamp`` is their declared owner and
+    # The two delivery-audit fields, record first because ``finish`` is their declared owner and
     # ``delivery`` second for the same reason ``context_hash`` reads that way round.
     delivery_hash = record.get("delivery_hash")
     tool_delivered = record.get("tool_delivered")
@@ -387,7 +387,7 @@ def project_turn(
     gold_columns = question.get("gold_columns")
     gold_rows = question.get("gold_rows")
     # Executed even when a published digest exists, whenever there is a prediction to compare:
-    # the verdict is `grade.results_match` on rows, which a digest cannot feed.
+    # the result is `grade.results_match` on rows, which a digest cannot feed.
     wants_gold_rows = gold_fp is None or pred_rows is not None
     if gold_rows is None and wants_gold_rows and connector is not None and question.get("gold_sql"):
         try:
@@ -431,7 +431,7 @@ def project_turn(
     # ``int(record.get(...) or 0)``, which turns a field the turn never wrote into a real zero —
     # and ``0`` is the *clean* value, so ``guardrail_error`` and ``re_served`` went from
     # ``cannot_evaluate`` to ``pass``. Measured: a record with ``guardrail_errors`` never written
-    # made **all seven gates pass**. That defeats two guards written to stop exactly this:
+    # made **all seven checks pass**. That defeats two guards written to stop exactly this:
     # ``measure/population.py``'s import-time assertion that an absent outcome is not a negative
     # one, and the ``or {}`` removed from this same function three lines below.
     #
@@ -443,24 +443,24 @@ def project_turn(
         else record.get("n_re_served")
     )
 
-    # Absent stays absent. ``{}`` would read to ``measure.gates`` as a real configuration in
-    # which every knob resolved to None, so one arm of empties would *pass* the gate.
-    knobs = record.get("knobs_resolved")
-    if not isinstance(knobs, Mapping):
-        knobs = state.get("knobs_resolved")
+    # Absent stays absent. ``{}`` would read to ``measure.checks`` as a real configuration in
+    # which every setting resolved to None, so one config of empties would *pass* the check.
+    settings = record.get("knobs_resolved")
+    if not isinstance(settings, Mapping):
+        settings = state.get("knobs_resolved")
 
     projected: dict[str, Any] = {
         "question_id": str(question["question_id"]),
-        "arm": arm,
+        "config": config,
         # The gold schema, from the question. Every funnel stage under ``schema_routed`` is
         # conditional on it, and it was reachable only by re-reading the dataset file beside
         # the artifact — so a row could not be attributed to a routing failure on its own.
         "db_id": question.get("db_id"),
         # The configuration the turn ran under (register: Absence.never, "the corpus IS the
-        # treatment" applies to knobs too). It reached ``stamp`` and stopped there: 1351/1351
-        # rows of the 2026-08-07 run carry no such key, so the knobs gate reported
+        # treatment" applies to settings too). It reached ``finish`` and stopped there: 1351/1351
+        # rows of the 2026-08-07 run carry no such key, so the settings check reported
         # ``cannot_evaluate`` and no number could be joined to what produced it.
-        "knobs_resolved": dict(knobs) if isinstance(knobs, Mapping) else None,
+        "knobs_resolved": dict(settings) if isinstance(settings, Mapping) else None,
         "outcome": outcome,
         # Propagated, never coerced: ``bool(grade["correct"])`` here turns every
         # ``missing_gold`` into a wrong answer (see ``grade.grade_turn``).
@@ -472,11 +472,11 @@ def project_turn(
         # reader.
         #
         # True for both endings the member covers -- the pause written above and a reader's
-        # fail-closed decline, which reaches `stamp` (`register/stages.Outcome`). That is the
-        # intended reading: the rate answers "how often did this arm need the reader", and both
-        # needed the reader. It is therefore *not* a witness that the row went unstamped; the
-        # gate that needs that distinction reads a stamped field instead
-        # (`measure/gates._paused_before_stamp`).
+        # fail-closed decline, which reaches `finish` (`registry/stages.Outcome`). That is the
+        # intended reading: the rate answers "how often did this config need the reader", and both
+        # needed the reader. It is therefore *not* a witness that the row went unwritten; the
+        # check that needs that distinction reads a written field instead
+        # (`measure/checks._paused_before_finish`).
         "clarified": outcome == Outcome.clarification.value,
         "refused": outcome == Outcome.refused.value,
         "crashed": crashed,
@@ -492,16 +492,16 @@ def project_turn(
         "grade_detail": grade.get("detail"),
         "context_hash": context_hash,
         "facet_channels": facet_channels,
-        # `None` when the turn did not record it, not `False` (audit M2). `serve/nodes/stamp.py`
+        # `None` when the turn did not record it, not `False` (audit M2). `serve/nodes/finish.py`
         # returns a deliberate `None` here — its comment says "`False` there is the degradation
-        # gate reading absence as clean" — and `or False` turned that straight back into `False`,
+        # check reading absence as clean" — and `or False` turned that straight back into `False`,
         # one function later. The fix and its defeat shipped in the same repository.
         "facet_degraded": (
             None if record.get("facet_degraded") is None
             else bool(record.get("facet_degraded"))
         ),
-        # Retrieval and crash attribution. Without `licensed`/`schemas` a row says EX=0 and
-        # not *why*: a miss with the gold schema never licensed is a routing problem, a miss
+        # Retrieval and crash attribution. Without `retrieved_tables`/`schemas` a row says EX=0 and
+        # not *why*: a miss with the gold schema never retrieved_tables is a routing problem, a miss
         # with the right tables in hand is a generation problem — and an absent `reached_gold`
         # reads as zero, which once made a run contradict its own corpus (both figures
         # retired; citations.py). Without `error_type`, `outcome: "crashed"` carries no stage
@@ -509,7 +509,7 @@ def project_turn(
         "error_type": record.get("error_type") or state.get("failure", {}).get("error_type")
         if isinstance(state.get("failure"), Mapping)
         else record.get("error_type"),
-        # **The two treatment identities.** Both reached ``stamp`` and stopped there, so no
+        # **The two treatment identities.** Both reached ``finish`` and stopped there, so no
         # artifact this repository has produced says which corpus or which prompt wording made
         # it — the corpus was recoverable only from the filename, a human convention, and the
         # prompt not at all. A prompt A/B whose two artifacts cannot be told apart is not an
@@ -517,42 +517,42 @@ def project_turn(
         "corpus_content_hash": record.get("corpus_content_hash"),
         "prompt_set_hash": record.get("prompt_set_hash"),
         # What the char budget dropped before the model saw it. Absent when the block fit.
-        # ``table_coverage`` is computed over ``licensed`` and is therefore a *licensing*
+        # ``table_coverage`` is computed over ``retrieved_tables`` and is therefore a *licensing*
         # figure; this is the only thing that says whether the model actually saw those tables.
-        # Measured for the first time on the 2026-08-09 v3-fold arm: the budget bit on
+        # Measured for the first time on the 2026-08-09 v3-fold config: the budget bit on
         # **19 of 1 351 turns (1.4%)** and dropped only bodies -- no whole table, ever. An
         # offline reconstruction had put it at 16 of 25 by building the context from every
-        # licensed table's every column, which ignores the per-type budgets pass two applies.
+        # retrieved table's every column, which ignores the per-type budgets pass two applies.
         "context_evicted": (delivery.get("evicted") if isinstance(delivery, Mapping) else None),
         # **What was delivered, and whether it can be checked afterwards.** ``context_hash``
-        # above is the deterministic half and is what `measure/gates.py` gates on;
+        # above is the deterministic half and is what `measure/checks.py` checks on;
         # `delivery_hash` folds in every tool return the model actually asked for, so it is the
         # only field that answers whether curated bodies reached the model. A digest is the
         # whole point of it, which makes carrying it 66 bytes.
         "delivery_hash": delivery_hash,
         # Carried verbatim: bounded by the agent's tool-call count (nine attempts was the
-        # maximum over the 2026-08-09 v4 arm) and 16 hex characters per entry, so it costs a
+        # maximum over the 2026-08-09 v4 config) and 16 hex characters per entry, so it costs a
         # few hundred bytes. `None` means the agent loop never ran, which is a different fact
         # from `{}`. The call ids are provider-minted and therefore do **not** join across
-        # arms; what compares is the ordered digests.
+        # configs; what compares is the ordered digests.
         "tool_delivered": dict(tool_delivered) if isinstance(tool_delivered, Mapping) else None,
         "licensed": list(record.get("licensed") or ()),
         "schemas": list(record.get("schemas") or ()),
-        # **Retrieval evidence.** ``schemas`` above is the selected top-N and ``licensed`` what
+        # **Retrieval evidence.** ``schemas`` above is the selected top-N and ``retrieved_tables`` what
         # the turn may reach; neither says what was scored and rejected, which is the
         # difference between a routing failure and a generation failure. Each is summarised
         # rather than copied -- see the helper for the size that forced it and what it costs.
         "schema_ranking": _schema_ranking(record, question),
-        "facet_hits": _facet_hits(record),
+        "facet_hits": _channel_hits(record),
         "pulled_in": _pulled_in(record),
         # A float or `None`, never `0.0` for "not measured": with an embedder every asset
         # scores above zero, so an out-of-corpus question still returns top_k tables and a
-        # clean run stamps confidence. This is the signal that says so.
+        # clean run writes confidence. This is the signal that says so.
         "lexical_coverage": _number(record.get("lexical_coverage")),
         # The budget witness, carried verbatim from the record. `budget_dropped` is what each
         # asset budget cut and `budget_best_dropped_score` the best score it cut, so together
         # they say whether a licensing miss was a retrieval failure or a budget decision --
-        # which is the difference between corpus work and a knob. `None` on a turn where no
+        # which is the difference between corpus work and a setting. `None` on a turn where no
         # cap bit, and that is a measured "nothing was dropped" rather than an absence.
         "budget_dropped": record.get("budget_dropped"),
         "budget_best_dropped_score": record.get("budget_best_dropped_score"),
@@ -564,7 +564,7 @@ def project_turn(
             if isinstance(crossings := record.get("crossings"), (list, tuple))
             else None
         ),
-        "guard": _guard_verdict(record, state),
+        "guard": _guard_result(record, state),
         # Whether this row's shortlist **was** replayed, not whether one was offered.
         #
         # This read `bool(question.get(PINNED_SCHEMAS_KEY))` — the pin as *attached by the
@@ -590,15 +590,15 @@ def project_turn(
         # `terminal_reason` above already carries the *reason* on a withheld turn, because the
         # policy writes it into the same channel every other decline uses; this carries the
         # rules it asked and the facts it asked them about, so a reader can recompute the
-        # verdict from the row instead of trusting it. `None` when the turn ended before the
-        # node; `{"outcome": "disabled", ...}` when the knob was off, which is the fact that
-        # makes a control arm nameable rather than merely silent.
+        # result from the row instead of trusting it. `None` when the turn ended before the
+        # node; `{"outcome": "disabled", ...}` when the setting was off, which is the fact that
+        # makes a control config nameable rather than merely silent.
         "abstention": record.get("abstention"),
         # Carried so the run can be counted: `observed_tokens` reads it, and without it a
         # batch reports no calls at all, reading as a free run rather than an unmeasured one.
         # Tokens only — `measure/price.py` is deleted, so cost is the provider's number.
         "usage": list(record.get("usage") or ()),
-        # The totals a reader compares between arms, so cost sits next to EX without replaying
+        # The totals a reader compares between configs, so cost sits next to EX without replaying
         # `usage`. `None` when any call went uncounted: a partial sum would read as a cheap turn.
         **_row_tokens(record.get("usage") or ()),
         # The other half of cost, and the half no artifact has ever had: `usage` is tokens
@@ -614,7 +614,7 @@ def project_turn(
     # 008, which is why that experiment could not say whether its treatment was aimed at
     # anything.
     #
-    # **Its own field, not `error_type`.** `register/record.py` declares `error_type` as the
+    # **Its own field, not `error_type`.** `registry/record.py` declares `error_type` as the
     # exception CLASS of a turn that raised, and this classifier's output is a taxonomy label
     # for a turn that completed. Writing one into the other made `error_type is not None` --
     # which reads as "this turn crashed" against the declaration -- go from 0 to 78 on 008's

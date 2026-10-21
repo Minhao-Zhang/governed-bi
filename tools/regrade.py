@@ -11,7 +11,7 @@ session, the register's ``statement_timeout_ms`` and the same row cap. The state
 model-written, and a regrade on a different connection would measure the connection as well as
 the grader.
 
-Each regraded row carries two verdicts on the *same* re-executed rows: ``correct`` from the
+Each regraded row carries two results on the *same* re-executed rows: ``correct`` from the
 current grader and ``correct_digest_rule`` from the BIRD digest comparison the artifact was
 graded with. The report pairs recorded against digest rule (re-execution drift, the control) and
 digest rule against current (the grader change), so one pass separates the two causes.
@@ -38,7 +38,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset"
 
-#: What a regraded row's ``grader`` field names. Bumped when ``eval/grade.py``'s verdict changes.
+#: What a regraded row's ``grader`` field names. Bumped when ``eval/grade.py``'s result changes.
 GRADER = "rows-v3"
 
 
@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     from governed_bi.datasource.postgres import PostgresConnector
     from governed_bi.eval.datalake import dataset_qid_lists
     from governed_bi.eval.provenance import git_provenance
-    from governed_bi.register.knobs import knob_default
+    from governed_bi.registry.settings import setting_default
 
     gold_sql: dict[str, str] = {}
     for line in (args.dataset / "test_final.jsonl").read_text(encoding="utf-8").splitlines():
@@ -93,9 +93,9 @@ def main(argv: list[str] | None = None) -> int:
         if line.strip()
     ]
 
-    timeout_ms = int(knob_default("statement_timeout_ms"))
-    max_rows = int(knob_default("max_rows"))
-    stamp = {
+    timeout_ms = int(setting_default("statement_timeout_ms"))
+    max_rows = int(setting_default("max_rows"))
+    finish = {
         "grader": GRADER,
         "statement_timeout_ms": timeout_ms,
         "max_rows": max_rows,
@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
                 execute=lambda sql: connector.execute(sql)[:2],
                 gold_sql=gold_sql,
                 order_sensitive=order_sensitive,
-                stamp=stamp,
+                finish=finish,
             )
         except RegradeAborted as err:
             print(f"aborted, nothing written: {err}", file=sys.stderr)
@@ -144,7 +144,7 @@ def regrade_rows(
     execute: Callable[[str], tuple[Any, Any]],
     gold_sql: dict[str, str],
     order_sensitive: set[str],
-    stamp: dict[str, Any],
+    finish: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], Counter]:
     """Every row re-executed and graded twice. ``execute(sql) -> (columns, rows)``.
 
@@ -191,7 +191,7 @@ def regrade_rows(
             gold_cache[qid] = run(gold)
         gcols, grows = gold_cache[qid]
 
-        verdict = grade_turn(
+        result = grade_turn(
             outcome=str(row.get("outcome")),
             pred_columns=pcols,
             pred_rows=prows,
@@ -200,14 +200,14 @@ def regrade_rows(
             order_sensitive=qid in order_sensitive,
         )
         # Not coerced: a row the regrade cannot judge stays unmeasured rather than wrong.
-        now = verdict["correct"]
+        now = result["correct"]
         row["correct"] = now
-        row["correct_digest_rule"] = _digest_rule(verdict)
-        row["gold_fingerprint"] = verdict.get("gold_fingerprint")
-        row["pred_fingerprint"] = verdict.get("pred_fingerprint")
-        row["grade_detail"] = verdict.get("detail")
+        row["correct_digest_rule"] = _digest_rule(result)
+        row["gold_fingerprint"] = result.get("gold_fingerprint")
+        row["pred_fingerprint"] = result.get("pred_fingerprint")
+        row["grade_detail"] = result.get("detail")
         row["regraded"] = True
-        row["regrade"] = {**stamp, "correct_before": was}
+        row["regrade"] = {**finish, "correct_before": was}
         flips[
             "now unmeasured" if now is None and was is not None
             else "unchanged" if now == was
@@ -218,15 +218,15 @@ def regrade_rows(
     return out, flips
 
 
-def _digest_rule(verdict: dict[str, Any]) -> bool | None:
+def _digest_rule(result: dict[str, Any]) -> bool | None:
     """The artifact's original rule on the re-executed rows: equal BIRD digests.
 
     ``None`` when the gold could not run (nothing to compare), ``False`` when only the
     prediction could not, the same three values as ``grade_turn``.
     """
-    if verdict.get("correct") is None:
+    if result.get("correct") is None:
         return None
-    gold_fp, pred_fp = verdict.get("gold_fingerprint"), verdict.get("pred_fingerprint")
+    gold_fp, pred_fp = result.get("gold_fingerprint"), result.get("pred_fingerprint")
     if gold_fp is None or pred_fp is None:
         return False
     return pred_fp == gold_fp

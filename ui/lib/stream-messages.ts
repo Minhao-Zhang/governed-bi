@@ -127,8 +127,8 @@ function asMapping(value: unknown): Record<string, unknown> | null {
 /**
  * The **1-based question number** a record states it belongs to, or `null` if it does not say.
  *
- * `record.usage` is one row per model call, and `stamp` filters that channel to the current
- * turn before projecting it (`nodes/stamp.py::_usage_for_turn` keeps rows whose `turn_index`
+ * `record.usage` is one row per model call, and `finish` filters that channel to the current
+ * turn before projecting it (`nodes/finish.py::_usage_for_turn` keeps rows whose `turn_index`
  * equals the turn's), so every row in a record's `usage` carries **this** turn's index — the
  * count `serve/accept.py` derives from the thread's human messages. That is the engine's own
  * statement of which question the row answers, and the only one that survives into the record:

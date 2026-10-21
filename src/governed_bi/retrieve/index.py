@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Mapping, Sequence
 
 from governed_bi.ports import Embedder
-from governed_bi.register.assets import ASSET_REGISTER, AssetType, TagRule
-from governed_bi.register.knobs import knob_default
+from governed_bi.registry.assets import ASSET_REGISTER, AssetType, TagRule
+from governed_bi.registry.settings import setting_default
 
 from .lexical import BM25
 from .semantic import cache_key
@@ -74,7 +74,7 @@ def schema_tag_for(
     binding_schema: str | None = None,
     left_table_schema: str | None = None,
 ) -> str | None:
-    """Derive the index-time schema tag from :class:`~governed_bi.register.assets.TagRule`.
+    """Derive the index-time schema tag from :class:`~governed_bi.registry.assets.TagRule`.
 
     The declared table in function form — the one answer to which schema an asset votes for.
     """
@@ -98,9 +98,9 @@ def schema_tag_for(
 
 #: How alike two embeds of one text must be to be the same vector space.
 #:
-#: Deliberately **not** a register knob. A knob is a comparability dial — a value an arm might
+#: Deliberately **not** a register setting. A setting is a comparability dial — a value a config might
 #: legitimately want set differently, recorded so two runs can be told apart. This one only ever
-#: decides whether a corrupt store raises, so an arm choosing its own value is an arm choosing
+#: decides whether a corrupt store raises, so a config choosing its own value is a config choosing
 #: not to be checked. The margin is wide in both directions: one model embedding one text twice
 #: agrees to better than 0.9999, and two different models occupy unrelated subspaces of the same
 #: width, so they agree at roughly the cosine of two arbitrary vectors.
@@ -320,13 +320,13 @@ def build_index(
 
     # `k` from the register, not `BM25`'s own default. The two agreed at 1.2, which is why
     # nobody noticed `lexical_saturation_k` shipping UNSET while this line ran a literal.
-    lexical = BM25(docs, k=float(knob_default("lexical_saturation_k")))
+    lexical = BM25(docs, k=float(setting_default("lexical_saturation_k")))
 
     if vector_cache is not None and embedder is None:
         raise ValueError(
             "vector_cache requires an embedder: the key is (model, dimensions, text), "
             "so without one there is no identity to read the cache under "
-            "(register/knobs.py, the embedding_model setting)"
+            "(registry/settings.py, the embedding_model setting)"
         )
 
     vectors: VectorStore | None = None

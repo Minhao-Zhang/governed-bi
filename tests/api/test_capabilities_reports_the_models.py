@@ -2,7 +2,7 @@
 
 ``chat_model`` and ``llm_utility_model`` are recorded settings. A client that spells
 its id only as ``model_id`` used to fall through to the class name, so two models
-published one value and the drift gate compared them equal. This test is that probe.
+published one value and the drift check compared them equal. This test is that probe.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def test_model_name_does_not_fall_back_to_the_class_name() -> None:
 
 
 def test_model_name_still_prefers_model_name_over_model_id() -> None:
-    """`model_id` is last in the probe order, so earlier arms keep their recorded meaning."""
+    """`model_id` is last in the probe order, so earlier configs keep their recorded meaning."""
     assert _model_name(_OpenAI()) == "gpt-6-luna"
 
 
@@ -75,7 +75,7 @@ def test_models_reports_all_three_surfaces() -> None:
     }
     assert models["utility"]["id"] == "gpt-6-luna"
     assert models["utility"]["provider"] == "openai"
-    # No live utility client on this session, and no knob records the effort, so it is null
+    # No live utility client on this session, and no setting records the effort, so it is null
     # rather than silently borrowing the agent surface's value.
     assert models["utility"]["effort"] is None
 
@@ -103,9 +103,9 @@ def test_capabilities_carries_models_and_keeps_the_legacy_model_field() -> None:
 def test_models_reports_none_rather_than_omitting_a_surface() -> None:
     """An offline profile resolves no chat model. The keys must still be there.
 
-    Omission is what made three knobs *absent* rather than null from 8,106 measurement rows,
-    where a missing key compares equal to itself and the drift gate passes on a configuration it
-    never saw (`serve/session.py::_resolved_knobs`). Same hazard, same rule, one surface over.
+    Omission is what made three settings *absent* rather than null from 8,106 measurement rows,
+    where a missing key compares equal to itself and the drift check passes on a configuration it
+    never saw (`serve/session.py::_resolved_settings`). Same hazard, same rule, one surface over.
     """
 
     class _Offline(_Session):

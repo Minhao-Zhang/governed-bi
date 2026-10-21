@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from governed_bi.eval.harness import project_turn
-from governed_bi.register.quantity import Measured
+from governed_bi.registry.quantity import Measured
 
 
 def _row(usage: list[dict[str, Any]]) -> dict[str, Any]:
@@ -17,8 +17,12 @@ def _row(usage: list[dict[str, Any]]) -> dict[str, Any]:
         "corpus_content_hash": "corpus-x",
         "prompt_set_hash": "prompt-x",
     }
-    state = {"answer": {"answer_text": "42", "outcome": "answered", "record": record}, "licensed": [], "schemas": []}
-    return project_turn(state, question={"question_id": "q1", "db_id": "s", "question": "how many?"}, arm="t")
+    state = {
+        "answer": {"answer_text": "42", "outcome": "answered", "record": record},
+        "retrieved_tables": [],
+        "schemas": [],
+    }
+    return project_turn(state, question={"question_id": "q1", "db_id": "s", "question": "how many?"}, config="t")
 
 
 def test_the_totals_sum_every_stage() -> None:

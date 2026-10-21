@@ -24,7 +24,7 @@ def _question(qid: str = "q1") -> dict:
 
 def test_a_clarification_interrupt_is_flagged_clarified_not_refused() -> None:
     state = {"__interrupt__": [{"value": {"kind": "clarification"}}], "answer": None}
-    row = project_turn(state, question=_question(), arm="curated")
+    row = project_turn(state, question=_question(), config="curated")
     assert row["outcome"] == "clarification"
     assert row["clarified"] is True
     assert row["refused"] is False
@@ -33,7 +33,7 @@ def test_a_clarification_interrupt_is_flagged_clarified_not_refused() -> None:
 
 def test_a_refusal_is_flagged_refused_not_clarified() -> None:
     state = {"answer": {"outcome": "refused", "refused_by": "no_coverage", "record": {}}}
-    row = project_turn(state, question=_question(), arm="curated")
+    row = project_turn(state, question=_question(), config="curated")
     assert row["outcome"] == "refused"
     assert row["refused"] is True
     assert row["clarified"] is False
@@ -47,7 +47,7 @@ def test_a_clean_answer_is_neither() -> None:
             "record": {"generated_sql": "SELECT 1"},
         }
     }
-    row = project_turn(state, question=_question(), arm="curated")
+    row = project_turn(state, question=_question(), config="curated")
     assert row["outcome"] == "answered"
     assert row["refused"] is False
     assert row["clarified"] is False

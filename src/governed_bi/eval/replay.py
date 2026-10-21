@@ -1,19 +1,19 @@
-"""Pin one run's routing decisions onto the next, so a single-knob A/B measures the knob.
+"""Pin one run's routing decisions onto the next, so a single-setting A/B measures the setting.
 
-``route_node`` itself is deterministic — it ranks facet hits and takes ``route_top_n``. What
-is not deterministic is the four **facet rewriters** upstream of it (``FACET_EXTRACTS``;
-``facet_schema`` does not rewrite): each is a utility-model
+``route_node`` itself is deterministic — it ranks channel hits and takes ``route_top_n``. What
+is not deterministic is the four **channel rewriters** upstream of it (``CHANNEL_EXTRACTS``;
+``channel_schema`` does not rewrite): each is a utility-model
 call, and two runs of the same question over the same corpus can hand ``route`` two different
-sets of hits. The schema shortlist then differs, ``licensed`` differs, and the agent is asked
+sets of hits. The schema shortlist then differs, ``retrieved_tables`` differs, and the agent is asked
 a different question. A prompt A/B run that way cannot separate "the new prompt helped" from
 "routing happened to land better this time".
 
-This module replays the ``schemas`` field of a prior artifact. The facets still run — they
+This module replays the ``schemas`` field of a prior artifact. The channels still run — they
 also drive pass-two retrieval **within** the chosen schemas, and switching them off would
 measure a system nobody serves. Only the shortlist is frozen.
 
 **It therefore does not freeze everything, and does not pretend to.** Pass two still re-searches
-inside the pinned schemas, so ``licensed`` can still move. :func:`licensed_drift` measures how
+inside the pinned schemas, so ``retrieved_tables`` can still move. :func:`licensed_drift` measures how
 much it moved and the driver reports it, because an unquantified "mostly deterministic" is the
 claim this module exists to stop anyone from making.
 """
@@ -29,8 +29,8 @@ __all__ = [
     "PINNED_SCHEMAS_KEY",
     "routing_from_artifact",
     "attach_pinned_routing",
-    "licensed_baseline",
-    "licensed_drift",
+    "retrieved_tables_baseline",
+    "retrieved_tables_drift",
     "drift_against",
     "pin_realised",
 ]
@@ -46,9 +46,9 @@ def routing_from_artifact(path: str | Path) -> dict[str, list[str]]:
 
     Rows whose ``schemas`` is absent or empty are **skipped rather than pinned to ``[]``**: an
     empty shortlist is the ``no_schema_matched`` decline, and replaying it would freeze a
-    retrieval failure into the treatment arm as though it were a decision. Eight rows of the
-    2026-08-09 full run licensed nothing at all; pinning those would carry that defect forward
-    and make the next arm look like it reproduced a bug it never ran.
+    retrieval failure into the treatment config as though it were a decision. Eight rows of the
+    2026-08-09 full run retrieved_tables nothing at all; pinning those would carry that defect forward
+    and make the next config look like it reproduced a bug it never ran.
     """
     pinned: dict[str, list[str]] = {}
     with Path(path).open(encoding="utf-8") as handle:
@@ -74,7 +74,7 @@ def attach_pinned_routing(
     harness needs no second argument threaded through every call site.
 
     A question absent from the artifact is left alone and **counted**. Silently routing it
-    live would mean an arm described as pinned had an unmeasured fraction that was not — the
+    live would mean a config described as pinned had an unmeasured fraction that was not — the
     driver prints the count so the label on the run is true.
     """
     counts = {"pinned": 0, "unpinned": 0}
@@ -89,17 +89,17 @@ def attach_pinned_routing(
     return counts
 
 
-def licensed_baseline(path: str | Path) -> dict[str, list[str]]:
-    """``{question_id -> licensed}`` for the rows :func:`routing_from_artifact` would pin.
+def retrieved_tables_baseline(path: str | Path) -> dict[str, list[str]]:
+    """``{question_id -> retrieved_tables}`` for the rows :func:`routing_from_artifact` would pin.
 
     The baseline :func:`licensed_drift` measures against must cover **the same rows the pin
     covered** and no others. The driver built it from every row of the replayed artifact,
     including the ones ``routing_from_artifact`` deliberately skips for having an empty
     shortlist — turns that declined with ``no_schema_matched``. Those were never pinned, so
-    whatever the next arm does with them is drift the pin never claimed to prevent, and
+    whatever the next config does with them is drift the pin never claimed to prevent, and
     counting it deflated the residual.
 
-    Measured on the v4 arm against ``proxy_v3_fold``: the six excluded rows move the mean
+    Measured on the v4 config against ``proxy_v3_fold``: the six excluded rows move the mean
     Jaccard over the movers from 0.7020 to 0.7049 and the identical rate from 0.0940 to 0.0937.
     Small — and in the direction that flatters the pin, which is the direction a measurement
     must not be wrong in.
@@ -121,13 +121,13 @@ def licensed_baseline(path: str | Path) -> dict[str, list[str]]:
     return baseline
 
 
-def licensed_drift(
+def retrieved_tables_drift(
     rows: Iterable[Mapping[str, Any]], baseline: Mapping[str, Sequence[str]]
 ) -> dict[str, Any]:
-    """How far ``licensed`` moved despite the shortlist being pinned.
+    """How far ``retrieved_tables`` moved despite the shortlist being pinned.
 
-    ``baseline`` is ``{question_id -> licensed}`` from the artifact being replayed. Pinning the
-    schemas does not pin pass two, so this is the residual: the fraction of turns whose licensed
+    ``baseline`` is ``{question_id -> retrieved_tables}`` from the artifact being replayed. Pinning the
+    schemas does not pin pass two, so this is the residual: the fraction of turns whose retrieved_tables
     table set is not identical to the one the agent saw last time, and the mean Jaccard over
     those that moved.
 
@@ -179,7 +179,7 @@ def drift_against(baseline_path: str | Path, rows: Iterable[Mapping[str, Any]]) 
     The pinned side of the contrast (the driver) and the unpinned reference now come out of the
     same two calls, which is the only structural defence against the next one.
     """
-    return licensed_drift(rows, licensed_baseline(baseline_path))
+    return retrieved_tables_drift(rows, retrieved_tables_baseline(baseline_path))
 
 
 def pin_realised(
@@ -205,7 +205,7 @@ def pin_realised(
     * ``exact`` — an independent check that does not read the flag at all: the turn's
       ``schemas`` equals the pin source's, in order;
     * ``same_set_out_of_order`` — turns whose shortlist holds the pinned schemas in a different
-      order. It is 0 on all three arms, which is what makes ``exact`` and ``realised`` agreeing
+      order. It is 0 on all three configs, which is what makes ``exact`` and ``realised`` agreeing
       a real corroboration rather than two spellings of one comparison.
 
     ``flagged - realised`` is the gap: clarifications that ended before routing.

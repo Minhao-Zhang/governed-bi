@@ -19,7 +19,7 @@ from typing import Annotated, Any
 
 from langchain.agents import AgentState
 
-from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY
+from governed_bi.registry.stages import ATTEMPT_CAP_REFUSED_BY
 from governed_bi.serve.ledger import INTROSPECTION_PATHS, attempt_field
 
 __all__ = [
@@ -116,7 +116,7 @@ def _chargeable(committed: Mapping[str, Any] | None) -> set[str]:
 
     **``attempts_by_call`` is the turn's ledger, not the attempt cap's.** Charging a slot per
     key meant ``sample_rows`` rows and the cap row itself silently spent governed statements the
-    knob promises. It also made the cap uncountable: ``ToolCallLimitMiddleware`` counts
+    setting promises. It also made the cap uncountable: ``ToolCallLimitMiddleware`` counts
     ``run_query`` calls and nothing else, so both enforcers have to read the same population
     before either can be described as "five attempts".
 

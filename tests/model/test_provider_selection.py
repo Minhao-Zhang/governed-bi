@@ -82,9 +82,9 @@ def test_credentials_follow_the_openai_key(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_the_embedding_default_is_the_openai_model() -> None:
     from governed_bi.model.openai_embedder import OPENAI_EMBEDDING_MODEL
-    from governed_bi.register.knobs import knob_default
+    from governed_bi.registry.settings import setting_default
 
-    assert P.default_embedding_model() == OPENAI_EMBEDDING_MODEL == knob_default("embedding_model")
+    assert P.default_embedding_model() == OPENAI_EMBEDDING_MODEL == setting_default("embedding_model")
 
 
 def test_embedder_is_the_openai_adapter() -> None:

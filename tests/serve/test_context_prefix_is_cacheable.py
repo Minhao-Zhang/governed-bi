@@ -3,7 +3,7 @@
 The agent re-sends a ~22k-token context block on every model call, by design — it cannot be a
 ``SystemMessage`` (that would make ``prompt_set_hash`` describe text never sent) and cannot sit
 in ``messages`` as the client's own turn (the SDK renders it as the user's bubble). Measured on
-the 2026-08-09 v3-fold arm, ``agent_core`` makes 3 308 model calls over 1 345 turns -- 2.5
+the 2026-08-09 v3-fold config, ``agent_core`` makes 3 308 model calls over 1 345 turns -- 2.5
 each -- so the repeated prefix is **58.3%** of all input tokens. That is a measurement, not the
 bound it replaced: the bound came from dividing tokens by block size, and ``model_calls`` now
 counts the calls directly.
@@ -110,7 +110,7 @@ def test_the_breakpoint_rides_after_the_block_not_before_it() -> None:
 
 
 def test_without_a_breakpoint_the_content_stays_a_plain_string() -> None:
-    """The OpenAI and proxy arms must be byte-identical to before this existed."""
+    """The OpenAI and proxy configs must be byte-identical to before this existed."""
     assert _with_block(_convo(), "BLOCK")[0].content == "BLOCK"
 
 
@@ -153,7 +153,7 @@ def test_the_delivery_channel_carries_what_the_budget_evicted() -> None:
     """``merge_into`` rebuilt a fresh four-key dict, so ``assemble``'s ``evicted`` was destroyed
     in ``agent_core`` on every turn that had one — a silent data loss that lived undetected.
 
-    It is the only record that a table was routed, licensed, *counted as covered* by
+    It is the only record that a table was routed, retrieved_tables, *counted as covered* by
     ``table_coverage``, and then dropped for space before the model saw it. Measured once it
     survived: 19 of 1 351 turns (1.4%), bodies only, never a whole table. Rare — but nothing
     could know that while this function deleted the field.
@@ -163,7 +163,7 @@ def test_the_delivery_channel_carries_what_the_budget_evicted() -> None:
     ``retrieved`` at the same time — a per-channel hand-fix cannot see one channel over. The
     rule is now ``state.merge_delta`` on the channel and a two-key delta from the tracker, so
     the property that matters is what the *channel* holds after ``agent_core`` writes, which is
-    what ``stamp`` reads. Composed here exactly as LangGraph composes it.
+    what ``finish`` reads. Composed here exactly as LangGraph composes it.
     """
     from governed_bi.serve.delivery import DeliveryTracker
     from governed_bi.serve.state import merge_delta
@@ -217,7 +217,7 @@ def test_the_eval_row_reports_what_was_evicted() -> None:
             "messages": [],
         },
         question={"question_id": "q1", "db_id": "d"},
-        arm="a",
+        config="a",
     )
     assert row["context_evicted"] == evicted
 
@@ -297,10 +297,10 @@ def test_the_served_record_carries_what_the_budget_evicted(
     row is projected from. (``runs/serve/*.jsonl`` was that sink when this was written; it is
     deleted — ADR 0004, ADR 0014 — and the record is read off thread state now.)
 
-    ``stamp`` projects ``delivery`` into the record through an explicit key set, so ``evicted``
+    ``finish`` projects ``delivery`` into the record through an explicit key set, so ``evicted``
     is one name in one literal away from reaching the eval row and nothing else — and that is
     exactly the state it was found in. A served turn would then have no trace that the char
-    budget dropped a licensed table before the model ever saw it, on the only path a user's
+    budget dropped a retrieved table before the model ever saw it, on the only path a user's
     question actually takes.
 
     Same turn twice, differing only in the budget, so the field is asserted as a *response* to
@@ -310,14 +310,14 @@ def test_the_served_record_carries_what_the_budget_evicted(
     from governed_bi.serve.graph import compile_graph
 
     def _serve(budget: int | None, thread: str) -> dict[str, Any]:
-        knobs: dict[str, Any] = {"route_top_n": 1, "candidate_depth": 50}
+        settings: dict[str, Any] = {"route_top_n": 1, "candidate_depth": 50}
         if budget is not None:
-            knobs["context_budget_chars"] = budget
+            settings["context_budget_chars"] = budget
         state = {
             "question": "customer", "thread_id": thread, "turn_index": 1, "run_id": "r-evict",
             "turn_id": f"turn-{thread}", "question_id": "q-evict", "db_id": "sales_a",
             "attempt_id": "a-evict", "corpus_content_hash": "c", "prompt_set_hash": "p",
-            "knobs_resolved": knobs, "n_re_served": 0, "messages": [], "usage": [],
+            "knobs_resolved": settings, "n_re_served": 0, "messages": [], "usage": [],
             "route_top_n": 1, "candidate_depth": 50, "identity": {"token": "tok"},
         }
         config = {

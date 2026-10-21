@@ -13,7 +13,7 @@ from typing import Mapping
 __all__ = [
     "Prompt",
     "PROMPT_REGISTRY",
-    "FACET_QUERY_PROMPTS",
+    "CHANNEL_QUERY_PROMPTS",
     "DEFAULT_VARIANTS",
     "prompt_text",
     "prompt_set_hash",
@@ -41,7 +41,7 @@ class Prompt:
         if key not in self.variants:
             raise KeyError(
                 f"prompt {self.name!r} has no variant {key!r}; declared: "
-                f"{sorted(self.variants)}. A variant chosen by a knob and absent here would "
+                f"{sorted(self.variants)}. A variant chosen by a setting and absent here would "
                 "otherwise fall back to the default silently, and the run would report the "
                 "hash of a prompt it did not send."
             )
@@ -60,7 +60,7 @@ ANALYST = Prompt(
         "over-projected and 51 of them (47.7%) became correct once the extra columns were "
         "dropped, while a repair sweep recovered 27 more by toggling DISTINCT — 15 by adding it, "
         "12 by removing it, which is why the DISTINCT rule is about intent and not a direction. "
-        "**v3 is the default from 2026-08-09**: two arms, paired McNemar p = 0.0008 against "
+        "**v3 is the default from 2026-08-09**: two configs, paired McNemar p = 0.0008 against "
         "run1 and p = 0.00008 against run2, with over-projection 107 -> 18 and every guardrail "
         "flat or better. Leaving v2 default meant an unflagged run served the worse wording. "
         "**v4 is the default from 2026-08-10, and not because it won on EX.** Against v3-fold "
@@ -72,7 +72,7 @@ ANALYST = Prompt(
         "check() will refuse is right whether or not the score notices.\n"
         "v4 is v3 plus the star rule: `check()` refuses `SELECT *` at BINDING and the prompt "
         "had never said so, so the agent wrote it, was refused, and had nothing to go on -- 29 "
-        "turns of the v3-fold arm, of which 1 ended correct, and 14 of the 48 questions WrenAI "
+        "turns of the v3-fold config, of which 1 ended correct, and 14 of the 48 questions WrenAI "
         "solves and we abstain on. The same shape as the identifier rules two paragraphs up: a "
         "constraint that exists, fires, and was never stated. `COUNT(*)` is named explicitly "
         "because it is the carve-out and an agent told only 'no star' would stop using it. "
@@ -243,7 +243,7 @@ ANALYST = Prompt(
 )
 
 
-#: Guard scope gate: is this a BI question? Reply YES/NO; fail closed on YES.
+#: Guard scope check: is this a BI question? Reply YES/NO; fail closed on YES.
 BI_SCOPE = Prompt(
     name="bi_scope",
     stage="guard",
@@ -300,17 +300,17 @@ BI_SCOPE = Prompt(
 )
 
 
-#: Shared suffix for facet rewriters: search text only, no reasoning.
+#: Shared suffix for channel rewriters: search text only, no reasoning.
 _REWRITE_TAIL = (
     "\n\nReply with the search text only — no preamble, no explanation, no quotes. "
     "Keep it under 30 words. If the question gives you nothing to work with, reply with "
     "the question unchanged."
 )
 
-#: Schema-facet rewriter (declared for hashing; not sent — see FACET_QUERY_PROMPTS).
-FACET_SCHEMA_QUERY = Prompt(
+#: Schema-channel rewriter (declared for hashing; not sent — see CHANNEL_QUERY_PROMPTS).
+CHANNEL_SCHEMA_QUERY = Prompt(
     name="facet_schema_query",
-    stage="facet_schema",
+    stage="channel_schema",
     why=(
         "Turns the question into catalogue search terms for the tables and schemas that "
         "would answer it. The schema router consumes this, so it decides which corpus the "
@@ -341,9 +341,9 @@ FACET_SCHEMA_QUERY = Prompt(
     },
 )
 
-FACET_TERM_QUERY = Prompt(
+CHANNEL_TERM_QUERY = Prompt(
     name="facet_term_query",
-    stage="facet_term",
+    stage="channel_term",
     why="Turns the question into search text for business-term and definition assets.",
     variants={
         "v1": (
@@ -355,9 +355,9 @@ FACET_TERM_QUERY = Prompt(
     },
 )
 
-FACET_METRIC_QUERY = Prompt(
+CHANNEL_METRIC_QUERY = Prompt(
     name="facet_metric_query",
-    stage="facet_metric",
+    stage="channel_metric",
     why="Turns the question into search text for metric definitions.",
     variants={
         "v1": (
@@ -369,9 +369,9 @@ FACET_METRIC_QUERY = Prompt(
     },
 )
 
-FACET_ENTITY_QUERY = Prompt(
+CHANNEL_ENTITY_QUERY = Prompt(
     name="facet_entity_query",
-    stage="facet_entity",
+    stage="channel_entity",
     why="Turns the question into search text for the concrete entities and column values it names.",
     variants={
         "v1": (
@@ -383,12 +383,12 @@ FACET_ENTITY_QUERY = Prompt(
     },
 )
 
-FACET_EXAMPLE_QUERY = Prompt(
+CHANNEL_EXAMPLE_QUERY = Prompt(
     name="facet_example_query",
-    stage="facet_example",
+    stage="channel_example",
     why=(
         "Turns the question into search text for past question/SQL example pairs. An "
-        "embedder retrieves these better than BM25, which is why this facet declares only "
+        "embedder retrieves these better than BM25, which is why this retrieval channel declares only "
         "the semantic channel."
     ),
     variants={
@@ -426,13 +426,13 @@ NARRATE = Prompt(
 )
 
 
-#: Stage → rewriter prompt. ``facet_schema`` absent: searches raw question;
+#: Stage → rewriter prompt. ``channel_schema`` absent: searches raw question;
 #: ``FACET_SCHEMA_QUERY`` stays in the registry (hashed) as an unsent baseline.
-FACET_QUERY_PROMPTS: Mapping[str, str] = {
-    "facet_term": "facet_term_query",
-    "facet_metric": "facet_metric_query",
-    "facet_entity": "facet_entity_query",
-    "facet_example": "facet_example_query",
+CHANNEL_QUERY_PROMPTS: Mapping[str, str] = {
+    "channel_term": "facet_term_query",
+    "channel_metric": "facet_metric_query",
+    "channel_entity": "facet_entity_query",
+    "channel_example": "facet_example_query",
 }
 
 
@@ -443,11 +443,11 @@ PROMPT_REGISTRY: Mapping[str, Prompt] = {
         ANALYST,
         BI_SCOPE,
         NARRATE,
-        FACET_SCHEMA_QUERY,
-        FACET_TERM_QUERY,
-        FACET_METRIC_QUERY,
-        FACET_ENTITY_QUERY,
-        FACET_EXAMPLE_QUERY,
+        CHANNEL_SCHEMA_QUERY,
+        CHANNEL_TERM_QUERY,
+        CHANNEL_METRIC_QUERY,
+        CHANNEL_ENTITY_QUERY,
+        CHANNEL_EXAMPLE_QUERY,
     )
 }
 

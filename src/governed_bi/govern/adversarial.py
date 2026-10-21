@@ -1,7 +1,7 @@
 """The adversarial governance suite, as data (``adversarial.toml``).
 
 open-work.md 3.11 recorded the gap this closes — until this suite existed it read "the layer
-stack, the allowlist and the scope gate have no adversarial evaluation, so what governance buys
+stack, the allowlist and the scope check have no adversarial evaluation, so what governance buys
 has no number", and it now reports the first number instead. This module loads the cases and resolves
 the fictional world they read against; :mod:`.adversarial_run` runs them and reports the
 numbers. Both are deliberately model-free, network-free and credential-free — the whole layer
@@ -55,7 +55,7 @@ __all__ = [
     "build_world_fixture",
 ]
 
-#: Beside this module, for ``register/arms.toml``'s reason: a claim that ships with the
+#: Beside this module, for ``registry/configs.toml``'s reason: a claim that ships with the
 #: library must travel with the distribution rather than be reached by climbing out of the
 #: package, which resolves only from a source checkout.
 SUITE_FILE = Path(__file__).resolve().parent / "adversarial.toml"
@@ -78,7 +78,7 @@ CASE_FAMILIES: frozenset[str] = frozenset(
 CASE_KINDS: frozenset[str] = frozenset({"attack", "benign"})
 
 #: Which entry point the expectation is read from. ``check`` is the layer stack alone;
-#: ``pipeline`` is a step ``prepare()`` runs around it — the pre-NFKC encoding gate, or
+#: ``pipeline`` is a step ``prepare()`` runs around it — the pre-NFKC encoding check, or
 #: canonicalisation — where ``check()`` on the raw string would pass. Both run for every case
 #: regardless, and an attack must leave ``prepare()`` with nothing to execute either way.
 ENFORCERS: frozenset[str] = frozenset({"check", "pipeline"})
@@ -125,7 +125,7 @@ class AdversarialCase:
     expect_rule: str | None = None
     enforced_by: str = "check"
     #: A refusal of a benign case that somebody chose to accept, with the reason. Counted in
-    #: the false-refusal rate and reported; does not fail the gate. Empty means "must pass".
+    #: the false-refusal rate and reported; does not fail the check. Empty means "must pass".
     known_false_refusal: str = ""
 
     @property
@@ -144,7 +144,7 @@ class AdversarialWorld:
     default_schema: str
     #: ``{schema}.{table} -> declared column spellings``, in declaration order.
     tables: Mapping[str, tuple[str, ...]]
-    licensed: frozenset[str]
+    retrieved_tables: frozenset[str]
     excluded: frozenset[str]
     suspect: frozenset[str]
 
@@ -175,7 +175,7 @@ class GuardCase:
     #: runs, so the rule id *is* the whole attribution.
     expect_rule: str | None = None
     #: As :attr:`AdversarialCase.known_false_refusal`: a benign refusal somebody accepted,
-    #: with the reason. Counted and reported; does not fail the gate.
+    #: with the reason. Counted and reported; does not fail the check.
     known_false_refusal: str = ""
 
     @property
@@ -206,7 +206,7 @@ class WorldFixture:
     """:class:`AdversarialWorld` resolved into the arguments the two entry points take."""
 
     corpus: AnalystCorpus
-    licensed: frozenset[str]
+    retrieved_tables: frozenset[str]
     spellings: Mapping[str, str]
     ambiguous: frozenset[str]
     by_table: Mapping[str, Mapping[str, str]]
@@ -239,20 +239,20 @@ def _parse_world(body: Mapping[str, Any]) -> AdversarialWorld:
             raise ValueError(f"[world.tables] {table_id!r} must be a list of column names")
         resolved[table_id] = tuple(columns)
 
-    licensed = frozenset(str(x) for x in body.get("licensed", ()))
-    unknown = sorted(licensed - set(resolved))
+    retrieved_tables = frozenset(str(x) for x in body.get("licensed", ()))
+    unknown = sorted(retrieved_tables - set(resolved))
     if unknown:
         raise ValueError(f"[world].licensed names {unknown}, which no [world.tables] entry declares")
-    if licensed == set(resolved):
+    if retrieved_tables == set(resolved):
         raise ValueError(
-            "[world] licenses every table it declares, so the TABLES layer has nothing to "
-            "refuse and a checker that licensed everything would score perfectly"
+            "[world] lists every table it declares as retrieved, so the TABLES layer has nothing to "
+            "refuse and a checker that retrieved every table would score perfectly"
         )
 
     return AdversarialWorld(
         default_schema=str(body.get("default_schema") or ""),
         tables=resolved,
-        licensed=licensed,
+        retrieved_tables=retrieved_tables,
         excluded=frozenset(str(x) for x in body.get("excluded", ())),
         suspect=frozenset(str(x) for x in body.get("suspect", ())),
     )
@@ -543,10 +543,10 @@ def build_world_fixture(world: AdversarialWorld) -> WorldFixture:
     open-work.md 3.2a's defects live — untested.
     """
     corpus = for_analyst(_world_assets(world))
-    spellings, ambiguous, by_table = spellings_for(corpus, world.licensed)
+    spellings, ambiguous, by_table = spellings_for(corpus, world.retrieved_tables)
     return WorldFixture(
         corpus=corpus,
-        licensed=world.licensed,
+        retrieved_tables=world.retrieved_tables,
         spellings=spellings,
         ambiguous=ambiguous,
         by_table=by_table,

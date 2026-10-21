@@ -12,7 +12,7 @@ from .deterministic_embedder import DETERMINISTIC_DIMENSIONS, DeterministicEmbed
 from .embedder import (
     DEFAULT_BATCH_SIZE,
     BaseEmbedder,
-    embedding_knobs,
+    embedding_settings,
     refuse_blank,
 )
 from .openai_embedder import (
@@ -38,7 +38,7 @@ __all__ = [
     "OpenAIEmbedder",
     "chat_model",
     "embedder",
-    "embedding_knobs",
+    "embedding_settings",
     "reasoning_effort_of",
     "refuse_blank",
 ]

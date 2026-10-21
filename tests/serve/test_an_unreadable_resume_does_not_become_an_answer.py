@@ -8,7 +8,7 @@ produced:
 * ``None``          → told the answer was the literal ``"None"``
 * ``123`` / a list  → ``"123"`` / ``"[1, 2, 3]"``
 
-each stamped ``resolution: "answered"`` in the record, beside the real ones, and each letting
+each written ``resolution: "answered"`` in the record, beside the real ones, and each letting
 the turn proceed to ``run_query`` on the strength of a reply nobody gave. An operator reading
 ``/audit/turns/{id}/trace`` afterwards would find a clarification marked answered and an
 answer that came from the transport.

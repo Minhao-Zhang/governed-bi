@@ -1,6 +1,6 @@
 """``GovernancePolicy``: the security configuration of one turn.
 
-Mostly a typed view of the settings in ``register.knobs``. Defaults are read,
+Mostly a typed view of the settings in ``registry.settings``. Defaults are read,
 never restated. ``guard_rules_enabled`` stays ``UNSET`` until a caller sets it.
 ``Unset.__bool__`` raises; use the explicit accessor.
 """
@@ -10,14 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping
 
-from ..register.knobs import Unset, knob_default
+from ..registry.settings import Unset, setting_default
 from .functions import PERMITTED_FUNCTIONS
 
 __all__ = ["GovernancePolicy", "DEFAULT_DIALECT"]
 
 #: The dialect assumed when a caller does not thread one from its connector.
 #:
-#: Not a knob: ``ports.Connector.dialect`` is where the real value comes from.
+#: Not a setting: ``ports.Connector.dialect`` is where the real value comes from.
 #: Postgres because the bypass list is Postgres-specific, so it is the stricter
 #: default of the two.
 DEFAULT_DIALECT = "postgres"
@@ -55,18 +55,18 @@ class GovernancePolicy:
 
     #: The positive function allowlist, as canonical names. Defaults to the
     #: committed list in :mod:`.functions`, whose digest is what the
-    #: ``permitted_functions`` knob carries into the config hash.
+    #: ``permitted_functions`` setting carries into the config hash.
     permitted_functions: frozenset[str] = field(default_factory=lambda: PERMITTED_FUNCTIONS)
-    hard_block_suspect: bool = field(default_factory=lambda: knob_default("hard_block_suspect"))
-    graded_delivery_enabled: bool = field(default_factory=lambda: knob_default("graded_delivery_enabled"))
-    run_query_attempt_cap: int = field(default_factory=lambda: knob_default("run_query_attempt_cap"))
-    max_rows: int = field(default_factory=lambda: knob_default("max_rows"))
-    g_length_max_chars: int = field(default_factory=lambda: knob_default("g_length_max_chars"))
+    hard_block_suspect: bool = field(default_factory=lambda: setting_default("hard_block_suspect"))
+    graded_delivery_enabled: bool = field(default_factory=lambda: setting_default("graded_delivery_enabled"))
+    run_query_attempt_cap: int = field(default_factory=lambda: setting_default("run_query_attempt_cap"))
+    max_rows: int = field(default_factory=lambda: setting_default("max_rows"))
+    g_length_max_chars: int = field(default_factory=lambda: setting_default("g_length_max_chars"))
     #: ``UNSET`` ⇒ no rule has both of its numbers yet (ADR 0006 OQ3), so
     #: :func:`~governed_bi.govern.guard.guard` refuses to run rather than choosing
     #: between shipping uncalibrated rules and shipping no guard while claiming one.
     guard_rules_enabled: Mapping[str, bool] | Unset = field(
-        default_factory=lambda: knob_default("guard_rules_enabled")
+        default_factory=lambda: setting_default("guard_rules_enabled")
     )
 
     def __post_init__(self) -> None:
@@ -78,7 +78,7 @@ class GovernancePolicy:
         :data:`GUARD_RULE_IDS`, ``g_bi_scope`` is not a member, and
         :meth:`guard_rule_enabled`'s ``.get(rule_id, False)`` turns every absent id into a
         silent ``False``. So the served surface ran **zero** deterministic predicates from the
-        day the scope gate was added, and the only test that read the shipped mapping pinned it
+        day the scope check was added, and the only test that read the shipped mapping pinned it
         with ``==`` — it would have failed on the fix and passed on the regression.
 
         Validating *keys* and not *coverage*: an empty mapping stays legal, because
@@ -103,7 +103,7 @@ class GovernancePolicy:
             )
 
     def guard_rule_enabled(self, rule_id: str) -> bool:
-        """Whether ``rule_id`` is enabled. Raises while the knob is ``UNSET``."""
+        """Whether ``rule_id`` is enabled. Raises while the setting is ``UNSET``."""
         if isinstance(self.guard_rules_enabled, Unset):
             raise TypeError(
                 "guard_rules_enabled is UNSET. ADR 0006 OQ3 requires red-team recall and "

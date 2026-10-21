@@ -3,7 +3,7 @@
  *
  * The serve graph emits one custom event per governed boundary — every rail from
  * `serve/wrap.py`, every tool and every governance verdict from `serve/tools.py`,
- * and the terminal from `serve/nodes/stamp.py`. ADR 0010 is the spec for that
+ * and the terminal from `serve/nodes/finish.py`. ADR 0010 is the spec for that
  * event; this module owns the client half of it:
  *
  *  - `reduceSteps` folds the ordered stream into append-only rows, merging a
@@ -73,7 +73,7 @@ export interface GovEvent {
    * A `register/stages.py` Stage value: rails
    * accept|guard|rewrite|negative_gate|facet_{schema,term,metric,entity,example}|
    * route|resolve|connect|assemble|agent_core|refuse|decline, tools
-   * read_body|inspect_schema|sample_rows|check|execute|cap|ask_user, final stamp.
+   * read_body|inspect_schema|sample_rows|check|execute|cap|ask_user, final finish.
    */
   step: string;
   status: "start" | "ok" | "blocked" | "error" | "refused" | "cap" | "hit" | "miss" | "declined";
@@ -129,7 +129,7 @@ export interface TimelineStep {
  * `TERMINAL_STAGES` beside the `refuse`/`decline` rails, because the two facts
  * live at different levels: the `cap` **row** says *this tool call was refused a
  * slot*, keyed on its `tool_call_id`, while the **turn** being cap-terminated is a
- * separate `stamp` row with `status: "cap"`. A capped turn emits both and they are
+ * separate `finish` row with `status: "cap"`. A capped turn emits both and they are
  * not duplicates.
  */
 const TOOL_STEPS = new Set([
@@ -143,19 +143,19 @@ const TOOL_STEPS = new Set([
 ]);
 
 /** The one step whose `kind` is `final`: every terminal path funnels through it. */
-const FINAL_STEP = "stamp";
+const FINAL_STEP = "finish";
 
 /**
- * The five concurrent facets → the noun their row is about. A `Map`, not an
+ * The five concurrent channels → the noun their row is about. A `Map`, not an
  * object literal: `step` is an unvalidated wire string, and an object lookup
  * answers for `constructor` and every other `Object.prototype` key.
  */
 const FACET_NOUNS = new Map<string, string>([
-  ["facet_schema", "Schema"],
-  ["facet_term", "Terms"],
-  ["facet_metric", "Metrics"],
-  ["facet_entity", "Entities"],
-  ["facet_example", "Examples"],
+  ["channel_schema", "Schema"],
+  ["channel_term", "Terms"],
+  ["channel_metric", "Metrics"],
+  ["channel_entity", "Entities"],
+  ["channel_example", "Examples"],
 ]);
 
 export function isTool(step: string): boolean {
@@ -163,7 +163,7 @@ export function isTool(step: string): boolean {
 }
 
 /**
- * Everything the agent loop does not do. Note `stamp` answers `true` here while
+ * Everything the agent loop does not do. Note `finish` answers `true` here while
  * its wire `kind` is `final` — when a caller holds a row, prefer `row.kind`.
  */
 export function isRail(step: string): boolean {
@@ -172,7 +172,7 @@ export function isRail(step: string): boolean {
 
 /** Icon per step, so rails and each tool read distinctly at a glance. */
 export function stepIcon(step: string): LucideIcon {
-  if (FACET_NOUNS.has(step)) return Search; // the five facets are one gesture
+  if (FACET_NOUNS.has(step)) return Search; // the five channels are one gesture
   switch (step) {
     case "accept":
       return Inbox;
@@ -269,7 +269,7 @@ function facetLabel(
   return hits === null ? `${noun} retrieved` : `${noun}: ${hits}`;
 }
 
-/** `stamp`'s `outcome` → the one line a reader wants (register/stages.py Outcome). */
+/** `finish`'s `outcome` → the one line a reader wants (register/stages.py Outcome). */
 function outcomeLabel(outcome: string, failedStage: string | null): string {
   switch (outcome) {
     case "answered":
@@ -282,7 +282,7 @@ function outcomeLabel(outcome: string, failedStage: string | null): string {
       return "Stopped at the attempt limit";
     case "crashed":
       return failedStage ? `Failed in ${failedStage}` : "Failed";
-    // Not "Answered": the turn ended without running a governed statement, and the `stamp` row
+    // Not "Answered": the turn ended without running a governed statement, and the `finish` row
     // carries `status: "ok"` because the rail's status vocabulary has no word for this. The label
     // is where the distinction lands, so it has to say it.
     case "no_sql":
@@ -323,7 +323,7 @@ export function defaultLabel(ev: {
         return rule ? `Input gate: refused (${rule})` : "Input gate: refused";
       }
       if (s === "error") {
-        return str(d, "gate") === "error_failed_open"
+        return str(d, "check") === "error_failed_open"
           ? failedOpen("Input gate")
           : "Input gate: failed";
       }
@@ -341,7 +341,7 @@ export function defaultLabel(ev: {
     case "negative_gate": {
       if (running) return "Checking known-bad questions";
       if (s === "error") {
-        return str(d, "gate") === "error_failed_open"
+        return str(d, "check") === "error_failed_open"
           ? failedOpen("Negative gate")
           : errorLabel("Negative gate failed", d);
       }
@@ -358,7 +358,7 @@ export function defaultLabel(ev: {
       // the gate really did run. Getting these two the same way round is the
       // difference between a screen that says what happened and one that lies on
       // every turn.
-      if (str(d, "gate") === "disabled") return "Negative-example gate: disabled";
+      if (str(d, "check") === "disabled") return "Negative-example gate: disabled";
       return s === "ok" ? "Negative gate: cleared" : "No negative match";
     }
     case "route": {
@@ -512,7 +512,7 @@ export function defaultLabel(ev: {
       // right for measurement, wrong for a timeline, where "no schema matched" and
       // "the guard blocked this" are not the same event to the person reading it.
       // `clarification` still wins, because waiting on an answer is a state rather
-      // than a failure (ADR 0010, `stamp` reads `path_kind` first for exactly this).
+      // than a failure (ADR 0010, `finish` reads `path_kind` first for exactly this).
       if (s === "declined" && outcome !== "clarification") return "Declined";
       if (outcome) return outcomeLabel(outcome, failed);
       if (s === "refused") return "Refused";
@@ -601,7 +601,7 @@ function nextPosition(prev: TimelineStep[], first: number): number {
  * Fold one event into the accumulated rows. A step's `start` and its resolution
  * share `id`, so they merge into a single row (status advances `running` → the
  * terminal status, detail deep-merges). Rows stay in the order they were first
- * seen, which is what lets the five concurrent facets arrive interleaved.
+ * seen, which is what lets the five concurrent channels arrive interleaved.
  */
 export function reduceSteps(prev: TimelineStep[], ev: GovEvent): TimelineStep[] {
   const key = ev.id ?? `${ev.step}:${ev.seq}`;
@@ -619,8 +619,8 @@ export function reduceSteps(prev: TimelineStep[], ev: GovEvent): TimelineStep[] 
     // clarification splits a turn into the connection that pauses and the one that
     // resumes. If the server restarts while a human is answering — which
     // `langgraph dev` does on every file save — the counter restarts with it, and
-    // the resumed `check`/`execute`/`stamp` arrive as 2, 4, 6 against rows numbered
-    // 33-60. Sorting on that puts `stamp` above `guard` and the timeline reads
+    // the resumed `check`/`execute`/`finish` arrive as 2, 4, 6 against rows numbered
+    // 33-60. Sorting on that puts `finish` above `guard` and the timeline reads
     // backwards. Arrival order also absorbs a gap in the sequence and two turns
     // interleaving their numbers in one process. There is no case where `seq` is
     // right and arrival is wrong.

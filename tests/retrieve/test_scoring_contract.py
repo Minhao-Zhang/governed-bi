@@ -11,7 +11,7 @@ being built in parallel, so assertions against its API would be assertions again
 API invented here. The scoring functions therefore take ``(id, text)`` pairs. That is
 not a workaround: a scorer has no business knowing what an asset is, and the seam is
 better for it. Only :func:`test_budgets_come_from_the_register` reaches into
-``register/assets.py``, which is already declared and committed.
+``registry/assets.py``, which is already declared and committed.
 
 The four properties that carry this parcel, each with a specific v1 failure behind it:
 
@@ -20,12 +20,12 @@ The four properties that carry this parcel, each with a specific v1 failure behi
    ``Embedder`` is a port at all — ``model`` and ``dimensions`` are part of the
    interface rather than a convention each caller remembers.
 2. **A channel that did not run is not a channel that scored zero.** ``lexical`` on the
-   ``example`` facet is *correct* absence, by design; on ``entity`` the same absence
-   means the index died. ``register/facets.py`` decides which, and ``retrieve/`` must
+   ``example`` channel is *correct* absence, by design; on ``entity`` the same absence
+   means the index died. ``registry/channels.py`` decides which, and ``retrieve/`` must
    never decide it locally.
-3. **``fuse`` renormalises by active channels.** Otherwise a one-channel facet scores
+3. **``fuse`` renormalises by active channels.** Otherwise a one-channel channel scores
    systematically below a two-channel one and the budget silently prefers the richer
-   facet — an artefact of the arithmetic presented as relevance.
+   channel — an artefact of the arithmetic presented as relevance.
 4. **``resolve`` is total, ``connect`` is not.** Conflating them reports a bounded
    best-effort path as a closure.
 
@@ -36,7 +36,7 @@ recorded here because it is the same kind of statement as the four above:
    lower its score. The original implementation violated this, and it violated it *because*
    property 2's mechanism was missing: with no way to be told which channels ran, ``fuse``
    inferred it from the score dict, so "absent" was neutral and "scored 0.0" cost half the
-   score — and the then-current per-facet min-max scaler floored every channel's weakest
+   score — and the then-current per-channel min-max scaler floored every channel's weakest
    document at exactly 0.0. (That scaler is deleted; ``retrieve/fuse.py``'s
    ``scale_to_ceiling`` replaced it, audit I1.) The two properties are one property; property
    2 was stated and not given a parameter to be stated *through*.
@@ -103,7 +103,7 @@ def test_bm25_scores_are_absolute_not_relative_to_the_best_hit() -> None:
     """Saturating normalisation ``s/(s+k)``, per ADR 0005 §2.
 
     A score divided by the current query's best hit is only comparable *within* one
-    query, so it cannot be summed across facets in ``route`` or weighted against a
+    query, so it cannot be summed across channels in ``route`` or weighted against a
     cosine in ``fuse``. The check: a query whose best match is weak must not have its
     top hit normalised up to the same value as a query whose best match is strong.
     """
@@ -145,7 +145,7 @@ def test_lexical_coverage_measures_the_share_of_query_terms_the_corpus_knows() -
 
     ``lexical_coverage`` is declared ``Tier.decision`` / ``Absence.not_measured`` and its stated
     job is to feed ``weak_retrieval``: with an embedder every asset scores above zero, so an
-    out-of-corpus question still returns ``top_k`` tables and a clean run stamps confidence.
+    out-of-corpus question still returns ``top_k`` tables and a clean run writes confidence.
     Cosine cannot tell "nothing here is relevant" from "everything here is a bit relevant".
 
     A hard-coded ``0.0`` is the *maximum-weakness* reading of that signal, asserted on every
@@ -171,7 +171,7 @@ def test_lexical_coverage_measures_the_share_of_query_terms_the_corpus_knows() -
     # Repeating an unknown word is one thing the corpus does not know, not two.
     assert bm.coverage("zebra zebra customers") == pytest.approx(0.5)
     # Measured against the **full** corpus vocabulary, not the restricted view: the question is
-    # whether the corpus has the words, not whether this facet's candidate subset does. Same
+    # whether the corpus has the words, not whether this channel's candidate subset does. Same
     # reasoning as `test_idf_is_global_not_computed_within_the_selected_schemas` above.
     assert bm.restrict_to(["a"]).coverage("sensors voltage") == pytest.approx(1.0)
 
@@ -180,7 +180,7 @@ def test_lexical_coverage_measures_the_share_of_query_terms_the_corpus_knows() -
 
 
 def test_fuse_renormalises_by_the_active_channels() -> None:
-    """Property 3. A one-channel facet must not be systematically penalised.
+    """Property 3. A one-channel channel must not be systematically penalised.
 
     A document scoring 0.8 on its only active channel must fuse to 0.8, not to
     ``0.5 * 0.8`` — otherwise ``example`` (semantic only, by design) always ranks below
@@ -188,7 +188,7 @@ def test_fuse_renormalises_by_the_active_channels() -> None:
     allocates on an artefact of the arithmetic.
 
     **Body updated 2026-08-06 to pass ``consulted``; the property is unchanged.** Property 2
-    of this file's header ends "``register/facets.py`` decides which, and ``retrieve/`` must
+    of this file's header ends "``registry/channels.py`` decides which, and ``retrieve/`` must
     never decide it locally" — and ``fuse``'s old signature gave it no way to be told, so it
     decided locally by inspecting the score dict. The parameter is what the header asked for.
     """
@@ -230,7 +230,7 @@ def test_fuse_is_monotone_in_evidence() -> None:
 
     The old rule averaged over the channels **present** in the score dict, so an absent
     channel was neutral and a present one scored 0.0 was maximally penalising — while the
-    then-current per-facet min-max scaler (since deleted, see ``retrieve/fuse.py``) floored
+    then-current per-channel min-max scaler (since deleted, see ``retrieve/fuse.py``) floored
     each channel's weakest document at exactly 0.0. With the shipped 0.5/0.5 weights that
     made
 
@@ -288,29 +288,29 @@ def test_fuse_refuses_a_score_on_a_channel_it_was_told_did_not_run() -> None:
 # ── routing ──────────────────────────────────────────────────────────────────
 
 
-def test_route_takes_the_per_facet_max_then_sums_across_facets() -> None:
+def test_route_takes_the_per_channel_max_then_sums_across_channels() -> None:
     """ADR 0005 §2.5's arithmetic, asserted against hand-computed values.
 
-    Per-facet **max** so a schema with forty weak hits in one facet does not outrank a
-    schema with one strong hit; **summed** across facets so agreement between facets is
+    Per-channel **max** so a schema with forty weak hits in one channel does not outrank a
+    schema with one strong hit; **summed** across channels so agreement between channels is
     what accumulates. Written as literals rather than re-derived, because a test that
     recomputes the rule it checks passes when the rule is inverted — which is exactly
-    how v1's gold gate survived a reversed denominator.
+    how v1's gold check survived a reversed denominator.
     """
     from governed_bi.retrieve.route import route  # type: ignore[import-not-found]
 
     hits = [
-        ("facet_entity", "s1", 0.9),
-        ("facet_entity", "s1", 0.4),
-        ("facet_term", "s1", 0.5),
-        ("facet_entity", "s2", 0.6),
-        ("facet_term", "s2", 0.6),
-        ("facet_metric", "s2", 0.6),
+        ("channel_entity", "s1", 0.9),
+        ("channel_entity", "s1", 0.4),
+        ("channel_term", "s1", 0.5),
+        ("channel_entity", "s2", 0.6),
+        ("channel_term", "s2", 0.6),
+        ("channel_metric", "s2", 0.6),
     ]
     scores = dict(route(hits))
     assert scores["s1"] == pytest.approx(1.4)  # max(0.9, 0.4) + 0.5
     assert scores["s2"] == pytest.approx(1.8)  # 0.6 + 0.6 + 0.6
-    assert max(scores, key=lambda k: scores[k]) == "s2", "facet agreement must accumulate"
+    assert max(scores, key=lambda k: scores[k]) == "s2", "retrieval-channel agreement must accumulate"
 
 
 def test_route_runs_before_budgets_are_applied() -> None:
@@ -378,9 +378,9 @@ def test_budgets_come_from_the_register() -> None:
 
     v1 kept the budget in one table and the type in another; they disagreed, and
     ``NegativeExampleAsset`` was embedded, indexed and structurally unretrievable. The
-    budget is a column of the asset policy row in ``register/assets.py``.
+    budget is a column of the asset policy row in ``registry/assets.py``.
     """
-    from governed_bi.register import assets
+    from governed_bi.registry import assets
     from governed_bi.retrieve import budget as module  # type: ignore[import-not-found]
 
     for asset_type in assets.AssetType:
@@ -397,7 +397,7 @@ def test_pulled_in_assets_do_not_consume_budget_and_stay_distinguishable() -> No
     structural neighbours, and merging them into the hit list would make attribution
     claim retrieval found something it did not.
     """
-    from governed_bi.register import assets
+    from governed_bi.registry import assets
     from governed_bi.retrieve.budget import apply_budgets  # type: ignore[import-not-found]
 
     cap = assets.ASSET_REGISTER[assets.AssetType.table].budget
@@ -411,14 +411,14 @@ def test_pulled_in_assets_do_not_consume_budget_and_stay_distinguishable() -> No
     assert not (set(result.hits) & set(result.pulled_in))
 
 
-def test_a_hit_carries_its_facet_both_channel_scores_and_every_query_that_hit() -> None:
+def test_a_hit_carries_its_channel_both_channel_scores_and_every_query_that_hit() -> None:
     """Attribution built in, per ADR 0005 §2.
 
-    v1 could not answer "which facet found this and on which channel", so every
-    retrieval post-mortem was a reconstruction. ``queries`` is plural because a facet
+    v1 could not answer "which channel found this and on which channel", so every
+    retrieval post-mortem was a reconstruction. ``queries`` is plural because a channel
     issues several and knowing which one matched is what makes extraction debuggable.
     """
     from governed_bi.retrieve.result import Hit  # type: ignore[import-not-found]
 
     fields = set(Hit.__dataclass_fields__)  # type: ignore[attr-defined]
-    assert {"facet", "asset_id", "asset_type", "lexical", "semantic", "queries"} <= fields
+    assert {"channel", "asset_id", "asset_type", "lexical", "semantic", "queries"} <= fields

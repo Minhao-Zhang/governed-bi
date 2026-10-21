@@ -9,16 +9,16 @@ statement as the dict reaching the channel.
 
 What sat between them: ``accept`` returns ``PER_TURN_RESET``, and ``serve/wrap.py`` *stripped*
 the null ``turn_started_at`` out of every node update before merging it. That strip closed a
-real defect of its own — the reset used to overwrite a stamp taken microseconds earlier, so a
+real defect of its own — the reset used to overwrite a finish taken microseconds earlier, so a
 0.266 s turn recorded 0.010 s — and in closing it removed the only thing that ever cleared the
-channel. From turn two onward the incoming state always held turn one's stamp, the "stamp only
-if absent" branch could never fire, and ``serve/nodes/stamp.py``'s ``latency_sec`` reported the
+channel. From turn two onward the incoming state always held turn one's finish, the "finish only
+if absent" branch could never fire, and ``serve/nodes/finish.py``'s ``latency_sec`` reported the
 whole conversation's wall clock. The two functions' docstrings each cited the other as the
 reason it was safe.
 
 Only the **served** graph could show this: ``eval/harness.py`` builds no ``accept`` node, so
 ``PER_TURN_RESET`` arrives through the input channel rather than as a node update and never
-passes through the wrapper. The measured arms could not observe the bug, which is why these
+passes through the wrapper. The measured configs could not observe the bug, which is why these
 tests drive the wrapper directly rather than the harness.
 """
 
@@ -78,7 +78,7 @@ def test_the_first_node_of_a_fresh_thread_starts_the_clock() -> None:
 
     They have no ``accept``, so nothing on those paths ever writes the null — the clock has to
     start from the empty channel instead. Dropping that branch would leave every non-served
-    path with no clock at all, and ``stamp`` raises rather than guessing one.
+    path with no clock at all, and ``finish`` raises rather than guessing one.
     """
     guard = wrap_node("guard", lambda state: {"guard": {"outcome": "clear"}}, stream=False)
 

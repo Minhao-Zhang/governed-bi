@@ -25,7 +25,7 @@ Three rules the caller cannot opt out of, each from a defect already shipped her
 * **Declines are priced in** :mod:`.abstention`, **not here.** The two questions --
   how well a ranking separates right from wrong, and what the engine's own declines
   would have been worth -- have different denominators, and §4.1's is a subset the
-  dataset selected rather than the arm.
+  dataset selected rather than the config.
 """
 
 from __future__ import annotations
@@ -34,8 +34,8 @@ import math
 from dataclasses import dataclass, replace
 from typing import Callable
 
-from ..register.quantity import Measured
-from ..register.stages import Outcome
+from ..registry.quantity import Measured
+from ..registry.stages import Outcome
 from .population import Population, TurnRow
 from .signals import Direction, Signal
 from .stats import McNemarResult, mcnemar
@@ -72,7 +72,7 @@ MIN_OPERATING_POINT = 50
 #: context, or was the no-model stub. Before the taxonomy split those turns arrived as
 #: ``answered`` with ``correct=False``, i.e. in the **delivered** bucket as guaranteed misses:
 #: they inflated coverage and deflated delivered accuracy. Both figures move now, in opposite
-#: directions, by the ``no_sql`` share of the arm — 23 of 9,459 rows (0.24%) on the artifacts on
+#: directions, by the ``no_sql`` share of the config — 23 of 9,459 rows (0.24%) on the artifacts on
 #: disk, which carry the old label and are therefore **not** recomputable across the boundary.
 #:
 #: The alternative was to drop them the way :func:`graded` drops crashes. Rejected: an
@@ -82,7 +82,7 @@ MIN_OPERATING_POINT = 50
 #:
 #: ``clarification`` covers two endings and both belong here, which is why the set did not change
 #: when the second one arrived: a turn that paused on ``ask_user`` and a turn whose reader
-#: declined fail-closed (``register/stages.Outcome``) each delivered no answer, so each is
+#: declined fail-closed (``registry/stages.Outcome``) each delivered no answer, so each is
 #: withheld coverage. :func:`_split` is what would have caught a member added for the second —
 #: it raises on an outcome that is in neither set, so a coverage figure cannot quietly acquire a
 #: third kind of ending.
@@ -96,7 +96,7 @@ DECLINED: frozenset[str] = frozenset(
 )
 
 
-def graded(arm: Population) -> Population:
+def graded(config: Population) -> Population:
     """The population every figure in this module is computed over.
 
     One function, so a driver cannot compute the headline over one row set and the
@@ -112,27 +112,27 @@ def graded(arm: Population) -> Population:
 
     Both are recorded in ``filtered_by``, so ``describe()`` carries them to any report.
     """
-    return arm.restrict(
+    return config.restrict(
         lambda r: r.get("outcome") != Outcome.crashed.value, "excluded crashed turns"
     ).restrict(
         lambda r: r.get("correct") is not None, "excluded turns the grader could not judge"
     )
 
 
-def _split(arm: Population) -> tuple[tuple[TurnRow, ...], tuple[TurnRow, ...]]:
+def _split(config: Population) -> tuple[tuple[TurnRow, ...], tuple[TurnRow, ...]]:
     """Delivered rows and declined rows, refusing on an outcome that is neither."""
-    delivered = tuple(r for r in arm.rows if r.get("outcome") == Outcome.answered.value)
-    declined = tuple(r for r in arm.rows if r.get("outcome") in DECLINED)
-    if len(delivered) + len(declined) != arm.n:
+    delivered = tuple(r for r in config.rows if r.get("outcome") == Outcome.answered.value)
+    declined = tuple(r for r in config.rows if r.get("outcome") in DECLINED)
+    if len(delivered) + len(declined) != config.n:
         unknown = sorted(
             {
                 str(r.get("outcome"))
-                for r in arm.rows
+                for r in config.rows
                 if r.get("outcome") != Outcome.answered.value and r.get("outcome") not in DECLINED
             }
         )
         raise ValueError(
-            f"{arm.describe()} contains outcome(s) that are neither an answer nor a declared "
+            f"{config.describe()} contains outcome(s) that are neither an answer nor a declared "
             f"abstention: {unknown}. Coverage is the share of turns that got an answer, so a "
             "third kind of ending has to be classified before it can be counted -- putting it "
             "silently on either side moves the headline."
@@ -229,7 +229,7 @@ class DeliveryPolicy:
         """One row per turn carrying ``useful_answer``, for :func:`compare_policies`.
 
         ``filtered_by`` is carried over from the source rather than reset, so two
-        policies built off differently-filtered arms are refused by
+        policies built off differently-filtered configs are refused by
         :func:`~.stats.mcnemar` instead of quietly compared.
         """
         rows = [
@@ -243,19 +243,19 @@ class DeliveryPolicy:
         return replace(built, filtered_by=self.population.filtered_by)
 
 
-def engine_policy(arm: Population) -> DeliveryPolicy:
+def engine_policy(config: Population) -> DeliveryPolicy:
     """What the engine actually did: answer the answered turns, withhold the rest."""
-    delivered, _ = _split(arm)
+    delivered, _ = _split(config)
     return DeliveryPolicy(
         label="engine (governance + attempt cap)",
-        population=arm,
-        delivered=frozenset(str(r[arm.unit_key]) for r in delivered),
+        population=config,
+        delivered=frozenset(str(r[config.unit_key]) for r in delivered),
     )
 
 
 @dataclass(frozen=True)
 class RiskCoverage:
-    """One signal's curve over one arm.
+    """One signal's curve over one config.
 
     ``ranked`` holds the delivered turns best-first under the signal's declared
     direction. Declined turns sit below every score, because the engine already withheld
@@ -272,7 +272,7 @@ class RiskCoverage:
     #: Cumulative expected wrong answers after delivering ``k`` turns, for ``k = 1..n``.
     errors: tuple[float, ...]
     n_declined: int
-    #: Non-empty when the arm does not carry this signal on every delivered turn.
+    #: Non-empty when the config does not carry this signal on every delivered turn.
     unavailable: str = ""
 
     @property
@@ -431,25 +431,25 @@ def _rank_auc(scored: list[tuple[float, bool]]) -> Measured[float]:
 
 
 def _curve_from_scores(
-    arm: Population, name: str, direction: Direction, score: Callable[[TurnRow], float | None]
+    config: Population, name: str, direction: Direction, score: Callable[[TurnRow], float | None]
 ) -> RiskCoverage:
     """Rank the delivered turns, average inside tie groups, append the declines."""
-    delivered, declined = _split(arm)
+    delivered, declined = _split(config)
     scores = [score(row) for row in delivered]
     blind = sum(1 for value in scores if value is None)
     if blind:
         return RiskCoverage(
-            signal=name, direction=direction, population=arm, ranked=(), errors=(),
+            signal=name, direction=direction, population=config, ranked=(), errors=(),
             n_declined=len(declined),
             unavailable=(
                 f"{blind} of {len(delivered)} delivered turns carry no {name!r}, so the ranking "
                 "would be over a sub-population and its AURC would not be comparable to any "
-                "other signal's on this arm"
+                "other signal's on this config"
             ),
         )
     sign = 1.0 if direction is Direction.lower_first else -1.0
     scored = [
-        (str(row[arm.unit_key]), float(value), not bool(row.get("correct")))
+        (str(row[config.unit_key]), float(value), not bool(row.get("correct")))
         for value, row in zip(scores, delivered)
         if value is not None
     ]
@@ -476,25 +476,25 @@ def _curve_from_scores(
     # not commit to a statement gets no credit for it), so the tail rises by one a turn.
     errors.extend(cumulative + step for step in range(1, len(declined) + 1))
     return RiskCoverage(
-        signal=name, direction=direction, population=arm, ranked=ranked,
+        signal=name, direction=direction, population=config, ranked=ranked,
         errors=tuple(errors), n_declined=len(declined),
     )
 
 
-def risk_coverage(arm: Population, signal: Signal) -> RiskCoverage:
-    """The curve for one declared signal over one graded arm."""
-    return _curve_from_scores(arm, signal.name, signal.direction, signal.read)
+def risk_coverage(config: Population, signal: Signal) -> RiskCoverage:
+    """The curve for one declared signal over one graded config."""
+    return _curve_from_scores(config, signal.name, signal.direction, signal.read)
 
 
-def oracle(arm: Population) -> RiskCoverage:
+def oracle(config: Population) -> RiskCoverage:
     """The ceiling: rank by the grade itself. Reads gold, and is named for it."""
     return _curve_from_scores(
-        arm, "oracle (reads the grade)", Direction.lower_first,
+        config, "oracle (reads the grade)", Direction.lower_first,
         lambda row: 0.0 if row.get("correct") else 1.0,
     )
 
 
-def no_ranking(arm: Population) -> RiskCoverage:
+def no_ranking(config: Population) -> RiskCoverage:
     """The null: one score for every turn, so buying coverage back buys nothing.
 
     Not the same as "accuracy = EX". The engine's abstentions still sit below every
@@ -502,7 +502,7 @@ def no_ranking(arm: Population) -> RiskCoverage:
     exceeds what the engine answered. That is the honest null for a *ranking*, and
     ``risk-coverage-v4.md`` §1 makes the same correction in prose.
     """
-    return _curve_from_scores(arm, "no ranking", Direction.lower_first, lambda _row: 0.0)
+    return _curve_from_scores(config, "no ranking", Direction.lower_first, lambda _row: 0.0)
 
 
 @dataclass(frozen=True)
@@ -573,7 +573,7 @@ def compare_policies(a: DeliveryPolicy, b: DeliveryPolicy) -> McNemarResult | Ne
     b=3, p=0.0026``) are not nested and still go through ``mcnemar``.
 
     The population guards stay with ``mcnemar``: a mismatched pair raises there, before
-    the nesting is examined, so a subset relation cannot excuse comparing two arms.
+    the nesting is examined, so a subset relation cannot excuse comparing two configs.
     """
     left, right = a.as_population(), b.as_population()
     if (

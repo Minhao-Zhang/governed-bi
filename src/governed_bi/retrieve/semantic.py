@@ -11,7 +11,7 @@ import math
 from collections.abc import Collection, Sequence
 from typing import TYPE_CHECKING
 
-from governed_bi.register.facets import ChannelState
+from governed_bi.registry.channels import ChannelState
 
 if TYPE_CHECKING:  # ``index`` imports ``cache_key`` from here, so this stays a hint only.
     from .index import UnifiedIndex

@@ -70,7 +70,7 @@ def test_the_report_prints_both_halves_and_disagreement(tmp_path: Path, capsys) 
     )
 
     def coverage(rows, _gold):
-        return {"all_gold_tables_licensed": 1.0 if rows else 0.0}
+        return {"all_gold_tables_retrieved_tables": 1.0 if rows else 0.0}
 
     args = type("Args", (), {"dataset": dataset})()
 

@@ -8,10 +8,10 @@ to refuse — this node does not set ``path_kind``.
 ``config["configurable"]["policy"]`` (not in state — it is not msgpack-serialisable
 for the checkpointer). ``guard_rules_enabled`` must be an explicit mapping.
 
-**Two gates, one verdict.** The five deterministic rules live in ``govern/guard.py`` and are
+**Two checks, one result.** The five deterministic rules live in ``govern/guard.py`` and are
 pure. The sixth — *is this a BI question at all?* — needs a model, and ``govern/`` must stay
 importable with no model, no settings and no I/O, so the call is here and only the rule id is
-declared there. Both produce the same :class:`~governed_bi.govern.guard.GuardVerdict`: the
+declared there. Both produce the same :class:`~governed_bi.govern.guard.GuardResult`: the
 record has one ``guard`` field, and a second shape would be a second vocabulary for it.
 
 The deterministic rules run **first** because they are free, and a question that trips one
@@ -28,7 +28,7 @@ from governed_bi.serve.runtime import assets_by_id, configurable, prompt_variant
 
 __all__ = ["guard_node", "scope_catalogue", "scope_system_prompt"]
 
-#: The one token that clears the scope gate. Keying on the negative instead would make any
+#: The one token that clears the scope check. Keying on the negative instead would make any
 #: unexpected reply read as "in scope", failing **open** exactly when the model was confused.
 _IN_SCOPE = "yes"
 
@@ -44,7 +44,7 @@ _SCHEMAS_SLOT = "{schemas}"
 def scope_catalogue(assets: Iterable[Any]) -> str:
     """One line per schema asset, ``- name: summary``, sorted by name.
 
-    The scope gate's picture of the deployment. Schema assets rather than tables because there
+    The scope check's picture of the deployment. Schema assets rather than tables because there
     is one per namespace with a written summary, which keeps the prompt near 45 tokens a schema
     instead of growing with the table count.
     """
@@ -59,9 +59,9 @@ def scope_catalogue(assets: Iterable[Any]) -> str:
 
 
 def scope_system_prompt(variants: Mapping[str, str] | None, catalogue: str) -> str | None:
-    """The exact system text the scope gate sends, or ``None`` when the variant needs schemas
+    """The exact system text the scope check sends, or ``None`` when the variant needs schemas
     and ``catalogue`` is empty. The probe hashes this, so a row names the prompt it measured."""
-    from governed_bi.register.prompts import prompt_text
+    from governed_bi.registry.prompts import prompt_text
 
     system = prompt_text("bi_scope", variants)
     if _SCHEMAS_SLOT not in system:
@@ -80,7 +80,7 @@ def _clears_scope(answer: str) -> bool:
     ``answer.startswith("yes")`` was the rule, and it fails **open** on a whole class: any reply
     that merely *begins* with the affirmative clears. Probed against the live parser, ``YES/NO``,
     ``Yes and no``, ``yes or no?`` and the prompt's own instruction echoed back
-    (``YES if it is in scope, NO if it is not.``) all cleared the gate. That direction is the
+    (``YES if it is in scope, NO if it is not.``) all cleared the check. That direction is the
     dangerous one -- ``detail`` is ``None`` on the clear branch and carries the reply on
     ``blocked``, so a wrongly *blocked* turn can be diagnosed afterwards and a wrongly *cleared*
     one leaves no trace at all.
@@ -111,13 +111,13 @@ async def guard_node(state: dict, config: RunnableConfig) -> dict:
 
     cfg = configurable(config)
     policy = cfg["policy"]
-    verdict = guard(state["question"], policy)
-    if verdict["outcome"] != "clear":
+    result = guard(state["question"], policy)
+    if result["outcome"] != "clear":
         # A deterministic rule already decided. Do not pay for a model call to confirm it, and
         # do not overwrite a `blocked` with a `clear` — the first refusal is the reason.
-        return {"guard": verdict}
+        return {"guard": result}
     if not policy.guard_rule_enabled(BI_SCOPE_RULE_ID):
-        return {"guard": verdict}
+        return {"guard": result}
     # Both branches above return without a usage row because neither called a model.
     #
     # **The utility model, not the agent's**: a one-word classification in front of every turn,
@@ -126,14 +126,14 @@ async def guard_node(state: dict, config: RunnableConfig) -> dict:
     # a rule six call sites must spell identically. A caller who hand-builds a config with only
     # `agent_model` gets `error_failed_open`, which is what that sentinel is for.
     model = cfg.get("utility_model")
-    verdict, usage = await _bi_scope(
+    result, usage = await _bi_scope(
         state["question"],
         model,
         state.get("turn_index", 1),
         prompt_variants(config),
         scope_catalogue(assets_by_id(cfg).values()),
     )
-    update: dict = {"guard": verdict}
+    update: dict = {"guard": result}
     if usage is not None:
         update["usage"] = [usage]
     return update
@@ -146,37 +146,37 @@ async def _bi_scope(
     variants: Mapping[str, str] | None = None,
     catalogue: str = "",
 ) -> tuple[Any, dict | None]:
-    """Ask a model whether the question is in scope. Returns ``(GuardVerdict, usage row)``.
+    """Ask a model whether the question is in scope. Returns ``(GuardResult, usage row)``.
 
-    The usage row is why this returns a pair: without it a turn the gate refused records
+    The usage row is why this returns a pair: without it a turn the check refused records
     ``usage: []`` and ``cost_est_usd: None`` having really spent ~136 tokens. ``None`` when no
     model call happened, which keeps "spent nothing" distinct from "spent and did not say".
 
     **Enabled with no model is ``error_failed_open``, not ``clear``**, and so is a model error
     — the question goes through either way, as ADR 0006 §1 has a raising deterministic rule do,
-    because this gate is about *scope* and not safety. The sentinel is countable, which is what
-    keeps a gate that was never wired up from passing for one that never fired.
+    because this check is about *scope* and not safety. The sentinel is countable, which is what
+    keeps a check that was never wired up from passing for one that never fired.
 
-    It is **not** gated. The ``guard`` field in ``register/record.py`` carries no ``gate=``, so
-    ``measure/gates.py`` has no implementation reading it and an arm in which this gate was
+    It is **not** gated. The ``guard`` field in ``registry/record.py`` carries no ``check=``, so
+    ``measure/checks.py`` has no implementation reading it and a config in which this check was
     enabled and errored on every turn is still fully quotable. The sibling field one row down
     (``negative``) *is* gated, which is what the wording here used to claim for this one. Inert
-    while every eval arm passes ``guard_rules_enabled={}``; a trap for the first arm that does
+    while every eval config passes ``guard_rules_enabled={}``; a trap for the first config that does
     not. See ``tests/serve/test_guard_bi_scope.py``.
 
     ``catalogue`` fills a variant's ``{schemas}`` slot. A variant that has the slot and a corpus
     with no schema asset is ``error_failed_open``: a judge shown an empty list refuses every
-    question, which would turn a missing corpus into a gate that blocks all traffic.
+    question, which would turn a missing corpus into a check that blocks all traffic.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    from governed_bi.govern.guard import GuardVerdict
+    from governed_bi.govern.guard import GuardResult
     from governed_bi.govern.policy import BI_SCOPE_RULE_ID
     from governed_bi.serve.usage import usage_row
 
     if model is None:
         return (
-            GuardVerdict(
+            GuardResult(
                 outcome="error_failed_open",
                 rule_id=BI_SCOPE_RULE_ID,
                 detail=(
@@ -191,7 +191,7 @@ async def _bi_scope(
     system = scope_system_prompt(variants, catalogue)
     if system is None:
         return (
-            GuardVerdict(
+            GuardResult(
                 outcome="error_failed_open",
                 rule_id=BI_SCOPE_RULE_ID,
                 detail="the bi_scope variant lists the served schemas and the corpus has none",
@@ -204,7 +204,7 @@ async def _bi_scope(
             [SystemMessage(system), HumanMessage(question)],
             # Named, because a turn makes eight model calls and LangChain names every one after
             # the client class. The name is the *registered prompt's*, so the trace and
-            # ``register/prompts.py`` cannot drift apart.
+            # ``registry/prompts.py`` cannot drift apart.
             config={"run_name": "bi_scope"},
         )
         # ``.text`` rather than walking ``content``: the Responses API returns blocks and
@@ -212,7 +212,7 @@ async def _bi_scope(
         answer = str(getattr(reply, "text", "") or "").strip().lower()
     except Exception as err:  # noqa: BLE001 — a provider hiccup must not end a real turn
         return (
-            GuardVerdict(
+            GuardResult(
                 outcome="error_failed_open",
                 rule_id=BI_SCOPE_RULE_ID,
                 detail=f"{type(err).__name__}: {err}",
@@ -227,12 +227,12 @@ async def _bi_scope(
     # The *affirmative* is matched, so an apology, a clarifying question or an empty completion
     # refuses. See ``_clears_scope`` for why it is not ``startswith``.
     if _clears_scope(answer):
-        return GuardVerdict(outcome="clear", rule_id=None, detail=None), spent
-    verdict = GuardVerdict(
+        return GuardResult(outcome="clear", rule_id=None, detail=None), spent
+    result = GuardResult(
         outcome="blocked",
         rule_id=BI_SCOPE_RULE_ID,
-        # Ledger-only: ``GuardVerdict.detail`` is marked "Never surfaced" against rule probing.
+        # Ledger-only: ``GuardResult.detail`` is marked "Never surfaced" against rule probing.
         # The public refusal stays ``GUARD_PUBLIC_MESSAGE``.
         detail=f"model judged the question out of scope: {answer[:200]!r}",
     )
-    return verdict, spent
+    return result, spent

@@ -1,11 +1,11 @@
 """``--replay-routing``: pinning one run's shortlist onto the next.
 
-The knob exists because ``route`` is deterministic and the five facet rewriters above it are
+The setting exists because ``route`` is deterministic and the five channel rewriters above it are
 not. Each is a utility-model call, so two runs of one question over one corpus can hand
-``route`` different hits, the shortlist moves, ``licensed`` moves, and a prompt A/B cannot say
+``route`` different hits, the shortlist moves, ``retrieved_tables`` moves, and a prompt A/B cannot say
 whether its delta came from the prompt. Every test here is on a property that, if it broke,
 would leave the flag *accepted and ineffective* — the failure shape this repository keeps
-paying for, because an arm labelled pinned that was not is worse than no flag at all.
+paying for, because a config labelled pinned that was not is worse than no flag at all.
 
 This half is the artifact contract: reading a prior run and measuring the residual. That the
 pin actually reaches ``route_node`` is asserted in
@@ -21,15 +21,15 @@ from typing import Any
 
 import pytest
 
-from governed_bi.eval.arms import stub_arm
-from governed_bi.eval.harness import run_arm
+from governed_bi.eval.configs import stub_config
+from governed_bi.eval.harness import run_config
 from governed_bi.eval.replay import (
     PINNED_SCHEMAS_KEY,
     attach_pinned_routing,
     drift_against,
-    licensed_baseline,
-    licensed_drift,
     pin_realised,
+    retrieved_tables_baseline,
+    retrieved_tables_drift,
     routing_from_artifact,
 )
 
@@ -48,8 +48,8 @@ def _artifact(tmp_path: Path, rows: list[dict[str, Any]]) -> Path:
 def test_an_empty_shortlist_is_skipped_rather_than_pinned(tmp_path: Path) -> None:
     """``schemas: []`` is the ``no_schema_matched`` decline, not a decision to replay.
 
-    Eight rows of the 2026-08-09 full run licensed nothing at all. Pinning those would freeze
-    a retrieval failure into the next arm and make it look like a reproduced result rather than
+    Eight rows of the 2026-08-09 full run retrieved_tables nothing at all. Pinning those would freeze
+    a retrieval failure into the next config and make it look like a reproduced result rather than
     a carried-forward defect.
     """
     path = _artifact(
@@ -65,7 +65,7 @@ def test_an_empty_shortlist_is_skipped_rather_than_pinned(tmp_path: Path) -> Non
 
 
 def test_a_question_the_artifact_does_not_cover_is_counted_not_hidden() -> None:
-    """An arm labelled pinned always has some fraction that is not; the count is the honesty."""
+    """An config labelled pinned always has some fraction that is not; the count is the honesty."""
     questions: list[dict[str, Any]] = [
         {"question_id": "a"},
         {"question_id": "b"},
@@ -83,14 +83,14 @@ def test_a_question_the_artifact_does_not_cover_is_counted_not_hidden() -> None:
 def test_the_row_says_whether_its_own_shortlist_was_replayed(tmp_path: Path) -> None:
     """The count above lives in the run header; this is the same fact per row.
 
-    ``attach_pinned_routing`` covers whatever the prior artifact happened to contain, so an arm
+    ``attach_pinned_routing`` covers whatever the prior artifact happened to contain, so a config
     described as pinned is always part pinned and part live. The header count says how much;
     only ``routing_pinned`` on the row says *which*, and without it no later reader can restrict
     an analysis to the replayed half.
 
-    Driven through ``run_arm`` and asserted on the emitted rows, because that is the artifact.
+    Driven through ``run_config`` and asserted on the emitted rows, because that is the artifact.
     A per-row field is exactly the shape that survives being wired to a constant: ``True``
-    everywhere reads as a fully pinned arm and ``False`` everywhere as one that ignored the
+    everywhere reads as a fully pinned config and ``False`` everywhere as one that ignored the
     flag, and both are plausible enough to be believed. So the two questions here must disagree
     in the row, not merely in the question dict the harness was handed.
     """
@@ -102,14 +102,14 @@ def test_the_row_says_whether_its_own_shortlist_was_replayed(tmp_path: Path) -> 
     counts = attach_pinned_routing(questions, routing_from_artifact(covered))
     assert counts == {"pinned": 1, "unpinned": 1}, "fixture no longer mixes the two cases"
 
-    rows = run_arm(questions, stub_arm())
+    rows = run_config(questions, stub_config())
 
     assert {str(r["question_id"]): r["routing_pinned"] for r in rows} == {
         "replayed": True,
         "routed_live": False,
     }, (
         "the row does not distinguish a replayed shortlist from a live one, so the pinned "
-        "fraction of a --replay-routing arm is unrecoverable from its artifact"
+        "fraction of a --replay-routing config is unrecoverable from its artifact"
     )
 
 
@@ -121,7 +121,7 @@ def test_a_pin_the_turn_did_not_run_on_is_not_recorded_as_a_replay(tmp_path: Pat
     and only if it runs at all, so the three cases the field silently reported as ``true`` were
     an unknown pin, a partial pin, and a turn that ended before routing.
 
-    Here the pin names a schema this arm's routing never selects, so the turn runs on its own
+    Here the pin names a schema this config's routing never selects, so the turn runs on its own
     shortlist. The row must say so, or an analysis restricted to "the replayed half" is
     restricted to something else.
     """
@@ -134,7 +134,7 @@ def test_a_pin_the_turn_did_not_run_on_is_not_recorded_as_a_replay(tmp_path: Pat
         "unpinned": 0,
     }, "the fixture must attach a pin, or this asserts nothing"
 
-    row = run_arm(questions, stub_arm())[0]
+    row = run_config(questions, stub_config())[0]
     assert row["schemas"] == ["main"], "fixture: the turn routed for itself"
     assert row["routing_pinned"] is False, (
         "the row claims its shortlist was replayed when the turn ran on a different one"
@@ -154,16 +154,16 @@ def test_a_turn_that_ended_before_routing_is_not_recorded_as_a_replay() -> None:
     row = project_turn(
         {"answer": {"outcome": "clarification", "record": {"schemas": []}}, "messages": []},
         question={"question_id": "q", "db_id": "d", PINNED_SCHEMAS_KEY: ["a", "b"]},
-        arm="t",
+        config="t",
     )
     assert row["routing_pinned"] is False
 
     ran = project_turn(
         {"answer": {"outcome": "answered", "record": {"schemas": ["a", "b"]}}, "messages": []},
         question={"question_id": "q", "db_id": "d", PINNED_SCHEMAS_KEY: ["a", "b"]},
-        arm="t",
+        config="t",
     )
-    assert ran["routing_pinned"] is True, "the gate must still be able to say yes"
+    assert ran["routing_pinned"] is True, "the check must still be able to say yes"
 
 
 def test_a_partially_honoured_pin_is_not_the_pin() -> None:
@@ -175,7 +175,7 @@ def test_a_partially_honoured_pin_is_not_the_pin() -> None:
     row = project_turn(
         {"answer": {"outcome": "answered", "record": {"schemas": ["a"]}}, "messages": []},
         question={"question_id": "q", "db_id": "d", PINNED_SCHEMAS_KEY: ["a", "ghost"]},
-        arm="t",
+        config="t",
     )
     assert row["routing_pinned"] is False
 
@@ -191,7 +191,7 @@ def test_drift_is_measured_over_the_rows_that_moved() -> None:
         {"question_id": "b", "licensed": ["s.t1", "s.t3"]},
         {"question_id": "zz", "licensed": ["s.t1"]},
     ]
-    drift = licensed_drift(rows, baseline)
+    drift = retrieved_tables_drift(rows, baseline)
 
     assert drift["compared"] == 2 and drift["identical"] == 1 and drift["moved"] == 1
     assert drift["not_in_baseline"] == 1
@@ -207,7 +207,7 @@ def test_the_drift_baseline_holds_only_the_rows_the_pin_covered(tmp_path: Path) 
     The driver built the baseline from *every* row of the replayed artifact, including the
     ``no_schema_matched`` declines ``routing_from_artifact`` skips on purpose. Those were never
     pinned and are guaranteed to differ, so they entered the residual as drift the flag never
-    claimed to prevent. Measured on the v4 arm: 6 such rows move the mean Jaccard over the
+    claimed to prevent. Measured on the v4 config: 6 such rows move the mean Jaccard over the
     movers from 0.7020 to 0.7049 and the identical rate from 0.0940 to 0.0937.
 
     Asserted as the same set as ``routing_from_artifact``, because two readers of one file that
@@ -221,11 +221,11 @@ def test_the_drift_baseline_holds_only_the_rows_the_pin_covered(tmp_path: Path) 
             {"question_id": "b", "schemas": ["s"], "licensed": []},
         ],
     )
-    baseline = licensed_baseline(path)
+    baseline = retrieved_tables_baseline(path)
 
     assert set(baseline) == set(routing_from_artifact(path)) == {"a", "b"}
     assert "declined" not in baseline
-    # An empty `licensed` on a row that *did* route is a measured zero and stays in.
+    # An empty `retrieved_tables` on a row that *did* route is a measured zero and stays in.
     assert baseline["b"] == []
 
 
@@ -239,7 +239,7 @@ def test_an_artifact_replayed_against_itself_shows_no_drift(tmp_path: Path) -> N
     baseline = {r["question_id"]: r["licensed"] for r in rows}
 
     assert routing_from_artifact(path) == {"a": ["s"], "b": ["s"]}
-    drift = licensed_drift(rows, baseline)
+    drift = retrieved_tables_drift(rows, baseline)
     assert drift["moved"] == 0 and drift["identical_rate"] == 1.0
 
 
@@ -275,7 +275,7 @@ def test_both_sides_of_a_drift_contrast_come_out_of_one_function(tmp_path: Path)
     assert "mean_jaccard" not in {k for k in drift if k.endswith("_all")}
 
 
-# ── how much of an arm actually ran on the pin ────────────────────────────────
+# ── how much of a config actually ran on the pin ────────────────────────────────
 
 
 def test_the_realised_pin_count_is_readable_on_an_old_semantics_artifact() -> None:
@@ -308,7 +308,7 @@ def test_the_realised_pin_count_is_readable_on_an_old_semantics_artifact() -> No
 def test_a_reordered_shortlist_is_not_an_exact_replay() -> None:
     """The corroboration is only worth something if the two rules can disagree.
 
-    ``realised`` and ``exact`` agreeing on all three arms is evidence precisely because
+    ``realised`` and ``exact`` agreeing on all three configs is evidence precisely because
     ``exact`` is order-sensitive and could have come out lower. A row holding the pinned
     schemas in another order is counted separately rather than folded into either.
     """

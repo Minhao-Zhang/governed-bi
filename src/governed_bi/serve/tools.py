@@ -28,7 +28,7 @@ from governed_bi.govern.ledger import (
     statement_sha256,
 )
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.register.prompts import prompt_text
+from governed_bi.registry.prompts import prompt_text
 from governed_bi.serve import fetch
 from governed_bi.serve.agent_state import CAP_LEDGER_KEY, AttemptBook
 from governed_bi.serve.clarification import (
@@ -44,7 +44,7 @@ from governed_bi.serve.ledger import (
     execution_from_attempts,
     pipeline_error_attempt,
 )
-from governed_bi.serve.runtime import bool_knob, configurable, prompt_variants
+from governed_bi.serve.runtime import bool_setting, configurable, prompt_variants
 from governed_bi.serve.schema_term_guard import find_schema_leak
 from governed_bi.serve.structured_check import percentage_scale_suffix
 
@@ -65,7 +65,7 @@ def analyst_prompt(config: Mapping[str, Any] | None = None) -> str:
     **A function, not the module constant it was.** ``SYSTEM_PROMPT = prompt_text("analyst")``
     bound at import, so a run selecting a non-default variant sent the default and recorded the
     override's ``prompt_set_hash`` — an artifact naming a treatment it did not receive, which is
-    strictly worse than not having the knob. The registry has carried ``variants`` since it was
+    strictly worse than not having the setting. The registry has carried ``variants`` since it was
     written; nothing in ``src/`` ever passed one, so nothing exercised the gap.
     """
     return prompt_text("analyst", prompt_variants(config))
@@ -153,10 +153,10 @@ async def _fetch(
             event_id=event_id,
             detail={**detail, "error_type": type(exc).__name__},
         )
-        # Same as the `run_query` site (audit C1): an executor path that dies before its verdict
+        # Same as the `run_query` site (audit C1): an executor path that dies before its result
         # exists still owes the ledger a row, or the turn reads as one that attempted nothing.
         # `read_body` and `inspect_schema` build no statement and own no path, so they get no row
-        # -- inventing one would put a governance verdict on a corpus read.
+        # -- inventing one would put a governance result on a corpus read.
         updates: dict[str, Any] = {}
         if ledger_path is not None:
             updates["attempts_by_call"] = {
@@ -175,12 +175,12 @@ async def _fetch(
         status = "error"
     updates = dict(_delivered(runtime, payload)) if delivered else {}
     if attempt is not None:
-        # The verdict rides **this** step's detail rather than emitting ``check`` / ``execute``
-        # rows: those two are ``run_query``'s attempt numbering, and a sample verdict among
+        # The result rides **this** step's detail rather than emitting ``check`` / ``execute``
+        # rows: those two are ``run_query``'s attempt numbering, and a sample result among
         # them would read as a SQL attempt the model never made.
         detail = {
             **detail,
-            "layer": attempt["verdict_layer"],
+            "layer": attempt["result_layer"],
             "reason_code": attempt["reason_code"],
             "executed": attempt["executed_sql"] is not None,
         }
@@ -205,7 +205,7 @@ def _emit_attempt(runtime: Any, attempt: Mapping[str, Any], *, number: int, payl
         event_id=tool_event_id("check", call_id),
         detail={
             "attempt": number,
-            "layer": attempt.get("verdict_layer"),
+            "layer": attempt.get("result_layer"),
             "reason_code": attempt.get("reason_code"),
         },
     )
@@ -295,7 +295,7 @@ def build_tools(
 
     @tool
     async def inspect_schema(table_id: str, runtime: ToolRuntime) -> Command:
-        """List columns and physical types for a licensed table."""
+        """List columns and physical types for a retrieved table."""
         return await _fetch(
             "inspect_schema",
             runtime,
@@ -305,7 +305,7 @@ def build_tools(
 
     @tool
     async def sample_rows(column_id: str, runtime: ToolRuntime, limit: int = 5) -> Command:
-        """Sample distinct values for a ColumnAsset id whose table is licensed."""
+        """Sample distinct values for a ColumnAsset id whose table is retrieved_tables."""
         return await _fetch(
             "sample_rows",
             runtime,
@@ -324,7 +324,7 @@ def build_tools(
 
     @tool
     async def run_query(sql: str, runtime: ToolRuntime) -> Command:
-        """Governed SQL execution against licensed tables only."""
+        """Governed SQL execution against retrieved tables only."""
         call_id = _call_id(runtime)
         committed = (getattr(runtime, "state", None) or {}).get("attempts_by_call")
         if not book.admit(committed, call_id):
@@ -388,11 +388,11 @@ def build_tools(
                 detail={"attempt": attempt_number, "error_type": type(exc).__name__},
             )
             # **A row, not just a string** (audit C1). Everything reaching here failed before a
-            # verdict existed -- `fetch.run_query` already returns the attempt row when the
+            # result existed -- `fetch.run_query` already returns the attempt row when the
             # *execution* fails, for the reason stated at that site -- so this is our checker
-            # breaking. Returning only the string left the ledger empty, and `stamp` reads an
+            # breaking. Returning only the string left the ledger empty, and `finish` reads an
             # empty ledger as "answered from the delivered context": outcome `answered`,
-            # `guardrail_errors: 0`, every gate green, `generated_sql` holding a statement that
+            # `guardrail_errors: 0`, every check green, `generated_sql` holding a statement that
             # never reached `prepare()`. The refund stays: the attempt cost the model nothing it
             # should be charged for, and the row is what makes the failure countable.
             return _reply(
@@ -415,7 +415,7 @@ def build_tools(
         # `_emit_attempt` and `_result_table` on purpose, so neither the stream event's status
         # nor the structured `result_table` the answer card reads carries this prose.
         suffix = ""
-        if bool_knob(state, "enable_structured_percentage_check"):
+        if bool_setting(state, "enable_structured_percentage_check"):
             suffix = percentage_scale_suffix(
                 state.get("question"), attempt_field(attempt, "executed_sql")
             )
@@ -489,9 +489,9 @@ def build_tools(
         # The alternative -- pause anyway and *record* the leak -- is what the code does not
         # support, and not merely what we preferred. It would have to interrupt first, which
         # means the leaked text has already been shown to the reader this guard exists to
-        # protect, and the verdict would then need somewhere to live: `clarifications_by_call`
+        # protect, and the result would then need somewhere to live: `clarifications_by_call`
         # is a declared channel with a declared shape, so a new field there is a state-channel
-        # plus record-field plus projector change, and a verdict nothing reads is a declaration
+        # plus record-field plus projector change, and a result nothing reads is a declaration
         # with no consumer. `why` is checked too because it is rendered beside the question, not logged.
         leak = find_schema_leak(question, why)
         if leak is not None:

@@ -44,13 +44,13 @@ def _session(
 ) -> Session:
     """A real ``Session``, so ``prompt_set_hash`` is the one the record publishes.
 
-    The hash comes from ``register/prompts.py``, the same way ``session.from_assets`` computes
+    The hash comes from ``registry/prompts.py``, the same way ``session.from_assets`` computes
     it. It used to be ``_digest(SYSTEM_PROMPT)`` here — a hand-built copy of the derivation
     production used at the time — and a fixture that recomputes a value instead of asking for it
     is a fixture that keeps passing after production stops agreeing with it. It did: the engine
     moved to hashing the whole registry and this line went on digesting one prompt.
     """
-    from governed_bi.register.prompts import prompt_set_hash
+    from governed_bi.registry.prompts import prompt_set_hash
 
     structure, _problems = build_structure(list(assets.values()))
     return Session(
@@ -104,15 +104,15 @@ def test_the_system_prompt_reaches_the_model(two_schema_index, two_schema_assets
     that keeps a prompt but drops the discipline, which is what makes a turn answer from
     delivered context alone and still record ``answered``.
 
-    **"Every call" stopped meaning "the analyst".** The guard's scope gate and the five facet
+    **"Every call" stopped meaning "the analyst".** The guard's scope check and the five channel
     query rewriters now invoke a model too, sharing this one because no separate utility model is
     configured here, so the loop that asserted ``SYSTEM_PROMPT`` on every call was asserting it
     of a rewriter. The upper bound is kept and made stronger instead: every system prompt the
-    model was given must be one ``register/prompts.py`` declares. That catches a prompt invented
+    model was given must be one ``registry/prompts.py`` declares. That catches a prompt invented
     at a call site, which is exactly what the registry exists to prevent and is a wider net than
     the old loop ever cast.
     """
-    from governed_bi.register.prompts import PROMPT_REGISTRY
+    from governed_bi.registry.prompts import PROMPT_REGISTRY
 
     model, _ = _served(two_schema_index, two_schema_assets, guard_off_policy)
     prompts = model.system_prompts()
@@ -166,7 +166,7 @@ def test_prompt_set_hash_digests_the_prompt_the_model_was_given(
     """The record's claim about the prompt must match what was delivered.
 
     ``prompt_set_hash`` is a ``a recorded setting`` field: two runs agreeing on it are treated
-    as having asked the model the same way, and a quotability gate reads it. It is computed by
+    as having asked the model the same way, and a quotability check reads it. It is computed by
     ``Session``, which is one step removed from what ``create_agent`` handed the provider — and
     one step is where a v1 ladder's ``llm_reasoning_effort`` went missing and cleared a pair it
     should have separated. This closes the loop against the observation.
@@ -175,9 +175,9 @@ def test_prompt_set_hash_digests_the_prompt_the_model_was_given(
     places: the analyst text the model was handed must be the registered analyst text, and the
     record's hash must be the registry's. Digesting the delivered prompt directly, as this used
     to, would now be asserting that a six-prompt engine hashes like a one-prompt one — the exact
-    thing ``register/prompts.py`` was built to stop.
+    thing ``registry/prompts.py`` was built to stop.
     """
-    from governed_bi.register.prompts import prompt_set_hash, prompt_text
+    from governed_bi.registry.prompts import prompt_set_hash, prompt_text
 
     model, out = _served(two_schema_index, two_schema_assets, guard_off_policy)
     analyst_calls = model.calls_with_system(SYSTEM_PROMPT)
@@ -209,7 +209,7 @@ def test_the_delivered_context_reaches_the_model(
     model, out = _served(two_schema_index, two_schema_assets, guard_off_policy)
     block = (out.get("delivery") or {}).get("context_block") or ""
     assert block, "precondition: assemble rendered a context block"
-    # The **analyst** call, not call 0. The facet rewriters and the guard gate share this model
+    # The **analyst** call, not call 0. The channel rewriters and the guard check share this model
     # when no utility model is configured, and they are called first — so `prompt_text(0)` is a
     # rewriter's messages, which of course never carried the context block.
     analyst_calls = model.calls_with_system(SYSTEM_PROMPT)
@@ -324,7 +324,7 @@ def test_the_context_block_is_never_the_last_thing_the_model_sees() -> None:
     as the newest thing the user said — and the model sometimes answered the block instead of
     the question. Observed live: the tool returned ``whuber`` and the agent's final text was
     "Understood. I'll use the specified joins, bindings, and non-suspect columns for subsequent
-    queries", with the record still stamping ``answered``.
+    queries", with the record still writing ``answered``.
 
     It is intermittent, so a behavioural test would be flaky in the direction that matters —
     passing while broken. This pins the shape instead.
@@ -372,7 +372,7 @@ def test_a_selected_prompt_variant_reaches_the_model_end_to_end(
     The failure being refused is silent: the run records ``v1``'s ``prompt_set_hash`` and the
     model receives ``v2``, so a paired A/B measures a prompt against itself and reports zero.
     """
-    from governed_bi.register.prompts import prompt_text
+    from governed_bi.registry.prompts import prompt_text
 
     v1, v2 = prompt_text("analyst", {"analyst": "v1"}), prompt_text("analyst")
     assert v1 != v2, "the fixture variants are identical, so this test cannot fail"

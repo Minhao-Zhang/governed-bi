@@ -1,7 +1,7 @@
-"""The engine must be able to say *why* it withheld, in a vocabulary a gate can read.
+"""The engine must be able to say *why* it withheld, in a vocabulary a check can read.
 
-**The defect this closes.** On the v4 arm 19 of 20 refusals end on ``r_table_not_licensed`` and
-all four clarifications licensed nothing, so the engine never *decided* to withhold — retrieval
+**The defect this closes.** On the v4 config 19 of 20 refusals end on ``r_table_not_retrieved`` and
+all four clarifications retrieved_tables nothing, so the engine never *decided* to withhold — retrieval
 missed and Layer 6 blocked the fifth statement of five. "Declines on purpose" was a description
 of an outcome, not of a mechanism.
 
@@ -12,14 +12,14 @@ risk-coverage curve reads 0.7144 at the engine's own coverage. This file has a t
 job is to fail if a confidence field appears, over the module's **source** and not only its
 output, because a behavioural check passes on the day it is written.
 
-**The two halves that make a knob honest.** Off, the node's entire effect on state is the one
+**The two halves that make a setting honest.** Off, the node's entire effect on state is the one
 declared field — asserted on the update itself, not inferred from a passing turn. On, the policy
 withholds the same turn *before the agent is called at all*, which is the property "evaluated
 before the agent spends its five attempts" actually means.
 
 **Which tests build a state dict, and why so few of them do.** ``ServeState`` has 47 channels and
 the node signature names none of them, so a policy test used to have to assemble a plausible turn
-— nested ``delivery`` and ``facets`` mappings included — to say "nothing failed". The rules take
+— nested ``delivery`` and ``channels`` mappings included — to say "nothing failed". The rules take
 :class:`~governed_bi.serve.abstention.AbstentionInputs` now, so a rule test states the one fact
 it is about and the dict appears in exactly two places: the tests of the projection itself, and
 the end-to-end pair that goes through ``build_serve_graph``. That split is asserted, not merely
@@ -45,8 +45,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from governed_bi.corpus.schema import ColumnAsset, SchemaAsset, TableAsset
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.register.facets import ChannelState
-from governed_bi.register.stages import (
+from governed_bi.registry.channels import ChannelState
+from governed_bi.registry.stages import (
     ABSTENTION_REASONS,
     REFUSED_BY_TO_STAGE,
     Outcome,
@@ -70,14 +70,14 @@ from governed_bi.serve.session import from_assets
 
 QUESTION = "how many sales orders are there"
 
-#: Inputs the policy has no objection to: a table licensed and a block rendered. Every other
+#: Inputs the policy has no objection to: a table retrieved_tables and a block rendered. Every other
 #: field defaults, and the defaults are what "nothing failed, nothing was evicted" looks like —
 #: which is why this is two facts and not a turn.
-GOOD = AbstentionInputs(licensed=("sales.orders",), context_block="## Context\ntable sales.orders")
+GOOD = AbstentionInputs(retrieved_tables=("sales.orders",), context_block="## Context\ntable sales.orders")
 
 #: The smallest state dict the *node* needs to be a turn the policy would withhold. One key: the
-#: adapter's own reads (``path_kind``, the knob) are absent, so the register's default applies.
-WITHHELD_STATE: dict[str, Any] = {"licensed": []}
+#: adapter's own reads (``path_kind``, the setting) are absent, so the register's default applies.
+WITHHELD_STATE: dict[str, Any] = {"retrieved_tables": []}
 
 
 @pytest.fixture(autouse=True)
@@ -108,7 +108,7 @@ def test_every_reason_is_a_terminal_the_existing_readers_can_attribute() -> None
     the *mapping*: every reason is in the table and every one is filed under ``abstain``.
 
     ``Outcome.refused`` and not ``crashed``: declining on purpose is the product working, and
-    the two must stay apart or every arm's crash rate absorbs its abstentions.
+    the two must stay apart or every config's crash rate absorbs its abstentions.
     """
     assert ABSTENTION_REASONS, "the policy declares no reasons at all"
     assert ABSTENTION_REASONS <= set(REFUSED_BY_TO_STAGE)
@@ -152,12 +152,12 @@ _FORBIDDEN = (
 )
 
 
-def test_the_verdict_carries_no_trust_signal() -> None:
+def test_the_result_carries_no_trust_signal() -> None:
     """The line between a ledger and theatre, asserted over the **source**.
 
     Reporting *why* the engine withheld is the ledger. Scoring *how sure it is* is theatre —
     ADR 0013's word, and the measurements behind
-    it are in open-work.md §3.11. A behavioural test that no verdict carries a score passes for
+    it are in open-work.md §3.11. A behavioural test that no result carries a score passes for
     every input it happens to try; this one fails when someone adds the field.
 
     ``question_terms_in_corpus`` is in the evidence and is *not* a violation: nothing reads it,
@@ -167,13 +167,13 @@ def test_the_verdict_carries_no_trust_signal() -> None:
     found = sorted(word for word in _FORBIDDEN if word in _vocabulary_of_the_policy())
     assert not found, (
         f"the abstention policy grew a trust signal: {found}. ADR 0007 forbids it on the answer "
-        "card and the reflector arm measured why — a judge whose 'unsure' bucket is as likely "
+        "card and the reflector config measured why — a judge whose 'unsure' bucket is as likely "
         "to be right as its 'correct' one has no perception of its own uncertainty to express"
     )
 
-    verdict = decide(GOOD)
-    assert set(verdict) == {"policy", "outcome", "reason", "rules_evaluated", "evidence"}
-    assert verdict["outcome"] in ("answer", "withhold")
+    result = decide(GOOD)
+    assert set(result) == {"policy", "outcome", "reason", "rules_evaluated", "evidence"}
+    assert result["outcome"] in ("answer", "withhold")
 
 
 #: Every piece the policy and its adapter are made of, as objects — the *code*, not a list of
@@ -206,7 +206,7 @@ def _sources_of_the_policy() -> tuple[Path, ...]:
     :mod:`inspect` where each object in :data:`_THE_POLICY` was defined, so the day the rules
     move again the forbidden-word scan moves with them. A hardcoded path would have gone on
     passing over the half that stayed behind, which is the failure this whole file exists to
-    make impossible for a *verdict field* and would have been embarrassing to reintroduce for
+    make impossible for a *result field* and would have been embarrassing to reintroduce for
     the scan itself.
 
     Sorted, so a diff of what was scanned is stable.
@@ -279,7 +279,7 @@ def test_the_source_scan_covers_every_file_the_policy_lives_in() -> None:
 
     ``serve/nodes/abstain.py`` was 470 lines against ADR 0005 §6's soft cap of 400, and the
     split that pays that back separates the decision from the adapter. The risk it creates is
-    not behavioural: it is that :func:`test_the_verdict_carries_no_trust_signal` goes on walking
+    not behavioural: it is that :func:`test_the_result_carries_no_trust_signal` goes on walking
     one file while half the logic sits in another, and passes for a ``confidence`` field it
     can no longer see.
 
@@ -326,16 +326,16 @@ def test_the_source_scan_covers_every_file_the_policy_lives_in() -> None:
 
 
 def test_no_rule_reads_a_threshold() -> None:
-    """``lexical_coverage`` is evidence and must not become a gate.
+    """``lexical_coverage`` is evidence and must not become a check.
 
     ``the retired threshold`` ships ``UNSET`` rather than guessed, on the argument that "an uncalibrated
-    refusal gate is worse than none" — a benchmark whose questions are answerable by
+    refusal check is worse than none" — a benchmark whose questions are answerable by
     construction cannot calibrate one. A coverage threshold here would be that same
-    uncalibrated gate under a different name, so the rule is: the evidence may carry the
+    uncalibrated check under a different name, so the rule is: the evidence may carry the
     number, and no rule may branch on it.
 
     Driven, not read: two states differing **only** in ``lexical_coverage``, one at the floor,
-    must reach the same verdict.
+    must reach the same result.
     """
     floor = replace(GOOD, question_terms_in_corpus=0.0)
     ceiling = replace(GOOD, question_terms_in_corpus=1.0)
@@ -351,8 +351,8 @@ def test_no_rule_reads_a_threshold() -> None:
 @pytest.mark.parametrize(
     ("reason", "inputs"),
     [
-        ("retrieval_channel_failed", replace(GOOD, failed_channels=("facet_term.semantic",))),
-        ("nothing_licensed", replace(GOOD, licensed=())),
+        ("retrieval_channel_failed", replace(GOOD, failed_channels=("channel_term.semantic",))),
+        ("nothing_licensed", replace(GOOD, retrieved_tables=())),
         ("empty_context", replace(GOOD, context_block="(no context)")),
         ("licensed_table_evicted", replace(GOOD, tables_evicted=1)),
     ],
@@ -361,45 +361,45 @@ def test_each_rule_fires_on_its_own_evidence(reason: str, inputs: AbstentionInpu
     """One case per rule, differing from a clean one in exactly the fact the rule reads.
 
     ``replace`` and one field, which is the shape of a predicate over named facts. It used to be
-    a nested state dict per case — ``{"facets": {"facet_term": {"channels": {...}}}}`` to say one
+    a nested state dict per case — ``{"channels": {"channel_term": {"channels": {...}}}}`` to say one
     channel errored — and the *state* those built was never the thing under test: how a channel
     map becomes ``failed_channels`` is the projection's, and is asserted once, below.
 
     ``rules_evaluated`` stops at the rule that fired, and that is asserted rather than
     incidental: listing the rules after it would claim a check the policy never performed,
-    which is the same class of untruth as a gate that leaves no trace.
+    which is the same class of untruth as a check that leaves no trace.
     """
-    verdict = decide(inputs)
-    assert verdict["outcome"] == "withhold", verdict
-    assert verdict["reason"] == reason, verdict
-    assert verdict["rules_evaluated"][-1] == reason
-    assert verdict["policy"] == ABSTENTION_POLICY
-    assert verdict["evidence"], "a withheld turn carries no evidence for the decision"
+    result = decide(inputs)
+    assert result["outcome"] == "withhold", result
+    assert result["reason"] == reason, result
+    assert result["rules_evaluated"][-1] == reason
+    assert result["policy"] == ABSTENTION_POLICY
+    assert result["evidence"], "a withheld turn carries no evidence for the decision"
 
 
 def test_a_clean_turn_records_that_the_policy_let_it_through() -> None:
-    """An ``answer`` verdict is a record, not an absence.
+    """An ``answer`` result is a record, not an absence.
 
     Every rule appears in ``rules_evaluated``, so "the policy considered this turn" is a fact in
-    the artifact. A gate that leaves a trace only when it fires cannot afterwards be told from
+    the artifact. A check that leaves a trace only when it fires cannot afterwards be told from
     one that was never wired up — ``negative``'s argument, and the reason it writes
     ``outcome: disabled`` every turn.
     """
-    verdict = decide(GOOD)
-    assert verdict["outcome"] == "answer"
-    assert verdict["reason"] is None
-    assert verdict["rules_evaluated"] == [rule.reason for rule in ABSTENTION_RULES]
+    result = decide(GOOD)
+    assert result["outcome"] == "answer"
+    assert result["reason"] is None
+    assert result["rules_evaluated"] == [rule.reason for rule in ABSTENTION_RULES]
 
 
-def test_the_verdict_is_a_pure_function_of_its_inputs() -> None:
+def test_the_result_is_a_pure_function_of_its_inputs() -> None:
     """So a reader can recompute it from the row instead of trusting it.
 
     That is the property a score does not have, and it is what "in terms a person can check"
     means. Nothing here reads a model, a clock, the environment or the network — and, since the
     policy is handed :class:`AbstentionInputs` rather than the graph's state, "a pure function
-    of *what*" is now answerable by reading the signature. Two equal inputs, two equal verdicts.
+    of *what*" is now answerable by reading the signature. Two equal inputs, two equal results.
     """
-    inputs = replace(GOOD, licensed=())
+    inputs = replace(GOOD, retrieved_tables=())
     assert decide(inputs) == decide(replace(inputs))
     assert decide(inputs)["evidence"] == abstention_evidence(inputs)
 
@@ -411,7 +411,7 @@ def test_the_projection_names_every_channel_the_policy_reads() -> None:
     """The node's read set, written down — the thing ``(state, config) -> dict`` does not say.
 
     Asserted as **whole-object equality**, so a ninth field cannot be added without this test
-    naming it. Six channels arrive here (``licensed``, ``delivery`` twice over, ``facets``,
+    naming it. Six channels arrive here (``retrieved_tables``, ``delivery`` twice over, ``channels``,
     ``retrieved``, ``schemas``, ``knobs_resolved``); the two the adapter keeps for itself,
     ``path_kind`` and ``turn_id``, are asserted where the adapter is.
 
@@ -420,20 +420,20 @@ def test_the_projection_names_every_channel_the_policy_reads() -> None:
     fields is a count or a collection, and the policy's question of it is "is there any".
     """
     state = {
-        "licensed": ["sales.orders", "sales.customers"],
+        "retrieved_tables": ["sales.orders", "sales.customers"],
         "delivery": {
             "context_block": "## Context",
             "evicted": {"tables_dropped": 2, "bodies_dropped": 3},
         },
-        "facets": {"facet_schema": {"channels": {"lexical": "ran", "semantic": ChannelState.failed}}},
+        "channels": {"channel_schema": {"channels": {"lexical": "ran", "semantic": ChannelState.failed}}},
         "retrieved": {"lexical_coverage": 0.5},
         "schemas": ["sales"],
         "knobs_resolved": {"abstention_policy_enabled": True},
     }
     assert AbstentionInputs.from_state(state) == AbstentionInputs(
-        licensed=("sales.orders", "sales.customers"),
+        retrieved_tables=("sales.orders", "sales.customers"),
         context_block="## Context",
-        failed_channels=("facet_schema.semantic",),
+            failed_channels=("channel_schema.semantic",),
         tables_evicted=2,
         bodies_evicted=3,
         schemas=("sales",),
@@ -447,18 +447,18 @@ def test_an_unconfigured_channel_is_not_a_failed_one() -> None:
     """The laptop case, and the reason this rule reads ``failed`` and not ``is_degraded``.
 
     A deployment with no embedder reports ``not_configured`` on every semantic channel by
-    design. ``register/facets.is_degraded`` counts that as degradation — correctly, for a
-    *health* gate — and a policy built on it would withhold every turn on every machine without
+    design. ``registry/channels.is_degraded`` counts that as degradation — correctly, for a
+    *health* check — and a policy built on it would withhold every turn on every machine without
     an embedding key, which is most of them.
 
     A test of the **projection**, and it always was: the distinction lives in how a channel map
-    becomes ``failed_channels``, so it is asserted on the field and then once more on the verdict
+    becomes ``failed_channels``, so it is asserted on the field and then once more on the result
     that reads it.
     """
     unconfigured = {
-        "licensed": ["sales.orders"],
+        "retrieved_tables": ["sales.orders"],
         "delivery": {"context_block": "## Context"},
-        "facets": {"facet_term": {"channels": {"semantic": ChannelState.not_configured}}},
+        "channels": {"channel_term": {"channels": {"semantic": ChannelState.not_configured}}},
     }
     inputs = AbstentionInputs.from_state(unconfigured)
     assert inputs.failed_channels == ()
@@ -468,11 +468,11 @@ def test_an_unconfigured_channel_is_not_a_failed_one() -> None:
 def test_only_the_projection_reads_the_state_dict() -> None:
     """One projection, structurally — the property the whole split rests on.
 
-    If two functions both know how to pull ``licensed`` out of a state dict then the read set is
+    If two functions both know how to pull ``retrieved_tables`` out of a state dict then the read set is
     not written down anywhere after all, and the second reader is free to disagree with the
-    first. That is not hypothetical here: ``measure/gates.py`` read ``Outcome.clarification`` as
-    a witness of "reached stamp" and silently dropped every row that carried the corpus hash out
-    of a gate's denominator.
+    first. That is not hypothetical here: ``measure/checks.py`` read ``Outcome.clarification`` as
+    a witness of "reached finish" and silently dropped every row that carried the corpus hash out
+    of a check's denominator.
 
     So: the functions that take a ``state`` at all are the projection's parts plus the adapter,
     and the private readers are called from ``from_state`` and nowhere else — including not from
@@ -498,7 +498,7 @@ def test_only_the_projection_reads_the_state_dict() -> None:
                 lambdas.append(node)
 
     projection = {
-        "_failed_channels", "_evicted", "_context_block", "_licensed", "_lexical_coverage",
+        "_failed_channels", "_evicted", "_context_block", "_retrieved_tables", "_lexical_coverage",
     }
     assert projection <= set(functions)
     assert {name for name, fn in functions.items()
@@ -530,7 +530,7 @@ def test_the_disabled_node_writes_one_key_and_nothing_else() -> None:
     """**The default-path proof, taken at the source rather than inferred from a green turn.**
 
     The node is registered with ``stream=False``, so it emits no timeline row. Its update, with
-    the knob off, is exactly one key — the declared record field. No ``path_kind``, no
+    the setting off, is exactly one key — the declared record field. No ``path_kind``, no
     ``terminal_reason``, no channel any other node reads. Together those are the whole of the
     claim that inserting it between ``assemble`` and ``agent_core`` changed nothing: there is no
     third way for a node to affect a turn.
@@ -565,27 +565,27 @@ async def _call(node: Any, state: dict) -> dict:
     return result
 
 
-def test_the_knob_is_what_turns_it_on() -> None:
-    """Read through ``bool_knob``, so the precedence is state → ``knobs_resolved`` → register.
+def test_the_setting_is_what_turns_it_on() -> None:
+    """Read through ``bool_setting``, so the precedence is state → ``knobs_resolved`` → register.
 
     The register default is ``False`` and the string ``"false"`` must not read as ``True`` —
-    ``bool_knob`` owns that and this is the assertion that the policy goes through it rather
+    ``bool_setting`` owns that and this is the assertion that the policy goes through it rather
     than testing the value itself.
     """
     import asyncio
 
-    from governed_bi.register.knobs import knob_default, knob_names
+    from governed_bi.registry.settings import setting_default, setting_names
 
-    assert knob_default("abstention_policy_enabled") is False
-    assert "abstention_policy_enabled" in knob_names(), (
-        "a knob that changes which turns are delivered must move the config hash, or two "
+    assert setting_default("abstention_policy_enabled") is False
+    assert "abstention_policy_enabled" in setting_names(), (
+        "a setting that changes which turns are delivered must move the config hash, or two "
         "operating points compare as one treatment"
     )
 
     state = {**WITHHELD_STATE, "knobs_resolved": {"abstention_policy_enabled": True}}
     update = asyncio.run(_call(abstain_node, state))
-    # Key order too: the update is a payload, and `stamp` copies the verdict onto an artifact
-    # row a reader diffs across arms. The adapter translates the patch and adds nothing.
+    # Key order too: the update is a payload, and `finish` copies the result onto an artifact
+    # row a reader diffs across configs. The adapter translates the patch and adds nothing.
     assert list(update) == ["abstention", "path_kind", "terminal_reason"], update
     assert update["path_kind"] == "decline"
     assert update["terminal_reason"] == "nothing_licensed"
@@ -622,7 +622,7 @@ def _model() -> ScriptedChatModel:
 def _session(*, enabled: bool, model: Any) -> Any:
     """A corpus with a schema and no table, so retrieval licenses nothing.
 
-    Not contrived: open-work.md §1.3 records four turns of the v4 arm that licensed nothing at
+    Not contrived: open-work.md §1.3 records four turns of the v4 config that retrieved_tables nothing at
     all, and today every one of them reaches the agent, which writes SQL against a relation
     Layer 6 will refuse.
     """
@@ -648,8 +648,8 @@ def _session(*, enabled: bool, model: Any) -> Any:
     assert not session.fatal_problems, [str(p) for p in session.fatal_problems]
     if not enabled:
         return session
-    # How `tools/run_datalake_eval.py --abstain` turns it on: a knob override folded into the
-    # session's resolved knobs, which `Session.turn` seeds every turn from.
+    # How `tools/run_datalake_eval.py --abstain` turns it on: a setting override folded into the
+    # session's resolved settings, which `Session.turn` seeds every turn from.
     return replace(
         session,
         knobs_resolved={**session.knobs_resolved, "abstention_policy_enabled": True},
@@ -668,21 +668,21 @@ def _serve(*, enabled: bool, thread: str) -> tuple[dict[str, Any], ScriptedChatM
     return out, model
 
 
-def test_a_turn_that_licensed_nothing_reaches_the_agent_today_and_is_withheld_by_the_policy() -> None:
+def test_a_turn_that_retrieved_tables_nothing_reaches_the_agent_today_and_is_withheld_by_the_policy() -> None:
     """The paired turn, through ``build_serve_graph`` — the topology ``langgraph.json`` runs.
 
     Off, the turn goes to the agent and comes back with prose and no statement, which is exactly
-    what v4 does with its four unlicensed turns and is what keeps v4 the control. On, the policy
+    what v4 does with its four not_retrieved turns and is what keeps v4 the control. On, the policy
     withholds it, and the thing that makes this a *decision* rather than a report is the last
     assertion: **the agent was never called.** Deciding after five refused ``run_query`` attempts
     is a description of what happened; deciding before the first one is a policy.
 
     **Renamed on 2026-08-18, from "is answered today".** ``_model``'s docstring already said it
     "answers from the context without a statement", and the control turn recorded
-    ``outcome: answered`` anyway — ``stamp`` hardcoded ``has_sql=True`` for a finished agent loop
+    ``outcome: answered`` anyway — ``finish`` hardcoded ``has_sql=True`` for a finished agent loop
     with an empty ledger. It records ``Outcome.no_sql`` now, which sharpens ADR 0013's own case
     rather than weakening it: without the policy the engine returns prose over a corpus that
-    licensed nothing, and the outcome no longer calls that an answer.
+    retrieved_tables nothing, and the outcome no longer calls that an answer.
 
     The reason reaches ``terminal_reason``, which is the field the refusal histogram and
     ``eval/report.py`` already read — not a second field a new reader would have to know about.
@@ -694,7 +694,7 @@ def test_a_turn_that_licensed_nothing_reaches_the_agent_today_and_is_withheld_by
     off_record = withheld["answer"]["record"]
 
     assert not on_record["licensed"], (
-        f"precondition: the turn was supposed to license nothing, got {on_record['licensed']!r}"
+        f"precondition: the turn was supposed to retrieve nothing, got {on_record['licensed']!r}"
     )
     assert committed["answer"]["outcome"] == Outcome.no_sql.value, committed["answer"]
     assert on_record["abstention"]["outcome"] == "disabled"
@@ -703,12 +703,12 @@ def test_a_turn_that_licensed_nothing_reaches_the_agent_today_and_is_withheld_by
     assert withheld["answer"]["outcome"] == "refused", withheld["answer"]
     assert off_record["terminal_reason"] == "nothing_licensed"
     assert withheld["answer"]["refused_by"] == "nothing_licensed"
-    verdict = off_record["abstention"]
-    assert verdict["outcome"] == "withhold"
-    assert verdict["reason"] == "nothing_licensed"
-    assert verdict["policy"] == ABSTENTION_POLICY
-    assert verdict["evidence"]["n_licensed"] == 0
-    assert verdict["evidence"]["schemas"] == on_record["schemas"]
+    result = off_record["abstention"]
+    assert result["outcome"] == "withhold"
+    assert result["reason"] == "nothing_licensed"
+    assert result["policy"] == ABSTENTION_POLICY
+    assert result["evidence"]["n_licensed"] == 0
+    assert result["evidence"]["schemas"] == on_record["schemas"]
 
     # **Before the agent spends an attempt.** The committed turn called the agent; the withheld
     # one did not, and there is no ledger row to show for it either.
@@ -721,7 +721,7 @@ def test_a_turn_that_licensed_nothing_reaches_the_agent_today_and_is_withheld_by
 
     # This pair used to assert that both turns reached an injected turn log and that the withheld
     # one was logged `refused`. The log is gone and `turns` is not in `ServeOutput`, so the
-    # observable is the answer the same node stamped.
+    # observable is the answer the same node wrote.
     assert withheld["answer"]["outcome"] == "refused", withheld["answer"]
     assert committed["answer"]["outcome"] == Outcome.no_sql.value, committed["answer"]
 
@@ -732,7 +732,7 @@ def test_a_disabled_policy_puts_no_row_on_the_timeline(monkeypatch) -> None:
     The node's *state* update is one key (above); this is its *event* output. Registered with
     ``stream=False``, so ``wrap_node`` emits neither the start nor the resolve row, and the node
     emits its own only when it judged something. Both halves are needed: a disabled node that
-    still put two rows on every timeline would have changed the event stream of every arm
+    still put two rows on every timeline would have changed the event stream of every config
     measured so far, which is the exact reason ``reflect`` is registered the same way.
 
     Patches the writer rather than ``emit``, so the payload construction under test is real.
@@ -762,17 +762,17 @@ def test_a_disabled_policy_puts_no_row_on_the_timeline(monkeypatch) -> None:
 
 
 def test_the_reason_reaches_the_artifact_row() -> None:
-    """A reason no gate can read is the declared-machinery defect this repository keeps finding.
+    """A reason no check can read is the declared-machinery defect this repository keeps finding.
 
-    Two hops, and both had to be built: ``stamp`` projects the verdict into the turn record, and
-    ``eval/harness.project_turn`` carries it onto the artifact row. Without the second, an arm
+    Two hops, and both had to be built: ``finish`` projects the result into the turn record, and
+    ``eval/harness.project_turn`` carries it onto the artifact row. Without the second, a config
     run with ``--abstain`` would decide, record the decision on a turn record nobody keeps, and
     produce an artifact in which the abstention is a bare ``terminal_reason`` with no evidence.
     """
     from governed_bi.eval.harness import project_turn
 
     withheld, _model = _serve(enabled=True, thread="t-artifact")
-    row = project_turn(withheld, question={"question_id": "q-1"}, arm="abstain")
+    row = project_turn(withheld, question={"question_id": "q-1"}, config="abstain")
 
     assert row["terminal_reason"] == "nothing_licensed"
     assert row["abstention"]["reason"] == "nothing_licensed"
@@ -780,12 +780,12 @@ def test_the_reason_reaches_the_artifact_row() -> None:
     assert row["outcome"] == "refused"
 
 
-def test_the_driver_can_run_the_paired_arm() -> None:
-    """The knob's wire. A comparability knob no driver can set is a treatment nobody can run.
+def test_the_driver_can_run_the_paired_config() -> None:
+    """The setting's wire. A comparability setting no driver can set is a treatment nobody can run.
 
     Source-level, because running the driver needs a paid model and a live database. What is
-    asserted is the three things that make the arm real and distinguishable: the flag exists,
-    it sets the knob, and it tags the artifact — the last because ``--resume`` compares corpus
+    asserted is the three things that make the config real and distinguishable: the flag exists,
+    it sets the setting, and it tags the artifact — the last because ``--resume`` compares corpus
     and prompt hashes and not this one, so an untagged abstaining run would resume into a
     committing artifact and the two would be reported as one.
     """
@@ -793,6 +793,6 @@ def test_the_driver_can_run_the_paired_arm() -> None:
         Path(__file__).resolve().parents[2] / "tools" / "run_datalake_eval.py"
     ).read_text(encoding="utf-8")
     assert '"--abstain"' in source
-    assert 'knob_overrides["abstention_policy_enabled"] = True' in source
+    assert 'setting_overrides["abstention_policy_enabled"] = True' in source
     assert 'abstain_tag = "_abstain" if args.abstain else ""' in source
     assert "{abstain_tag}" in source

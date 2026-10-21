@@ -165,7 +165,7 @@ def test_truncated_comes_from_a_max_rows_plus_one_fetch(connector, fixture_schem
 @pytest.mark.parametrize("sqlstate,label,sql", QUERY_FAULTS, ids=[q[1] for q in QUERY_FAULTS])
 def test_a_class_42_sqlstate_is_a_query_fault(connector, fixture_schema, sqlstate, label, sql) -> None:
     """Class ``42`` means the statement reached the engine and was rejected. That is a
-    **wrong answer**, not a crash, and the two land in different strata of every arm
+    **wrong answer**, not a crash, and the two land in different strata of every config
     comparison.
 
     ``undefined_function`` and ``wrong_arity`` are the ones that matter most: they are the
@@ -225,14 +225,14 @@ def test_the_statement_timeout_default_is_the_registers_and_not_a_literal() -> N
     """A second copy of the number is a second thing to forget when it changes.
 
     ``statement_timeout_ms`` is ``a recorded setting``: the value a run *records* and the
-    value it *enforces* have to be one value, or two arms sharing a config hash ran
+    value it *enforces* have to be one value, or two configs sharing a config hash ran
     different bounds.
     """
     from governed_bi.datasource.postgres import PostgresConnector  # type: ignore[import-not-found]
-    from governed_bi.register.knobs import knob_default
+    from governed_bi.registry.settings import setting_default
 
     assert PostgresConnector("postgresql://unused")._statement_timeout_ms == int(
-        knob_default("statement_timeout_ms")
+        setting_default("statement_timeout_ms")
     )
     assert PostgresConnector("postgresql://unused", statement_timeout_ms=0)._statement_timeout_ms == 0, (
         "0 must stay 0: Postgres already spells 'no bound' that way, and a falsy check here "
@@ -253,7 +253,7 @@ def test_a_class_08_sqlstate_is_infrastructure(dsn) -> None:
     # The class alone is not enough, and the strict xfail proved it: this test XPASSED
     # against a stub whose every method raises ConnectionError. A test satisfied by "raise
     # ConnectionError unconditionally" cannot tell a working classifier from no classifier
-    # at all -- the same shape as v1's gold gate passing with the comparison reversed. So
+    # at all -- the same shape as v1's gold check passing with the comparison reversed. So
     # the error must carry the code it classified on, which a stub has no way to produce.
     state = getattr(caught.value, "sqlstate", None)
     assert state and str(state).startswith("08"), (
@@ -325,7 +325,7 @@ def test_one_connection_blip_does_not_poison_the_rest_of_the_run() -> None:
 
     ``close()`` was the only writer of ``_conn = None`` and it is reached only from
     ``__exit__`` / ``__del__``, so a handle the driver had abandoned was reused for every
-    remaining statement. On a 1 351-question eval arm that is one network blip deciding
+    remaining statement. On a 1 351-question eval config that is one network blip deciding
     whether the rest of the run's data is real.
 
     **And the failure was invisible**, which is the half that matters more: psycopg raises
@@ -428,7 +428,7 @@ def test_the_sqlite_adapter_classifies_by_code_and_not_by_prose(tmp_path) -> Non
         "SELECT nope FROM t",
         "SELEC 1",
         "SELECT * FROM no_such_table",
-        # The read-only guard firing. SQLITE_READONLY is a verdict on the statement.
+        # The read-only guard firing. SQLITE_READONLY is a result on the statement.
         "INSERT INTO t VALUES (1)",
     ]
     for sql in statement_faults:
@@ -464,12 +464,12 @@ def test_a_statement_govern_permits_is_one_the_connector_executes(connector, fix
     from governed_bi.govern.check import check  # type: ignore[import-not-found]
 
     sql = f'SELECT count(*) FROM "{fixture_schema}".customers'
-    verdict = check(
+    result = check(
         f"SELECT count(*) FROM {fixture_schema}.customers",
-        licensed=frozenset({f"{fixture_schema}.customers"}),
+        retrieved_tables=frozenset({f"{fixture_schema}.customers"}),
         corpus=analyst_corpus_from_keys(allowed=(f"{fixture_schema}.customers.id",)),
     )
-    assert verdict["passed"] is True, verdict
+    assert result["passed"] is True, result
     columns, rows, _ = connector.execute(sql)
     assert rows[0][0] == 3, "govern permitted it; the connector must be able to run it"
 
@@ -519,7 +519,7 @@ def test_the_seed_makes_no_model_call(connector, fixture_schema, monkeypatch) ->
 
 def test_the_seed_is_deterministic(connector, fixture_schema) -> None:
     """``corpus_content_hash`` is the treatment identity, so a nondeterministic seed makes
-    every arm look differently treated and passes the delivery gate for the wrong reason."""
+    every config look differently treated and passes the delivery check for the wrong reason."""
     from governed_bi.corpus.seed import seed  # type: ignore[import-not-found]
 
     intro = connector.introspect(fixture_schema)

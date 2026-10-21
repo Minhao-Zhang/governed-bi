@@ -6,9 +6,9 @@ was rejected as a port, ``ports.py``'s no-single-adapter rule).
 
 **``model`` reports what the provider served, not what was requested.** A provider may
 serve an alias, a dated snapshot or a silent upgrade, and ``embedding_model`` is a
-comparability knob, so recording the request would let two runs on different snapshots
+comparability setting, so recording the request would let two runs on different snapshots
 compare as one (v1's reasoning-effort incident: an unrecorded live config field moved the
-baseline arm past that ladder's own detection threshold — sizes retired, mechanism is not).
+baseline config past that ladder's own detection threshold — sizes retired, mechanism is not).
 ``ports.Embedder.embed``'s ordering rule also requires ``model`` to be stable for the object's
 lifetime, which rules out returning the request and replacing it after the first call —
 that changes identity under a cache key already formed. One memoised probe holds both.
@@ -71,8 +71,8 @@ class OpenAIEmbedder(BaseEmbedder):
         self._served_width: int | None = None
         self._client = client
         # The embedder is the second provider surface: same 429 exposure, same critical path
-        # (`accept` embeds the question before any facet runs), so a "global retry limit" that
-        # skipped it would be false. `None` keeps the SDK defaults; `graph_app` passes the knobs.
+        # (`accept` embeds the question before any channel runs), so a "global retry limit" that
+        # skipped it would be false. `None` keeps the SDK defaults; `graph_app` passes the settings.
         self._max_retries = None if max_retries is None else int(max_retries)
         self._timeout = None if timeout is None else float(timeout)
         if batch_size is not None:

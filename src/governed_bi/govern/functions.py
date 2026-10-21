@@ -29,12 +29,12 @@ __all__ = [
 #: The sqlglot generation this list was enumerated against. A major bump renames and
 #: re-parents node classes, silently changing what the allowlist matches, so a
 #: mismatch raises at import. The minor version is recorded (not asserted) by the
-#: ``sqlglot_version`` comparability knob.
+#: ``sqlglot_version`` comparability setting.
 SQLGLOT_TESTED_MAJOR = 30
 
 
 def sqlglot_version() -> str:
-    """The installed sqlglot version, for the ``sqlglot_version`` knob."""
+    """The installed sqlglot version, for the ``sqlglot_version`` setting."""
     try:
         return version("sqlglot")
     except PackageNotFoundError:  # pragma: no cover - sqlglot is a hard dependency
@@ -158,7 +158,7 @@ def canonical_function_name(node: exp.Expr) -> str:
 
 
 def permitted_functions_digest() -> str:
-    """Content digest of the allowlist, for the ``permitted_functions`` knob.
+    """Content digest of the allowlist, for the ``permitted_functions`` setting.
 
     Hashed by content, so widening the list moves the serve config hash and breaks
     comparability with earlier runs. Intended, and not to be worked around: without

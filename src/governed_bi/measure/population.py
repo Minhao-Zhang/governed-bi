@@ -12,7 +12,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Callable, Mapping, Sequence
 
-from ..register.quantity import Measured
+from ..registry.quantity import Measured
 
 __all__ = ["Population", "TurnRow"]
 
@@ -57,7 +57,7 @@ class Population:
         if dupes:
             raise ValueError(
                 f"population {label!r}: {len(dupes)} duplicated {unit_key} value(s), "
-                f"e.g. {dupes[:3]}. v1 merged 1025 rows and 326 rows into one arm "
+                f"e.g. {dupes[:3]}. v1 merged 1025 rows and 326 rows into one config "
                 "score this way, double-weighting the overlap. If duplication is "
                 "intended, aggregate before constructing the population."
             )
@@ -113,7 +113,7 @@ class Population:
     def count(self, outcome: str) -> Measured[int]:
         """Number of rows where ``outcome`` is truthy, or unmeasured if any is absent.
 
-        The absent case is not a zero. An arm whose instrumentation dropped
+        The absent case is not a zero. An config whose instrumentation dropped
         ``correct`` on 40% of rows has an *unknown* score, and v1 reported it as a
         low one.
         """

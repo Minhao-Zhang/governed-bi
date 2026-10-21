@@ -2,7 +2,7 @@
 
 F2: ``route_node`` runs ADR 0005 §2.5 two-pass retrieval when a ``UnifiedIndex`` is on
 ``config["configurable"]["index"]``. Without an index, F1-compatible behaviour remains
-(schema selection from facet / injector hits; filter-or-empty ``retrieved``).
+(schema selection from channel / injector hits; filter-or-empty ``retrieved``).
 
 **All three nodes must declare ``config``** (ADR 0005 §2.8.2): ``wrap.py`` forwards
 ``RunnableConfig`` only to nodes whose signature asks for it, so a node that drops the
@@ -16,7 +16,7 @@ from typing import AbstractSet, Any, Mapping
 
 from langchain_core.runnables import RunnableConfig
 
-from governed_bi.register.assets import AssetType
+from governed_bi.registry.assets import AssetType
 from governed_bi.retrieve.budget import apply_budgets
 from governed_bi.retrieve.connect import components, connect
 from governed_bi.retrieve.fuse import fuse
@@ -27,10 +27,10 @@ from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 from governed_bi.serve.runtime import (
     ChannelScale,
     channel_scale,
+    channel_weights,
     corpus_structure,
     facet_hits,
-    facet_weights,
-    int_knob,
+    int_setting,
 )
 from governed_bi.serve.runtime import (
     configurable as runtime_config,
@@ -45,9 +45,9 @@ __all__ = [
     "connect_node",
 ]
 
-# No local defaults for `route_top_n`, `max_steiner_points` or `max_crossings`: `int_knob`
+# No local defaults for `route_top_n`, `max_steiner_points` or `max_crossings`: `int_setting`
 # reads state, then `knobs_resolved`, then the register, which is the one place the value is
-# declared. A `state.get(name, <constant>)` here is a knob nothing can set. ADR 0008 D7.
+# declared. A `state.get(name, <constant>)` here is a setting nothing can set. ADR 0008 D7.
 
 
 def empty_retrieved(
@@ -68,9 +68,9 @@ def empty_retrieved(
 def route_node(state: dict, config: RunnableConfig) -> dict:
     """Pass-one evidence → top-N schemas → pass-two re-search (or F1 fallback).
 
-    The terminal guard is load-bearing: ``route`` is the fan-in of five facet nodes, so it runs
+    The terminal guard is load-bearing: ``route`` is the fan-in of five channel nodes, so it runs
     whenever *any* of them ran, including when one crashed and ``wrap.py`` marked the turn
-    ``crashed``. Without it a facet crash reaches a full billed model call. This node must also
+    ``crashed``. Without it a channel crash reaches a full billed model call. This node must also
     write no ``path_kind`` key at all — writing ``None`` erased that mark, which is why
     ``settle_path_kind`` treats ``None`` as a no-op.
     """
@@ -80,11 +80,11 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     structure = corpus_structure(config)
     hits = _route_hit_triples(state, structure)
     ranking = sorted(
-        # `facet_weight_schema` / `facet_weight_other`, comparability knobs, both 1.0 as shipped.
-        route_scores(hits, weights=facet_weights(state)),
+        # `channel_weight_schema` / `channel_weight_other`, comparability settings, both 1.0 as shipped.
+        route_scores(hits, weights=channel_weights(state)),
         key=lambda pair: (-float(pair[1]), str(pair[0])),
     )
-    top_n = int_knob(state, "route_top_n")
+    top_n = int_setting(state, "route_top_n")
     eligible = [(schema, score) for schema, score in ranking if float(score) > 0]
     schemas = [schema for schema, _ in eligible[:top_n]]
 
@@ -93,7 +93,7 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     # skipped it would not be the same system. Nothing on a served turn writes this key.
     #
     # Restricted to schemas the structure actually knows: an artifact from another corpus
-    # would otherwise pin a name that licenses nothing, and the arm would read as a routing
+    # would otherwise pin a name that licenses nothing, and the config would read as a routing
     # collapse caused by the replay rather than by anything under test.
     pinned = state.get("pinned_schemas")
     if pinned:
@@ -104,7 +104,7 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
 
     if not schemas:
         # ``schema_ranking`` is **not** a top-level key: ``ServeState`` declares no such
-        # channel, so LangGraph drops it silently. ``stamp`` reads it out of ``retrieved``.
+        # channel, so LangGraph drops it silently. ``finish`` reads it out of ``retrieved``.
         return {
             "schemas": [],
             "path_kind": "decline",
@@ -126,7 +126,7 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
             schemas=schemas,
             ranking=ranking,
             query_vector=query_vector,
-            # Threaded so pass two can embed each facet's *rewritten* query. Without it the
+            # Threaded so pass two can embed each channel's *rewritten* query. Without it the
             # lexical channel searches the rewrite while the semantic channel scores the raw
             # question's vector, and the two are then blended.
             embedder=cfg.get("embedder"),
@@ -138,19 +138,19 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     # No ``path_kind`` key: routing succeeding is not a path kind, and ``None`` erases a crash.
     out: dict[str, Any] = {"schemas": schemas, "retrieved": retrieved}
     # **The seed is the POST-budget table set.** ``by_type`` is assembled out of the hits
-    # ``apply_budgets(...)`` kept, so a table the retrieval cap dropped is never licensed and
-    # Layer 6 refuses the statement ``r_table_not_licensed`` — a retrieval-budget outcome
-    # recorded as a governance verdict. ``resolve`` and ``connect`` only widen this set and
-    # neither restores a budget-cut table. ``govern/bounds.py::ToolBounds.licensed`` carries the
+    # ``apply_budgets(...)`` kept, so a table the retrieval cap dropped is never retrieved_tables and
+    # Layer 6 refuses the statement ``r_table_not_retrieved`` — a retrieval-budget outcome
+    # recorded as a governance result. ``resolve`` and ``connect`` only widen this set and
+    # neither restores a budget-cut table. ``govern/bounds.py::ToolBounds.retrieved_tables`` carries the
     # measurement; ADR 0006 §8 holds the open decision.
-    licensed = list((retrieved.get("by_type") or {}).get("table") or ())
-    if licensed:
-        out["licensed"] = sorted(str(x) for x in licensed)
+    retrieved_tables = list((retrieved.get("by_type") or {}).get("table") or ())
+    if retrieved_tables:
+        out["retrieved_tables"] = sorted(str(x) for x in retrieved_tables)
     return out
 
 
 def resolve_node(state: dict, config: RunnableConfig) -> dict:
-    """Reference closure over hit ids; additions land in ``pulled_in`` / ``licensed``.
+    """Reference closure over hit ids; additions land in ``pulled_in`` / ``retrieved_tables``.
 
     §2.8's closure rows **minus** its last one: join completion needs both endpoints, which a
     disjunctive fixpoint cannot express, so it runs in ``connect`` (§2.8.1). Everything here is
@@ -179,10 +179,10 @@ def resolve_node(state: dict, config: RunnableConfig) -> dict:
     # was.
     #
     # A decline and not a truncation, for the reason ``connect`` gives: a silently cut
-    # closure drops a table from ``licensed``, and the TABLES layer then refuses the
-    # statement ``r_table_not_licensed`` — a retrieval-budget outcome recorded as a
-    # governance verdict, which ``govern/bounds.py`` already has one instance of.
-    max_added = int_knob(state, "max_resolve_additions")
+    # closure drops a table from ``retrieved_tables``, and the TABLES layer then refuses the
+    # statement ``r_table_not_retrieved`` — a retrieval-budget outcome recorded as a
+    # governance result, which ``govern/bounds.py`` already has one instance of.
+    max_added = int_setting(state, "max_resolve_additions")
     if len(added) > max_added:
         # ``crossings`` cleared as ``connect``'s decline clears it: the turn ends here and a
         # partial crossing list reads as a finished one.
@@ -197,20 +197,20 @@ def resolve_node(state: dict, config: RunnableConfig) -> dict:
         pulled_in.setdefault(str(asset_id), "resolve")
 
     asset_types = structure.asset_types
-    licensed = set(state.get("licensed") or ())
-    licensed.update(_table_ids_from_retrieved(retrieved, asset_types))
+    retrieved_tables = set(state.get("retrieved_tables") or ())
+    retrieved_tables.update(_table_ids_from_retrieved(retrieved, asset_types))
     for asset_id in added:
         if _is_table(asset_id, asset_types, retrieved):
-            licensed.add(asset_id)
+            retrieved_tables.add(asset_id)
 
     return {
         "retrieved": {"pulled_in": pulled_in},
-        "licensed": sorted(str(x) for x in licensed),
+        "retrieved_tables": sorted(str(x) for x in retrieved_tables),
     }
 
 
 def connect_node(state: dict, config: RunnableConfig) -> dict:
-    """Bounded Steiner join over licensed tables; decline when disconnected / over caps.
+    """Bounded Steiner join over retrieved tables; decline when disconnected / over caps.
 
     **``route_top_n`` is a shortlist, not a conjunction.** Pass two licenses tables from every
     shortlisted schema, so on a pooled lake the terminal set spans schemas that share no join
@@ -221,7 +221,7 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
     So terminals are partitioned into :func:`~governed_bi.retrieve.connect.components` first —
     by component and not by schema, so two schemas with a declared cross-schema join stay
     together (the case ADR 0005 §2.8.2 charges ``crossings`` for). A losing component's assets
-    are dropped from ``retrieved`` as well as from ``licensed``, so the prompt cannot show the
+    are dropped from ``retrieved`` as well as from ``retrieved_tables``, so the prompt cannot show the
     analyst a table the turn may not query.
 
     **Join completion** (§2.8.1) runs here rather than in ``resolve``: a Steiner point exists
@@ -236,20 +236,20 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
 
     structure = corpus_structure(config)
     retrieved: Mapping[str, Any] = state.get("retrieved") or {}
-    terminals = set(state.get("licensed") or ())
+    terminals = set(state.get("retrieved_tables") or ())
     if not terminals:
         terminals = _table_ids_from_retrieved(retrieved, structure.asset_types)
 
     edges = structure.join_edges
-    max_points = int_knob(state, "max_steiner_points")
+    max_points = int_setting(state, "max_steiner_points")
 
     # **Connect each component; license every one that connects.** Do not pick: a pick caps
     # reachability at ``recall@1``, and no ranking rule — routing rank, pass-two score, any
-    # other — escapes a ceiling set by the shortlist it ranks. The 1 351-question arm that
+    # other — escapes a ceiling set by the shortlist it ranks. The 1 351-question config that
     # showed it is retired (register/citations.py); the bound is arithmetic and stands anyway.
     #
-    # Licensing all of them is sound: ``licensed`` is govern's table allowlist and ``check()``
-    # refuses any table a statement names but ``licensed`` does not. What ``connect``
+    # Licensing all of them is sound: ``retrieved_tables`` is govern's table allowlist and ``check()``
+    # refuses any table a statement names but ``retrieved_tables`` does not. What ``connect``
     # guarantees is a *retrieval* property — that the prompt carries a join path for the
     # tables it offers — and that holds per component. The turn declines only when **no**
     # component connects, which is what ``missing_join_path`` means.
@@ -265,7 +265,7 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
         connected.update(str(t) for t in group)
         added.update(str(a) for a in result.added)
 
-    # ``terminals`` guards the decline: zero terminals means retrieval licensed no table, so
+    # ``terminals`` guards the decline: zero terminals means retrieval retrieved_tables no table, so
     # there is nothing to join and ``connect(set())`` returns "not declined". Without the guard
     # every such turn declines ``over_connect_bounds`` — including the conformance suite's
     # answered path, which licenses no table and is supposed to reach the agent.
@@ -277,7 +277,7 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
             "path_kind": "decline",
             "terminal_reason": reason,
             "crossings": [],
-            "licensed": sorted(str(x) for x in terminals),
+            "retrieved_tables": sorted(str(x) for x in terminals),
         }
 
     delta: dict[str, Any] = {}
@@ -292,15 +292,15 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
         retrieved = {**retrieved, **delta}
 
     terminals = set(connected)
-    licensed = frozenset(connected | added)
+    retrieved_tables = frozenset(connected | added)
 
     pulled_in = dict(retrieved.get("pulled_in") or {})
     for asset_id in added:
         pulled_in[str(asset_id)] = "connect"
     # §2.8's last row, over the final set. Joins are `pulled_in` and never enter
-    # `licensed`: that field is govern's table allowlist (bounds.py), and a join id in
+    # `retrieved_tables`: that field is govern's table allowlist (bounds.py), and a join id in
     # it would be a table key naming no table.
-    for join_asset_id in complete_joins(licensed, structure):
+    for join_asset_id in complete_joins(retrieved_tables, structure):
         pulled_in.setdefault(str(join_asset_id), "connect")
     delta["pulled_in"] = pulled_in
 
@@ -308,19 +308,19 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
     selected_schemas = set(state.get("schemas") or ())
     crossings = _crossings(added, table_schemas, selected_schemas)
 
-    max_crossings = int_knob(state, "max_crossings")
+    max_crossings = int_setting(state, "max_crossings")
     if len(crossings) > max_crossings:
         return {
             "path_kind": "decline",
             "terminal_reason": "over_connect_bounds",
             "retrieved": delta,
             "crossings": crossings,
-            "licensed": sorted(str(x) for x in terminals),
+            "retrieved_tables": sorted(str(x) for x in terminals),
         }
 
     return {
         "retrieved": delta,
-        "licensed": sorted(str(x) for x in licensed),
+        "retrieved_tables": sorted(str(x) for x in retrieved_tables),
         "crossings": crossings,
     }
 
@@ -331,34 +331,34 @@ def connect_node(state: dict, config: RunnableConfig) -> dict:
 def _route_hit_triples(
     state: Mapping[str, Any], structure: CorpusStructure
 ) -> list[tuple[Any, Any, float]]:
-    """Pass-one evidence for ``route``. Prefer facet hits; injector is escape hatch."""
-    triples = _triples_from_facets(state, structure)
+    """Pass-one evidence for ``route``. Prefer channel hits; injector is escape hatch."""
+    triples = _triples_from_channels(state, structure)
     if triples:
         return triples
 
-    precomputed = state.get("facet_route_hits")
+    precomputed = state.get("channel_route_hits")
     if precomputed is not None:
         return [
-            (facet, schema, float(score))
-            for facet, schema, score in precomputed
+            (channel, schema, float(score))
+            for channel, schema, score in precomputed
         ]
     return []
 
 
-def _triples_from_facets(
+def _triples_from_channels(
     state: Mapping[str, Any], structure: CorpusStructure
 ) -> list[tuple[Any, Any, float]]:
     schema_tags = structure.schema_tags
     scale = channel_scale(state)
     triples: list[tuple[Any, Any, float]] = []
-    for facet_name, facet_result in (state.get("facets") or {}).items():
-        hits = facet_hits(facet_result)
+    for channel_name, channel_result in (state.get("channels") or {}).items():
+        hits = facet_hits(channel_result)
         for hit in hits:
             schema = _hit_schema(hit, schema_tags)
             score = _hit_score(hit, scale)
             if schema is None or score is None:
                 continue
-            triples.append((facet_name, schema, float(score)))
+            triples.append((channel_name, schema, float(score)))
     return triples
 
 
@@ -422,7 +422,7 @@ def _hit_as_dict(hit: Any) -> dict[str, Any]:
     if isinstance(hit, Mapping):
         return dict(hit)
     return {
-        "facet": getattr(hit, "facet", None),
+        "channel": getattr(hit, "channel", None),
         "asset_id": getattr(hit, "asset_id", None),
         "asset_type": getattr(hit, "asset_type", None),
         "lexical": getattr(hit, "lexical", None),
@@ -439,7 +439,7 @@ def _retrieved_for_schemas(
     ranking: list[tuple[Any, float]],
     structure: CorpusStructure,
 ) -> dict[str, Any]:
-    """F1 fallback: RetrievalResult from facet hits in the selected schemas."""
+    """F1 fallback: RetrievalResult from channel hits in the selected schemas."""
     schema_set = {str(s) for s in schemas}
     schema_tags = structure.schema_tags
     scale = channel_scale(state)
@@ -448,8 +448,8 @@ def _retrieved_for_schemas(
     selected: dict[str, dict[str, Any]] = {}
     best_score: dict[str, float] = {}
 
-    for facet_name, facet_result in (state.get("facets") or {}).items():
-        for hit in facet_hits(facet_result):
+    for channel_name, channel_result in (state.get("channels") or {}).items():
+        for hit in facet_hits(channel_result):
             schema = _hit_schema(hit, schema_tags)
             if schema is None or str(schema) not in schema_set:
                 continue
@@ -459,7 +459,7 @@ def _retrieved_for_schemas(
             if asset_id is None or asset_type is None or score is None:
                 continue
             payload = _hit_as_dict(hit)
-            payload["facet"] = facet_name
+            payload["channel"] = channel_name
             payload["score"] = score
             attributions.setdefault(asset_id, []).append(payload)
             prev = best_score.get(asset_id)
@@ -587,7 +587,7 @@ def _restrict_to_component(
     excluded **only when no kept table shares the schema** — two components inside one schema
     are possible, and dropping the whole schema would delete the half that works.
 
-    Licensing and context must agree: narrowing ``licensed`` alone leaves the losing schema's
+    Licensing and context must agree: narrowing ``retrieved_tables`` alone leaves the losing schema's
     tables rendered in the prompt but unqueryable, so the model is shown a table and then
     refused for using it.
 

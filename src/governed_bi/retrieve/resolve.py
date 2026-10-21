@@ -9,12 +9,12 @@ acceptance contracts assert it (``tests/retrieve/test_scoring_contract.py`` prop
 historical: ``connect`` *searches*, so stopping early means something, and it returns a
 ``ConnectResult`` carrying ``declined``. This walks to a fixpoint, where stopping early buys
 nothing a caller can use. **So the size bound on the closure lives in the caller**
-(``serve/nodes/route_retrieve.py::resolve_node``, knob ``max_resolve_additions``), which is
+(``serve/nodes/route_retrieve.py::resolve_node``, setting ``max_resolve_additions``), which is
 also where every other retrieval bound is read and where a decline can be turned into a
 terminal reason.
 
 **Why the caller bounds it at all**, recorded here because this is where a reader looks for
-the closure's cost. Every table the closure reaches enters ``licensed``, which is what the
+the closure's cost. Every table the closure reaches enters ``retrieved_tables``, which is what the
 TABLES layer accepts, and every asset it reaches enters ``pulled_in``, which is what the
 prompt renders. So a corpus author widens both by adding one ``references`` edge, with no
 access-policy change and nothing to review against. Measured on ``../BIRD-corpus`` (13,304

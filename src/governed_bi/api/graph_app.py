@@ -65,7 +65,7 @@ CORPUS_DIR_VAR = "GOVERNED_BI_CORPUS_DIR"
 #: import this module -- ``api`` is the outermost layer.
 MODEL_VAR = SURFACE_MODEL_VARS["agent"]
 
-#: Model for guard + facet rewriters. Unset → share :data:`MODEL_VAR`.
+#: Model for guard + channel rewriters. Unset → share :data:`MODEL_VAR`.
 UTILITY_MODEL_VAR = SURFACE_MODEL_VARS["utility"]
 
 #: Reasoning effort for the utility model (usually low/unset).
@@ -83,7 +83,7 @@ TIMEOUT_VAR = "GOVERNED_BI_LLM_TIMEOUT_S"
 #: Wall clock for guard, rewriters, and the embedder.
 UTILITY_TIMEOUT_VAR = "GOVERNED_BI_UTILITY_TIMEOUT_S"
 
-#: Reasoning effort for the agent model (comparability knob).
+#: Reasoning effort for the agent model (comparability setting).
 MODEL_EFFORT_VAR = "GOVERNED_BI_MODEL_EFFORT"
 
 #: Where a seeded corpus is written when no curated one is given.
@@ -302,8 +302,8 @@ def record_node() -> Any:
     with the log: the turn is returned as state and the checkpointer persists it, so there is one
     store and nothing to inject. A test observes the node by reading what it returns.
 
-    Sits after ``stamp`` and outside ``wrap_node``, so it swallows its own failures: there is
-    nothing after it to receive a ``crashed`` stamp, and a turn that answered is not a turn that
+    Sits after ``finish`` and outside ``wrap_node``, so it swallows its own failures: there is
+    nothing after it to receive a ``crashed`` finish, and a turn that answered is not a turn that
     failed.
 
     **It writes the record whole and lets the channel bound it.** The row it returns carries the
@@ -338,7 +338,7 @@ def record_node() -> Any:
                 "record": dict(record_dict),
             }
         except Exception:  # noqa: BLE001 — a turn that answered is not a turn that failed
-            # Nothing after this node can stamp the failure, so the log line is the only trace
+            # Nothing after this node can finish the failure, so the log line is the only trace
             # that an audit row was lost.
             _log_dropped_row(state)
             return {}
@@ -348,7 +348,7 @@ def record_node() -> Any:
 
 
 def build_serve_graph(session: Session) -> Any:
-    """The graph ``langgraph.json`` serves: ``accept`` before ``guard``, ``record`` after ``stamp``.
+    """The graph ``langgraph.json`` serves: ``accept`` before ``guard``, ``record`` after ``finish``.
 
     It differs from ``serve.graph.compile_graph`` on purpose, at the trust boundary. ``trust()``
     is called here, so the server-side constants override whatever a request supplies and a
@@ -384,7 +384,7 @@ def make_graph() -> Any:
 def _warm_imports() -> None:
     """Import request-path modules at load time (avoids blockbuster ``os.getcwd`` on first request)."""
     from governed_bi.govern import guard as _guard  # noqa: F401
-    from governed_bi.register.record import missing_required  # noqa: F401
+    from governed_bi.registry.record import missing_required  # noqa: F401
     from governed_bi.retrieve.index import IndexEntry  # noqa: F401
 
     try:  # pragma: no cover - only present when a model is configured

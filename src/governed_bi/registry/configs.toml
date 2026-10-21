@@ -1,17 +1,17 @@
-# Arm profiles: what each measured arm changed, declared where a reader can diff it.
+# Config profiles: what each measured config changed, declared where a reader can diff it.
 #
-# An arm's identity used to live in a gitignored `.env` on one machine, which is the
-# "versioned is not rebuildable" problem wearing a different hat: `runs/eval/` names an arm,
+# An config's identity used to live in a gitignored `.env` on one machine, which is the
+# "versioned is not rebuildable" problem wearing a different hat: `runs/eval/` names a config,
 # and nothing committed said what that name meant. This file is the committed half.
 #
-# `treatment` is the load-bearing field. `eval/report.py::knobs_comparable` refuses a pair that
+# `treatment` is the load-bearing field. `eval/report.py::settings_comparable` refuses a pair that
 # cannot name what changed, because "nobody said what changed" is not "nothing changed" — that
 # is audit D9's resolution, and this is where the caller says it. Every name must be a
-# `a recorded setting` knob in `register/knobs.py`; `register/arm_profiles.py` refuses the file
+# `a recorded setting` setting in `registry/settings.py`; `registry/config_profiles.py` refuses the file
 # otherwise rather than silently ignoring a typo.
 #
-# This file does NOT set knobs. It declares what an arm's treatment *was*, so a recorded run can
-# be checked against it. A second place that decides a knob's value is a defect; the knob
+# This file does NOT set settings. It declares what a config's treatment *was*, so a recorded run can
+# be checked against it. A second place that decides a setting's value is a defect; the setting
 # register stays the one home.
 #
 # `corpus` and `corpus_content_hash` are two different identifiers and both are here on purpose.
@@ -20,22 +20,22 @@
 # ref against the recorded digest with `startswith` is what `reconcile` used to do, and it could
 # never match — so the check returned agreement on every artifact ever produced.
 #
-# `corpus_content_hash` is **mandatory** on every arm. `register/arm_profiles.py` refuses this
+# `corpus_content_hash` is **mandatory** on every config. `registry/config_profiles.py` refuses this
 # file without it, because the alternative is the failure that outlived the first fix: v3_fold —
 # the baseline v4 is measured against — declared no digest, so `reconcile` skipped its only
-# comparison and the driver printed "every row agrees with the profile in arms.toml" from a check
-# that examined nothing. An arm that cannot be reconciled must say so, not report agreement.
+# comparison and the driver printed "every row agrees with the profile in configs.toml" from a check
+# that examined nothing. An config that cannot be reconciled must say so, not report agreement.
 #
 # `dataset` and `question_subset` are the same two-identifier split, one field over, and they are
 # here because this file enforced the rule above for the corpus **completely and for the question
 # set not at all**. Found 2026-08-14 by a downstream fork that needed to know which questions the
-# three arms below ran and could not read it anywhere: it recovered the answer by filtering four
+# three configs below ran and could not read it anywhere: it recovered the answer by filtering four
 # historical versions of `BIRD-Data-Obfuscation:eval_dataset/test_final.jsonl` against the 57
 # schemas `BIRD-corpus@30872d3` covers and cross-checking the surviving candidate against prose in
 # `docs/failure-modes.md`. That is a schema-filtered count across four repository versions to
 # recover one fact; it should have been one field. Until it was, a rerun on a *replaced* dataset
 # produced the same n = 1 351, a substantially different question population, and passed every
-# quotability gate — because the gates compare the corpus digest and the knobs, and both matched.
+# quotability check — because the checks compare the corpus digest and the settings, and both matched.
 #
 # `dataset` is the ref a human checks out in `../BIRD-Data-Obfuscation`; `question_subset` is what
 # a measurement row carries, and is the only one `reconcile` can compare. Same relationship as
@@ -43,13 +43,13 @@
 #
 # `question_subset` is **mandatory** for the reason `corpus_content_hash` is: an optional field
 # that silences a check is a check with an off switch nobody labelled. Its value is verbatim what
-# the `question_subset` scope knob records — `"<count>:<12 hex of sha256 over the sorted question
-# ids>"`, resolved by `eval/provenance.py::scope_identity`. The profile field carries the knob's
+# the `question_subset` scope setting records — `"<count>:<12 hex of sha256 over the sorted question
+# ids>"`, resolved by `eval/provenance.py::scope_identity`. The profile field carries the setting's
 # *name* as well as its format so that the corpus defect cannot recur here: comparing two
 # identifiers from two namespaces is what made `reconcile` vacuous, and one name in one format
 # cannot be confused with a git ref.
 #
-# **What a question-id digest cannot detect**, stated because a gate whose blind spot is unwritten
+# **What a question-id digest cannot detect**, stated because a check whose blind spot is unwritten
 # gets read as covering it: a dataset that edited a question's text, its evidence, or its gold SQL
 # while keeping the ids is invisible to this field. `1711248` → `22fe2a6` moved ids, so this field
 # would have caught it; a gold correction in place would not move it. `gold_fingerprint`
@@ -57,24 +57,24 @@
 # subsume it. Twelve hex characters is 48 bits, sized for drift between two attempts at one run
 # and not against an adversary who wants a collision.
 #
-# **And this is a per-arm declaration, not a cross-arm gate.** `eval/report.py::knobs_comparable`
+# **And this is a per-config declaration, not a cross-config check.** `eval/report.py::settings_comparable`
 # compares `comparability_keys()`, and `question_subset` is `Role.scope`, so nothing stops two
-# arms measured on two question sets from both being quotable. What the field buys is that each
-# arm's rows are now checked against a claim a reader can diff, so such a pair has to say so here.
+# configs measured on two question sets from both being quotable. What the field buys is that each
+# config's rows are now checked against a claim a reader can diff, so such a pair has to say so here.
 #
-# ── three fields no arm below declares, and why ───────────────────────────────
+# ── three fields no config below declares, and why ───────────────────────────────
 #
-# `hypothesised_effect`, `readout` and `corpus_release` are **optional**, and every arm in this
+# `hypothesised_effect`, `readout` and `corpus_release` are **optional**, and every config in this
 # file leaves all three blank. That is a decision, not an omission, and the loader now enforces
-# the shape of it: an unrecognised key in an `[arm.*]` table is refused outright, because these
-# three were fields of `ArmProfile` that `register/arm_profiles.py` never passed to it —
+# the shape of it: an unrecognised key in an `[config.*]` table is refused outright, because these
+# three were fields of `ConfigProfile` that `registry/config_profiles.py` never passed to it —
 # nine keys against twelve fields — so writing `hypothesised_effect = 0.03` here parsed clean,
-# arrived as `None`, and left `eval/provenance.py::arm_power_refusal` abstaining on every arm that
-# could ever be declared. The gate that stops an underpowered paid arm was silent by construction.
+# arrived as `None`, and left `eval/provenance.py::config_power_refusal` abstaining on every config that
+# could ever be declared. The check that stops an underpowered paid config was silent by construction.
 # `hypothesized_effect`, the American spelling, is one keystroke from the same silence; it is now
 # a load error.
 #
-#   hypothesised_effect  the effect the arm exists to detect, as a PROPORTION of the readout:
+#   hypothesised_effect  the effect the config exists to detect, as a PROPORTION of the readout:
 #                        3pp is `0.03`, and `3` is refused, because `eval/power.py::require_power`
 #                        compares it against a floor that is a proportion and so a
 #                        percentage-point figure clears every floor at every n. Must be strictly
@@ -85,33 +85,33 @@
 #                        2.15pp ceiling has 1.9 resolvable steps against EX's 28.5, so a draft
 #                        read the smaller MDE as the better instrument. Naming the readout is what
 #                        makes that unit error visible to whoever reads the refusal.
-#   corpus_release       the corpus TAG the arm was measured on, matching the `corpus_release`
-#                        comparability knob. Mandatory only for an arm whose `treatment` names
-#                        `corpus_release` — such an arm otherwise leaves the one field it exists
+#   corpus_release       the corpus TAG the config was measured on, matching the `corpus_release`
+#                        comparability setting. Mandatory only for a config whose `treatment` names
+#                        `corpus_release` — such a config otherwise leaves the one field it exists
 #                        to vary unchecked. A tag, not a ref and not a digest.
 #
-# **Why all four arms below are blank, stated rather than left to inference.**
+# **Why all four configs below are blank, stated rather than left to inference.**
 #
 # No effect size: all four were measured before the field existed, so any number here would be
-# read off the arm's own result. That is not a hypothesis, and it is worse than the silence in one
-# specific way — a fabricated effect makes `arm_power_refusal` *pass*, where an absent one makes it
-# abstain. The gate is therefore not in force on this file, which
-# `tests/conformance/test_arm_profiles_are_declared.py::
-# test_the_shipped_arms_declare_no_hypothesis_and_that_is_the_committed_state` asserts as an
-# inventory, so the first arm to declare one has to come through that test.
+# read off the config's own result. That is not a hypothesis, and it is worse than the silence in one
+# specific way — a fabricated effect makes `config_power_refusal` *pass*, where an absent one makes it
+# abstain. The check is therefore not in force on this file, which
+# `tests/conformance/test_config_profiles_are_declared.py::
+# test_the_shipped_configs_declare_no_hypothesis_and_that_is_the_committed_state` asserts as an
+# inventory, so the first config to declare one has to come through that test.
 #
 # No release: `../BIRD-corpus` carries no tags at all (checked 2026-08-24, `git tag --list` is
-# empty). All four arms were measured against a working tree, identified by the content digest
+# empty). All four configs were measured against a working tree, identified by the content digest
 # above, and minting a release name now to attach retroactively would be a claim about the corpus
 # repository that the corpus repository does not make. The digest already reconciles the rows.
 
-[arm.v3_fold]
+[config.v3_fold]
 description = "ANALYST v3 with the fold prompt, routing pinned."
 treatment = []
 corpus = "30872d3"
 # Derived from the artifact, not from the corpus checkout: 1 345 of the 1 351 rows of
 # `runs/eval/proxy_v3_fold_opus_high_corpus30872d3.jsonl` carry this digest and the other 6 carry
-# `None` — the zero-licensed clarifications of open-work §3.6a, which never reach the stamp. It is
+# `None` — the zero-retrieved_tables clarifications of open-work §3.6a, which never reach the finish. It is
 # the same digest v4 and v5 record, which is what a shared corpus is supposed to look like.
 corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
 # **Measured from the artifact, on 2026-08-20, not reconstructed.** The seven `proxy_*` artifacts
@@ -132,8 +132,8 @@ dataset = "22fe2a6"
 question_subset = "1351:423a3f4b65fb"
 notes = "The baseline v4 is measured against. Its own treatment is relative to v3, not recorded here."
 
-[arm.v4]
-description = "ANALYST v4 prompt. The arm every quoted figure in README.md comes from."
+[config.v4]
+description = "ANALYST v4 prompt. The config every quoted figure in README.md comes from."
 treatment = ["prompt_set"]
 compare_to = "v3_fold"
 corpus = "30872d3"
@@ -144,7 +144,7 @@ corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0
 dataset = "22fe2a6"
 question_subset = "1351:423a3f4b65fb"
 
-[arm.v5]
+[config.v5]
 description = "v4 plus the projection ablation, which priced ~4 points of EX as shape-matching."
 treatment = ["prompt_set"]
 compare_to = "v4"
@@ -154,8 +154,8 @@ corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0
 dataset = "22fe2a6"
 question_subset = "1351:423a3f4b65fb"
 
-[arm.ask_first]
-description = "ANALYST ask_first prompt. Off-default until a measured arm exists; serve stays v4."
+[config.ask_first]
+description = "ANALYST ask_first prompt. Off-default until a measured config exists; serve stays v4."
 treatment = ["prompt_set"]
 compare_to = "v4"
 corpus = "30872d3"
@@ -163,20 +163,20 @@ corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0
 dataset = "22fe2a6"
 question_subset = "1351:423a3f4b65fb"
 
-# ── the first arm measured on this engine rather than on the 2026-08 one ──────
+# ── the first config measured on this engine rather than on the 2026-08 one ──────
 #
 # Everything above was Claude-Opus-4.8 through `proxy`. This one is the configuration `.env`
 # ships and `tools/run_datalake_eval.py` defaults to, so it is a new baseline and not a
 # comparison: `treatment` is empty and there is no `compare_to`, for `v3_fold`'s reason. The
 # model moved, the gateway moved, and open-work §3.4 already records that the `run_query` tool
 # reply changed under an unchanged `prompt_set_hash` on 2026-08-20 — three reasons no pairing
-# with the arms above is sound, any one of which would be enough.
+# with the configs above is sound, any one of which would be enough.
 #
-# **It is also the first arm that can ever reach `knobs_comparable`.** All seven `proxy_*`
+# **It is also the first config that can ever reach `settings_comparable`.** All seven `proxy_*`
 # artifacts are missing `the retired budget`, `the retired threshold`, `semantic_scale_ceiling` and
-# `sqlglot_version`, so the gate returns `cannot_evaluate` at the absence branch and never
-# reaches its judgement (open-work §3.13). `session._resolved_knobs` omits no key now. The pair
-# this arm makes possible is with the arm *after* it, not with anything already on disk.
+# `sqlglot_version`, so the check returns `cannot_evaluate` at the absence branch and never
+# reaches its judgement (open-work §3.13). `session._resolved_settings` omits no key now. The pair
+# this config makes possible is with the config *after* it, not with anything already on disk.
 #
 # `corpus_content_hash` is the tip's, and the tip is `86ed1db`'s content plus two files.
 # `30872d3b..74ff80c4` adds `LICENSE` and `README.md` at the corpus root and touches no asset;
@@ -184,16 +184,16 @@ question_subset = "1351:423a3f4b65fb"
 # `README.md` is corpus content when no manifest is given), so the digest moved and the content
 # did not. Measured 2026-09-20 with the manifest supplied, which restricts the digest to the 57
 # schema subtrees and `_shared`: **both commits hash `5a556b3c7936ddc3e6e9e1a902f38adc745a62ce`
-# `9fac0cd44bb49d14b05f6c42`**, identical. So an arm measured here is on the same corpus as v4
+# `9fac0cd44bb49d14b05f6c42`**, identical. So a config measured here is on the same corpus as v4
 # in every sense except the one this field can express, and nobody has to take that on trust.
 #
-# The alternative — checking the corpus out at `30872d3b` so the digest matches the arms above —
+# The alternative — checking the corpus out at `30872d3b` so the digest matches the configs above —
 # was rejected: it pins the loop to a detached head to make one string compare equal, and the
 # thing that would actually make these digests stable across corpus-repo housekeeping is
-# passing the manifest, which is a change to what `corpus_content_hash` means for every arm and
+# passing the manifest, which is a change to what `corpus_content_hash` means for every config and
 # is not made on the way to a run.
-[arm.luna_v4_embed]
-description = "ANALYST v4 on gpt-6-luna/openai, xhigh, semantic channel on. The first arm on this engine."
+[config.luna_v4_embed]
+description = "ANALYST v4 on gpt-6-luna/openai, xhigh, semantic channel on. The first config on this engine."
 treatment = []
 corpus = "74ff80c4"
 corpus_content_hash = "6e5c7b4be83d56828bab66183eec03bbdcf486d7454d34acd066530010ebed85"
@@ -201,13 +201,13 @@ dataset = "dacf037"
 question_subset = "1351:423a3f4b65fb"
 # `dacf037` and not `22fe2a6`: the ref moved and the question set did not. The only commit
 # between them edits `docs/hf-dataset-card.md`, so `question_subset` is byte-identical to the
-# three arms above and reconciles against the same value. Verified 2026-09-20 by recomputing
+# three configs above and reconciles against the same value. Verified 2026-09-20 by recomputing
 # `eval/provenance.py::scope_identity` over the working tree: `1351:423a3f4b65fb`.
 notes = """\
-Runs with --embed. A lexical arm cannot pass the facet_channels gate: expected_channel_state \
-declares `ran` for every facet's semantic channel with no reference to whether a deployment \
-has an embedder, so a lexical run reports five `unconfigured` anomalies and the gate fails. \
-Measured 2026-09-20 on a 3-row smoke each way -- lexical: 2 gates fail; --embed: ALL GATES \
-PASS. docs/measurement.md calls the lexical arm "the reproducible baseline", which is true of \
+Runs with --embed. A lexical config cannot pass the facet_channels check: expected_channel_state \
+declares `ran` for every channel's semantic channel with no reference to whether a deployment \
+has an embedder, so a lexical run reports five `unconfigured` anomalies and the check fails. \
+Measured 2026-09-20 on a 3-row smoke each way -- lexical: 2 checks fail; --embed: ALL CHECKS \
+PASS. docs/measurement.md calls the lexical config "the reproducible baseline", which is true of \
 reproducibility and not of quotability.\
 """

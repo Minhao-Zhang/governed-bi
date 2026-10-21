@@ -1,7 +1,7 @@
 """A corpus cannot widen the licence set without limit by adding reference edges.
 
 ``resolve_node`` takes the reference closure of the retrieval hits and puts **every table in
-it into ``licensed``** — which is what the TABLES layer accepts — and every asset in it into
+it into ``retrieved_tables``** — which is what the TABLES layer accepts — and every asset in it into
 ``pulled_in``, which is what the prompt renders. The closure was unbounded, so both sets grew
 with the corpus's own shape: one ``references`` edge widens what SQL the guard will approve,
 with no access-policy change and nothing to review it against.
@@ -32,7 +32,7 @@ from typing import Any
 
 import pytest
 
-from governed_bi.register.knobs import knob_default
+from governed_bi.registry.settings import setting_default
 from governed_bi.retrieve.structure import CorpusStructure
 from governed_bi.serve.nodes.route_retrieve import resolve_node
 
@@ -59,7 +59,7 @@ def _state(hub: str = "s.hub", **extra: Any) -> dict[str, Any]:
             "pulled_in": {},
             "attributions": {},
         },
-        "licensed": [hub],
+        "retrieved_tables": [hub],
         **extra,
     }
 
@@ -77,7 +77,7 @@ def test_a_closure_within_the_bound_licenses_everything_it_reaches() -> None:
     update = _run(_fan_out(50), _state())
 
     assert update.get("path_kind") != "decline", update
-    assert len(update["licensed"]) == 51, "the closure did not reach the tables it points at"
+    assert len(update["retrieved_tables"]) == 51, "the closure did not reach the tables it points at"
     assert len(update["retrieved"]["pulled_in"]) == 50
 
 
@@ -85,26 +85,26 @@ def test_a_closure_past_the_bound_declines_rather_than_truncating() -> None:
     """The headline. Over the bound is a refusal with a name, not a shorter licence set.
 
     Truncating is the tempting fix and is the worse one: a silently cut closure drops a table
-    from ``licensed``, and the TABLES layer then refuses the statement
-    ``r_table_not_licensed`` — a retrieval-budget outcome recorded as a governance verdict.
+    from ``retrieved_tables``, and the TABLES layer then refuses the statement
+    ``r_table_not_retrieved`` — a retrieval-budget outcome recorded as a governance result.
     """
-    cap = knob_default("max_resolve_additions")
+    cap = setting_default("max_resolve_additions")
     update = _run(_fan_out(cap + 1), _state())
 
     assert update["path_kind"] == "decline"
     assert update["terminal_reason"] == "over_resolve_bounds"
-    assert "licensed" not in update, (
+    assert "retrieved_tables" not in update, (
         "a declining turn still widened the licence set, which is the thing the bound exists "
         "to stop"
     )
     assert update["crossings"] == []
 
 
-def test_the_bound_is_a_knob_and_not_a_constant() -> None:
-    """Read through ``int_knob``, so a deployment can move it and an arm records it.
+def test_the_bound_is_a_setting_and_not_a_constant() -> None:
+    """Read through ``int_setting``, so a deployment can move it and a config records it.
 
     ``route_retrieve.py`` states the rule: "No local defaults … a ``state.get(name,
-    <constant>)`` here is a knob nothing can set."
+    <constant>)`` here is a setting nothing can set."
     """
     structure = _fan_out(10)
 
@@ -120,7 +120,7 @@ def test_the_terminal_reason_is_in_the_declared_vocabulary() -> None:
     ``REFUSED_BY_TO_STAGE`` is the inventory ``classify_outcome`` reads; a value missing from
     it is a turn that ends somewhere the funnel cannot name.
     """
-    from governed_bi.register.stages import REFUSED_BY_TO_STAGE, Stage
+    from governed_bi.registry.stages import REFUSED_BY_TO_STAGE, Stage
 
     assert REFUSED_BY_TO_STAGE["over_resolve_bounds"] is Stage.connect, (
         "resolve has no stage of its own; its decline belongs where the closure would have "

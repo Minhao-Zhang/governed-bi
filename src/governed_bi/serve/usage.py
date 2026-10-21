@@ -1,17 +1,17 @@
 """Token rows for every model call the turn makes — one builder, used by every caller.
 
-``usage`` used to be written by ``agent_core`` alone, so the guard's BI-scope gate and the four
-facet query rewriters spent tokens no record mentioned — four, not five: there are five facet
-*nodes* and ``facet_schema`` is the one that calls no model. On an answered turn those five hid
+``usage`` used to be written by ``agent_core`` alone, so the guard's BI-scope check and the four
+channel query rewriters spent tokens no record mentioned — four, not five: there are five channel
+*nodes* and ``channel_schema`` is the one that calls no model. On an answered turn those five hid
 behind the agent's several thousand; on a **refused** turn they were the only calls that happened,
 so
 the record reported ``usage = []`` for a turn that really cost 136 tokens, and every token total
 in the repository was low.
 
 Rows carry ``stage``: eight of them can produce one today (``agent_core``, ``guard``,
-``narrate``, ``reflect``, and the four facets in ``FACET_EXTRACTS`` — ``facet_schema`` does not
+``narrate``, ``reflect``, and the four channels in ``CHANNEL_EXTRACTS`` — ``channel_schema`` does not
 rewrite, so it never calls a model). The split between the agent model and the utility model is
-a comparability knob (``llm_utility_model``) whose justification is cost and latency, which
+a comparability setting (``llm_utility_model``) whose justification is cost and latency, which
 cannot be argued from a single total.
 
 A helper, not a node — five call sites in five modules build the same row, so a provider that
@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from governed_bi.register.quantity import Measured
+from governed_bi.registry.quantity import Measured
 from governed_bi.serve.runtime import model_id
 
 __all__ = ["NO_TOKEN_USAGE", "reported_tokens", "usage_row"]

@@ -5,7 +5,7 @@ saver that *fails*. The sync fallback is different in kind. ``AsyncSqliteSaver.d
 bridge — ``run_coroutine_threadsafe(self.adelete_thread(...), self.loop).result()`` — and this
 harness's loop is not running between calls, so the call never resolves **and never raises**
 (probed at ``langgraph-checkpoint-sqlite`` 3.1.1: still blocked after 5 s). ``except Exception``
-cannot catch that, so if a future release renames or drops ``adelete_thread`` an arm blocks on
+cannot catch that, so if a future release renames or drops ``adelete_thread`` a config blocks on
 question one with no rows, no traceback and no partial output.
 
 The old comment in ``_evict`` said that method raised ``NotImplementedError``. ``aio.py`` contains
@@ -46,7 +46,7 @@ def _evict_bounded(compiled: Any, thread_id: str, *, seconds: float = 5.0) -> Ba
     worker.join(seconds)
     assert "result" in box, (
         f"`_evict` neither returned nor raised within {seconds} s, so it is blocking on a "
-        "loop-bound `delete_thread` again — an arm would hang on question one with no output"
+        "loop-bound `delete_thread` again — a config would hang on question one with no output"
     )
     return box["result"]
 
@@ -91,7 +91,7 @@ def test_a_missing_adelete_thread_raises_instead_of_blocking() -> None:
 
     assert isinstance(raised, harness.EvictionWouldHang), (
         f"expected EvictionWouldHang, got {raised!r} — a loop-bound `delete_thread` must not be "
-        "called, and returning quietly would leak the arm's whole database instead"
+        "called, and returning quietly would leak the config's whole database instead"
     )
     assert "adelete_thread=False" in str(raised), (
         "the message must name which half was unreachable, or the failure is unactionable"

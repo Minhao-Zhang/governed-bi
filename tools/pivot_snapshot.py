@@ -3,21 +3,21 @@
 One JSON Lines file, sorted by (kind, id) with sorted keys, that two runs at one commit
 reproduce byte for byte. Rows:
 
-* ``question``  one per question: routed schemas, the schema ranking, licensed tables, the join
+* ``question``  one per question: routed schemas, the schema ranking, retrieved tables, the join
   plan (joins and Steiner tables ``connect`` pulled in, and the schema crossings), and the
   SHA-256 of the rendered context.
 * ``statement`` one per ``[[case]]`` and ``[[guard_case]]`` in ``govern/adversarial.toml``:
-  the verdict, layer and rule id from ``check()`` and ``prepare()``, and whether SQL was produced.
+  the result, layer and rule id from ``check()`` and ``prepare()``, and whether SQL was produced.
 * ``probe``     one per ``[[probe]]``, run through ``eval.disclosure_probes.run_disclosure_probes``.
 * ``meta``      one row naming the corpus digest, the embedder, the sqlglot version and the seed.
 
 What it runs: a session over ``--corpus-dir`` with the deterministic embedder built in code,
 ``agent_model=None`` and the guard rules off, through the compiled graph's stub answer path, as
-``eval.datalake.routing_recall`` does. **Facet rewriting is off**: no utility model is configured,
-so every facet searches the raw question.
+``eval.datalake.routing_recall`` does. **Retrieval-channel rewriting is off**: no utility model is configured,
+so every channel searches the raw question.
 
 What it proves: routing, retrieval, join planning, context rendering and the SQL checks did not
-move between two commits. What it cannot prove: anything about the production embedder, the facet
+move between two commits. What it cannot prove: anything about the production embedder, the channel
 rewriters, the prompts, the agent loop, abstention, clarification or the UI. Those rest on the
 test suite and on the baseline run.
 
@@ -63,8 +63,8 @@ _TRACING_OFF = {
 }
 
 
-def _layer(verdict: Mapping[str, Any]) -> str | None:
-    layer = verdict["failed_layer"]
+def _layer(result: Mapping[str, Any]) -> str | None:
+    layer = result["failed_layer"]
     return None if layer is None else str(layer.name)
 
 
@@ -87,7 +87,7 @@ def question_row(question: Mapping[str, Any], out: Mapping[str, Any], assets: Ma
             [str(name), round(float(score), _SCORE_PLACES)]
             for name, score in retrieved.get("schema_ranking") or ()
         ],
-        "licensed": sorted(str(t) for t in out.get("licensed") or ()),
+        "retrieved_tables": sorted(str(t) for t in out.get("retrieved_tables") or ()),
         "join_plan": {
             "hit_joins": sorted(str(j) for j in (retrieved.get("by_type") or {}).get("join") or ()),
             "joins": sorted([str(a), str(origin)] for a, origin in pulled_in.items() if kind_of(str(a)) == "join"),
@@ -134,7 +134,7 @@ def statement_rows() -> list[dict[str, Any]]:
     suite = load_adversarial_suite()
     rows: list[dict[str, Any]] = []
     for result in run_adversarial_suite(suite).results:
-        check, prepare = result.verdict, result.prepared.verdict
+        check, prepare = result.result, result.prepared.result
         rows.append(
             {
                 "kind": "statement",
@@ -156,8 +156,8 @@ def statement_rows() -> list[dict[str, Any]]:
                 "kind": "statement",
                 "id": f"guard_case:{guard_result.case.id}",
                 "case_kind": guard_result.case.kind,
-                "outcome": guard_result.verdict["outcome"],
-                "rule": guard_result.verdict["rule_id"],
+                "outcome": guard_result.result["outcome"],
+                "rule": guard_result.result["rule_id"],
                 "status": guard_result.status,
             }
         )
@@ -189,7 +189,7 @@ def meta_row(session: Any, embedder: Any, *, hash_seed: int, n_questions: int) -
         "id": "snapshot",
         "corpus_content_hash": session.corpus_content_hash,
         "embedder": embedder.model,
-        "facet_rewriting": "off",
+        "channel_rewriting": "off",
         "hash_seed": hash_seed,
         "questions": n_questions,
         "sqlglot_version": sqlglot_version(),

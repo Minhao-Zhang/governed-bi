@@ -7,7 +7,7 @@ siblings. The artifact reading and the drift statistic are asserted there; what 
 once it reaches the graph is asserted here.
 
 If this file broke, ``--replay-routing`` would be accepted, printed in the run header, and
-silently ineffective — an arm labelled pinned that routed live. That is worse than not having
+silently ineffective — a config labelled pinned that routed live. That is worse than not having
 the flag, because the label is what a later reader trusts.
 """
 
@@ -31,7 +31,7 @@ from test_pass_two_and_context import (  # noqa: E402
     SCHEMA_B,
     _base_turn,
     _config,
-    _live_facets,
+    _live_channels,
 )
 
 
@@ -44,7 +44,7 @@ def _case(index: UnifiedIndex, assets: dict[str, Any]) -> tuple[dict[str, Any], 
         assets_by_id=assets,
     )
     state = _base_turn(question="customer", route_top_n=1)
-    return {**state, "facets": _live_facets(state, config), "candidate_depth": 50}, config
+    return {**state, "channels": _live_channels(state, config), "candidate_depth": 50}, config
 
 
 def test_route_honours_a_pinned_shortlist_over_its_own_ranking(
@@ -73,7 +73,7 @@ def test_route_honours_a_pinned_shortlist_over_its_own_ranking(
 def test_a_pin_naming_an_unknown_schema_is_ignored_rather_than_obeyed(
     two_schema_index: UnifiedIndex, two_schema_assets: dict[str, Any]
 ) -> None:
-    """An artifact from another corpus must not collapse the arm it is replayed into.
+    """An artifact from another corpus must not collapse the config it is replayed into.
 
     Obeying such a pin licenses nothing, and the run reads as a routing collapse caused by the
     replay rather than by anything under test — a confound introduced by the tool whose whole
@@ -109,7 +109,7 @@ def test_the_ranking_still_reaches_retrieval_under_a_pin(
     """Pass two scores against the pass-one ranking, so the pin must not replace it.
 
     Applying the pin before the ranking was computed would hand pass two a different input and
-    make the pinned arm a different system — the opposite of what pinning is for.
+    make the pinned config a different system — the opposite of what pinning is for.
     """
     state, config = _case(two_schema_index, two_schema_assets)
 

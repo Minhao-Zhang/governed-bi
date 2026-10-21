@@ -1,6 +1,6 @@
 """``tools/pivot_snapshot.py`` and ``tools/pivot_compare.py`` on a hand-made corpus.
 
-The snapshot is the instrument later milestones lean on to say "no verdict moved", so these tests
+The snapshot is the instrument later milestones lean on to say "no result moved", so these tests
 pin the two properties that make it one: it is the same bytes on every run, and it touches neither
 the network nor a model. The corpus is built here, not read from ``../BIRD-corpus``, so the test
 runs everywhere.
@@ -183,7 +183,7 @@ def test_a_question_row_names_its_routing_licensing_join_plan_and_context(rows: 
 
     assert row["schemas"], "no schema was routed"
     assert row["schema_ranking"] and len(row["schema_ranking"][0]) == 2
-    assert "sales_a.customers" in row["licensed"]
+    assert "sales_a.customers" in row["retrieved_tables"]
     assert set(row["join_plan"]) == {"hit_joins", "joins", "steiner_tables", "crossings"}
     assert len(row["context_sha256"]) == 64
 
@@ -253,7 +253,7 @@ def test_help_says_what_the_snapshot_cannot_prove() -> None:
         )
         assert done.returncode == 0
         text = " ".join(done.stdout.lower().split())
-        assert "facet rewriting is off" in text, tool
+        assert "retrieval-channel rewriting is off" in text, tool
         assert "cannot prove" in text, tool
 
 
@@ -280,21 +280,21 @@ def test_an_unlisted_difference_is_printed_and_exits_one(
     rows: list[dict[str, Any]], tmp_path: pathlib.Path, capsys: Any
 ) -> None:
     a = _write(tmp_path / "a.jsonl", rows)
-    b = _write(tmp_path / "b.jsonl", _edited(rows, "q1", licensed=["sales_a.orders"]))
+    b = _write(tmp_path / "b.jsonl", _edited(rows, "q1", retrieved_tables=["sales_a.orders"]))
 
     assert pivot_compare.main([str(a), str(b)]) == 1
     out = capsys.readouterr().out
-    assert "UNEXPECTED question q1 licensed" in out
+    assert "UNEXPECTED question q1 retrieved_tables" in out
 
 
 def test_a_listed_difference_passes_and_carries_its_reason(
     rows: list[dict[str, Any]], tmp_path: pathlib.Path, capsys: Any
 ) -> None:
     a = _write(tmp_path / "a.jsonl", rows)
-    b = _write(tmp_path / "b.jsonl", _edited(rows, "q1", licensed=["sales_a.orders"]))
+    b = _write(tmp_path / "b.jsonl", _edited(rows, "q1", retrieved_tables=["sales_a.orders"]))
     expected = tmp_path / "expected.toml"
     expected.write_text(
-        '[[expected]]\nkind = "question"\nid = "q1"\nfield = "licensed"\nreason = "the router changed"\n',
+        '[[expected]]\nkind = "question"\nid = "q1"\nfield = "retrieved_tables"\nreason = "the router changed"\n',
         encoding="utf-8",
     )
 
@@ -306,10 +306,10 @@ def test_a_listed_field_does_not_excuse_another_field_of_the_same_row(
     rows: list[dict[str, Any]], tmp_path: pathlib.Path
 ) -> None:
     a = _write(tmp_path / "a.jsonl", rows)
-    b = _write(tmp_path / "b.jsonl", _edited(rows, "q1", licensed=["x"], context_sha256="0" * 64))
+    b = _write(tmp_path / "b.jsonl", _edited(rows, "q1", retrieved_tables=["x"], context_sha256="0" * 64))
     expected = tmp_path / "expected.toml"
     expected.write_text(
-        '[[expected]]\nkind = "question"\nid = "q1"\nfield = "licensed"\nreason = "r"\n', encoding="utf-8"
+        '[[expected]]\nkind = "question"\nid = "q1"\nfield = "retrieved_tables"\nreason = "r"\n', encoding="utf-8"
     )
 
     assert pivot_compare.main([str(a), str(b), "--expected", str(expected)]) == 1
@@ -320,7 +320,7 @@ def test_an_expected_entry_without_a_reason_is_refused(
 ) -> None:
     a = _write(tmp_path / "a.jsonl", rows)
     expected = tmp_path / "expected.toml"
-    expected.write_text('[[expected]]\nkind = "question"\nid = "q1"\nfield = "licensed"\n', encoding="utf-8")
+    expected.write_text('[[expected]]\nkind = "question"\nid = "q1"\nfield = "retrieved_tables"\n', encoding="utf-8")
 
     assert pivot_compare.main([str(a), str(a), "--expected", str(expected)]) == 2
 
@@ -342,17 +342,25 @@ def test_a_row_that_disappears_is_a_difference_and_can_be_listed(
 
 
 def test_a_renamed_field_must_keep_its_value(rows: list[dict[str, Any]], tmp_path: pathlib.Path) -> None:
+    def as_old(row: dict[str, Any]) -> dict[str, Any]:
+        """The compare example still speaks the pre-rename field, whatever the tool emits."""
+        if row["kind"] != "question" or "retrieved_tables" not in row:
+            return dict(row)
+        moved = {k: v for k, v in row.items() if k != "retrieved_tables"}
+        return {**moved, "licensed": row["retrieved_tables"]}
+
     def renamed(row: dict[str, Any], value: Any = None) -> dict[str, Any]:
         if row["kind"] != "question":
             return dict(row)
         moved = {k: v for k, v in row.items() if k != "licensed"}
         return {**moved, "retrieved_tables": row["licensed"] if value is None else value}
 
+    old = [as_old(row) for row in rows]
     expected = tmp_path / "expected.toml"
     expected.write_text('[[rename]]\nkind = "question"\nfrom = "licensed"\nto = "retrieved_tables"\n', encoding="utf-8")
-    a = _write(tmp_path / "a.jsonl", rows)
-    same = _write(tmp_path / "same.jsonl", [renamed(r) for r in rows])
-    changed = _write(tmp_path / "changed.jsonl", [renamed(r, ["other"]) for r in rows])
+    a = _write(tmp_path / "a.jsonl", old)
+    same = _write(tmp_path / "same.jsonl", [renamed(r) for r in old])
+    changed = _write(tmp_path / "changed.jsonl", [renamed(r, ["other"]) for r in old])
 
     assert pivot_compare.main([str(a), str(same), "--expected", str(expected)]) == 0
     assert pivot_compare.main([str(a), str(changed), "--expected", str(expected)]) == 1

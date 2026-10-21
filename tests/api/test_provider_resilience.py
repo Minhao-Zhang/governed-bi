@@ -5,14 +5,14 @@ under a comment calling them *"the entire defence"* against provider rate limits
 deleted the reader for that file, so nothing had loaded them since the rewrite. Measured on the
 real objects: `ChatOpenAI.max_retries` was `None`, the underlying `openai` client fell back to
 its own default of **2**, and there was no timeout at all. The file itself is gone; retries and
-timeouts are knobs now.
+timeouts are settings now.
 
 Two things are asserted here and they fail differently, which is why both exist:
 
 * the values **reach the SDK client**, because a setting that stops being passed leaves an
   object that still works and quietly runs on someone else's defaults — the state this replaces;
-* the values are **recorded as knobs**, because retries move `crash_rate` and `crash_rate` is
-  what the quotability gates read. Two runs differing only in retries comparing as one is the
+* the values are **recorded as settings**, because retries move `crash_rate` and `crash_rate` is
+  what the quotability checks read. Two runs differing only in retries comparing as one is the
   `llm_reasoning_effort` failure exactly.
 """
 
@@ -20,33 +20,33 @@ from __future__ import annotations
 
 import pytest
 
-from governed_bi.register.knobs import KNOB_REGISTER, knob_default
+from governed_bi.registry.settings import SETTING_REGISTER, setting_default
 
-RESILIENCE_KNOBS = ("llm_max_retries", "llm_timeout_s", "llm_utility_timeout_s")
+RESILIENCE_SETTINGS = ("llm_max_retries", "llm_timeout_s", "llm_utility_timeout_s")
 
 
-def test_the_three_knobs_are_declared_comparability() -> None:
+def test_the_three_settings_are_declared_comparability() -> None:
     """Not `Role.scope`, not undeclared config.
 
     A retry budget that is not comparability is a run able to change its own crash rate and
-    still compare as unchanged — and `crash_rate` is a quotability gate's input.
+    still compare as unchanged — and `crash_rate` is a quotability check's input.
     """
-    by_name = {k.name: k for k in KNOB_REGISTER}
-    for name in RESILIENCE_KNOBS:
-        assert name in by_name, f"{name} must be declared in register/knobs.py"
+    by_name = {k.name: k for k in SETTING_REGISTER}
+    for name in RESILIENCE_SETTINGS:
+        assert name in by_name, f"{name} must be declared in registry/settings.py"
         assert by_name[name].env_var, f"{name} must name the variable that overrides it"
 
 
 def test_the_worst_case_for_one_call_is_bounded() -> None:
     """`timeout x (retries + 1)` is the number that matters, and it is a *pair* decision.
 
-    The two knobs are configured apart because they answer different questions, but choosing
+    The two settings are configured apart because they answer different questions, but choosing
     either alone is how the SDK's 600s default at three retries becomes a 40-minute hang. This
     fails if a future edit raises one without looking at the other.
     """
-    attempts = int(knob_default("llm_max_retries")) + 1
-    agent_ceiling = float(knob_default("llm_timeout_s")) * attempts
-    utility_ceiling = float(knob_default("llm_utility_timeout_s")) * attempts
+    attempts = int(setting_default("llm_max_retries")) + 1
+    agent_ceiling = float(setting_default("llm_timeout_s")) * attempts
+    utility_ceiling = float(setting_default("llm_utility_timeout_s")) * attempts
 
     assert agent_ceiling <= 30 * 60, f"one agent call could hang {agent_ceiling / 60:.0f} min"
     # Tighter, and deliberately so: these calls are on the critical path *before anything
@@ -54,23 +54,23 @@ def test_the_worst_case_for_one_call_is_bounded() -> None:
     assert utility_ceiling <= 5 * 60, f"one utility call could stall first paint {utility_ceiling}s"
     assert utility_ceiling < agent_ceiling, (
         "the split exists so the small calls fail faster than the agent; equal ceilings mean "
-        "the second knob is buying nothing"
+        "the second setting is buying nothing"
     )
 
 
 def test_node_timeouts_cover_one_call_provider_retry_budget() -> None:
     """Rail/agent hang-stops must not fire inside a single call's SDK retry budget.
 
-    Same pairing as the knob docstrings: ``rail_node_timeout_s`` vs utility×(retries+1),
+    Same pairing as the setting docstrings: ``rail_node_timeout_s`` vs utility×(retries+1),
     ``agent_node_timeout_s`` vs agent×(retries+1). Shrinking either below its ceiling makes
     ``TimeoutError`` and a provider retry disagree about the same hung call.
     """
-    attempts = int(knob_default("llm_max_retries")) + 1
-    assert float(knob_default("rail_node_timeout_s")) >= (
-        float(knob_default("llm_utility_timeout_s")) * attempts
+    attempts = int(setting_default("llm_max_retries")) + 1
+    assert float(setting_default("rail_node_timeout_s")) >= (
+        float(setting_default("llm_utility_timeout_s")) * attempts
     )
-    assert float(knob_default("agent_node_timeout_s")) >= (
-        float(knob_default("llm_timeout_s")) * attempts
+    assert float(setting_default("agent_node_timeout_s")) >= (
+        float(setting_default("llm_timeout_s")) * attempts
     )
 
 
@@ -79,11 +79,11 @@ def test_the_settings_reach_the_openai_client_on_every_surface(monkeypatch) -> N
 
     "Global" is a claim about coverage, and the embedder is the surface that makes it true or
     false: it builds a raw `OpenAI()` in `model/openai_embedder.py`, which has its own default
-    of 2, and it runs on the same critical path — `accept` embeds the question before any facet.
+    of 2, and it runs on the same critical path — `accept` embeds the question before any channel.
     """
     pytest.importorskip("langchain_openai")
     from governed_bi.model.openai_embedder import OpenAIEmbedder
-    from governed_bi.register.knobs import reset_settings, resolve_settings
+    from governed_bi.registry.settings import reset_settings, resolve_settings
 
     monkeypatch.setenv("GOVERNED_BI_LLM_MAX_RETRIES", "5")
     monkeypatch.setenv("GOVERNED_BI_LLM_TIMEOUT_S", "111")

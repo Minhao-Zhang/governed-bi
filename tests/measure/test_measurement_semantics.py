@@ -2,10 +2,10 @@
 
 **Why these are not written by whoever implements the layer.** The work is being
 parcelled out to agents, and an agent writes tests that pass against the
-implementation it just produced. v1 is the evidence: its gold-gate test re-derived
-``share > THRESHOLD`` itself, so deleting the gate, flipping the comparison, and
+implementation it just produced. v1 is the evidence: its gold-check test re-derived
+``share > THRESHOLD`` itself, so deleting the check, flipping the comparison, and
 reversing the denominator **all passed** — three ways to break a security-relevant
-gate with a green suite. So the acceptance criterion is authored separately from the
+check with a green suite. So the acceptance criterion is authored separately from the
 implementation, and it asserts *effects* against hand-computed literals.
 
 The authoring rules from ``tests/conformance/test_register_closure.py`` apply here
@@ -15,7 +15,7 @@ agrees with itself" and would then pass against an empty table.
 
 The property under test throughout is L-R1 — **absent is not zero** — in the four
 places it has to hold at once: the value type, the population, the statistics, and
-the gates. It recurred 25+ times in v1, which is more than any other defect, and
+the checks. It recurred 25+ times in v1, which is more than any other defect, and
 every recurrence was locally reasonable.
 """
 
@@ -25,10 +25,10 @@ import math
 
 import pytest
 
-from governed_bi.measure import gates, stats
+from governed_bi.measure import checks, stats
 from governed_bi.measure.population import Population
-from governed_bi.register.quantity import Measured, NotMeasured, Relation, State
-from governed_bi.register.record import GATE_CONDITIONS
+from governed_bi.registry.quantity import Measured, NotMeasured, Relation, State
+from governed_bi.registry.record import CHECK_CONDITIONS
 
 # ── the value type: absence must be unusable as a number ──────────────────────
 
@@ -37,7 +37,7 @@ def test_a_measured_has_no_truth_value() -> None:
     """``if rate:`` is False for a measured 0.0 and False for no measurement.
 
     Those are opposite conclusions, so the expression must not compile to a silent
-    choice between them. Same reasoning as ``knobs.UNSET``.
+    choice between them. Same reasoning as ``settings.UNSET``.
     """
     with pytest.raises(TypeError):
         bool(Measured.of(0.0))
@@ -84,7 +84,7 @@ def test_an_absence_must_carry_a_reason() -> None:
 def test_a_rate_over_zero_is_not_zero() -> None:
     """The denominator rule, and the reason ADR 0005 §4.1 requires the count.
 
-    v1's quotability gate read a degradation rate of "0 over 0 turns" as a pass on
+    v1's quotability check read a degradation rate of "0 over 0 turns" as a pass on
     runs where the fan-out never ran.
     """
     assert not Measured.rate(0, 0, what="probe").is_measured
@@ -125,7 +125,7 @@ def test_combine_is_unmeasured_if_either_side_is() -> None:
 
 
 def test_duplicate_units_are_refused_at_construction() -> None:
-    """v1 merged 1025 rows and 326 rows into one arm score, double-weighting."""
+    """v1 merged 1025 rows and 326 rows into one config score, double-weighting."""
     with pytest.raises(ValueError, match="duplicated"):
         Population.of("a", [{"question_id": "1"}, {"question_id": "1"}])
 
@@ -138,8 +138,8 @@ def test_a_row_with_no_unit_id_is_refused() -> None:
 def test_an_absent_outcome_is_not_a_failed_outcome() -> None:
     """The single most-repeated v1 defect, at the point it entered every rate.
 
-    An arm whose instrumentation dropped ``correct`` on some rows has an *unknown*
-    score. v1 reported it as a low one, i.e. as a bad arm rather than a broken one.
+    An config whose instrumentation dropped ``correct`` on some rows has an *unknown*
+    score. v1 reported it as a low one, i.e. as a bad config rather than a broken one.
     """
     p = Population.of("a", [{"question_id": "1", "correct": True}, {"question_id": "2"}])
     assert not p.count("correct").is_measured
@@ -179,9 +179,9 @@ def test_mcnemar_refuses_populations_filtered_differently() -> None:
 def test_mcnemar_refuses_to_silently_intersect_unit_sets() -> None:
     """Intersecting is almost always wanted, which is why it must be explicit.
 
-    An arm that crashed on 300 questions and one that did not are not comparable on
+    An config that crashed on 300 questions and one that did not are not comparable on
     the survivors without saying so — the 300 are not missing at random. v1 compared
-    1351 against 1025 and reported the delta as though both arms answered everything.
+    1351 against 1025 and reported the delta as though both configs answered everything.
     """
     a = Population.of("a", [{"question_id": str(i), "ok": True} for i in range(5)])
     b = Population.of("b", [{"question_id": str(i), "ok": True} for i in range(4)])
@@ -197,7 +197,7 @@ def test_mcnemar_p_value_against_a_hand_computed_literal() -> None:
     ``2 * (C(10,0) + C(10,1) + C(10,2)) / 2**10 = 2 * 56/1024``.
 
     Written as a literal on purpose. Re-deriving it from ``math.comb`` here would be
-    the test re-implementing the code, which is how v1's gate test passed against a
+    the test re-implementing the code, which is how v1's check test passed against a
     reversed denominator.
     """
     rows_a, rows_b = [], []
@@ -260,50 +260,50 @@ def test_rule_of_three_is_a_bound_and_never_zero() -> None:
     assert not stats.rule_of_three(0).is_measured
 
 
-# ── the gates: a check that did not happen is not a check that passed ─────────
+# ── the checks: a check that did not happen is not a check that passed ─────────
 
 
-def test_every_declared_gate_has_an_implementation() -> None:
-    """Cross-module closure. v1 shipped eight declared-but-dead gates.
+def test_every_declared_check_has_an_implementation() -> None:
+    """Cross-module closure. v1 shipped eight declared-but-dead checks.
 
     Legitimate as a comparison of two modules' constants — unlike asserting one
     module against its own, which passes for an empty table.
     """
-    assert set(gates.GATE_IMPLEMENTATIONS) == set(GATE_CONDITIONS)
+    assert set(checks.CHECK_IMPLEMENTATIONS) == set(CHECK_CONDITIONS)
 
 
-def test_an_uninstrumented_arm_is_not_quotable() -> None:
+def test_an_uninstrumented_config_is_not_quotable() -> None:
     """The v1 inversion, reversed.
 
-    Under v1's semantics a run with no health fields recorded passed every gate,
-    because an absent counter could not exceed zero. Here every gate must report
-    ``cannot_evaluate`` and the arm must not be quotable.
+    Under v1's semantics a run with no health fields recorded passed every check,
+    because an absent counter could not exceed zero. Here every check must report
+    ``cannot_evaluate`` and the config must not be quotable.
     """
-    arm = Population.of("bare", [{"question_id": str(i), "correct": True} for i in range(50)])
-    ok, results = gates.quotable(arm)
+    config = Population.of("bare", [{"question_id": str(i), "correct": True} for i in range(50)])
+    ok, results = checks.quotable(config)
     assert not ok
-    assert {r.verdict for r in results} == {gates.Verdict.cannot_evaluate}
-    assert len(results) == len(GATE_CONDITIONS)
+    assert {r.result for r in results} == {checks.Result.cannot_evaluate}
+    assert len(results) == len(CHECK_CONDITIONS)
 
 
-def test_a_crash_fails_the_outcome_gate() -> None:
-    """A crash counted as a refusal contaminated every v1 arm-to-arm delta."""
+def test_a_crash_fails_the_outcome_check() -> None:
+    """A crash counted as a refusal contaminated every v1 config-to-config delta."""
     rows = [{"question_id": str(i), "crashed": i == 3} for i in range(20)]
-    result = gates.GATE_IMPLEMENTATIONS["outcome"](Population.of("arm", rows))
-    assert result.verdict is gates.Verdict.failed
+    result = checks.CHECK_IMPLEMENTATIONS["outcome"](Population.of("config", rows))
+    assert result.result is checks.Result.failed
     assert result.observed.value == pytest.approx(1 / 20)
 
 
-def test_a_fully_instrumented_clean_arm_passes_the_zero_count_gates() -> None:
+def test_a_fully_instrumented_clean_config_passes_the_zero_count_checks() -> None:
     """The complement. Without it, "fails everything" would also satisfy the test
-    above, and a gate that always fails gets switched off."""
+    above, and a check that always fails gets switched off."""
     rows = [{"question_id": str(i), "crashed": False} for i in range(20)]
-    result = gates.GATE_IMPLEMENTATIONS["outcome"](Population.of("arm", rows))
-    assert result.verdict is gates.Verdict.passed
+    result = checks.CHECK_IMPLEMENTATIONS["outcome"](Population.of("config", rows))
+    assert result.result is checks.Result.passed
     assert result.observed.value == 0.0
 
 
-def test_zero_fanout_turns_cannot_evaluate_the_degradation_gate() -> None:
+def test_zero_fanout_turns_cannot_evaluate_the_degradation_check() -> None:
     """The precise defect that moved eight fields to stage-conditional.
 
     A guard-blocked turn never runs the fan-out, so ``facet_channels`` is empty. Under
@@ -312,33 +312,33 @@ def test_zero_fanout_turns_cannot_evaluate_the_degradation_gate() -> None:
     the field added to stop absence reading as agreement.
     """
     refused = [{"question_id": str(i), "facet_channels": None} for i in range(30)]
-    result = gates.GATE_IMPLEMENTATIONS["facet_channels"](Population.of("refusals", refused))
-    assert result.verdict is gates.Verdict.cannot_evaluate
+    result = checks.CHECK_IMPLEMENTATIONS["facet_channels"](Population.of("refusals", refused))
+    assert result.result is checks.Result.cannot_evaluate
     assert "0 over 0" in result.detail
 
 
-def test_the_degradation_gate_runs_on_the_turns_that_did_fan_out() -> None:
+def test_the_degradation_check_runs_on_the_turns_that_did_fan_out() -> None:
     rows = [
         {"question_id": str(i), "facet_channels": {"schema": "ran"}, "facet_degraded": i == 2}
         for i in range(10)
     ] + [{"question_id": f"r{i}", "facet_channels": None} for i in range(5)]
-    result = gates.GATE_IMPLEMENTATIONS["facet_channels"](Population.of("mixed", rows))
-    assert result.verdict is gates.Verdict.failed
+    result = checks.CHECK_IMPLEMENTATIONS["facet_channels"](Population.of("mixed", rows))
+    assert result.result is checks.Result.failed
     assert "n=10" in result.population, "the denominator must exclude the refusals"
 
 
-def test_a_fully_instrumented_arm_can_actually_be_quotable() -> None:
+def test_a_fully_instrumented_config_can_actually_be_quotable() -> None:
     """``quotable()`` could never return ``True``, on any input.
 
-    ``_context_hash_gate`` returned ``cannot_evaluate`` on **both** its branches — including
+    ``_context_hash_check`` returned ``cannot_evaluate`` on **both** its branches — including
     when coverage was complete — and ``quotable`` treats ``cannot_evaluate`` as blocking. So the
-    single-arm API was a permanent refusal. That is not a strict gate; it is a function no
+    single-config API was a permanent refusal. That is not a strict check; it is a function no
     caller can use.
 
-    The >= 95% cross-arm distinctness condition this gate used to defer to was retired by audit
+    The >= 95% cross-config distinctness condition this check used to defer to was retired by audit
     D9 — retrieval is nondeterministic, so it passed at 0.9993 on a pair differing only by a
-    random seed — and ``eval/report.knobs_comparable`` judges the treatment from the declared
-    knobs instead. What is decided here is only the half one arm can answer: did every turn
+    random seed — and ``eval/report.settings_comparable`` judges the treatment from the declared
+    settings instead. What is decided here is only the half one config can answer: did every turn
     carry a ``context_hash`` at all.
     """
     rows = [
@@ -346,56 +346,56 @@ def test_a_fully_instrumented_arm_can_actually_be_quotable() -> None:
             "question_id": str(i),
             "correct": i % 2 == 0,
             "outcome": "answered",
-            # The `outcome` gate reads a `crashed` boolean, not the outcome string, and refuses
+            # The `outcome` check reads a `crashed` boolean, not the outcome string, and refuses
             # to evaluate when it is absent on any row -- correctly, since an absent counter is
-            # not a zero. Present here so the *other* gates are what this test is about.
+            # not a zero. Present here so the *other* checks are what this test is about.
             "crashed": False,
             "context_hash": f"hash-{i}",
             "guardrail_error": False,
             "re_served": False,
             "negative_failed_open": False,
             "facet_degraded": False,
-            "facet_channels": {"facet_schema": {"lexical": "ran"}},
-            # Added 2026-08-06 with the `knobs_resolved` gate (audit §10): `knobs.Role` derived
-            # three key sets and none had a reader in `src/`, so a knob's role decided nothing.
-            # A row with no resolved knobs cannot be shown to have run under this arm's
+            "facet_channels": {"channel_schema": {"lexical": "ran"}},
+            # Added 2026-08-06 with the `knobs_resolved` check (audit §10): `settings.Role` derived
+            # three key sets and none had a reader in `src/`, so a setting's role decided nothing.
+            # A row with no resolved settings cannot be shown to have run under this config's
             # configuration -- and `Absence.never` already reports it as missing, so this
             # fixture was not "fully instrumented" before.
             "knobs_resolved": {"route_top_n": 3, "candidate_depth": 50},
-            # Added 2026-08-10 with the `corpus_content_hash` gate (audit D7), for the same
+            # Added 2026-08-10 with the `corpus_content_hash` check (audit D7), for the same
             # reason as the line above and with the same consequence for this fixture's name:
-            # the register has always said "the corpus IS the treatment" and no gate read the
-            # field, so an arm naming no corpus -- which is the state of both runs of the
-            # designated null replicate, 1351/1351 -- passed every gate. One value across all
-            # rows, because one arm is one corpus; no gate does the cross-arm half at all --
-            # `comparison_quotable` compares `context_hash` and the comparability knobs, and
+            # the register has always said "the corpus IS the treatment" and no check read the
+            # field, so a config naming no corpus -- which is the state of both runs of the
+            # designated null replicate, 1351/1351 -- passed every check. One value across all
+            # rows, because one config is one corpus; no check does the cross-config half at all --
+            # `comparison_quotable` compares `context_hash` and the comparability settings, and
             # `corpus_content_hash` is neither.
             "corpus_content_hash": "corpus-30872d3",
         }
         for i in range(50)
     ]
-    ok, results = gates.quotable(Population.of("instrumented", rows))
-    assert ok, {r.field: (r.verdict.value, r.detail) for r in results}
-    assert {r.verdict for r in results} == {gates.Verdict.passed}
+    ok, results = checks.quotable(Population.of("instrumented", rows))
+    assert ok, {r.field: (r.result.value, r.detail) for r in results}
+    assert {r.result for r in results} == {checks.Result.passed}
 
 
-def test_one_arm_two_configurations_is_not_one_arm() -> None:
-    """The gate that gives ``knobs.Role`` a production consumer (audit §10).
+def test_one_config_two_configurations_is_not_one_config() -> None:
+    """The check that gives ``settings.Role`` a production consumer (audit §10).
 
-    ``Role`` declared three values and derived ``knob_names``,
-    ``knob_names`` and ``knob_names`` from them — and **none had a reader in**
-    ``src/``: no config hash existed and no resume-drift check existed, so a knob's declared role
+    ``Role`` declared three values and derived ``setting_names``,
+    ``setting_names`` and ``setting_names`` from them — and **none had a reader in**
+    ``src/``: no config hash existed and no resume-drift check existed, so a setting's declared role
     decided nothing anywhere. A role that decides nothing is a comment.
 
-    ``knob_names()`` is the role's own definition of "fatal within one run directory",
-    and an arm *is* one run directory. So a row that resolved ``route_top_n`` to 3 beside one
-    that resolved it to 5 is not one arm, and every rate over the pair is a rate over a
+    ``setting_names()`` is the role's own definition of "fatal within one run directory",
+    and a config *is* one run directory. So a row that resolved ``route_top_n`` to 3 beside one
+    that resolved it to 5 is not one config, and every rate over the pair is a rate over a
     population that does not exist — L-R3's defect with the filter moved into the configuration.
 
-    The failure names the differing knobs rather than only the count, because "2 distinct
+    The failure names the differing settings rather than only the count, because "2 distinct
     configurations" sends a reader to the code and ``route_top_n`` sends them to the driver.
     """
-    from governed_bi.register.knobs import knob_names
+    from governed_bi.registry.settings import setting_names
 
     def row(i: int, top_n: int) -> dict:
         return {
@@ -408,36 +408,36 @@ def test_one_arm_two_configurations_is_not_one_arm() -> None:
             "re_served": False,
             "negative_failed_open": False,
             "facet_degraded": False,
-            "facet_channels": {"facet_schema": {"lexical": "ran"}},
+            "facet_channels": {"channel_schema": {"lexical": "ran"}},
             "knobs_resolved": {"route_top_n": top_n, "candidate_depth": 50},
         }
 
-    assert "route_top_n" in knob_names(), (
-        "the knob this fixture drifts is no longer a resume-drift key, so the test proves nothing"
+    assert "route_top_n" in setting_names(), (
+        "the setting this fixture drifts is no longer a resume-drift key, so the test proves nothing"
     )
 
-    drifted = gates.GATE_IMPLEMENTATIONS["knobs_resolved"](
+    drifted = checks.CHECK_IMPLEMENTATIONS["knobs_resolved"](
         Population.of("drifted", [row(i, 3 if i < 25 else 5) for i in range(50)])
     )
-    assert drifted.verdict is gates.Verdict.failed
+    assert drifted.result is checks.Result.failed
     assert "route_top_n" in drifted.detail, drifted.detail
-    assert "candidate_depth" not in drifted.detail, "only the knobs that differ are named"
+    assert "candidate_depth" not in drifted.detail, "only the settings that differ are named"
 
-    steady = gates.GATE_IMPLEMENTATIONS["knobs_resolved"](
+    steady = checks.CHECK_IMPLEMENTATIONS["knobs_resolved"](
         Population.of("steady", [row(i, 3) for i in range(50)])
     )
-    assert steady.verdict is gates.Verdict.passed
+    assert steady.result is checks.Result.passed
 
     # Absent is not passing. `Absence.never` already reports these as missing_required, and this
-    # gate reporting clean on the same row would be two gates disagreeing about one hole.
-    missing = gates.GATE_IMPLEMENTATIONS["knobs_resolved"](
+    # check reporting clean on the same row would be two checks disagreeing about one hole.
+    missing = checks.CHECK_IMPLEMENTATIONS["knobs_resolved"](
         Population.of("missing", [{"question_id": "a", "correct": True}])
     )
-    assert missing.verdict is gates.Verdict.cannot_evaluate
+    assert missing.result is checks.Result.cannot_evaluate
 
     # A type change is a configuration change: 3 and "3" are two configurations, and a
     # comparison that coerced them would report drift as agreement.
-    typed = gates.GATE_IMPLEMENTATIONS["knobs_resolved"](
+    typed = checks.CHECK_IMPLEMENTATIONS["knobs_resolved"](
         Population.of(
             "typed",
             [
@@ -446,15 +446,15 @@ def test_one_arm_two_configurations_is_not_one_arm() -> None:
             ],
         )
     )
-    assert typed.verdict is gates.Verdict.failed
+    assert typed.result is checks.Result.failed
 
 
 def test_partial_context_hash_coverage_fails_rather_than_abstaining() -> None:
     """Recorded-on-some-turns is a defect, not an absence.
 
-    An arm with no ``context_hash`` at all was never instrumented for this gate and reports
-    ``cannot_evaluate``; an arm that records it on 49 of 50 turns has instrumentation that is
-    dropping turns, and abstaining there would excuse exactly the failure the gate exists for.
+    An config with no ``context_hash`` at all was never instrumented for this check and reports
+    ``cannot_evaluate``; a config that records it on 49 of 50 turns has instrumentation that is
+    dropping turns, and abstaining there would excuse exactly the failure the check exists for.
     """
     rows = [
         {
@@ -470,7 +470,7 @@ def test_partial_context_hash_coverage_fails_rather_than_abstaining() -> None:
         }
         for i in range(50)
     ]
-    ok, results = gates.quotable(Population.of("partial", rows))
+    ok, results = checks.quotable(Population.of("partial", rows))
     assert not ok
     ctx = next(r for r in results if r.field == "context_hash")
-    assert ctx.verdict is gates.Verdict.failed, ctx.detail
+    assert ctx.result is checks.Result.failed, ctx.detail

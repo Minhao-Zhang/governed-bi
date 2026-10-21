@@ -1,7 +1,7 @@
-"""Tool bounds and the licensed set (ADR 0006 §8).
+"""Tool bounds and the retrieved tables (ADR 0006 §8).
 
 A tool that grants privilege must have a bound the model cannot widen.
-:class:`ToolBounds` is frozen with no widening method; ``licensed`` is closed at
+:class:`ToolBounds` is frozen with no widening method; ``retrieved_tables`` is closed at
 ``connect`` (ADR 0005). Out-of-scope and non-existent share :data:`OUT_OF_SCOPE_MESSAGE`.
 """
 
@@ -24,8 +24,8 @@ class ToolBounds:
 
     #: **Asset ids**, not ``{schema}.{physical_name}`` (``serve/context.py::_tool_key``). Seeded
     #: by ``route_node`` from the post-budget table set, so a table the retrieval cap dropped is
-    #: refused ``r_table_not_licensed``; ADR 0006 section 8 holds that open decision.
-    licensed: frozenset[str] = frozenset()
+    #: refused ``r_table_not_retrieved``; ADR 0006 section 8 holds that open decision.
+    retrieved_tables: frozenset[str] = frozenset()
     #: Asset ids in this turn's ``hits ∪ pulled_in``.
     #: ``read_body``'s bound.
     readable_assets: frozenset[str] = frozenset()
@@ -35,8 +35,8 @@ class ToolBounds:
         return asset_id in self.readable_assets
 
     def may_inspect_schema(self, table_key: str) -> bool:
-        """``inspect_schema`` is bounded by the licensed set."""
-        return table_key in self.licensed
+        """``inspect_schema`` is bounded by the retrieved tables."""
+        return table_key in self.retrieved_tables
 
     def may_sample(self, column_id: str) -> bool:
         """``sample_rows`` takes a **column id**, not a name (§7).
@@ -48,4 +48,4 @@ class ToolBounds:
         out of scope.
         """
         table = column_id.rsplit(".", 1)[0]
-        return bool(table) and table != column_id and table in self.licensed
+        return bool(table) and table != column_id and table in self.retrieved_tables

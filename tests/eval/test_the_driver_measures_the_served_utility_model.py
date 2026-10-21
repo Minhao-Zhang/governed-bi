@@ -1,8 +1,8 @@
 """The eval driver takes the utility model and effort from the served config when unset.
 
 Without it, a run with no ``--utility-model`` reused the agent model at the agent's effort for
-the scope gate and the facet rewriters, while the served app ran them on
-``GOVERNED_BI_UTILITY_MODEL`` at ``GOVERNED_BI_UTILITY_MODEL_EFFORT``. The arm registered as
+the scope check and the channel rewriters, while the served app ran them on
+``GOVERNED_BI_UTILITY_MODEL`` at ``GOVERNED_BI_UTILITY_MODEL_EFFORT``. The config registered as
 "the configuration ``.env`` ships" therefore measured another one.
 """
 
@@ -57,7 +57,7 @@ def test_an_explicit_effort_is_kept_beside_the_served_model(served) -> None:
 
 
 def test_no_env_override_still_uses_the_code_default(monkeypatch) -> None:
-    from governed_bi.register.knobs import reset_settings
+    from governed_bi.registry.settings import reset_settings
 
     monkeypatch.delenv(UTILITY_MODEL_VAR, raising=False)
     monkeypatch.delenv(UTILITY_MODEL_EFFORT_VAR, raising=False)

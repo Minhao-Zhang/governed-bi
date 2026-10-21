@@ -102,7 +102,7 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
 
     # **The ledger only** (audit C4). This used to fall back to the model's tool-call *argument*
     # whenever no attempt had executed, so a capped turn — or any turn whose proposal never
-    # reached ``prepare()`` — recorded a statement the engine never sent. ``register/record.py``
+    # reached ``prepare()`` — recorded a statement the engine never sent. ``registry/record.py``
     # declares this field as "the statement the engine SENT", and two callers take that literally
     # and **execute it** (``eval/harness.py``, the answered-grading and abstention-pricing paths),
     # so a proposal here is ungoverned SQL run against the database by the measurement harness.
@@ -116,7 +116,7 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
 
     update: dict[str, Any] = {
         # ``crashed`` when the loop died, and the ledger above is returned anyway: the two
-        # facts are independent. See :func:`_run`. Stamp still re-reads ``execution.terminal``
+        # facts are independent. See :func:`_run`. Finish still re-reads ``execution.terminal``
         # when ``path_kind`` is ``answered`` (capped / all-refused).
         "path_kind": "crashed" if failure is not None else "answered",
         # **Sealed, not raw.** A loop that died with a tool call pending commits an ``AIMessage``
@@ -270,20 +270,20 @@ def _agent_node_timeout(state: Mapping[str, Any]) -> float | None:
     the partial ledger; ``_run`` is where it fires, and it fires **between frames** so a tool that
     has already reached the database is never cut off before recording.
 
-    **Resolved through :func:`~governed_bi.serve.runtime.float_knob`, like every other knob.**
-    This previously took no state and read ``knob_default`` directly, which made
-    ``agent_node_timeout_s`` a ``a recorded setting`` knob that no arm could set: two arms
+    **Resolved through :func:`~governed_bi.serve.runtime.float_setting`, like every other setting.**
+    This previously took no state and read ``setting_default`` directly, which made
+    ``agent_node_timeout_s`` a ``a recorded setting`` setting that no config could set: two configs
     declaring different values recorded two configurations that had behaved identically.
 
     ``<= 0`` means **no wall**, which is why the return type is optional. ``"0"`` used to parse as
     a zero-second deadline that failed every turn on its first frame — a plausible thing to type
     for "off".
     """
-    from governed_bi.register.knobs import effective_settings
+    from governed_bi.registry.settings import effective_settings
 
-    knobs = state.get("knobs_resolved") or {}
-    if knobs.get("agent_node_timeout_s") is not None:
-        return _positive(float(knobs["agent_node_timeout_s"]))
+    settings = state.get("knobs_resolved") or {}
+    if settings.get("agent_node_timeout_s") is not None:
+        return _positive(float(settings["agent_node_timeout_s"]))
     return _positive(float(effective_settings()["agent_node_timeout_s"]))
 
 
@@ -301,9 +301,9 @@ def _hang_grace(state: Mapping[str, Any]) -> float:
     accepting that a statement may have executed without reaching the ledger — the lesser of two
     evils only because the alternative is a turn that never returns at all.
     """
-    from governed_bi.serve.runtime import float_knob
+    from governed_bi.serve.runtime import float_setting
 
-    return max(float_knob(state, "llm_timeout_s"), 1.0)
+    return max(float_setting(state, "llm_timeout_s"), 1.0)
 
 
 def _positive(seconds: float) -> float | None:
@@ -313,11 +313,11 @@ def _positive(seconds: float) -> float | None:
 
 def _recursion_limit(state: Mapping[str, Any]) -> int:
     """Nested-agent superstep ceiling from the turn's settings, then the resolved default."""
-    from governed_bi.register.knobs import effective_settings
+    from governed_bi.registry.settings import effective_settings
 
-    knobs = state.get("knobs_resolved") or {}
-    if knobs.get("agent_recursion_limit") is not None:
-        return int(knobs["agent_recursion_limit"])
+    settings = state.get("knobs_resolved") or {}
+    if settings.get("agent_recursion_limit") is not None:
+        return int(settings["agent_recursion_limit"])
     return int(effective_settings()["agent_recursion_limit"])
 
 
@@ -362,13 +362,13 @@ def _context_middleware(state: dict, model: Any = None) -> list[AgentMiddleware[
     Not a ``SystemMessage`` and not appended to ``system_prompt``: ``prompt_set_hash`` is a
     ``a recorded setting`` field digesting the prompt registry, and
     ``tests/serve/test_model_inputs.py`` asserts every system prompt the model receives is one
-    ``register/prompts.py`` declares. Per-turn text there makes the published hash describe
+    ``registry/prompts.py`` declares. Per-turn text there makes the published hash describe
     something that was never sent.
 
     **The block goes immediately before the turn's question, not after it.** Last also means
     *newest*, and a wall of governance text arriving after a tool result reads as the newest
     thing the user said — observed live, the agent replied "Understood. I'll use the specified
-    joins…" and the turn still stamped ``answered``. Anchoring to the question keeps the block
+    joins…" and the turn still wrote ``answered``. Anchoring to the question keeps the block
     off the end of both calls of a loop. Appended only when the request carries no human message
     at all, which no real path produces.
     """
@@ -511,7 +511,7 @@ class _ClarificationEndsTheTurn(AgentMiddleware):
 
     The tool writes ``clarification_requested`` onto nested state and does not
     ``Command(goto=END)``: an inner jump to the outer ``END`` would skip
-    ``stamp``. This hook is what actually stops the nested agent —
+    ``finish``. This hook is what actually stops the nested agent —
     ``before_model`` fires after the tool returns and before another SQL guess,
     and ``jump_to: "end"`` is the inner graph's end, not the parent.
     """
@@ -585,10 +585,10 @@ def _sealed(fresh: list[Any], failure: Mapping[str, Any] | None, *, paused: bool
     This repo has already paid for that once by the other route into it: measured on thread
     ``01a01bb8`` (2026-08-19), 12 ``tool_use`` against 11 ``tool_result``, and every subsequent
     turn raised ``ValidationException`` before reaching a single attempt. What makes this route
-    worse is that the damaging turn stamps an ordinary ``crashed`` and reads like a normal
+    worse is that the damaging turn writes an ordinary ``crashed`` and reads like a normal
     failure. Two paths reach it, both probed:
 
-    1. ``agent_node_timeout_s`` — a live production knob. The soft wall is checked **between**
+    1. ``agent_node_timeout_s`` — a live production setting. The soft wall is checked **between**
        frames (:func:`_run` says why it must be), so it fires exactly in the window after the
        model asked for a tool and before the tools super-step yields a frame.
     2. Any exception out of the nested agent with a call pending. Including

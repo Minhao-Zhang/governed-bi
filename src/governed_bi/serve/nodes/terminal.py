@@ -1,4 +1,4 @@
-"""Terminal path nodes — refuse / decline — before ``stamp``."""
+"""Terminal path nodes — refuse / decline — before ``finish``."""
 
 from __future__ import annotations
 

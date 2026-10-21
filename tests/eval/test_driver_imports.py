@@ -27,9 +27,9 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS = REPO / "tools"
 
 #: Modules the eval path reaches at import time. ``harness`` and ``datalake`` are the library;
-#: ``arms`` and ``grade`` are what they call.
+#: ``configs`` and ``grade`` are what they call.
 EVAL_MODULES = (
-    "governed_bi.eval.arms",
+    "governed_bi.eval.configs",
     "governed_bi.eval.datalake",
     "governed_bi.eval.grade",
     "governed_bi.eval.harness",
@@ -104,7 +104,7 @@ def test_an_unmeasured_token_count_does_not_become_zero_in_a_field() -> None:
     place `int(x or 0)` would have been wrong, and the summary is the one place it is safe.
     """
     from governed_bi.eval import datalake
-    from governed_bi.register.quantity import Measured
+    from governed_bi.registry.quantity import Measured
 
     unmeasured = Measured.unmeasured("the provider reported nothing")
     rows = [{"usage": [{"turn_index": 1, "stage": "narrate", "input_tokens": unmeasured}]}]

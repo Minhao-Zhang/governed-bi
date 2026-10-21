@@ -1,7 +1,7 @@
 """Serve graph state and reducers (ADR 0005 §3.2).
 
 ``usage`` uses ``operator.add`` and therefore accumulates across turns under a
-checkpointer. Every :class:`UsageRecord` must carry ``turn_index``; ``stamp``
+checkpointer. Every :class:`UsageRecord` must carry ``turn_index``; ``finish``
 filters to the current turn when projecting the register. Do not treat the raw
 channel as the per-turn cost list.
 """
@@ -16,14 +16,14 @@ from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
 from langgraph.graph.message import add_messages
 
-from governed_bi.govern.guard import GuardVerdict
+from governed_bi.govern.guard import GuardResult
 from governed_bi.govern.ledger import ExecutionRecord
-from governed_bi.register.quantity import Measured
+from governed_bi.registry.quantity import Measured
 
 __all__ = [
     "RewriteResult",
-    "AbstentionVerdict",
-    "FacetResult",
+    "AbstentionResult",
+    "ChannelResult",
     "SchemaCrossing",
     "RetrievalResult",
     "NodeFailure",
@@ -48,7 +48,7 @@ __all__ = [
     "keep_turns",
     "cleared",
     "merge_delta",
-    "merge_facets",
+    "merge_channels",
     "settle_path_kind",
     "settle_failure",
 ]
@@ -59,7 +59,7 @@ PathKind = Literal["refuse", "decline", "answered", "crashed"]
 #: Path kinds that short-circuit remaining retrieval / agent nodes.
 TERMINAL_PATH_KINDS: frozenset[str] = frozenset({"refuse", "decline", "crashed"})
 
-#: Written to ``path_kind`` / ``failure`` / ``facets`` to clear them for a new turn. See
+#: Written to ``path_kind`` / ``failure`` / ``channels`` to clear them for a new turn. See
 #: :func:`settle_path_kind` for why a sentinel and not ``None``, and :func:`cleared` for the
 #: LangGraph behaviour every reducer here has to survive.
 RESET = "reset"
@@ -83,11 +83,11 @@ class RewriteResult(TypedDict):
     outcome: Literal["rewritten", "unchanged", "failed"]
 
 
-class FacetResult(TypedDict):
-    """One facet branch's output. ``facet`` is a
-    :class:`~governed_bi.register.stages.Stage` value."""
+class ChannelResult(TypedDict):
+    """One channel branch's output. ``channel`` is a
+    :class:`~governed_bi.registry.stages.Stage` value."""
 
-    facet: str
+    channel: str
     queries: list[str]
     hits: list[Any]
     channels: dict[str, str]
@@ -119,13 +119,13 @@ class RetrievalResult(TypedDict):
     budget_best_dropped_score: NotRequired[dict[str, float]]
 
 
-class AbstentionVerdict(TypedDict):
+class AbstentionResult(TypedDict):
     """What the declared abstention policy decided, and the evidence behind it (ADR 0013).
 
     Written on **every** turn that reaches the node, including the turns where the policy is
-    off. A gate that leaves a trace only when it fires cannot afterwards be told from one
+    off. A check that leaves a trace only when it fires cannot afterwards be told from one
     that was never wired up. ``outcome: "disabled"`` is the
-    knob-off value and it carries no evidence, because gathering evidence for a decision nobody
+    setting-off value and it carries no evidence, because gathering evidence for a decision nobody
     took would be a cost with no reader.
 
     There is no score here, and that is a decision rather than an omission. A graded
@@ -138,7 +138,7 @@ class AbstentionVerdict(TypedDict):
     #: The policy that ran, by name and version. Two runs under two policies are two treatments.
     policy: str
     outcome: Literal["answer", "withhold", "disabled"]
-    #: A member of :data:`~governed_bi.register.stages.ABSTENTION_REASONS`, or ``None``.
+    #: A member of :data:`~governed_bi.registry.stages.ABSTENTION_REASONS`, or ``None``.
     reason: str | None
     #: Every rule the policy asked, in the order it asked them. Present on an ``answer`` too, so
     #: "the policy considered this turn and let it through" is a recorded fact.
@@ -268,7 +268,7 @@ _LIST_VIEW_KEYS: frozenset[str] = frozenset({
 def protected_record_keys() -> frozenset[str]:
     """Record keys :func:`compact_turn_record` must never touch.
 
-    Derived from :data:`~governed_bi.register.record.RECORD_REGISTER` rather than listed, which is
+    Derived from :data:`~governed_bi.registry.record.RECORD_REGISTER` rather than listed, which is
     what keeps the **read-time register judgement** ADR 0004 §2 defends: ``missing_required``
     reads exactly the ``Absence.never`` fields, so retaining all of them verbatim means
     ``incomplete_fields`` is still computed at read time, against today's declaration, and still
@@ -281,7 +281,7 @@ def protected_record_keys() -> frozenset[str]:
     silently — the alternative reading, "the stage never produced it", is a different and false
     fact about the turn.
     """
-    from governed_bi.register.record import required_keys
+    from governed_bi.registry.record import required_keys
 
     return frozenset(required_keys()) | _LIST_VIEW_KEYS
 
@@ -427,7 +427,7 @@ def merge_delta(left: Any, right: Any) -> Any:
     Clearing matters more here than for an unreduced channel: without it turn one's
     ``evicted`` would merge into turn two's delivery and report an eviction that never
     happened. :func:`cleared` is applied to ``left`` for the same belt-over-braces reason
-    :func:`merge_facets` gives.
+    :func:`merge_channels` gives.
     """
     if right is None or (isinstance(right, str) and right == RESET):
         return None
@@ -437,10 +437,10 @@ def merge_delta(left: Any, right: Any) -> Any:
     return {**base, **right}
 
 
-def merge_facets(
-    left: dict[str, FacetResult],
+def merge_channels(
+    left: dict[str, ChannelResult],
     right: Any,
-) -> dict[str, FacetResult]:
+) -> dict[str, ChannelResult]:
     """Replace by key — right wins. :data:`RESET` clears.
 
     The ``cleared()`` below is belt over braces: this annotation strips to ``dict``, so the
@@ -457,7 +457,7 @@ def merge_facets(
 def settle_path_kind(left: Any, right: Any) -> Any:
     """First terminal wins; ``None`` is a no-op; :data:`RESET` clears.
 
-    Concurrent facet crashes need a reducer (un-reduced → InvalidUpdateError).
+    Concurrent channel crashes need a reducer (un-reduced → InvalidUpdateError).
     ``None`` ≠ clear: nodes may return a null path_kind without erasing a prior terminal.
     """
     left = cleared(left)
@@ -490,11 +490,11 @@ class ServeInput(TypedDict, total=False):
     """Everything a client is allowed to write into the graph. Deliberately one key.
 
     The write half of the trust boundary — A2/A3, which measured a client
-    forging ``licensed`` and ``corpus_content_hash`` straight into ``ServeState``.
+    forging ``retrieved_tables`` and ``corpus_content_hash`` straight into ``ServeState``.
 
     ``trust()`` forces run constants over a caller's ``configurable``, but the graph's own
     ``input`` is a second write channel: ``langgraph_api`` forwards the client's dict unfiltered,
-    ``PER_TURN_RESET`` does not clear :data:`TEST_HOOKS`, and ``int_knob`` reads state *before*
+    ``PER_TURN_RESET`` does not clear :data:`TEST_HOOKS`, and ``int_setting`` reads state *before*
     ``knobs_resolved`` — so a request could set ``route_top_n`` while the record published the
     default. ``input_schema`` drops undeclared keys at the entry; measured on langgraph 1.2.10,
     ``route_top_n=99`` reaches the first node as absent, not as 99.
@@ -552,18 +552,18 @@ class ServeState(TypedDict, total=False):
     prompt_set_hash: str
     knobs_resolved: dict[str, Any]
 
-    guard: GuardVerdict
+    guard: GuardResult
     rewrite: RewriteResult | None
-    #: The declared abstention policy's verdict (ADR 0013). Written by ``abstain``, read by
-    #: ``graph._after_abstain`` for the routing and by ``stamp`` for the record.
-    abstention: AbstentionVerdict | None
+    #: The declared abstention policy's result (ADR 0013). Written by ``abstain``, read by
+    #: ``graph._after_abstain`` for the routing and by ``finish`` for the record.
+    abstention: AbstentionResult | None
 
-    facets: Annotated[dict[str, FacetResult], merge_facets]
+    channels: Annotated[dict[str, ChannelResult], merge_channels]
 
     schemas: list[str]
     #: Eval only: a shortlist replayed from a prior artifact, honoured by ``route`` in place of
     #: its own ranking (``eval/replay.py``). Absent on every served turn. It exists because the
-    #: four facet rewriters (``register/facets.py``'s ``FACET_EXTRACTS`` — four of the five facet
+    #: four channel rewriters (``registry/channels.py``'s ``CHANNEL_EXTRACTS`` — four of the five channel
     #: nodes) are model calls, so two runs of one question can hand ``route`` different hits — and
     #: an A/B that lets the shortlist move cannot attribute its own delta.
     pinned_schemas: list[str] | None
@@ -574,7 +574,7 @@ class ServeState(TypedDict, total=False):
     #: **Not** reduced, deliberately. ``connect`` *narrows* this set when a component cannot
     #: be joined, and a merge rule that unioned writes would re-license a table the node had
     #: just refused — govern's table allowlist growing back by reducer.
-    licensed: list[str]
+    retrieved_tables: list[str]
 
     #: Reduced by :func:`merge_delta`: ``assemble`` writes the block, ``agent_core`` writes
     #: only the tool-delivery keys.
@@ -617,7 +617,7 @@ class ServeState(TypedDict, total=False):
     answer_text: str | None
     #: Question embedding. Per-turn (streamed path cannot put it on load-time config).
     query_vector: list[float] | None
-    #: Epoch seconds when the turn's first node ran. ``wrap_node`` writes it, ``stamp`` derives
+    #: Epoch seconds when the turn's first node ran. ``wrap_node`` writes it, ``finish`` derives
     #: ``latency_sec`` from it. Wall clock so a clarification resume after a process bounce
     #: still yields a defined span *if* a durable checkpointer is present. `/chat` today uses
     #: ``InMemorySaver`` only — resume across processes is not supported there
@@ -625,8 +625,8 @@ class ServeState(TypedDict, total=False):
     turn_started_at: float | None
     n_re_served: int
 
-    # F1 test hooks and per-turn knobs.
-    facet_route_hits: list[tuple[Any, Any, float]]
+    # F1 test hooks and per-turn settings.
+    channel_route_hits: list[tuple[Any, Any, float]]
     retrieve_hooks: dict[str, Any]
     route_top_n: int
     max_steiner_points: int
@@ -638,7 +638,7 @@ class ServeState(TypedDict, total=False):
 PER_TURN_RESET: dict[str, Any] = {
     "path_kind": RESET,
     "failure": RESET,
-    "facets": RESET,
+    "channels": RESET,
     "terminal_reason": None,
     "guard": None,
     "rewrite": None,
@@ -659,7 +659,7 @@ PER_TURN_RESET: dict[str, Any] = {
     # turn one's pinned shortlist silently route turn two.
     "pinned_schemas": None,
     "crossings": [],
-    "licensed": [],
+    "retrieved_tables": [],
     "clarification_requested": False,
 }
 
@@ -675,8 +675,8 @@ TURN_IDENTITY: frozenset[str] = frozenset({
     "knobs_resolved", "n_re_served",
 })
 
-#: Per-turn knobs and F1 hooks. Caller sets these over ``turn()``'s output.
+#: Per-turn settings and F1 hooks. Caller sets these over ``turn()``'s output.
 TEST_HOOKS: frozenset[str] = frozenset({
-    "facet_route_hits", "retrieve_hooks", "route_top_n", "max_steiner_points",
+    "channel_route_hits", "retrieve_hooks", "route_top_n", "max_steiner_points",
     "max_crossings", "lexical_coverage",
 })

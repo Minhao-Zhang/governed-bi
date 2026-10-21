@@ -1,0 +1,311 @@
+"""Two configs are a comparison when the declared treatment moved and nothing else did.
+
+Neither half had a wire before 2026-08-11.
+
+**Confounders.** ``registry/settings.py`` declares 47 settings ``a recorded setting`` and derives
+``setting_names()`` / ``setting_names()`` from them. Neither function had a production
+caller — every hit outside that module was a comment — and there is no ``config_hash`` at all.
+``comparison_quotable`` was ``context_hashes_distinct`` plus *each config's own* checks, and the one
+check reading settings, ``_knobs_resolved_check``, uses ``setting_names()`` **within** one config. So
+two configs differing in ``chat_model`` were published as a clean delta.
+
+This is the between-config twin of a defect already fixed once here: ``session.py``'s
+``_resolved_settings`` records that ``UNSET`` settings were *absent* rather than null from all 9,457
+rows of seven configs, and "a key missing from every row compares equal to itself and the drift check
+passes on a configuration it never saw." Hence the absent-versus-``None`` care below — ``None``
+is a recorded measurement two configs may agree on; a missing key is the config declining to say.
+
+**The treatment.** Audit D9: ``context_hash`` distinctness was standing in for "the treatment
+changed" and actually measured retrieval nondeterminism, passing at 0.9993 on ``run1``/``run2``,
+which differ only by a random seed. The fix that audit prescribes is to demote that check to an
+existence check and read the treatment from declared fields instead — which is
+``settings_comparable``'s ``treatment`` argument.
+
+The first version of this file got the confounder half right and missed the treatment half
+entirely, which made the check refuse this repository's own headline comparison: v3-fold → v4 is
+a prompt change and ``prompt_set`` is a comparability setting.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from governed_bi.eval.report import comparison_quotable, config_population, settings_comparable
+from governed_bi.measure.checks import Result
+from governed_bi.registry.settings import UNSET, defaults
+
+#: The treatment in the fixtures below. A real one: v3-fold → v4 moved the prompt and nothing
+#: else, and ``prompt_set`` is ``a recorded setting`` — which is exactly why the treatment has
+#: to be declared rather than assumed to be whichever settings happen to differ.
+_TREATMENT = frozenset({"prompt_set"})
+
+
+def _recorded(**overrides: Any) -> dict[str, Any]:
+    """What a real config writes: every declared setting, ``UNSET`` flattened to ``None``.
+
+    Built from the register rather than hand-listed, so a setting added later is covered without
+    an edit. Mirrors ``serve/session.py::_resolved_settings``, whose contract is "**No key is ever
+    omitted.**"
+    """
+    base = {k: (None if v is UNSET else v) for k, v in defaults().items()}
+    base["prompt_set"] = "prompts-a"
+    return {**base, **overrides}
+
+
+def _rows(n: int, *, settings: dict[str, Any], hash_prefix: str) -> list[dict[str, Any]]:
+    """``n`` graded turns, carrying enough of a real row that every *unrelated* check passes.
+
+    Without the trailing fields the comparison is unquotable for reasons this file does not
+    name, and ``assert not ok`` would hold whether or not the check under test existed — a test
+    passing for a reason it does not name is the failure mode this repository counts as worse
+    than no test at all.
+    """
+    return [
+        {
+            "question_id": f"q{i}",
+            "correct": i % 2 == 0,
+            "context_hash": f"{hash_prefix}-{i}",
+            "knobs_resolved": dict(settings),
+            "corpus_content_hash": "corpus-abc",
+            "crashed": False,
+            "guardrail_error": False,
+            "negative_failed_open": False,
+            "facet_channels": {"entity": "ran"},
+            "facet_degraded": 0,
+        }
+        for i in range(n)
+    ]
+
+
+def _pair(settings_a: dict[str, Any], settings_b: dict[str, Any], n: int = 40) -> tuple[Any, Any]:
+    return (
+        config_population(_rows(n, settings=settings_a, hash_prefix="a"), label="a"),
+        config_population(_rows(n, settings=settings_b, hash_prefix="b"), label="b"),
+    )
+
+
+def _treated() -> tuple[Any, Any]:
+    """A legitimate config pair: the prompt moved, nothing else did."""
+    return _pair(_recorded(), _recorded(prompt_set="prompts-b"))
+
+
+# ── confounders ──────────────────────────────────────────────────────────────
+
+
+def test_a_model_swap_is_not_a_comparison() -> None:
+    """The defect, in the form that would have shipped a wrong number.
+
+    Mutation-verified 2026-08-11: drop the ``settings_comparable`` call from
+    ``comparison_quotable`` and this goes red.
+    """
+    a, b = _pair(_recorded(), _recorded(prompt_set="prompts-b", chat_model="another-model"))
+    ok, _ra, _rb, _ctx, settings = comparison_quotable(a, b, treatment=_TREATMENT)
+
+    assert settings.result is Result.failed
+    assert not ok, "two configs on different models were published as a comparison"
+    assert "chat_model" in settings.detail
+
+
+def test_a_real_config_pair_still_compares() -> None:
+    """The fence. A check refusing every pair would satisfy the test above and be useless.
+
+    This is the shape of v3-fold → v4: one comparability setting moved, on purpose, and it is the
+    declared treatment.
+    """
+    ok, _ra, _rb, _ctx, settings = comparison_quotable(*_treated(), treatment=_TREATMENT)
+
+    assert settings.result is Result.passed, settings.detail
+    assert ok
+
+
+def test_an_operational_or_scope_difference_is_not_fatal() -> None:
+    """Only the comparability set may block.
+
+    ``Role.operational`` is "recorded; difference does not invalidate a comparison" and
+    ``Role.scope`` is "not a comparability key", both by their own definitions in
+    ``registry/settings.py``.
+
+    This test is what makes the key set load-bearing. An earlier version moved ``run_id``,
+    which is **not a setting at all**, so the check was free to read ``setting_names()`` — the
+    superset, and the wrong question — with every test still green. Mutation-verified in the
+    corrected form: swapping ``setting_names()`` for ``setting_names()`` turns this red.
+    """
+    a, b = _pair(
+        _recorded(),
+        _recorded(
+            prompt_set="prompts-b",
+            git_sha="beefbeef",          # operational
+            working_tree_dirty=True,     # operational
+            split="dev",                 # scope
+        ),
+    )
+    _ok, _ra, _rb, _ctx, settings = comparison_quotable(a, b, treatment=_TREATMENT)
+
+    assert settings.result is Result.failed, settings.detail
+    assert "git_sha" in settings.detail
+
+
+def test_a_setting_missing_on_one_side_cannot_evaluate() -> None:
+    """Absent on one side is a difference in what is *known*, not a difference in value."""
+    thin = _recorded(prompt_set="prompts-b")
+    del thin["embedding_model"]
+    ok, _ra, _rb, _ctx, settings = comparison_quotable(
+        *_pair(_recorded(), thin), treatment=_TREATMENT
+    )
+
+    assert settings.result is Result.cannot_evaluate
+    assert not ok
+    assert "embedding_model" in settings.detail
+
+
+def test_a_setting_absent_from_both_configs_is_not_silently_equal() -> None:
+    """The hole in its purest form: what ``row.get`` would have called agreement.
+
+    Both configs omit the key, so ``get`` returns ``None`` on each side and ``==`` says they match,
+    certifying a setting the check never saw. That is how ``context_hash``'s ``'unknown'`` sentinel
+    used to pass — see that field's note in ``registry/record.py``.
+    """
+    a_settings, b_settings = _recorded(), _recorded(prompt_set="prompts-b")
+    del a_settings["sqlglot_version"]
+    del b_settings["sqlglot_version"]
+    result = settings_comparable(*_pair(a_settings, b_settings), treatment=_TREATMENT)
+
+    assert result.result is Result.cannot_evaluate
+    assert "sqlglot_version" in result.detail
+
+
+def test_none_on_both_sides_is_agreement_not_ignorance() -> None:
+    """The other side of that line, and why the two cannot be collapsed.
+
+    ``_resolved_settings`` flattens ``UNSET`` to ``None`` deliberately: "this run had no calibrated
+    value" is a measurement worth writing down. Treating recorded-``None`` as unmeasured would
+    make every real comparison ``cannot_evaluate`` — ``the retired threshold`` is ``None`` on every turn
+    while the negative check ships disabled.
+    """
+    assert _recorded()["permitted_functions"] is None, "fixture no longer represents a real config"
+
+    assert settings_comparable(*_treated(), treatment=_TREATMENT).result is Result.passed
+
+
+# ── the treatment itself (audit D9) ──────────────────────────────────────────
+
+
+def test_a_pair_whose_declared_treatment_did_not_move_is_a_replicate() -> None:
+    """D9's fix, stated positively.
+
+    Two configs identical on every comparability setting are a replicate, whatever their contexts
+    look like. The old check inferred "the treatment changed" from ``context_hash``
+    distinctness, which is retrieval noise, and so said yes on a seed-only pair.
+    """
+    result = settings_comparable(*_pair(_recorded(), _recorded()), treatment=_TREATMENT)
+
+    assert result.result is Result.failed
+    assert "replicate" in result.detail
+    assert "prompt_set" in result.detail
+
+
+def test_a_pair_with_no_declared_treatment_cannot_be_evaluated() -> None:
+    """"Nobody said what changed" is not "nothing changed", and neither is a pass.
+
+    Two identical configs, which is the shape of the seed-only null pair the D9 control uses:
+    nothing in the declared configuration separates them, and no caller said what was supposed
+    to. This is the honest result for that pair, and the reason the control can stop being an
+    ``xfail``.
+
+    With a setting differing and no treatment named the result is ``failed`` instead — everything
+    is a confounder when nothing is declared — which the model-swap test already covers.
+    """
+    result = settings_comparable(*_pair(_recorded(), _recorded()))
+
+    assert result.result is Result.cannot_evaluate
+    assert "no treatment declared" in result.detail
+
+
+def test_a_treatment_that_is_not_a_comparability_setting_is_refused() -> None:
+    """A category error, refused rather than quietly ignored.
+
+    Silently dropping an unknown name would let a typo — ``prompt_sett`` — read as "no treatment
+    declared" on one path and as a passing comparison on another.
+    """
+    result = settings_comparable(*_treated(), treatment=frozenset({"prompt_sett"}))
+
+    assert result.result is Result.cannot_evaluate
+    assert "prompt_sett" in result.detail
+
+
+def test_a_malformed_configs_file_is_a_loud_failure_and_not_an_undeclared_config(
+    tmp_path, monkeypatch
+) -> None:
+    """``summarise`` reads the treatment from ``configs.toml`` when the caller does not name one.
+
+    ``_declared_treatment`` used to catch ``ValueError`` alongside ``KeyError``, so one typo in
+    that file — a treatment naming something that is not a comparability setting, which the loader
+    refuses the *whole file* for — silently un-declared **every** config and turned each comparison
+    into ``cannot_evaluate``. Nothing distinguishes that from "these two configs genuinely cannot be
+    compared", so a broken register reads as a data problem and sends the reader to the
+    artifacts.
+
+    Driven through ``summarise`` rather than by calling the private helper, because the property
+    is about what a *caller* sees (D25: when a test can reach the real path, reaching for the
+    function instead is a different test).
+    """
+    from governed_bi.eval.report import summarise
+    from governed_bi.registry import config_profiles
+
+    broken = tmp_path / "configs.toml"
+    broken.write_text('[config.v4]\ntreatment = ["prompt_sett"]\n', encoding="utf-8")
+    monkeypatch.setattr(config_profiles, "CONFIGS_FILE", broken)
+    config_profiles.load_config_profiles.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="prompt_sett"):
+            summarise(
+                {
+                    "v3_fold": _rows(2, settings=_recorded(), hash_prefix="a"),
+                    "v4": _rows(2, settings=_recorded(prompt_set="p-b"), hash_prefix="b"),
+                },
+                pair=("v3_fold", "v4"),
+            )
+    finally:
+        config_profiles.load_config_profiles.cache_clear()
+
+
+def test_an_config_with_no_profile_still_reads_as_nobody_said_what_changed(
+    tmp_path, monkeypatch
+) -> None:
+    """The case that *must* stay a soft one, or the correction above would break every
+    undeclared config. A well-formed file that simply has no entry for this config is ``KeyError``,
+    which is exactly "nobody wrote a profile".
+
+    "Well-formed" now includes a ``corpus_content_hash`` **and a ``question_subset``** on every
+    entry: a config that declares neither cannot be reconciled and the loader refuses the file for
+    it, because the alternative was ``v3_fold`` silently exempting itself from the only check
+    ``reconcile`` performs -- and, one field over, every config exempting itself from the question
+    set entirely. The fixture carries both so that this test still exercises the *absent-entry*
+    path and not the malformed-file path above it.
+    """
+    from governed_bi.eval.report import summarise
+    from governed_bi.registry import config_profiles
+
+    fine = tmp_path / "configs.toml"
+    fine.write_text(
+        '[config.somebody_else]\ntreatment = ["prompt_set"]\n'
+        'corpus_content_hash = "abc123"\nquestion_subset = "2:abc123abc123"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_profiles, "CONFIGS_FILE", fine)
+    config_profiles.load_config_profiles.cache_clear()
+    try:
+        summary = summarise(
+            {
+                "v3_fold": _rows(2, settings=_recorded(), hash_prefix="a"),
+                "v4": _rows(2, settings=_recorded(prompt_set="p-b"), hash_prefix="b"),
+            },
+            pair=("v3_fold", "v4"),
+        )
+    finally:
+        config_profiles.load_config_profiles.cache_clear()
+
+    assert summary["comparison"]["treatment"] == []
+    assert summary["comparison"]["quotable"] is False

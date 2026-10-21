@@ -34,8 +34,8 @@ def delivery_hash_for(
 
 
 def tool_bounds_from_state(state: Mapping[str, Any]) -> ToolBounds:
-    """Frozen bounds from ``licensed`` + ``retrieved`` (hits ∪ pulled_in)."""
-    licensed = frozenset(str(x) for x in (state.get("licensed") or ()))
+    """Frozen bounds from ``retrieved_tables`` + ``retrieved`` (hits ∪ pulled_in)."""
+    retrieved_tables = frozenset(str(x) for x in (state.get("retrieved_tables") or ()))
     retrieved = state.get("retrieved") or {}
     readable: set[str] = set()
     if isinstance(retrieved, Mapping):
@@ -49,7 +49,7 @@ def tool_bounds_from_state(state: Mapping[str, Any]) -> ToolBounds:
                     aid = getattr(hit, "asset_id", None)
                     if aid is not None:
                         readable.add(str(aid))
-    return ToolBounds(licensed=licensed, readable_assets=frozenset(readable))
+    return ToolBounds(retrieved_tables=retrieved_tables, readable_assets=frozenset(readable))
 
 
 class DeliveryTracker:
@@ -73,10 +73,10 @@ class DeliveryTracker:
         ``context_hash`` and ``evicted`` because they are already in the channel.
 
         **This function used to rebuild the record.** It returned a fresh four-key dict, so
-        ``assemble``'s ``evicted`` — the only record that the char budget dropped a licensed
+        ``assemble``'s ``evicted`` — the only record that the char budget dropped a retrieved_tables
         table before the model ever saw it — was destroyed here, mid-turn, on every turn that
         had one. It is the reason ``table_coverage`` reads as an EX ceiling and is really a
-        licensing figure: a table can be routed, licensed, counted as covered, and then
+        licensing figure: a table can be routed, retrieved_tables, counted as covered, and then
         evicted for space with nothing anywhere saying so. Measured once it survived: 1.4% of
         turns, bodies only. Rare -- but "rare" was not knowable while this deleted it.
 

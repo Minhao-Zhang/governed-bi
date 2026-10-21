@@ -9,7 +9,7 @@ position past the budget.
 
 from __future__ import annotations
 
-from governed_bi.register.assets import AssetType
+from governed_bi.registry.assets import AssetType
 from governed_bi.retrieve.budget import apply_budgets, budget_for
 
 
@@ -56,7 +56,7 @@ def test_equal_scores_break_on_the_asset_id_not_on_dict_order() -> None:
     """Every other ordering in the retrieval path is ``(-score, str(id))``; this one was not.
 
     ``connect.py`` was given three explicit sorts after a cross-process coverage tremor of one
-    question in 114 was traced to hash order. Ties are no longer rare here: within-facet scaling
+    question in 114 was traced to hash order. Ties are no longer rare here: within-channel scaling
     puts every channel's best hit at exactly 1.0, so the 8-table boundary sees them often.
     """
     cap = budget_for(AssetType.table)

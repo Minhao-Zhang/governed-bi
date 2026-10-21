@@ -45,7 +45,7 @@ def assemble_node(state: dict, config: RunnableConfig) -> dict:
 
     # Out-parameter, filled only when the char budget bit. Without it the eviction ladder drops
     # asset bodies and whole pulled-in tables with no signal anywhere, so a gold table that was
-    # routed, licensed and then evicted for space is indistinguishable from one that rendered.
+    # routed, retrieved_tables and then evicted for space is indistinguishable from one that rendered.
     evicted: dict[str, Any] = {}
     block, context_hash = render_context(
         retrieved=retrieved,

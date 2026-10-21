@@ -19,9 +19,9 @@ from .functions import (
     canonical_function_name,
     permitted_functions_digest,
 )
-from .guard import GUARD_PUBLIC_MESSAGE, GuardVerdict, guard
+from .guard import GUARD_PUBLIC_MESSAGE, GuardResult, guard
 from .identifiers import column_key, fold, is_valid_schema_id, table_key
-from .layers import RULES, CheckVerdict, Layer
+from .layers import RULES, CheckResult, Layer
 from .ledger import AttemptRecord, ExecutionRecord, attempt_record
 from .pipeline import Prepared, prepare
 from .policy import GovernancePolicy
@@ -30,13 +30,13 @@ __all__ = [
     "ADVERSARIAL_SET",
     "AttemptRecord",
     "Bindings",
-    "CheckVerdict",
+    "CheckResult",
     "ColumnBinding",
     "ExecutionRecord",
     "GUARD_PUBLIC_MESSAGE",
     "GovernancePolicy",
     "GovernanceUsageError",
-    "GuardVerdict",
+    "GuardResult",
     "Layer",
     "LayerRefusal",
     "OUT_OF_SCOPE_MESSAGE",

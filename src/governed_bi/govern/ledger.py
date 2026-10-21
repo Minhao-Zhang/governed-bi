@@ -22,8 +22,8 @@ import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import SqlglotError
 
-from ..register.stages import Outcome
-from .layers import GUARDRAIL_ERROR, CheckVerdict
+from ..registry.stages import Outcome
+from .layers import GUARDRAIL_ERROR, CheckResult
 from .policy import DEFAULT_DIALECT
 
 __all__ = [
@@ -48,12 +48,12 @@ EXECUTOR_PATHS: tuple[ExecutorPath, ...] = ("agent", "graded", "sample", "profil
 class AttemptRecord(TypedDict):
     """One statement's trip through the stack (ADR 0006 §12).
 
-    ``verdict_layer`` is the layer's **name**, not the :class:`~.layers.Layer`, because a
+    ``result_layer`` is the layer's **name**, not the :class:`~.layers.Layer`, because a
     checkpoint round-trips through JSON. ``eval/projection.py::_attempt_trace`` re-keys it to
     ``layer`` for the measurement row, so the two spellings are one field.
     """
 
-    verdict_layer: str | None
+    result_layer: str | None
     passed: bool
     reason_code: str
     path: ExecutorPath
@@ -65,12 +65,12 @@ class ExecutionRecord(TypedDict):
     """Written every turn, including turns with no SQL."""
 
     attempts: list[AttemptRecord]
-    #: ``crashed`` is written only by ``stamp`` when the turn failed after attempts
+    #: ``crashed`` is written only by ``finish`` when the turn failed after attempts
     #: existed — so ``outcome=crashed`` never sits beside ``terminal=answered``.
     #:
-    #: ``"no_sql"`` is also an :class:`~governed_bi.register.stages.Outcome` member, and
+    #: ``"no_sql"`` is also an :class:`~governed_bi.registry.stages.Outcome` member, and
     #: :func:`_assert_the_no_statement_word_is_shared` asserts the two spellings at import.
-    #: ``stamp`` classifies that outcome by reading *this* field, so a drift here would leave
+    #: ``finish`` classifies that outcome by reading *this* field, so a drift here would leave
     #: ``outcome`` and ``terminal`` answering "did a statement run" differently.
     terminal: Literal["answered", "graded", "refused", "capped", "no_sql", "crashed"]
     #: Exceptions swallowed by ``check()``. ``== 0`` joins the quotability
@@ -102,19 +102,19 @@ def structural_fingerprint(sql: str, *, dialect: str = DEFAULT_DIALECT) -> str:
 
 
 def attempt_record(
-    verdict: CheckVerdict, path: ExecutorPath, *, executed_sql: str | None = None
+    result: CheckResult, path: ExecutorPath, *, executed_sql: str | None = None
 ) -> AttemptRecord:
-    """Project a verdict into the measurement layer's per-attempt row.
+    """Project a result into the measurement layer's per-attempt row.
 
     ``executed_sql`` is :func:`~governed_bi.govern.pipeline.prepare`'s output, so the row
     says what the engine sent, not what the model asked for. ``None`` means a refused
     attempt sent nothing — a value, not a gap.
     """
-    failed = verdict["failed_layer"]
+    failed = result["failed_layer"]
     return AttemptRecord(
-        verdict_layer=failed.name if failed is not None else None,
-        passed=verdict["passed"],
-        reason_code=verdict["reason_code"],
+        result_layer=failed.name if failed is not None else None,
+        passed=result["passed"],
+        reason_code=result["reason_code"],
         path=path,
         executed_sql=executed_sql,
     )
@@ -145,7 +145,7 @@ def _assert_the_no_statement_word_is_shared() -> None:
     """Import-time: the ledger's "no statement ran" word is ``Outcome.no_sql``'s.
 
     Asserted rather than imported, for :data:`~.layers.GUARDRAIL_REFUSED_BY`'s reason: the
-    ``Literal`` above has to be spelled out to be a type at all. ``stamp`` derives
+    ``Literal`` above has to be spelled out to be a type at all. ``finish`` derives
     ``Outcome.no_sql`` from this field, so if the two strings drift the outcome becomes
     unreachable and every statement-less turn silently records ``crashed`` instead.
     """
@@ -156,7 +156,7 @@ def _assert_the_no_statement_word_is_shared() -> None:
     if Outcome.no_sql.value not in vocabulary:  # pragma: no cover - import-time guard
         raise AssertionError(
             f"Outcome.no_sql is {Outcome.no_sql.value!r} and ExecutionRecord.terminal declares "
-            f"{sorted(vocabulary)}. stamp reads terminal to classify that outcome, so the two "
+            f"{sorted(vocabulary)}. finish reads terminal to classify that outcome, so the two "
             "must be one word."
         )
 

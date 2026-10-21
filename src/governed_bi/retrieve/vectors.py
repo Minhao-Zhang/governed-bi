@@ -50,7 +50,7 @@ _KEY_COLUMN = "key"
 #:
 #: Also not uniform: on the real store ``_batches()`` yields 17 ragged batches of 1 to 1,024 rows.
 #:
-#: Not a register knob: it changes no score and no arm would want it set differently.
+#: Not a register setting: it changes no score and no config would want it set differently.
 _LOAD_BATCH_ROWS = 1024
 
 
@@ -152,7 +152,7 @@ class VectorStore:
     def mark_space_verified(self, identity: tuple[str, int]) -> None:
         """Record that ``(model, dimensions)`` matched these rows. **Add only, never clear.**
 
-        Nothing removes an entry, and ``_replace`` deliberately does not either: a verdict about
+        Nothing removes an entry, and ``_replace`` deliberately does not either: a result about
         rows that were deleted is stale, but ``_replace`` is called once per store, on a fresh one,
         before it is ever verified. If that ever stops being true this is where it breaks.
         """
@@ -282,7 +282,7 @@ class VectorStore:
         ``source.to_arrow()`` — the whole persistent cache — followed by a full-permutation
         ``.take()`` and a materialised table handed to ``create_table``: three copies of the
         payload alive at once, once per index build, which made it the largest allocation in the
-        tree. Measured on the real 14,613-row store, one arm per process, 179.6 MB payload:
+        tree. Measured on the real 14,613-row store, one config per process, 179.6 MB payload:
 
         ===================  ==========  =========
         private commit       before      after
@@ -375,7 +375,7 @@ class VectorStore:
     def _batches(self, *, rows: int = _LOAD_BATCH_ROWS) -> "Iterator[pa.RecordBatch]":
         """Every row, projected to the two real columns, ``rows`` at a time.
 
-        ``rows`` is the memory knob for :meth:`load_from`: at 3,072 dimensions a 1,024-row batch
+        ``rows`` is the memory setting for :meth:`load_from`: at 3,072 dimensions a 1,024-row batch
         is ~12.6 MB, against 181 MB for the whole table.
         """
         yield from (
@@ -448,7 +448,7 @@ class VectorStore:
         **No vector index is built, so this is exact.** LanceDB creates none by default but
         uses one automatically the moment it exists — on 13,968 × 3,072 an ``IvfPq`` index
         shared **one** of the brute-force top twenty, silently. Brute force is 190-270 ms.
-        An approximate index must arrive as a measured knob, never as a default.
+        An approximate index must arrive as a measured setting, never as a default.
 
         The candidate restriction must stay a **prefilter** (LanceDB's default): with
         ``prefilter=False`` the same k=1000 filter and ``limit(20)`` returned 3 rows,

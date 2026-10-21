@@ -7,7 +7,7 @@ statement has, because the agent's wall clock cannot fire while a query blocks.
 
 Error taxonomy is SQLSTATE class lookup (parcel C): ``42`` → ``QueryError``;
 ``08`` / ``53`` / ``57`` → ``ConnectionError``, less ``57014`` (``query_canceled`` — our own
-``statement_timeout``), which is a verdict on the statement and leaves the handle usable.
+``statement_timeout``), which is a result on the statement and leaves the handle usable.
 Never message-regex.
 
 **A failed statement must discard a dead connection** (audit §9.1). Reusing the
@@ -31,7 +31,7 @@ from ..corpus.introspect import (
     IntrospectedTable,
     Introspection,
 )
-from ..register.knobs import knob_default
+from ..registry.settings import setting_default
 from .errors import ConnectionError, QueryError
 
 __all__ = ["PostgresConnector"]
@@ -62,7 +62,7 @@ class PostgresConnector:
         #: a literal default so the number a run records and the number it enforces are one
         #: value; pass ``0`` to disable the bound, which is what Postgres already means by it.
         self._statement_timeout_ms = (
-            int(knob_default("statement_timeout_ms"))
+            int(setting_default("statement_timeout_ms"))
             if statement_timeout_ms is None
             else int(statement_timeout_ms)
         )
@@ -214,7 +214,7 @@ class PostgresConnector:
         # healthy handle.** 57014 is ``query_canceled`` -- on this connector, ``statement_timeout``
         # firing. The rest of class 57 is the operator taking the server away (shutdown,
         # ``pg_terminate_backend``), where discarding is right; this one is the server enforcing
-        # a bound *we* set on *this statement*, so the connection is fine and the verdict belongs
+        # a bound *we* set on *this statement*, so the connection is fine and the result belongs
         # to the statement. Classifying it ConnectionError would reconnect on every attempt and,
         # worse, tell the agent the warehouse is unreachable when what happened is that its query
         # was too expensive -- the one fact that would make it write a cheaper one.
@@ -236,7 +236,7 @@ class PostgresConnector:
                 sqlstate=sqlstate or _FALLBACK_CONNECTION_SQLSTATE,
             ) from err
         # Statement path, no SQLSTATE: the server did not classify this, so it is not a
-        # verdict on the statement. Falling through to QueryError here is how one blip made
+        # result on the statement. Falling through to QueryError here is how one blip made
         # every remaining question read as "the model wrote bad SQL".
         if self._connection_is_unusable(err):
             self._discard()

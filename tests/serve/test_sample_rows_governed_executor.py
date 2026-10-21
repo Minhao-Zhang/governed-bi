@@ -35,7 +35,7 @@ def test_delivery_hash_stable_for_same_tool_payload() -> None:
 def test_tool_bounds_from_state_includes_pulled_in() -> None:
     bounds = tool_bounds_from_state(
         {
-            "licensed": ["s.t"],
+            "retrieved_tables": ["s.t"],
             "retrieved": {
                 "selected": {},
                 "pulled_in": {"s.t.extra": "resolve"},
@@ -86,7 +86,7 @@ def test_sample_rows_asks_for_the_engines_spelling_in_the_right_schema() -> None
             statements.append(sql)
             return (["Code"], [("AA",), ("DL",)], False)
 
-    state = _state(licensed=["airline.Air_Carriers_66c534"])
+    state = _state(retrieved_tables=["airline.Air_Carriers_66c534"])
     state["retrieved"]["by_type"]["table"] = ["airline.Air_Carriers_66c534"]
     state["retrieved"]["selected"] = {
         "airline.Air_Carriers_66c534.Code": {
@@ -163,7 +163,7 @@ def test_sample_rows_is_a_governed_executor_path() -> None:
             executed.append(sql)
             return (["ssn"], [("123-45-6789",)], False)
 
-    state = _state(licensed=["sales.customers"])
+    state = _state(retrieved_tables=["sales.customers"])
     state["retrieved"]["selected"] = {
         "sales.customers.ssn": {
             "asset_id": "sales.customers.ssn",

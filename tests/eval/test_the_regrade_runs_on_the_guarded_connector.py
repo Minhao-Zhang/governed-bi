@@ -69,14 +69,14 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
         {"question_id": "q3", "sql_rename": "GOLD3"},
     ]
     (dataset / "test_final.jsonl").write_text("".join(json.dumps(g) + "\n" for g in gold))
-    artifact = tmp_path / "arm.jsonl"
+    artifact = tmp_path / "config.jsonl"
     rows = [
         {"question_id": "q1", "outcome": "answered", "correct": False, "generated_sql": "P1"},
         {"question_id": "q2", "outcome": "answered", "correct": True, "generated_sql": "P2"},
         {"question_id": "q3", "outcome": "answered", "correct": False, "generated_sql": "P3"},
     ]
     artifact.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    return {"dataset": dataset, "artifact": artifact, "out": tmp_path / "out" / "arm.regraded.jsonl"}
+    return {"dataset": dataset, "artifact": artifact, "out": tmp_path / "out" / "config.regraded.jsonl"}
 
 
 def _run(world: dict[str, Path], *extra: str) -> int:
@@ -106,11 +106,11 @@ def test_statements_run_on_the_guarded_connector_with_the_register_bounds(world)
     assert rows["q1"]["correct_digest_rule"] is False
     assert rows["q2"]["correct"] is rows["q2"]["correct_digest_rule"] is True
     assert rows["q3"]["correct"] is rows["q3"]["correct_digest_rule"] is False
-    stamp = rows["q1"]["regrade"]
-    assert stamp["grader"] == "rows-v3"
-    assert stamp["statement_timeout_ms"] == 120_000
-    assert stamp["correct_before"] is False
-    assert "git_sha" in stamp and "working_tree_dirty" in stamp
+    finish = rows["q1"]["regrade"]
+    assert finish["grader"] == "rows-v3"
+    assert finish["statement_timeout_ms"] == 120_000
+    assert finish["correct_before"] is False
+    assert "git_sha" in finish and "working_tree_dirty" in finish
 
 
 def test_a_statement_fault_is_graded_as_the_harness_grades_it(world) -> None:

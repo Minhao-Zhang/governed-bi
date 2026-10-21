@@ -1,6 +1,6 @@
 """``lexical_coverage`` is measured, not passed through from a test hook.
 
-The field was null on every turn of every arm and the cause was a dead producer, not a missing
+The field was null on every turn of every config and the cause was a dead producer, not a missing
 consumer. ``BM25.coverage`` is the declared derivation and had no production caller at all; its
 wrapper had one call site, in ``route_retrieve``'s F1 no-index path, which passes ``index=None``
 on purpose. Pass two -- the real indexed path -- returned ``state.get("lexical_coverage")``, a
@@ -38,7 +38,7 @@ def _one_table_index():
 
 
 def test_pass_two_measures_lexical_coverage_from_the_live_index() -> None:
-    """The declared measurement had a dead producer, and the row recorded null on every arm.
+    """The declared measurement had a dead producer, and the row recorded null on every config.
 
     ``BM25.coverage`` is the derivation and had **no production caller at all**. Its wrapper,
     ``lexical_coverage``, had one call site, in ``route_retrieve``'s F1 no-index path, which
@@ -58,9 +58,9 @@ def test_pass_two_measures_lexical_coverage_from_the_live_index() -> None:
             state={
                 "question": question,
                 "knobs_resolved": {},
-                "facets": {
-                    "facet_entity": {
-                        "facet": "facet_entity",
+                "channels": {
+                    "channel_entity": {
+                        "channel": "channel_entity",
                         "queries": [question],
                         "hits": [],
                     }

@@ -20,14 +20,14 @@ from governed_bi.serve.graph import (
 from governed_bi.serve.nodes.agent_core import _recursion_limit
 
 
-def test_accept_soft_crash_routes_to_stamp_not_guard() -> None:
-    assert _after_accept({"path_kind": "crashed"}) == "stamp"
+def test_accept_soft_crash_routes_to_finish_not_guard() -> None:
+    assert _after_accept({"path_kind": "crashed"}) == "finish"
     assert _after_accept({"path_kind": None}) == "guard"
     assert _after_accept({}) == "guard"
 
 
-def test_rewrite_crash_short_circuits_to_stamp() -> None:
-    assert _after_rewrite({"path_kind": "crashed"}) == "stamp"
+def test_rewrite_crash_short_circuits_to_finish() -> None:
+    assert _after_rewrite({"path_kind": "crashed"}) == "finish"
     assert _after_rewrite({"path_kind": None}) == "fanout"
 
 
@@ -94,21 +94,21 @@ def test_narrate_generate_failure_degrades_without_failure_channel() -> None:
 
 
 def test_agent_recursion_limit_defaults_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    from governed_bi.register.knobs import knob_default
+    from governed_bi.registry.settings import setting_default
 
-    assert _recursion_limit({}) == int(knob_default("agent_recursion_limit"))
+    assert _recursion_limit({}) == int(setting_default("agent_recursion_limit"))
     assert _recursion_limit({"knobs_resolved": {"agent_recursion_limit": 17}}) == 17
     monkeypatch.setenv("GOVERNED_BI_AGENT_RECURSION_LIMIT", "9")
     assert _recursion_limit({}) == 9
     assert _recursion_limit({"knobs_resolved": {"agent_recursion_limit": 17}}) == 17
 
 
-def test_n_re_served_is_not_a_quotability_gate() -> None:
-    from governed_bi.measure import gates
-    from governed_bi.register.record import GATE_CONDITIONS
+def test_n_re_served_is_not_a_quotability_check() -> None:
+    from governed_bi.measure import checks
+    from governed_bi.registry.record import CHECK_CONDITIONS
 
-    assert "n_re_served" not in GATE_CONDITIONS
-    assert "n_re_served" not in gates.GATE_IMPLEMENTATIONS
+    assert "n_re_served" not in CHECK_CONDITIONS
+    assert "n_re_served" not in checks.CHECK_IMPLEMENTATIONS
 
 
 def test_capabilities_report_durability_by_observing_the_config_not_a_literal() -> None:

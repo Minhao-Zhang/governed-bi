@@ -1,4 +1,4 @@
-"""A node timeout must stamp the turn and resolve its rail, under every stream mode.
+"""A node timeout must finish the turn and resolve its rail, under every stream mode.
 
 This replaces a test of the ``error_handler`` design, which was removed because it did not
 work. The history is worth keeping, because the replacement is only obviously right once you
@@ -16,7 +16,7 @@ original measurement used.
 
 It failed a second way that no exception would have revealed. A node killed from outside never
 returns, so ``wrap_node._end`` never runs, so the rail emitted ``start`` and no resolve — the
-timeline showed the stage running forever while ``stamp`` reported a crash.
+timeline showed the stage running forever while ``finish`` reported a crash.
 
 So the clock moved inside. Both properties are pinned below, and the stream-mode parametrisation
 is the point: the old design passed the first case and failed the rest.
@@ -70,7 +70,7 @@ def _custom_events(node: Any, state: dict) -> list[dict[str, Any]]:
 
 
 def test_a_timeout_becomes_an_ordinary_crashed_update() -> None:
-    """Not an escaping exception. The wrapper owns it, so the turn survives to be stamped."""
+    """Not an escaping exception. The wrapper owns it, so the turn survives to be written."""
     wrapped = wrap_node("guard", _slow, timeout=0.05)
     update = asyncio.run(wrapped({"question": "q"}))
 
@@ -113,15 +113,15 @@ def test_the_turn_is_stamped_under_every_stream_mode(stream_mode: str, subgraphs
         await asyncio.sleep(30)
         return {"trace": ["slow-body"]}
 
-    def stamp_like(_state: _RailState) -> dict:
+    def finish_like(_state: _RailState) -> dict:
         return {"trace": ["stamped"]}
 
     builder = StateGraph(_RailState)
     builder.add_node("slow", wrap_node("guard", slow, stream=False, timeout=0.05))
-    builder.add_node("stamp_like", stamp_like)
+    builder.add_node("finish_like", finish_like)
     builder.add_edge(START, "slow")
-    builder.add_edge("slow", "stamp_like")
-    builder.add_edge("stamp_like", END)
+    builder.add_edge("slow", "finish_like")
+    builder.add_edge("finish_like", END)
     graph = builder.compile()
 
     async def drive() -> list[Any]:
@@ -133,7 +133,7 @@ def test_the_turn_is_stamped_under_every_stream_mode(stream_mode: str, subgraphs
         ]
 
     # No exception is the assertion. Under the old design three of these four raised
-    # `NodeTimeoutError` out of `astream` at executor teardown and the turn was never stamped.
+    # `NodeTimeoutError` out of `astream` at executor teardown and the turn was never written.
     asyncio.run(drive())
 
     final = asyncio.run(graph.ainvoke({"trace": [], "path_kind": ""}))
@@ -148,7 +148,7 @@ def test_a_node_that_returns_no_mapping_crashes_inside_the_wrapper(is_async: boo
     ``_end`` and ``_without_cleared_clock`` run *after* the ``except``, and both subscript the
     update. So a node returning ``None`` — or anything that is not a mapping — raised from the
     wrapper itself: no ``crashed`` marker, no ``answer``, no ``final`` event, and the exception
-    left the graph. "Every failure routes through ``stamp``" is exactly what this wrapper exists
+    left the graph. "Every failure routes through ``finish``" is exactly what this wrapper exists
     for, and this was the one path around it.
 
     Parametrised over both shapes because the fix nearly missed one: ``_body``'s async branch
@@ -168,7 +168,7 @@ def test_a_node_that_returns_no_mapping_crashes_inside_the_wrapper(is_async: boo
 
     assert out.get("path_kind") == "crashed", (
         f"a node returning None escaped the wrapper: {out!r}. Nothing downstream records the "
-        "turn, because stamp never runs."
+        "turn, because finish never runs."
     )
     assert (out.get("failure") or {}).get("error_type") == "TypeError"
     assert (out.get("failure") or {}).get("stage") == "guard"

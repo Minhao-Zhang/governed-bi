@@ -187,7 +187,7 @@ class BM25:
         # This loop used to multiply each term by its raw `qf`, which is Okapi's `k3 -> infinity`
         # limit, so a repeated word bought unbounded score. Measured against one document:
         # `search("cuisine")` = 0.4498 and `search("cuisine cuisine cuisine")` = 0.7103. Not
-        # hypothetical, because the four facet rewriters *generate* these queries — a rewriter that
+        # hypothetical, because the four channel rewriters *generate* these queries — a rewriter that
         # happens to say a keyword twice then outranks one that says it once on identical evidence,
         # and its phrasing is a model's, not a person's.
         #
@@ -219,7 +219,7 @@ class BM25:
         scores above zero, so an unanswerable question still returns ``top_k`` tables and
         stamps confidence. Distinct terms, not occurrences. Measured against ``_idf``, the
         full corpus vocabulary, not this restricted view: the question is whether *the
-        corpus* has the vocabulary, not whether this facet's candidates do.
+        corpus* has the vocabulary, not whether this channel's candidates do.
 
         :data:`_STOPWORDS` is subtracted **here and nowhere else** (audit I4). Counting them
         floored an unanswerable question at 0.50 on the BIRD corpus, because ``the``, ``a`` and
@@ -229,7 +229,7 @@ class BM25:
         hand-written out-of-corpus probe, against a criterion fixed before the run:
 
         =================  ==========  ==========
-        arm                in-corpus   probe
+        config                in-corpus   probe
         =================  ==========  ==========
         counting them        0.9488      0.5989
         this                 0.9135      0.3247

@@ -14,7 +14,7 @@ from typing import Mapping
 __all__ = [
     "Stage",
     "Outcome",
-    "FACET_STAGES",
+    "CHANNEL_STAGES",
     "TERMINAL_STAGES",
     "REFUSED_BY_TO_STAGE",
     "ABSTENTION_REASONS",
@@ -37,18 +37,18 @@ class Stage(str, Enum):
     #: Derives a turn from the conversation when the caller sends only a message.
     #: Optional: `START -> accept -> guard` on a server; `START -> guard` otherwise.
     accept = "accept"
-    #: Rule-based input gate. ADR 0006 §6 owns the rules; this owns the name.
+    #: Rule-based input check. ADR 0006 §6 owns the rules; this owns the name.
     guard = "guard"
     #: Follow-up rewritten into a self-contained question (multi-turn only).
     rewrite = "rewrite"
 
-    # ── The five facets, concurrent ──
-    # Named individually: "which facet degraded" is a quotability input.
-    facet_schema = "facet_schema"
-    facet_term = "facet_term"
-    facet_metric = "facet_metric"
-    facet_entity = "facet_entity"
-    facet_example = "facet_example"
+    # ── The five channels, concurrent ──
+    # Named individually: "which channel degraded" is a quotability input.
+    channel_schema = "channel_schema"
+    channel_term = "channel_term"
+    channel_metric = "channel_metric"
+    channel_entity = "channel_entity"
+    channel_example = "channel_example"
 
     # ── Post-fan-in, deterministic ──
     #: Schema selection plus the second retrieval pass.
@@ -92,7 +92,7 @@ class Stage(str, Enum):
     refuse = "refuse"
     decline = "decline"
     #: Writes an ``Answer``. Every terminal path funnels here.
-    stamp = "stamp"
+    finish = "finish"
 
     # ── Attributed after the fact by the offline analyser ──
     table_select = "table_select"
@@ -103,15 +103,15 @@ class Stage(str, Enum):
 
 
 #: Facet stages in fan-out order.
-FACET_STAGES: tuple[Stage, ...] = (
-    Stage.facet_schema,
-    Stage.facet_term,
-    Stage.facet_metric,
-    Stage.facet_entity,
-    Stage.facet_example,
+CHANNEL_STAGES: tuple[Stage, ...] = (
+    Stage.channel_schema,
+    Stage.channel_term,
+    Stage.channel_metric,
+    Stage.channel_entity,
+    Stage.channel_example,
 )
 
-#: Stages that end a turn. ``stamp`` is not one: every terminal passes through it.
+#: Stages that end a turn. ``finish`` is not one: every terminal passes through it.
 TERMINAL_STAGES: frozenset[Stage] = frozenset({Stage.refuse, Stage.decline, Stage.cap})
 
 
@@ -139,16 +139,16 @@ class Outcome(str, Enum):
 
     :attr:`clarification` is **one member over two endings**, and that is a deliberate limit on
     what it may be used for. The engine asked the reader something and got no usable answer,
-    either because the turn paused on ``ask_user`` and nothing resumed it — no node ever stamped
+    either because the turn paused on ``ask_user`` and nothing resumed it — no node ever wrote
     that turn — or because the reader declined or cancelled and ``ask_user`` failed closed, which
-    ends the agent loop and *does* reach ``stamp`` with a full record. Both are the same fact
+    ends the agent loop and *does* reach ``finish`` with a full record. Both are the same fact
     about delivery (no governed answer ran, and the reader owes one), so they are counted together
     by ``measure/selective.DECLINED``, ``eval/grade.grade_turn`` and ``eval/projection``'s
     ``clarified`` — splitting the member would split those three counts for no measurement
     question, and would put a value in the artifacts that ``ui/lib/schemas.ts``'s closed outcome
     enum drops on the floor. What the member therefore **cannot** answer is whether the row was
-    stamped. A consumer needing that must read a field ``stamp`` writes;
-    ``measure/gates._paused_before_stamp`` is the one that does, and carries the write-up of what
+    written. A consumer needing that must read a field ``finish`` writes;
+    ``measure/checks._paused_before_finish`` is the one that does, and carries the write-up of what
     reading the outcome instead cost. The two writers are named in :func:`classify_outcome`.
     """
 
@@ -158,9 +158,9 @@ class Outcome(str, Enum):
     capped = "capped"
     crashed = "crashed"
     #: Spelled exactly as ``govern.ledger.ExecutionRecord``'s ``terminal`` word, and
-    #: ``govern/ledger.py`` asserts the two agree at import. ``stamp`` derives this member
+    #: ``govern/ledger.py`` asserts the two agree at import. ``finish`` derives this member
     #: *from* that field rather than from ``path_kind``, the same way it reads the ledger's
-    #: verdict for ``capped``, so ``outcome`` and ``ledger`` cannot disagree; a second spelling
+    #: result for ``capped``, so ``outcome`` and ``ledger`` cannot disagree; a second spelling
     #: here would be a second answer to one question.
     no_sql = "no_sql"
 
@@ -179,15 +179,15 @@ class Outcome(str, Enum):
 #: Why the vocabulary rather than a score, what the guards structurally cannot see, and the
 #: ``unattributed`` bucket that covers that gap: ADR 0013 §2.
 ABSTENTION_REASONS: frozenset[str] = frozenset({
-    #: A facet channel that was configured to run, ran, and errored. The shortlist this turn
+    #: A channel channel that was configured to run, ran, and errored. The shortlist this turn
     #: worked from was produced by a retriever that is not the declared one.
     "retrieval_channel_failed",
-    #: The turn licensed no table. No statement it writes can clear Layer 6, so the five
+    #: The turn retrieved_tables no table. No statement it writes can clear Layer 6, so the five
     #: ``run_query`` attempts are spent discovering what ``connect`` already knew.
     "nothing_licensed",
     #: The rendered context is empty. The model has been handed nothing to work from.
     "empty_context",
-    #: The char budget dropped a whole licensed table before the model saw it, so the turn is
+    #: The char budget dropped a whole retrieved table before the model saw it, so the turn is
     #: asking for SQL over a relation it did not show.
     "licensed_table_evicted",
 })
@@ -209,7 +209,7 @@ REFUSED_BY_TO_STAGE: Mapping[str, Stage] = {
     **{reason: Stage.abstain for reason in sorted(ABSTENTION_REASONS)},
 }
 
-#: ``refused_by`` values that mean our bug (crash wearing a refusal stamp).
+#: ``refused_by`` values that mean our bug (crash wearing a refusal finish).
 #:
 #: Spelled as literals, not imported: ``register`` sits below ``govern``, so
 #: ``govern.layers.GUARDRAIL_ERROR`` cannot be referenced here and ``layers.py`` asserts at
@@ -219,7 +219,7 @@ REFUSED_BY_TO_STAGE: Mapping[str, Stage] = {
 #:
 #: Why ``guardrail_error`` belongs here rather than under ``refused``: ADR 0005 §3.2 and
 #: ``govern.layers.GUARDRAIL_ERROR``'s docstring, which name what it looked like when it did not
-#: (an arm refusing everything at ``crash_rate == 0`` with every register key present).
+#: (a config refusing everything at ``crash_rate == 0`` with every register key present).
 CRASH_REFUSED_BY: frozenset[str] = frozenset({"model_error", "guardrail_error"})
 
 #: Attempt-cap ``refused_by``. Named so rename stays in step with the table.
@@ -260,7 +260,7 @@ def classify_outcome(
 
     An **absent** ``terminal`` still falls through to ``crashed``. A turn with no statement whose
     ledger says nothing at all has not been observed ending, and that is what a crash is; the
-    caller has to hand over the ledger's verdict to get :attr:`Outcome.no_sql`.
+    caller has to hand over the ledger's result to get :attr:`Outcome.no_sql`.
     """
     if error and error.startswith(INFRA_ERROR_PREFIX):
         return Outcome.crashed
@@ -269,9 +269,9 @@ def classify_outcome(
     if refused_by == ATTEMPT_CAP_REFUSED_BY:
         return Outcome.capped
     if clarification_requested:
-        # Reaching here means the engine asked and the reader *declined* — a stamped turn with a
+        # Reaching here means the engine asked and the reader *declined* — a written turn with a
         # full record. A live pause never reaches this function at all; it raises
-        # ``GraphInterrupt``. So this member is **not** a witness of "never reached ``stamp``",
+        # ``GraphInterrupt``. So this member is **not** a witness of "never reached ``finish``",
         # and reading it as one is a live defect this project has already shipped once.
         #
         # Tested before the general ``refused_by`` on purpose, which masks exactly one pair
@@ -289,8 +289,8 @@ def classify_outcome(
 
 
 # ``classify_row`` was here and is gone (audit §10): zero callers, and it was a second
-# entry point to one decision (read the stamped ``outcome`` if it parses, else re-derive)
-# that would have disagreed exactly when the stamp was wrong. One derivation, no fallback:
+# entry point to one decision (read the written ``outcome`` if it parses, else re-derive)
+# that would have disagreed exactly when the finish was wrong. One derivation, no fallback:
 # a row whose ``outcome`` does not parse is a broken row, not a row to guess about.
 
 
@@ -318,9 +318,9 @@ def _assert_refusal_tables_are_closed() -> None:
             f"{REFUSED_BY_TO_STAGE[ATTEMPT_CAP_REFUSED_BY]!r}"
         )
 
-    overlap = TERMINAL_STAGES & set(FACET_STAGES)
+    overlap = TERMINAL_STAGES & set(CHANNEL_STAGES)
     if overlap:  # pragma: no cover - import-time guard
-        raise AssertionError(f"a facet cannot be a terminal stage: {sorted(overlap)}")
+        raise AssertionError(f"a retrieval channel cannot be a terminal stage: {sorted(overlap)}")
 
     unmapped = sorted(ABSTENTION_REASONS - set(REFUSED_BY_TO_STAGE))
     if unmapped:  # pragma: no cover - import-time guard
@@ -344,7 +344,7 @@ def _assert_refusal_tables_are_closed() -> None:
         )
 
     # Every declared refusal outranks an empty ledger. A guard-blocked turn, a decline and an
-    # abstention all reach `stamp` with `attempts: []`, so `execution.terminal` is `"no_sql"` on
+    # abstention all reach `finish` with `attempts: []`, so `execution.terminal` is `"no_sql"` on
     # each of them -- and `Outcome.no_sql` is the one member that reads that field. Tested over
     # the whole vocabulary rather than trusted to `classify_outcome`'s line order, because the
     # failure is silent: the refusal keeps its `refused_by`, its `terminal_reason` and its stage,

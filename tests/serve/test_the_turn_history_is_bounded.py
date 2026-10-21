@@ -31,7 +31,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from governed_bi.api.graph_app import record_node
 from governed_bi.corpus.schema import ColumnAsset, SchemaAsset, TableAsset
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.register.record import missing_required, required_keys, undeclared_keys
+from governed_bi.registry.record import missing_required, required_keys, undeclared_keys
 from governed_bi.serve.accept import accept_node
 from governed_bi.serve.graph import as_sync, build_graph
 from governed_bi.serve.scripted_model import ScriptedChatModel
@@ -144,7 +144,7 @@ def test_an_archived_row_is_still_judged_by_todays_register_at_read_time() -> No
     archived, dropped = compact_turn_record(full)
 
     assert missing_required(archived) == missing_required(full), (
-        f"compaction changed the read-time quotability verdict: {sorted(dropped)} were trimmed "
+        f"compaction changed the read-time quotability result: {sorted(dropped)} were trimmed "
         "and one of them is a field `missing_required` reads. Required fields are protected by "
         "`protected_record_keys()`; the byte budget must never reach them."
     )

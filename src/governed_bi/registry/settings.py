@@ -18,11 +18,11 @@ from .assets import ASSET_REGISTER
 __all__ = [
     "UNSET",
     "Unset",
-    "Knob",
-    "KNOB_REGISTER",
-    "knob_names",
+    "Setting",
+    "SETTING_REGISTER",
+    "setting_names",
     "defaults",
-    "knob_default",
+    "setting_default",
     "config_hash",
     "effective_settings",
     "bind_settings",
@@ -68,7 +68,7 @@ _ENV_NAMES: Final[Mapping[str, str]] = {
 }
 
 @dataclass(frozen=True, slots=True)
-class Knob:
+class Setting:
     """One setting: the name the record uses, its default, and its variable."""
 
     name: str
@@ -76,8 +76,8 @@ class Knob:
     env_var: str
 
 
-def _k(name: str, default: Any, env_var: str | None = None) -> Knob:
-    return Knob(name, default, env_var or _ENV_NAMES.get(name) or f"GOVERNED_BI_{name.upper()}")
+def _k(name: str, default: Any, env_var: str | None = None) -> Setting:
+    return Setting(name, default, env_var or _ENV_NAMES.get(name) or f"GOVERNED_BI_{name.upper()}")
 
 
 _ASSET_BUDGETS: Final[tuple[tuple[str, Any], ...]] = tuple(
@@ -85,7 +85,7 @@ _ASSET_BUDGETS: Final[tuple[tuple[str, Any], ...]] = tuple(
 )
 
 
-KNOB_REGISTER: tuple[Knob, ...] = (
+SETTING_REGISTER: tuple[Setting, ...] = (
     _k("summary_max_chars", 250),
     _k("summary_min_chars", 1),
     _k("asset_budgets", _ASSET_BUDGETS),
@@ -95,8 +95,8 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("seed_dir", ""),
     _k("candidate_depth", 50),
     _k("route_top_n", 3),
-    _k("facet_weight_schema", 1.0),
-    _k("facet_weight_other", 1.0),
+    _k("channel_weight_schema", 1.0),
+    _k("channel_weight_other", 1.0),
     _k("w_lexical", 0.5),
     _k("w_semantic", 0.5),
     _k("semantic_scale_ceiling", 0.6),
@@ -108,7 +108,7 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("context_budget_chars", 80_000),
     _k("read_body_max_tokens", 20_000),
     _k("chat_model", "gpt-6-luna"),
-    _k("facet_model", None),
+    _k("channel_model", None),
     _k("rewrite_model", None),
     _k("llm_reasoning_effort", "xhigh"),
     _k("llm_utility_model", "gpt-6-luna"),
@@ -141,7 +141,7 @@ KNOB_REGISTER: tuple[Knob, ...] = (
     _k("diff_sha256", None),
     _k("serve_workers", None),
     _k("build_workers", None),
-    _k("arms", None),
+    _k("configs", None),
     _k("schemas_under_test", None),
     _k("split", None),
     _k("question_subset", None),
@@ -151,39 +151,39 @@ KNOB_REGISTER: tuple[Knob, ...] = (
 )
 
 
-def knob_names() -> frozenset[str]:
-    return frozenset(k.name for k in KNOB_REGISTER)
+def setting_names() -> frozenset[str]:
+    return frozenset(k.name for k in SETTING_REGISTER)
 
 
 def defaults() -> Mapping[str, Any]:
     """Every setting at its declared default. ``UNSET`` values remain ``UNSET``."""
-    return {k.name: k.default for k in KNOB_REGISTER}
+    return {k.name: k.default for k in SETTING_REGISTER}
 
 
-def knob_default(name: str) -> Any:
+def setting_default(name: str) -> Any:
     """One setting's declared default. ``UNSET`` stays ``UNSET``. Raises if undeclared."""
-    for knob in KNOB_REGISTER:
-        if knob.name == name:
-            return knob.default
+    for setting in SETTING_REGISTER:
+        if setting.name == name:
+            return setting.default
     raise KeyError(f"{name!r} is not a declared setting")
 
 
 def env_overrides() -> Mapping[str, str]:
     """``{setting name -> environment variable}`` for every setting."""
-    return {k.name: k.env_var for k in KNOB_REGISTER}
+    return {k.name: k.env_var for k in SETTING_REGISTER}
 
 
-def _coerce(knob: Knob, raw: str) -> Any:
-    """Parse ``raw`` as the type of ``knob``'s default. Blank is not a value."""
+def _coerce(setting: Setting, raw: str) -> Any:
+    """Parse ``raw`` as the type of ``setting``'s default. Blank is not a value."""
     text = str(raw).strip()
     if text == "":
         return _MISSING
-    default = knob.default
+    default = setting.default
     if isinstance(default, bool):
         lowered = text.lower()
         if lowered not in ("true", "false"):
             raise ValueError(
-                f"{knob.env_var}={raw!r} is not a boolean; setting {knob.name!r} declares {default!r}"
+                f"{setting.env_var}={raw!r} is not a boolean; setting {setting.name!r} declares {default!r}"
             )
         return lowered == "true"
     if isinstance(default, int) and not isinstance(default, bool):
@@ -191,22 +191,22 @@ def _coerce(knob: Knob, raw: str) -> Any:
             return int(text)
         except ValueError as err:
             raise ValueError(
-                f"{knob.env_var}={raw!r} cannot be read as the int that setting {knob.name!r} declares"
+                f"{setting.env_var}={raw!r} cannot be read as the int that setting {setting.name!r} declares"
             ) from err
     if isinstance(default, float):
         try:
             return float(text)
         except ValueError as err:
             raise ValueError(
-                f"{knob.env_var}={raw!r} cannot be read as the float that setting {knob.name!r} declares"
+                f"{setting.env_var}={raw!r} cannot be read as the float that setting {setting.name!r} declares"
             ) from err
     if default is UNSET or default is None:
-        if knob.name == "embedding_dimensions":
+        if setting.name == "embedding_dimensions":
             try:
                 return int(text)
             except ValueError as err:
                 raise ValueError(
-                    f"{knob.env_var}={raw!r} cannot be read as the int that setting {knob.name!r} declares"
+                    f"{setting.env_var}={raw!r} cannot be read as the int that setting {setting.name!r} declares"
                 ) from err
         return text
     return text
@@ -215,13 +215,13 @@ def _coerce(knob: Knob, raw: str) -> Any:
 def env_override(name: str, environ: Mapping[str, str] | None = None) -> Any | None:
     """What ``name``'s variable says, or ``None`` when it is unset or blank."""
     env = os.environ if environ is None else environ
-    for knob in KNOB_REGISTER:
-        if knob.name != name:
+    for setting in SETTING_REGISTER:
+        if setting.name != name:
             continue
-        raw = env.get(knob.env_var)
+        raw = env.get(setting.env_var)
         if raw is None:
             return None
-        value = _coerce(knob, str(raw))
+        value = _coerce(setting, str(raw))
         return None if value is _MISSING else value
     raise KeyError(f"{name!r} is not a declared setting")
 
@@ -245,21 +245,21 @@ def config_hash(values: Mapping[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def _recorded_default(knob: Knob) -> Any:
-    return None if knob.default is UNSET else knob.default
+def _recorded_default(setting: Setting) -> Any:
+    return None if setting.default is UNSET else setting.default
 
 
 def resolve_settings(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Defaults overlaid with ``GOVERNED_BI_*`` from ``environ``. Does not read ``.env``."""
     env = os.environ if environ is None else environ
     resolved: dict[str, Any] = {}
-    for knob in KNOB_REGISTER:
-        raw = env.get(knob.env_var)
+    for setting in SETTING_REGISTER:
+        raw = env.get(setting.env_var)
         if raw is None or str(raw).strip() == "":
-            resolved[knob.name] = _recorded_default(knob)
+            resolved[setting.name] = _recorded_default(setting)
             continue
-        value = _coerce(knob, str(raw))
-        resolved[knob.name] = _recorded_default(knob) if value is _MISSING else value
+        value = _coerce(setting, str(raw))
+        resolved[setting.name] = _recorded_default(setting) if value is _MISSING else value
     resolved["config_hash"] = config_hash(resolved)
     return resolved
 
@@ -285,15 +285,15 @@ def effective_settings() -> dict[str, Any]:
     return resolve_settings(os.environ)
 
 
-def _assert_knobs_are_coherent() -> None:
-    names = [k.name for k in KNOB_REGISTER]
+def _assert_settings_are_coherent() -> None:
+    names = [k.name for k in SETTING_REGISTER]
     dupes = sorted({n for n in names if names.count(n) > 1})
     if dupes:  # pragma: no cover - import-time guard
         raise AssertionError(f"duplicate settings: {dupes}")
-    variables = [k.env_var for k in KNOB_REGISTER]
+    variables = [k.env_var for k in SETTING_REGISTER]
     dup_vars = sorted({n for n in variables if variables.count(n) > 1})
     if dup_vars:  # pragma: no cover - import-time guard
         raise AssertionError(f"two settings share one variable: {dup_vars}")
 
 
-_assert_knobs_are_coherent()
+_assert_settings_are_coherent()

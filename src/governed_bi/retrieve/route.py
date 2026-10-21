@@ -1,7 +1,7 @@
 """Schema scoring from faceted hits.
 
-Each facet casts one vote per schema (its strongest hit); votes are summed.
-Optional ``weights`` multiply a facet's vote (default 1.0).
+Each channel casts one vote per schema (its strongest hit); votes are summed.
+Optional ``weights`` multiply a channel's vote (default 1.0).
 """
 
 
@@ -17,24 +17,24 @@ def route[F: Hashable, S: Hashable](
     *,
     weights: Mapping[F, float] | None = None,
 ) -> list[tuple[S, float]]:
-    """Aggregate ``(facet, schema, score)`` hits into per-schema totals.
+    """Aggregate ``(channel, schema, score)`` hits into per-schema totals.
 
-    Per schema: sum over facets of that facet's max hit score. Returns
-    ``(schema, score)`` pairs. ``weights`` multiplies a facet's vote (default 1.0).
+    Per schema: sum over channels of that channel's max hit score. Returns
+    ``(schema, score)`` pairs. ``weights`` multiplies a channel's vote (default 1.0).
     """
-    # schema → facet → max score seen
+    # schema → channel → max score seen
     by_schema: dict[S, dict[F, float]] = defaultdict(dict)
-    for facet, schema, score in hits:
-        facet_scores = by_schema[schema]
-        prev = facet_scores.get(facet)
+    for channel, schema, score in hits:
+        channel_scores = by_schema[schema]
+        prev = channel_scores.get(channel)
         if prev is None or score > prev:
-            facet_scores[facet] = score
+            channel_scores[channel] = score
 
     scale = weights or {}
     return [
         (
             schema,
-            sum(float(scale.get(facet, 1.0)) * score for facet, score in facet_scores.items()),
+            sum(float(scale.get(channel, 1.0)) * score for channel, score in channel_scores.items()),
         )
-        for schema, facet_scores in by_schema.items()
+        for schema, channel_scores in by_schema.items()
     ]

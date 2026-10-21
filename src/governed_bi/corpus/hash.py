@@ -27,11 +27,11 @@ def corpus_content_hash(
 ) -> str:
     """A hex digest over the corpus stored under ``root``.
 
-    ``schemas`` restricts the digest to those subtrees, so an arm's treatment identity
+    ``schemas`` restricts the digest to those subtrees, so a config's treatment identity
     covers exactly the schemas it served and a leftover subtree enters neither.
 
     Raises ``FileNotFoundError`` on a missing ``root`` rather than returning a sentinel:
-    two absences would compare equal and pass a comparability gate.
+    two absences would compare equal and pass a comparability check.
 
     Hashes **every** file in the selected subtrees, not just ``.yaml`` — the markdown D9
     keeps beside the assets is corpus content, and ignoring it reports two different
@@ -57,7 +57,7 @@ def corpus_content_hash(
         raise FileNotFoundError(
             f"no corpus at {base}. There is no digest for a corpus that is not there, "
             "and returning one would be v1's 'unknown' sentinel: a value that compares "
-            "equal to another run's missing corpus and passes the comparability gate"
+            "equal to another run's missing corpus and passes the comparability check"
         )
 
     replaced: dict[Path, bytes] = {}

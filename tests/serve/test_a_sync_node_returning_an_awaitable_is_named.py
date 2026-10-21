@@ -2,7 +2,7 @@
 
 ``inspect.isawaitable`` admits more than coroutines, and only a coroutine has ``close``. With a
 bare ``update.close()`` a Future-like return raised ``AttributeError`` first, so the crash was
-stamped under the wrong error type.
+written under the wrong error type.
 """
 
 from __future__ import annotations

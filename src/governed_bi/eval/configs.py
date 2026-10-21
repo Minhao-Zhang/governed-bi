@@ -1,6 +1,6 @@
-"""Eval arm specifications — factories for serve ``configurable`` (ADR 0005 §5).
+"""Eval config specifications — factories for serve ``configurable`` (ADR 0005 §5).
 
-Knobs match serve defaults. No eval-only permissive overrides.
+Settings match serve defaults. No eval-only permissive overrides.
 """
 
 from __future__ import annotations
@@ -14,14 +14,14 @@ from langchain_core.messages import AIMessage
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.scripted_model import ScriptedChatModel
 
-__all__ = ["ArmSpec", "oracle_arm", "stub_arm", "scripted_arm", "live_arm"]
+__all__ = ["ConfigSpec", "oracle_config", "stub_config", "scripted_config", "live_config"]
 
 BuildConfigurable = Callable[[], dict[str, Any]]
 
 
 @dataclass(frozen=True)
-class ArmSpec:
-    """One treatment arm: name + how to build LangGraph ``configurable``."""
+class ConfigSpec:
+    """One treatment config: name + how to build LangGraph ``configurable``."""
 
     name: str
     build_configurable: BuildConfigurable
@@ -30,12 +30,12 @@ class ArmSpec:
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
-def oracle_arm(*, connector: Any, **extra: Any) -> ArmSpec:
+def oracle_config(*, connector: Any, **extra: Any) -> ConfigSpec:
     """Grader ceiling — gold SQL only, no model.
 
     **Measures nothing unless the questions carry an independent gold** — a
     ``gold_fingerprint``, or ``gold_columns`` + ``gold_rows``. Without one every row is
-    ``correct=None`` and the arm's EX is *unmeasured*, because the only comparison left is
+    ``correct=None`` and the config's EX is *unmeasured*, because the only comparison left is
     the executed gold against itself, which returns 1.000 for any statement whatsoever.
     """
 
@@ -46,19 +46,19 @@ def oracle_arm(*, connector: Any, **extra: Any) -> ArmSpec:
             **extra,
         }
 
-    return ArmSpec(name="oracle", build_configurable=build, oracle_only=True)
+    return ConfigSpec(name="oracle", build_configurable=build, oracle_only=True)
 
 
-def live_arm(session: Any, *, name: str = "live", **extra: Any) -> ArmSpec:
-    """A real model over a real corpus — the arm that costs money.
+def live_config(session: Any, *, name: str = "live", **extra: Any) -> ConfigSpec:
+    """A real model over a real corpus — the config that costs money.
 
     Built from a :class:`~governed_bi.serve.session.Session`, not loose keyword arguments:
     the session is what mints ``corpus_content_hash``, ``prompt_set_hash`` and
-    ``knobs_resolved``, the fields every quotability gate reads. A fabricated hash (the
-    harness once used ``f"corpus-{arm}"``) makes two runs over *different* corpora compare
+    ``knobs_resolved``, the fields every quotability check reads. A fabricated hash (the
+    harness once used ``f"corpus-{config}"``) makes two runs over *different* corpora compare
     equal — a forged comparison, not a wrong one.
 
-    Pass the returned arm to ``run_arm(..., session=session)``; the harness then takes each
+    Pass the returned config to ``run_config(..., session=session)``; the harness then takes each
     turn from ``Session.turn`` instead of building one.
     """
     def build() -> dict[str, Any]:
@@ -66,10 +66,10 @@ def live_arm(session: Any, *, name: str = "live", **extra: Any) -> ArmSpec:
         cfg.update(extra)
         return cfg
 
-    return ArmSpec(name=name, build_configurable=build, extra={"session": session})
+    return ConfigSpec(name=name, build_configurable=build, extra={"session": session})
 
 
-def stub_arm(**extra: Any) -> ArmSpec:
+def stub_config(**extra: Any) -> ConfigSpec:
     """Serve without ``agent_model`` (F3 stub answer path)."""
 
     def build() -> dict[str, Any]:
@@ -80,14 +80,14 @@ def stub_arm(**extra: Any) -> ArmSpec:
         cfg.pop("agent_model", None)
         return cfg
 
-    return ArmSpec(name="stub", build_configurable=build)
+    return ConfigSpec(name="stub", build_configurable=build)
 
 
-def scripted_arm(
+def scripted_config(
     *,
     gold_sql_by_qid: Mapping[str, str],
     **extra: Any,
-) -> ArmSpec:
+) -> ConfigSpec:
     """Scripted model that ``run_query``s the gold SQL for each question.
 
     The model is rebuilt per question inside the harness via
@@ -101,11 +101,11 @@ def scripted_arm(
             **extra,
         }
 
-    return ArmSpec(name="scripted", build_configurable=build)
+    return ConfigSpec(name="scripted", build_configurable=build)
 
 
 def model_for_question(configurable: Mapping[str, Any], question_id: str) -> Any | None:
-    """Build a per-question :class:`ScriptedChatModel` when the arm is scripted."""
+    """Build a per-question :class:`ScriptedChatModel` when the config is scripted."""
     lookup = configurable.get("scripted_sql_lookup")
     if not isinstance(lookup, Mapping):
         return configurable.get("agent_model")

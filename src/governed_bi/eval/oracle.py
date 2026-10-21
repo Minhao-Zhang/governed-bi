@@ -9,7 +9,7 @@ the reference was taken on, or the harness lost rows. That is the "grader ceilin
 **Without that independent record there is no measurement here at all.** Fingerprinting the
 executed gold against itself returns ``correct=True`` for any statement whatsoever, including
 ``SELECT 'garbage'``. Such a question yields ``correct=None``, which
-``measure/population.Population.count`` reads as unmeasured, so the arm's headline EX is
+``measure/population.Population.count`` reads as unmeasured, so the config's headline EX is
 unmeasured with a reason attached — neither 1.000 nor 0.000, both of which are claims.
 """
 
@@ -19,7 +19,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from governed_bi.eval.grade import GradeResult, grade_results, result_fingerprint
-from governed_bi.register.stages import Outcome
+from governed_bi.registry.stages import Outcome
 
 __all__ = ["oracle_grade", "OracleQuestion", "NO_INDEPENDENT_GOLD"]
 
@@ -27,7 +27,7 @@ __all__ = ["oracle_grade", "OracleQuestion", "NO_INDEPENDENT_GOLD"]
 #: One fixture / dataset question for the free grader ceiling.
 OracleQuestion = Mapping[str, Any]
 
-#: ``grade_detail`` for a question this arm cannot grade. Spelled out because it is what a
+#: ``grade_detail`` for a question this config cannot grade. Spelled out because it is what a
 #: reader of the artifact sees instead of a score, so it has to say why the cell is empty.
 NO_INDEPENDENT_GOLD = (
     "no_independent_gold: the question carries neither gold_fingerprint nor "
@@ -59,9 +59,9 @@ def oracle_grade(
         columns, rows, _truncated = connector.execute(sql)
     except Exception as err:  # noqa: BLE001 — the row is the point
         # Caught rather than propagated: one unexecutable gold statement raising out of here
-        # would end the arm and discard every row already computed, reported as a shorter
-        # file. `harness.run_arm` calls this row by row and hands each to `on_row`, so a
-        # crashed row is recorded and the arm continues.
+        # would end the config and discard every row already computed, reported as a shorter
+        # file. `harness.run_config` calls this row by row and hands each to `on_row`, so a
+        # crashed row is recorded and the config continues.
         return _row(
             qid,
             sql,
@@ -139,7 +139,7 @@ def _row(
     """
     return {
         "question_id": qid,
-        "arm": "oracle",
+        "config": "oracle",
         "outcome": outcome,
         "correct": correct,
         "crashed": crashed,

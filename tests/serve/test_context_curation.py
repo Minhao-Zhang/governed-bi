@@ -241,9 +241,9 @@ def test_a_slugged_table_renders_the_key_the_tools_accept() -> None:
     ``slug()`` exists because an id becomes a filename and ``"Air Carriers".yaml`` is illegal
     on Windows (``corpus/identity.py``), so the divergence is deliberate and permanent. What
     was missing is that the prompt only ever saw one side of it: ``context.py`` renders
-    ``physical_name`` and ``bounds.may_inspect_schema`` tests membership of ``licensed``,
+    ``physical_name`` and ``bounds.may_inspect_schema`` tests membership of ``retrieved_tables``,
     which holds ids. Every call on the rendered spelling returned ``OUT_OF_SCOPE_MESSAGE`` —
-    which ``bounds.py`` makes deliberately indistinguishable from "not licensed", so the model
+    which ``bounds.py`` makes deliberately indistinguishable from "not retrieved_tables", so the model
     could not tell a typo from a permission error and had no way to recover.
     """
     from governed_bi.corpus.schema import ColumnAsset, TableAsset
@@ -324,7 +324,7 @@ def test_the_analyst_prompt_names_the_id_convention_and_every_tool() -> None:
     against calling the three that could have told it a column's value vocabulary — the
     information the corpus does not carry (0 of 5 947 columns have ``sample_values``).
     """
-    from governed_bi.register.prompts import PROMPT_REGISTRY, prompt_text
+    from governed_bi.registry.prompts import PROMPT_REGISTRY, prompt_text
 
     text = prompt_text("analyst")
     assert "id=" in text, "the id convention is rendered but never explained"
@@ -339,7 +339,7 @@ def test_context_eviction_reports_what_it_dropped() -> None:
     """``_assemble_and_evict`` dropped bodies and whole tables with no signal anywhere.
 
     No return value, no state field, no record field, no test — so a gold table that was routed,
-    retrieved, licensed and then evicted for space was indistinguishable in every artifact from
+    retrieved, retrieved_tables and then evicted for space was indistinguishable in every artifact from
     one that was rendered. That blind spot sits exactly between "table selection" and
     "generation", the two stages any attribution of the remaining loss has to separate.
     """

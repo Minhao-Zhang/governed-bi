@@ -7,7 +7,7 @@ Deterministic non-empty ``summary`` on every asset. Does not author
 
 from __future__ import annotations
 
-from governed_bi.register.knobs import knob_default
+from governed_bi.registry.settings import setting_default
 
 from .identity import derive_column_id, join_id
 from .identity import table_id as table_id_for
@@ -29,7 +29,7 @@ def fit_summary(head: str, entries: list[str], *, joiner: str = ", ", tail: str 
 
     Dropped count appears as ``(+N more)``. ``tail`` is measured inside the loop.
     """
-    cap = int(knob_default("summary_max_chars"))
+    cap = int(setting_default("summary_max_chars"))
     kept = list(entries)
     while True:
         dropped = len(entries) - len(kept)

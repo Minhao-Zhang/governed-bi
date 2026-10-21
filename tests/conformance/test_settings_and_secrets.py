@@ -9,9 +9,9 @@ import pytest
 from governed_bi.api.graph_app import resolve_run as server_resolve
 from governed_bi.boot import resolve_settings as eval_resolve
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.register.knobs import config_hash, reset_settings, resolve_settings
-from governed_bi.register.record import project
-from governed_bi.serve.session import _resolved_knobs
+from governed_bi.registry.record import project
+from governed_bi.registry.settings import config_hash, reset_settings, resolve_settings
+from governed_bi.serve.session import _resolved_settings
 
 
 def test_changing_one_setting_changes_the_recorded_config_hash(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -63,7 +63,7 @@ def test_a_secret_is_absent_from_the_config_hash_and_the_turn(monkeypatch: pytes
     secret = "sk-fake-not-recorded"
     monkeypatch.setenv("OPENAI_API_KEY", secret)
     reset_settings()
-    recorded = _resolved_knobs(GovernancePolicy(guard_rules_enabled={}))
+    recorded = _resolved_settings(GovernancePolicy(guard_rules_enabled={}))
     recorded["config_hash"] = config_hash(recorded)
 
     def extract(state, name):

@@ -8,7 +8,7 @@ text that enters either retrieval channel (``retrieve/index.py``), so the phrase
 key. ``check_train_only.py`` cannot see it: the phrases carry no question wording, and the
 contaminated corpus passed there with statistics byte-identical to the control.
 
-A source gate rather than a corpus gate, because the corpora are untracked and the durable
+A source check rather than a corpus check, because the corpora are untracked and the durable
 artifact is the producing script. Both producers — ``tools/_nuclear_dense_plus_prefix.py``
 and ``tools/_revise_miss_summaries.py`` — are deleted, so their tables live on here as rule A.
 Rule B is the shape: a summary shouting what its schema is **NOT**.
@@ -70,7 +70,7 @@ RETIRED_DISCRIMINATORS: dict[str, str] = {
 #: sibling *not* to pick.
 #:
 #: ``noqa: E501`` because a needle wrapped to fit a line limit no longer matches. Ten exceed
-#: 120 characters, which is why ``ruff check .`` — CI's third step, before every gate — failed
+#: 120 characters, which is why ``ruff check .`` — CI's third step, before every check — failed
 #: for the whole life of the ``v2`` branch.
 RETIRED_LEADS: dict[str, str] = {  # noqa: E501
     "ice_hockey_draft": "scouting draft prospects ELITEID height weight CSS junior leagues NOT career HOF Stanley",
@@ -136,7 +136,7 @@ ASSET_TYPE = re.compile(r"^\s*\"?asset_type\"?\s*:\s*\"?([A-Za-z_]+)", re.MULTIL
 #: promises a misspelling is still scanned and the equality test broke that promise: with
 #: ``== "schema"``, ``asset_type: schmea`` and ``asset_type: schema_v2`` both went silently
 #: exempt. Unrecognised now means scanned, which is the fail-closed direction. Kept as a literal
-#: rather than imported from ``register.assets``, so this gate still runs against a corpus
+#: rather than imported from ``registry.assets``, so this check still runs against a corpus
 #: whose vocabulary has moved on from this tree's.
 EXEMPT_ASSET_TYPES: frozenset[str] = frozenset(
     {"table", "column", "join", "metric", "term", "few_shot", "negative_example"}
@@ -153,7 +153,7 @@ SCAN_ROOTS: tuple[str, ...] = ("src", "tools", "tests", "corpora")
 
 #: Corpus trees **outside** the scanned repository, scanned when the checkout is present. The
 #: served corpus moved to its own repository on 2026-08-07 (D13), which took it out of every
-#: root above, and this gate went on passing while looking at no corpus at all. The counts
+#: root above, and this check went on passing while looking at no corpus at all. The counts
 #: printed on success are what makes that visible, so read them rather than the exit code.
 def sibling_data_roots(repo: pathlib.Path) -> tuple[pathlib.Path, ...]:
     return (repo.parent / "BIRD-corpus",)
@@ -165,7 +165,7 @@ SCAN_SUFFIXES: frozenset[str] = frozenset({".py", ".yaml", ".yml", ".json", ".js
 COMPILED_SUFFIXES: frozenset[str] = frozenset({".pyc", ".pyo"})
 
 #: An ASCII run long enough to be a phrase rather than an opcode operand. 8 is below the
-#: shortest retired phrase, so the floor never decides a verdict.
+#: shortest retired phrase, so the floor never decides a result.
 PRINTABLE_RUN = re.compile(rb"[ -~]{8,}")
 
 #: ``__pycache__`` stays here for the **text** scan — a ``.pyc`` is not source and would report
@@ -205,7 +205,7 @@ def compiled_to_scan(repo: pathlib.Path = REPO) -> list[pathlib.Path]:
     exactly that: ``tools/__pycache__/_nuclear_dense_plus_prefix.cpython-311.pyc``, 7 115 bytes,
     still importable, carrying the whole hand-written per-schema table (``cricket IPL batsman
     bowling``, ``Mubi lists subscriber trialist``, ``NHL-career Stanley-Cup HOF``, …) three days
-    after its ``.py`` was deleted. It was invisible to this gate for **two independent** reasons —
+    after its ``.py`` was deleted. It was invisible to this check for **two independent** reasons —
     ``__pycache__`` is in :data:`SKIP_DIRS` and ``.pyc`` is not in :data:`SCAN_SUFFIXES` — while
     this module's own docstring claimed the deleted producers "live on here as rule A".
 
@@ -352,7 +352,7 @@ def hits(paths: list[pathlib.Path], repo: pathlib.Path = REPO) -> list[str]:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             # Named rather than skipped: an unreadable file under a corpus root is a file this
-            # gate did not check, and a scan that silently shrinks is a scan that passes.
+            # check did not check, and a scan that silently shrinks is a scan that passes.
             found.append(f"{rel}: unreadable, so unchecked")
             continue
         lines = text.splitlines()
@@ -389,7 +389,7 @@ def hits(paths: list[pathlib.Path], repo: pathlib.Path = REPO) -> list[str]:
 def main() -> int:
     # ``--root DIR`` scans a tree the caller owns instead of this repository, so the negative
     # tests can plant a discriminator without writing one into ``corpora/`` — where a crashed
-    # run leaves it behind and every later invocation of this gate then fails on it. The
+    # run leaves it behind and every later invocation of this check then fails on it. The
     # tables above are declarations and stay this repository's either way.
     argv = sys.argv[1:]
     repo = REPO

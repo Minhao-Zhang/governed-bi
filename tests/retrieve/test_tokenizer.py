@@ -114,7 +114,7 @@ def test_repeating_a_query_term_buys_no_score() -> None:
 
     The score multiplied each term by its raw ``qf``, Okapi's ``k3 -> infinity`` limit, so a
     repeated word bought unbounded score: measured, ``search("cuisine")`` = 0.4498 against
-    ``search("cuisine cuisine cuisine")`` = 0.7103 on the same document. The five facet rewriters
+    ``search("cuisine cuisine cuisine")`` = 0.7103 on the same document. The five channel rewriters
     *generate* these queries, so this decided routing on a model's phrasing — a rewriter that said
     a keyword twice outranked one that said it once on identical evidence.
 

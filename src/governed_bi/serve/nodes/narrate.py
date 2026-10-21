@@ -65,11 +65,11 @@ async def narrate_node(state: dict, config: RunnableConfig) -> dict:
     """Write ``answer_text``. Adopts the agent's prose; generates only when there is none.
 
     Returns ``{}`` rather than ``{"answer_text": None}`` on the paths with nothing to say: the
-    channel keeps its reset value and ``stamp`` reads null either way, but the *update* says
+    channel keeps its reset value and ``finish`` reads null either way, but the *update* says
     which of the two happened.
 
     **Never raises into ``wrap_node``.** A timeout or unexpected exception would otherwise mark
-    an already-answered turn ``crashed`` (``failure is not None`` wins in ``stamp``). Degrade
+    an already-answered turn ``crashed`` (``failure is not None`` wins in ``finish``). Degrade
     to no prose instead.
 
     **``capped`` is separated from ``refused``, which ``ledger_ended_without_answer`` groups.**
@@ -143,7 +143,7 @@ async def _generate(
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    from governed_bi.register.prompts import prompt_text
+    from governed_bi.registry.prompts import prompt_text
     from governed_bi.serve.usage import usage_row
 
     model = configurable(config).get("utility_model")
@@ -156,7 +156,7 @@ async def _generate(
                 SystemMessage(prompt_text("narrate", prompt_variants(config))),
                 HumanMessage(_brief(state, result, capped=capped)),
             ],
-            # Named after the registered prompt, like the scope gate and the rewriters.
+            # Named after the registered prompt, like the scope check and the rewriters.
             config={"run_name": "narrate"},
         )
         text = str(getattr(reply, "text", "") or "").strip()

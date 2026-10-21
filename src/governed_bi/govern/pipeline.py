@@ -26,7 +26,7 @@ from ..corpus.analyst import AnalystCorpus
 from .check import GovernanceUsageError, check
 from .guard import has_control_characters
 from .identifiers import fold, fold_map
-from .layers import CheckVerdict, refuse
+from .layers import CheckResult, refuse
 from .policy import DEFAULT_DIALECT, GovernancePolicy
 from .scopes import iter_scopes
 
@@ -44,7 +44,7 @@ __all__ = [
 class Prepared:
     """Outcome of steps 1–4. ``sql`` is ``None`` when nothing may run."""
 
-    verdict: CheckVerdict
+    result: CheckResult
     #: The exact string to hand to ``Connector.execute``, limit included.
     sql: str | None
     raw: str
@@ -62,22 +62,22 @@ def normalise(text: str) -> str:
 
 
 def spellings_for(
-    corpus: AnalystCorpus, licensed: frozenset[str]
+    corpus: AnalystCorpus, retrieved_tables: frozenset[str]
 ) -> tuple[Mapping[str, str], frozenset[str], Mapping[str, Mapping[str, str]]]:
     """``(folded -> declared, ambiguous folds, per-table folded -> declared)``.
 
-    Scoped to ``licensed``, because a corpus-wide map makes ``name``, ``id`` and ``city``
+    Scoped to ``retrieved_tables``, because a corpus-wide map makes ``name``, ``id`` and ``city``
     ambiguous and would refuse nearly every query. **That scoping is right in kind and was not
-    narrow enough**: a turn licenses ~26 tables across ~8 schemas, so two of them declaring
+    narrow enough**: a turn retrieves ~26 tables across ~8 schemas, so two of them declaring
     ``Name`` and ``name`` made every reference to either refuse. Measured on the 2026-08-09 v3
-    arm, that hit 119 of 1 351 turns, 112 of which ended ``capped`` at EX 0.025, and it burned
+    config, that hit 119 of 1 351 turns, 112 of which ended ``capped`` at EX 0.025, and it burned
     24% of the run's input tokens on statements the model was never told how to fix.
 
     The third return value is the fix: the same map **per table**, so a *qualified* reference
     resolves against its own table and never consults the flat one. ``T1."Name"`` was never
     ambiguous; only the flat namespace made it look that way.
 
-    Two early exits remain — one ``continue`` for a licensed id the corpus does not hold, and the
+    Two early exits remain — one ``continue`` for a retrieved_tables id the corpus does not hold, and the
     ``physical_name`` guard below, which skips the write rather than the iteration. Neither can
     poison a bare key, because neither has a name
     to poison it with. Both fail closed elsewhere — an absent table contributes no allowed column
@@ -90,7 +90,7 @@ def spellings_for(
     # ambiguous, and the filter on the return drops it. Annotated without it until 2026-09-18,
     # which made the one write this function exists for a type error nothing ran.
     by_table: dict[str, Mapping[str, str] | None] = {}
-    for table_id in sorted(licensed):
+    for table_id in sorted(retrieved_tables):
         table = corpus.get(table_id)
         if table is None:
             continue
@@ -112,7 +112,7 @@ def spellings_for(
         schema = getattr(table, "schema", None)
         if isinstance(physical_name, str) and physical_name:
             bare = fold(physical_name)
-            # Two licensed schemas both declaring ``country`` must not have one of them own the
+            # Two retrieved_tables schemas both declaring ``country`` must not have one of them own the
             # bare key by sort order -- the same collision this function refuses, one scope up.
             # ``None`` poisons it; the schema-qualified key still resolves.
             #
@@ -121,7 +121,7 @@ def spellings_for(
             # above this block, so a self-colliding table neither registered nor poisoned its bare
             # key and another schema's table of the same name took sole ownership: ``FROM country``
             # bound to the self-colliding table while ``country.code`` was spelled from the other
-            # one, behind a passing verdict, where ``r_ambiguous_fold`` was the required answer.
+            # one, behind a passing result, where ``r_ambiguous_fold`` was the required answer.
             by_table[bare] = None if own_ambiguous or bare in by_table else own_spellings
             # The schema-qualified key is still withheld from a self-colliding table: within one
             # table the collision is real and the flat map's refusal is the right answer.
@@ -191,7 +191,7 @@ def _column_sources(tree: exp.Expr) -> dict[int, str]:
     answers a *different question* from ``bind()`` is the defect rather than the guard.
 
     Three statements motivated the per-scope rule; a first draft resolved each one over the whole
-    tree and rewrote it **wrongly** while reaching a passing verdict, which is precisely what
+    tree and rewrote it **wrongly** while reaching a passing result, which is precisely what
     ``r_ambiguous_fold`` exists to prevent:
 
     * ``... FROM s.people AS T1 WHERE id IN (SELECT T1.name FROM s.places AS T1)`` — the inner
@@ -208,7 +208,7 @@ def _column_sources(tree: exp.Expr) -> dict[int, str]:
         FROM (SELECT o.name, x.name FROM s.places AS o JOIN s.people AS x ON o.id = x.id) AS p
         WHERE EXISTS (SELECT 1 FROM s.people AS p WHERE p.id = 1)
 
-    With ``s.places.name`` and ``s.people.Name`` both licensed that reached ``passed: True`` and
+    With ``s.places.name`` and ``s.people.Name`` both retrieved_tables that reached ``passed: True`` and
     emitted ``p."Name"`` — the derived source exposes both spellings, so it executes and reads a
     different column of a different table, and ``bind()`` marks ``p.name`` ``opaque`` so nothing
     downstream looks at it. The outer ``p`` is derived *in the scope the reference sits in*, so
@@ -261,7 +261,7 @@ def canonicalise(
     ambiguous: frozenset[str] = frozenset(),
     dialect: str = DEFAULT_DIALECT,
     by_table: Mapping[str, Mapping[str, str]] | None = None,
-) -> str | CheckVerdict:
+) -> str | CheckResult:
     """Rewrite every declared identifier to the corpus's spelling, **and quote it**.
 
     Unknown identifiers — aliases, CTE names — pass through untouched: the binding rule
@@ -272,12 +272,12 @@ def canonicalise(
     folds an unquoted identifier to lower case, so the engine looks for ``address.cbsa``
     and reports no such relation. 81 of 738 tables and 610 of 6,909 columns in the
     obfuscated lake are mixed-case, and each failed at the engine *after* a passing
-    verdict, because ``check()`` compares folded keys. "Quote only when necessary" is
+    result, because ``check()`` compares folded keys. "Quote only when necessary" is
     rejected: *necessary* is a predicate over the engine's folding rules, which is the
     thing that was got wrong. Always-quoting also gives one spelling per identifier, so
     ``generated_sql`` is comparable across runs.
 
-    Returns the rewritten SQL, or a refusing :class:`CheckVerdict` when an identifier's
+    Returns the rewritten SQL, or a refusing :class:`CheckResult` when an identifier's
     folded form is ambiguous in the corpus.
     """
     try:
@@ -288,7 +288,7 @@ def canonicalise(
         return refuse("r_empty_statement", "no statement to canonicalise")
 
     # Qualified columns first. ``T1."Name"`` names exactly one table, so the flat map's
-    # ambiguity — which exists only because ~26 licensed tables share one namespace — cannot
+    # ambiguity — which exists only because ~26 retrieved tables share one namespace — cannot
     # apply to it. Resolving these here is what stops a genuine collision two tables away from
     # refusing a reference that was never in doubt.
     settled: set[int] = set()
@@ -353,7 +353,7 @@ def _existing_limit(tree: exp.Query) -> int | None:
     return None
 
 
-def apply_row_limit(sql: str, *, max_rows: int, dialect: str = DEFAULT_DIALECT) -> str | CheckVerdict:
+def apply_row_limit(sql: str, *, max_rows: int, dialect: str = DEFAULT_DIALECT) -> str | CheckResult:
     """Force ``min(existing, max_rows + 1)`` at the statement root."""
     try:
         tree = sqlglot.parse_one(sql, dialect=dialect)
@@ -381,7 +381,7 @@ def apply_row_limit(sql: str, *, max_rows: int, dialect: str = DEFAULT_DIALECT) 
 def prepare(
     sql: str,
     *,
-    licensed: frozenset[str] | None,
+    retrieved_tables: frozenset[str] | None,
     corpus: AnalystCorpus | None,
     spellings: Mapping[str, str] | None,
     ambiguous_folds: frozenset[str] = frozenset(),
@@ -395,22 +395,22 @@ def prepare(
     ``spellings`` has **no default** (ADR 0008 D7: an optional control argument is a
     control that will be un-wired — this one shipped optional and no production caller
     passed it). Pass ``spellings={}`` to state that this call declares none; ``None``
-    raises, on ``check()``'s reasoning for ``licensed=None`` — absence is not
+    raises, on ``check()``'s reasoning for ``retrieved_tables=None`` — absence is not
     permission and must not be spellable by omission.
     """
     if spellings is None:
         raise GovernanceUsageError(
             "prepare() requires `spellings`. Build it with `spellings_for(corpus, "
-            "licensed)`, or pass `spellings={}` to state that this call declares none. "
+            "retrieved_tables)`, or pass `spellings={}` to state that this call declares none. "
             "It has no default because it had one: the only production caller omitted "
             "it, so every mixed-case identifier in the corpus reached the engine folded "
-            "to lower case and failed after a passing verdict (ADR 0008 P1)."
+            "to lower case and failed after a passing result (ADR 0008 P1)."
         )
     policy = policy or GovernancePolicy()
 
     if has_control_characters(sql):
         return Prepared(
-            verdict=refuse(
+            result=refuse(
                 "r_control_characters",
                 "the statement contains control, bidi or zero-width characters, which "
                 "NFKC would fold into ordinary text",
@@ -429,20 +429,20 @@ def prepare(
         by_table=spellings_by_table,
     )
     if isinstance(canonical, dict):
-        return Prepared(verdict=canonical, sql=None, raw=sql, canonical=None)
+        return Prepared(result=canonical, sql=None, raw=sql, canonical=None)
 
-    verdict = check(
+    result = check(
         canonical,
-        licensed=licensed,
+        retrieved_tables=retrieved_tables,
         corpus=corpus,
         default_schema=default_schema,
         dialect=dialect,
         policy=policy,
     )
-    if not verdict["passed"]:
-        return Prepared(verdict=verdict, sql=None, raw=sql, canonical=canonical)
+    if not result["passed"]:
+        return Prepared(result=result, sql=None, raw=sql, canonical=canonical)
 
     limited = apply_row_limit(canonical, max_rows=policy.max_rows, dialect=dialect)
     if isinstance(limited, dict):
-        return Prepared(verdict=limited, sql=None, raw=sql, canonical=canonical)
-    return Prepared(verdict=verdict, sql=limited, raw=sql, canonical=canonical)
+        return Prepared(result=limited, sql=None, raw=sql, canonical=canonical)
+    return Prepared(result=result, sql=limited, raw=sql, canonical=canonical)

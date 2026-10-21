@@ -74,8 +74,8 @@ class ScriptedChatModel(BaseChatModel):
     def calls_with_system(self, text: str) -> list[int]:
         """Indices of the calls whose system prompt is exactly ``text``.
 
-        **One model serves several callers** — the guard's scope gate and the four facet query
-        rewriters (``FACET_EXTRACTS``; ``facet_schema`` is the fifth facet *node* and rewrites
+        **One model serves several callers** — the guard's scope check and the four channel query
+        rewriters (``CHANNEL_EXTRACTS``; ``channel_schema`` is the fifth channel *node* and rewrites
         nothing) share it whenever no separate utility model is configured — so call 0 is
         whichever ran first, and an assertion about the analyst that reads it silently changes
         subject. Selecting by system prompt stays true as more callers appear.

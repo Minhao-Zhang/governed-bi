@@ -1,8 +1,8 @@
 """``corpus_content_hash`` says a corpus changed. It cannot say what it was before.
 
-Taken from RyanChenJung/governed-bi-utkuai@12c3e15, where a control arm was built by copying a
-tree by hand and confirming with ``diff -rq``. That worked once, and stopped working when a knob
-of theirs began writing drafts into the corpus mid-run -- a live arm mutating its own treatment
+Taken from RyanChenJung/governed-bi-utkuai@12c3e15, where a control config was built by copying a
+tree by hand and confirming with ``diff -rq``. That worked once, and stopped working when a setting
+of theirs began writing drafts into the corpus mid-run -- a live config mutating its own treatment
 identity. **No path in this repository writes to a corpus during a run**, so what is being taken
 is the capability and its three destructive-guard defects already found, not a fix for a live
 defect here. The reason to hold it now is that the hash is unforgiving: adding a single file inside
@@ -56,7 +56,7 @@ def test_restore_returns_the_tree_to_the_captured_hash(tmp_path: Path) -> None:
 
 def test_restore_removes_a_file_the_snapshot_did_not_have(tmp_path: Path) -> None:
     """A draft written mid-run is a *new* file. A restore that only overwrites would leave it
-    behind and the next arm would inherit the previous arm's treatment."""
+    behind and the next config would inherit the previous config's treatment."""
     root = _corpus(tmp_path / "corpus")
     snapshot(root, tmp_path / "snap")
     (root / "draft.yaml").write_text("id: draft\nkind: term\nstatus: proposed\n")

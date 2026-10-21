@@ -1,22 +1,22 @@
 """A rendered comparison carries its own quotability, because a copied line leaves the flag.
 
-``report.py`` renders the paired McNemar whenever the population is non-empty, gate or no
-gate, and that is deliberate — the comment beside it says computing it for diagnostics
+``report.py`` renders the paired McNemar whenever the population is non-empty, check or no
+check, and that is deliberate — the comment beside it says computing it for diagnostics
 whatever ``quotable`` says is that line's job, and it is right. ``summary["comparison"]
-["quotable"]`` carries the verdict one key away.
+["quotable"]`` carries the result one key away.
 
 One key away is the problem. The rendered line is the thing a person copies into a message,
 a commit or a doc, and the boolean does not travel with it. **Every real pair in
-``runs/eval/`` is non-quotable today** — ``knobs_comparable`` returns ``cannot_evaluate``
-because ~50 of the 51 comparability knobs are absent from those rows — so every line that
+``runs/eval/`` is non-quotable today** — ``settings_comparable`` returns ``cannot_evaluate``
+because ~50 of the 51 comparability settings are absent from those rows — so every line that
 function has ever produced was a diagnostic that read exactly like a result:
 
     v4 - v3_fold: 0.0118 (p=0.1812, n=1351, discordant=126, MDE=0.0233)
 
-The gate was not removed and the render was not suppressed. Only the string changed.
+The check was not removed and the render was not suppressed. Only the string changed.
 
 ``McNemarResult.render`` itself is untouched: it is a statement about the statistic, and a
-gate verdict is not part of the arithmetic. The annotation is added where the gate's answer
+check result is not part of the arithmetic. The annotation is added where the check's answer
 is known.
 """
 
@@ -37,8 +37,8 @@ def _pair() -> tuple[Population, Population]:
 
 
 def test_a_quotable_delta_renders_unchanged() -> None:
-    """The gate passing must not decorate the line. Asserted first, so the marker means one
-    thing: a gate said no."""
+    """The check passing must not decorate the line. Asserted first, so the marker means one
+    thing: a check said no."""
     a, b = _pair()
     result = mcnemar(a, b, "correct")
 
@@ -46,7 +46,7 @@ def test_a_quotable_delta_renders_unchanged() -> None:
     assert MARKER not in _rendered_mcnemar(result, quotable=True)
 
 
-def test_a_non_quotable_delta_carries_the_verdict_in_the_string() -> None:
+def test_a_non_quotable_delta_carries_the_result_in_the_string() -> None:
     """The line has to survive being copied out of the report it came from."""
     a, b = _pair()
     result = mcnemar(a, b, "correct")
@@ -62,7 +62,7 @@ def test_a_non_quotable_delta_carries_the_verdict_in_the_string() -> None:
 def test_the_real_pair_on_disk_is_marked() -> None:
     """The case this exists for, through ``summarise`` rather than the helper.
 
-    ``arms.toml`` declares ``v4.compare_to = "v3_fold"``, so this pair is computed on every
+    ``configs.toml`` declares ``v4.compare_to = "v3_fold"``, so this pair is computed on every
     report. It is non-quotable and its delta is null (p=0.18) — the two facts a reader needs
     together, and until now only one of them travelled with the number.
     """
@@ -83,18 +83,18 @@ def test_the_real_pair_on_disk_is_marked() -> None:
 
     # `read_text` and not `open(...)` in a comprehension: `pyproject.toml` turns
     # `ResourceWarning` into an error, after 131 of them traced to one unclosed-handle bug.
-    arms = {
-        arm: [
+    configs = {
+        config: [
             json.loads(line)
             for line in (root / f).read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-        for arm, f in names.items()
+        for config, f in names.items()
     }
-    comparison = summarise(arms, pair=("v3_fold", "v4"))["comparison"]
+    comparison = summarise(configs, pair=("v3_fold", "v4"))["comparison"]
 
     assert comparison["quotable"] is False
     assert MARKER in comparison["mcnemar"], (
-        "the one pair arms.toml declares renders as a bare delta while a gate says it cannot "
+        "the one pair configs.toml declares renders as a bare delta while a check says it cannot "
         "be quoted"
     )

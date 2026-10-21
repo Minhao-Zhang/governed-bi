@@ -42,9 +42,9 @@ its own header says so -- so the interpreter dying is still covered only by the 
 eval get :data:`HARNESS_DB` instead, because their traffic is measurement. Measured 2026-08-20: a
 checkpoint blob averages 82.5 KB here (900 checkpoints, 36 threads, 88.4 MB) and 76.6 KB in
 ``runs/harness-checkpoints.sqlite``, where one single-turn thread is 23 checkpoints and ~2.1 MB --
-so a 131-question arm is ~275 MB, three times the whole conversation store as it stands, and one
+so a 131-question config is ~275 MB, three times the whole conversation store as it stands, and one
 file would be mostly benchmark. That is the same contamination that put 116 ``t-transport`` turns
-into the old JSONL log with no field to tell them apart. (This docstring used to price the arm at
+into the old JSONL log with no field to tell them apart. (This docstring used to price the config at
 "~3.9 MB of checkpoint each"; ADR 0014's Consequences retracted that as turn one's cost read as a  [retired]
 constant, and measured off the dev server's per-channel pickle rather than this saver.)
 
@@ -58,7 +58,7 @@ discovering it while reading the wrong table.
 through ``graph._SyncApp``. Reusing an ``AsyncSqliteSaver`` across two ``asyncio.run`` calls does
 not raise -- it **hangs** (observed). The cause is the saver's ``asyncio.Lock``, created on the loop
 that constructed it and taken by every method: an *uncontended* acquire returns on a fast path that
-never inspects the loop, so single-task reuse looks fine, while a *contended* one -- which the facet
+never inspects the loop, so single-task reuse looks fine, while a *contended* one -- which the channel
 fan-out guarantees every turn -- raises ``RuntimeError: Lock ... is bound to a different event
 loop`` **and leaves the lock held**, poisoning the saver for good. It is **not** the connection:
 ``aiosqlite`` creates each future on the current loop and resolves it via
@@ -93,7 +93,7 @@ __all__ = [
 #: these means the operator handed us a warehouse DSN -- the one thing this must never be.
 def _db_path(setting: str) -> Path:
     """Resolve one checkpoint path from the bound settings. Relative paths start at the repo."""
-    from governed_bi.register.knobs import effective_settings
+    from governed_bi.registry.settings import effective_settings
 
     raw = str(effective_settings()[setting])
     path = Path(raw)
@@ -138,7 +138,7 @@ async def _open(path: Path) -> Any:
     # ("eval compiles one graph per worker thread against one saver") -- that is false, each worker
     # gets its own graph, loop and connection, and per the note above it must. Left in place only
     # because removing a defensive flag on the concurrent eval path, which no test exercises, is
-    # the worse trade; delete it once an arm has actually run.
+    # the worse trade; delete it once a config has actually run.
     conn = await aiosqlite.connect(str(path), check_same_thread=False, timeout=30)
     saver = AsyncSqliteSaver(conn)
     await saver.setup()

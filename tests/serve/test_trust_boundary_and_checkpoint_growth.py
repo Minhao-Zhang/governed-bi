@@ -12,7 +12,7 @@ omission as an omission.
   unchanged. That remainder is B1 and is open — nothing below asserts
   otherwise.
 * ``compile_graph`` defaults to an ``InMemorySaver`` that nothing ever empties, and
-  ``eval/harness.py`` keeps one compiled graph per worker for a whole arm.
+  ``eval/harness.py`` keeps one compiled graph per worker for a whole config.
 """
 
 from __future__ import annotations
@@ -73,18 +73,18 @@ def test_a_finished_question_stops_costing_memory() -> None:
         return sum(1 for _ in saver.list(None))
 
     for index in range(3):
-        thread_id = f"run-arm-q{index}"
+        thread_id = f"run-config-q{index}"
         app._app.update_state({"configurable": {"thread_id": thread_id}}, {"question": "q"})
         assert depth() == 1, f"question {index} wrote nothing to evict"
         _evict(app, thread_id)
         assert depth() == 0, (
-            f"question {index} left checkpoints behind; over an arm this is ~100 KB per "
+            f"question {index} left checkpoints behind; over a config this is ~100 KB per "
             "question retained until the process exits"
         )
 
 
 def test_eviction_never_fails_a_turn() -> None:
-    """Housekeeping must not be able to kill an arm 900 questions in."""
+    """Housekeeping must not be able to kill a config 900 questions in."""
     _evict(compile_graph(), "never-existed")
     _evict(object(), "no-saver-at-all")
     _evict(compile_graph(checkpointer=False), "no-saver-compiled")

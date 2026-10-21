@@ -1,6 +1,6 @@
 """Pass-two re-retrieval inside selected schemas (ADR 0005 §2.5).
 
-Re-runs facet queries against a ``UnifiedIndex`` restricted to the selected
+Re-runs channel queries against a ``UnifiedIndex`` restricted to the selected
 schemas (global IDF via ``BM25.restrict_to``). Not a filter of pass-one.
 Untagged pass-one hits are carried forward unconditionally before budgets.
 """
@@ -10,15 +10,15 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import Any, Mapping, Sequence
 
-from governed_bi.register.assets import AssetType
-from governed_bi.register.facets import (
-    FACET_CHANNELS,
-    FACET_TARGETS,
+from governed_bi.registry.assets import AssetType
+from governed_bi.registry.channels import (
+    CHANNEL_TARGETS,
+    DECLARED_CHANNELS,
     SCORING_CHANNELS,
     Channel,
     ChannelState,
 )
-from governed_bi.register.stages import Stage
+from governed_bi.registry.stages import Stage
 from governed_bi.retrieve.budget import apply_budgets
 from governed_bi.retrieve.index import UnifiedIndex
 from governed_bi.serve.runtime import (
@@ -43,9 +43,9 @@ def pass_two_retrieve(
     query_vector: Sequence[float] | None = None,
     embedder: Any | None = None,
 ) -> dict[str, Any]:
-    """Re-search selected schemas per facet query; merge untagged pass-one hits.
+    """Re-search selected schemas per channel query; merge untagged pass-one hits.
 
-    ``query_vector`` is the raw question's, from ``accept``. ``embedder`` is what lets a facet's
+    ``query_vector`` is the raw question's, from ``accept``. ``embedder`` is what lets a channel's
     *rewritten* query be scored against its own vector; without it this pass blends BM25 over one
     text with cosine over another. Optional, because fixtures and no-embedder configurations
     legitimately have none, and then ``query_vector`` is the only vector available.
@@ -54,16 +54,16 @@ def pass_two_retrieve(
     depth = candidate_depth(state)
     scale = channel_scale(state)
     question = str(state.get("question") or "")
-    #: query text -> its vector, for this call. Two facets often rewrite to the same phrase.
+    #: query text -> its vector, for this call. Two channels often rewrite to the same phrase.
     vectors: dict[str, Sequence[float] | None] = {}
 
-    # Per-facet hit lists (dict payloads) after within-facet dedup.
-    hits_by_facet: dict[str, list[dict[str, Any]]] = {}
+    # Per-channel hit lists (dict payloads) after within-channel dedup.
+    hits_by_channel: dict[str, list[dict[str, Any]]] = {}
 
-    for facet_name, facet_result in (state.get("facets") or {}).items():
-        name = str(facet_name)
-        queries = _facet_queries(facet_result)
-        targets = _facet_targets(name)
+    for channel_name, channel_result in (state.get("channels") or {}).items():
+        name = str(channel_name)
+        queries = _channel_queries(channel_result)
+        targets = _channel_targets(name)
         candidate_ids = _candidate_ids(index, schema_set, targets)
 
         merged: dict[str, dict[str, Any]] = {}
@@ -71,18 +71,18 @@ def pass_two_retrieve(
             # **Each channel retrieves; their union is scored** (ADR 0005 §2.4). Gating this
             # block on `_scores_lexical(name)` as a whole, and taking candidates from the
             # lexical ranking with the cosine read back by id, breaks two things silently:
-            # `facet_example` declares only the semantic channel and is skipped entirely (its
+            # `channel_example` declares only the semantic channel and is skipped entirely (its
             # pass-one hits are then dropped below, since the carry-forward keeps only
             # *untagged* hits and every few-shot carries `TagRule.own_schema`); and for the
-            # other facets an asset with a strong cosine and no shared term cannot enter the
+            # other channels an asset with a strong cosine and no shared term cannot enter the
             # context at any depth. The `_scores_lexical` guard stays one level lower, because
-            # `Anomaly.extra_channel` is real — a facet must not be scored on a channel
-            # `register/facets.py` does not declare for it.
+            # `Anomaly.extra_channel` is real — a channel must not be scored on a channel
+            # `registry/channels.py` does not declare for it.
             restricted = (
                 index.lexical.restrict_to(candidate_ids) if _scores_lexical(name) else None
             )
-            # The channels this facet declares and this pass therefore consulted. `fuse`
-            # renormalises over these, so `facet_example` (semantic only) is not diluted, and a
+            # The channels this channel declares and this pass therefore consulted. `fuse`
+            # renormalises over these, so `channel_example` (semantic only) is not diluted, and a
             # document one consulted channel missed scores 0.0 on it rather than being credited
             # as if the channel never ran.
             consulted = frozenset(
@@ -103,7 +103,7 @@ def pass_two_retrieve(
                 # **Inside the query loop, and scored against the vector of *this* query.**
                 # Hoisted out, it scores the call-level `query_vector` — the raw question's —
                 # while the lexical channel searches `queries`, the utility-model rewrite, and
-                # the two are then blended. Memoised per call, so two facets producing the same
+                # the two are then blended. Memoised per call, so two channels producing the same
                 # rewrite embed it once and the raw question needs no call at all.
                 semantic_scores = (
                     _semantic_scores(
@@ -114,7 +114,7 @@ def pass_two_retrieve(
                     if _scores_semantic(name)
                     else {}
                 )
-                # Positive only, matching `nodes/facets.py`. The two passes disagreeing about
+                # Positive only, matching `nodes/channels.py`. The two passes disagreeing about
                 # what counts as a semantic score is how one asset ends up with two different
                 # `score` values in one turn.
                 semantic_scores = {
@@ -130,7 +130,7 @@ def pass_two_retrieve(
                 # order first and de-duplicating; the real ordering happens in `apply_budgets`.
                 lexical_top = list(lexical_scores)[:depth]
                 # The scale belongs to `combine_channels` and is a fixed ceiling, not a min-max
-                # over this facet's scored population: pass one and pass two score different
+                # over this channel's scored population: pass one and pass two score different
                 # candidate sets, so a population-dependent scale gave one asset two different
                 # numbers in one turn and `apply_budgets` sorted them together (audit I1).
                 for asset_id in dict.fromkeys([*lexical_top, *semantic_top]):
@@ -141,7 +141,7 @@ def pass_two_retrieve(
                     semantic = semantic_scores.get(asset_id)
                     score = _hybrid(lexical, semantic, consulted=consulted, scale=scale)
                     payload = {
-                        "facet": name,
+                        "channel": name,
                         "asset_id": asset_id,
                         "asset_type": (
                             entry.asset_type.value
@@ -154,59 +154,59 @@ def pass_two_retrieve(
                         "score": score,
                         "schema_tag": entry.schema_tag,
                     }
-                    _merge_within_facet(merged, payload)
+                    _merge_within_channel(merged, payload)
 
-        # Untagged pass-one hits for this facet — unconditional carry-forward.
-        pass_one_consulted = _pass_one_consulted(facet_result)
-        for hit in hits_of(facet_result):
+        # Untagged pass-one hits for this channel — unconditional carry-forward.
+        pass_one_consulted = _pass_one_consulted(channel_result)
+        for hit in hits_of(channel_result):
             if _raw_schema_tag(hit) is not None:
                 continue
             carried = _pass_one_payload(hit, name, pass_one_consulted, scale)
             if carried is None:
                 continue
-            _merge_within_facet(merged, carried)
+            _merge_within_channel(merged, carried)
 
         if merged:
-            hits_by_facet[name] = list(merged.values())
+            hits_by_channel[name] = list(merged.values())
 
-    return _build_retrieved(hits_by_facet, ranking, state, index)
+    return _build_retrieved(hits_by_channel, ranking, state, index)
 
 
-def _scores_lexical(facet_name: str) -> bool:
-    """Whether this facet declares a lexical channel — read from ``FACET_CHANNELS``.
+def _scores_lexical(channel_name: str) -> bool:
+    """Whether this channel declares a lexical channel — read from ``DECLARED_CHANNELS``.
 
-    Without the guard, pass two scores ``facet_example`` on ``lexical`` and a few-shot outranks
+    Without the guard, pass two scores ``channel_example`` on ``lexical`` and a few-shot outranks
     an entity hit on a channel the same turn's record declares ``not_configured``
-    (``Anomaly.extra_channel``). ADR 0005 §2: ``register/facets.py`` decides which channels a
-    facet uses and ``retrieve/`` must never decide it locally. An unrecognised facet name has no
+    (``Anomaly.extra_channel``). ADR 0005 §2: ``registry/channels.py`` decides which channels a
+    channel uses and ``retrieve/`` must never decide it locally. An unrecognised channel name has no
     declaration to consult, so it is scored on nothing.
     """
     try:
-        stage = Stage(facet_name)
+        stage = Stage(channel_name)
     except ValueError:
         return False
-    return Channel.lexical in FACET_CHANNELS.get(stage, frozenset())
+    return Channel.lexical in DECLARED_CHANNELS.get(stage, frozenset())
 
 
-def _scores_semantic(facet_name: str) -> bool:
-    """Whether this facet declares a semantic channel — the other half of :func:`_scores_lexical`.
+def _scores_semantic(channel_name: str) -> bool:
+    """Whether this channel declares a semantic channel — the other half of :func:`_scores_lexical`.
 
-    Two questions, not one: ``facet_example`` declares ``semantic`` alone, so answering "may I
+    Two questions, not one: ``channel_example`` declares ``semantic`` alone, so answering "may I
     run the vector channel here" with the lexical declaration silences it completely.
     """
     try:
-        stage = Stage(facet_name)
+        stage = Stage(channel_name)
     except ValueError:
         return False
-    return Channel.semantic in FACET_CHANNELS.get(stage, frozenset())
+    return Channel.semantic in DECLARED_CHANNELS.get(stage, frozenset())
 
 
-def _facet_targets(facet_name: str) -> frozenset[AssetType] | None:
+def _channel_targets(channel_name: str) -> frozenset[AssetType] | None:
     try:
-        stage = Stage(facet_name)
+        stage = Stage(channel_name)
     except ValueError:
         return None
-    return FACET_TARGETS.get(stage)
+    return CHANNEL_TARGETS.get(stage)
 
 
 def _candidate_ids(
@@ -225,13 +225,13 @@ def _candidate_ids(
     return out
 
 
-def _facet_queries(facet_result: Any) -> list[str]:
-    if facet_result is None:
+def _channel_queries(channel_result: Any) -> list[str]:
+    if channel_result is None:
         return []
-    if isinstance(facet_result, Mapping):
-        raw = facet_result.get("queries") or ()
+    if isinstance(channel_result, Mapping):
+        raw = channel_result.get("queries") or ()
     else:
-        raw = getattr(facet_result, "queries", None) or ()
+        raw = getattr(channel_result, "queries", None) or ()
     return [str(q) for q in raw if q is not None and str(q)]
 
 
@@ -273,11 +273,11 @@ def _vector_for(
 ) -> Sequence[float] | None:
     """:func:`~governed_bi.serve.runtime.vector_for_query`, memoised over this call.
 
-    The five facets frequently rewrite a question into overlapping phrases, and a facet whose
+    The five channels frequently rewrite a question into overlapping phrases, and a channel whose
     query *is* the question resolves to ``fallback`` with no embedding call at all.
 
     **The state is dropped here and the vector is not substituted** (audit I7). Pass two derives
-    ``consulted`` from ``register/facets.py``'s *declared* channels rather than from what ran, so
+    ``consulted`` from ``registry/channels.py``'s *declared* channels rather than from what ran, so
     it has nowhere to record an observed ``failed`` — that seam is pass one's. What it must not
     do is what it used to: score a rewrite's BM25 against the raw question's cosine. With
     ``None`` the semantic channel contributes 0.0 to every asset, which is a channel that found
@@ -302,17 +302,17 @@ def _hybrid(
 
     This score is what reaches ``apply_budgets``, so it decides which tables survive the cap of 8
     — the largest attributable loss in the pipeline — and fusing raw BM25 saturation with raw cosine
-    is the lexical score plus a small constant. ``scale`` carries the three fusion knobs **this turn
+    is the lexical score plus a small constant. ``scale`` carries the three fusion settings **this turn
     resolved**, rather than the values ``serve.runtime`` read when it was imported (audit I10).
 
-    ``consulted`` comes from the facet's declared channels (``_scores_lexical`` /
-    ``_scores_semantic``), so a facet declaring one channel is not diluted and a document one
+    ``consulted`` comes from the channel's declared channels (``_scores_lexical`` /
+    ``_scores_semantic``), so a channel declaring one channel is not diluted and a document one
     channel missed is not credited as if that channel never ran.
     """
     return combine_channels(lexical, semantic, consulted=consulted, scale=scale)
 
 
-def _merge_within_facet(
+def _merge_within_channel(
     merged: dict[str, dict[str, Any]],
     payload: dict[str, Any],
 ) -> None:
@@ -333,17 +333,17 @@ def _merge_within_facet(
         prev["queries"] = queries
 
 
-def _pass_one_consulted(facet_result: Any) -> frozenset[str]:
-    """The scoring channels pass one **recorded as having run** for this facet.
+def _pass_one_consulted(channel_result: Any) -> frozenset[str]:
+    """The scoring channels pass one **recorded as having run** for this channel.
 
-    Read from the facet result's ``channels``, not from ``FACET_CHANNELS``: the declaration says
-    which channels the facet uses, and a declared channel that failed reports ``failed`` there.
+    Read from the channel result's ``channels``, not from ``DECLARED_CHANNELS``: the declaration says
+    which channels the channel uses, and a declared channel that failed reports ``failed`` there.
     Counting it as consulted would divide by a channel that never scored anything.
     """
-    if isinstance(facet_result, Mapping):
-        channels = facet_result.get("channels")
+    if isinstance(channel_result, Mapping):
+        channels = channel_result.get("channels")
     else:
-        channels = getattr(facet_result, "channels", None)
+        channels = getattr(channel_result, "channels", None)
     if not isinstance(channels, Mapping):
         return frozenset()
     scoring = {c.value for c in SCORING_CHANNELS}
@@ -355,7 +355,7 @@ def _pass_one_consulted(facet_result: Any) -> frozenset[str]:
 
 
 def _pass_one_payload(
-    hit: Any, facet_name: str, consulted: Collection[str], scale: ChannelScale
+    hit: Any, channel_name: str, consulted: Collection[str], scale: ChannelScale
 ) -> dict[str, Any] | None:
     if isinstance(hit, Mapping):
         asset_id = hit.get("asset_id")
@@ -382,7 +382,7 @@ def _pass_one_payload(
         # hit: a channel holding a component for it demonstrably ran, whatever the record says.
         # Both empty means nothing is recorded about which channels ran, and then the components
         # present are the whole of what is known — the fallback `route_retrieve._hit_score` takes,
-        # for the same reason. Never the facet's declaration, which would divide by a channel
+        # for the same reason. Never the channel's declaration, which would divide by a channel
         # that did not run.
         present = frozenset(
             channel
@@ -398,7 +398,7 @@ def _pass_one_payload(
     if score is None:
         return None
     return {
-        "facet": facet_name,
+        "channel": channel_name,
         "asset_id": str(asset_id),
         "asset_type": str(asset_type.value if isinstance(asset_type, AssetType) else asset_type),
         "lexical": float(lexical) if lexical is not None else None,
@@ -420,7 +420,7 @@ def _build_retrieved(
     best_score: dict[str, float] = {}
     by_id: dict[str, tuple[str, AssetType, float]] = {}
 
-    for _facet_name, hits in facet_hits.items():
+    for _channel_name, hits in facet_hits.items():
         for payload in hits:
             asset_id = str(payload["asset_id"])
             asset_type_raw = payload["asset_type"]
@@ -473,7 +473,7 @@ def _build_retrieved(
         "attributions": {k: v for k, v in attributions.items() if k in kept_ids},
         "pulled_in": {},
         "schema_ranking": list(ranking),
-        # Imported rather than copied. The measured text is the raw question, not a facet
+        # Imported rather than copied. The measured text is the raw question, not a channel
         # rewrite, and a second copy of that choice would drift.
         "lexical_coverage": _lexical_coverage(state, index),
     }
@@ -481,7 +481,7 @@ def _build_retrieved(
     # lines above deletes over-budget ids from `selected` and `attributions`, so without this a
     # 9th-ranked gold table does not exist to the turn and the miss reads as "retrieval never
     # found it". A correctly routed question can still have its gold table below the cap; the
-    # offline arm that sized how often is retired (register/citations.py). Emitted only when
+    # offline config that sized how often is retired (register/citations.py). Emitted only when
     # something was cut, so a turn under budget is byte-identical and `context_hash` holds.
     if budgeted.dropped:
         out["budget_dropped"] = dict(budgeted.dropped)

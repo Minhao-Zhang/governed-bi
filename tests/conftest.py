@@ -38,7 +38,7 @@ def _load_dotenv_into_environ() -> int:
 
 
 def pytest_runtest_teardown(item, nextitem) -> None:  # noqa: ARG001
-    from governed_bi.register.knobs import reset_settings
+    from governed_bi.registry.settings import reset_settings
 
     reset_settings()
 

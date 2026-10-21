@@ -65,7 +65,7 @@ def _turn(thread_id: str) -> dict[str, Any]:
         "prompt_set_hash": "p",
         "knobs_resolved": {},
         "n_re_served": 0,
-        "facet_route_hits": [("facet_schema", "sales", 1.0)],
+        "channel_route_hits": [("channel_schema", "sales", 1.0)],
         "messages": [],
         "usage": [],
         "clarifications": [],

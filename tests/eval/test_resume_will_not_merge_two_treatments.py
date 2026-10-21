@@ -3,12 +3,12 @@
 The artifact filename carries ``--model``, ``--effort``, ``--top-n``, ``--embed``, the provider,
 ``--prompt-variant`` and (since 2026-08-11) ``--replay-routing``, so a renamed tag already
 aborts. It carries **no** corpus and no dataset, and an explicit ``--out`` bypasses the tag
-entirely. Pull ``../BIRD-corpus``, resume, and one artifact holds two corpora: every gate passes
-and the driver prints ``ALL GATES PASS -- these numbers are quotable as a single arm``.
+entirely. Pull ``../BIRD-corpus``, resume, and one artifact holds two corpora: every check passes
+and the driver prints ``ALL CHECKS PASS -- these numbers are quotable as a single config``.
 
 The guard reads three things back off the rows the resume intends to keep — the two treatment
-hashes and every comparability knob — because the hashes alone do not move with ``--top-n``,
-``--embed``, ``--reflect`` or the model id, and those are the knobs an ``--out`` run can change
+hashes and every comparability setting — because the hashes alone do not move with ``--top-n``,
+``--embed``, ``--reflect`` or the model id, and those are the settings an ``--out`` run can change
 with no tag to stop it.
 
 These tests drive :func:`resume_identity_problem` rather than ``main``: it is the only part of
@@ -29,17 +29,17 @@ from governed_bi.eval.provenance import (
     truncation_notice,
 )
 
-#: The two knobs the fixtures move. Real comparability knob names, so a rename in the register
+#: The two settings the fixtures move. Real comparability setting names, so a rename in the register
 #: breaks these tests rather than leaving them asserting against a string nothing declares.
-KNOBS = ("route_top_n", "abstention_policy_enabled")
+SETTINGS = ("route_top_n", "abstention_policy_enabled")
 
 
 @pytest.fixture(autouse=True)
-def _knob_names_are_real() -> None:
-    from governed_bi.register.knobs import knob_names
+def _setting_names_are_real() -> None:
+    from governed_bi.registry.settings import setting_names
 
-    missing = sorted(set(KNOBS) - knob_names())
-    assert not missing, f"{missing} are no longer comparability knobs; fix the fixtures"
+    missing = sorted(set(SETTINGS) - setting_names())
+    assert not missing, f"{missing} are no longer comparability settings; fix the fixtures"
 
 
 def _rows(
@@ -47,9 +47,9 @@ def _rows(
     *,
     corpus: Any = "corpus-a",
     prompt: Any = "prompt-p",
-    knobs: dict | None = None,
+    settings: dict | None = None,
     outcome: str = "answered",
-    licensed: tuple[str, ...] = ("s.t",),
+    retrieved_tables: tuple[str, ...] = ("s.t",),
     routing_pinned: bool = False,
     first_qid: int = 1,
 ) -> list[dict]:
@@ -58,9 +58,9 @@ def _rows(
             "question_id": f"q{i}",
             "corpus_content_hash": corpus,
             "prompt_set_hash": prompt,
-            "knobs_resolved": dict(knobs if knobs is not None else {"route_top_n": 3}),
+            "knobs_resolved": dict(settings if settings is not None else {"route_top_n": 3}),
             "outcome": outcome,
-            "licensed": list(licensed),
+            "licensed": list(retrieved_tables),
             "routing_pinned": routing_pinned,
         }
         for i in range(first_qid, first_qid + n)
@@ -106,7 +106,7 @@ def test_a_second_prompt_set_in_the_artifact_refuses_the_resume() -> None:
 def test_a_row_predating_the_field_warns_but_does_not_refuse() -> None:
     """``None`` on an *answered* row means "written before this field existed".
 
-    Refusing on it would strand every artifact produced before the treatment hashes landed,
+    Refusing on it would strand every artifact produced before the config hash landed,
     which is a different and much less likely failure than the one being guarded.
     """
     refusal, warnings = check(_rows(4, corpus=None, prompt=None))
@@ -124,7 +124,7 @@ def test_a_clarification_that_never_routed_is_counted_and_not_warned_about() -> 
     reader to ignore a warning. Reported as a count instead, in words that are not a caution.
     """
     rows = _rows(5) + _rows(
-        2, corpus=None, prompt=None, outcome="clarification", licensed=(), first_qid=6
+        2, corpus=None, prompt=None, outcome="clarification", retrieved_tables=(), first_qid=6
     )
     refusal, warnings = check(rows)
     assert refusal == ""
@@ -134,31 +134,31 @@ def test_a_clarification_that_never_routed_is_counted_and_not_warned_about() -> 
 
 
 def test_a_clarification_that_did_license_tables_still_warns() -> None:
-    """The narrow exemption stays narrow: only a turn that licensed *nothing* is the declared
+    """The narrow exemption stays narrow: only a turn that retrieved_tables *nothing* is the declared
     path. A clarification with tables in hand reached routing, so a missing hash there is the
     unexplained case the warning is for."""
-    rows = _rows(3, corpus=None, outcome="clarification", licensed=("s.t", "s.u"))
+    rows = _rows(3, corpus=None, outcome="clarification", retrieved_tables=("s.t", "s.u"))
     _, warnings = check(rows)
     assert any("cannot prove" in w for w in warnings)
 
 
-def test_a_comparability_knob_that_moved_refuses_even_though_both_hashes_agree() -> None:
+def test_a_comparability_setting_that_moved_refuses_even_though_both_hashes_agree() -> None:
     """The ``--out`` hole. ``--top-n`` moves no hash and is only in the filename tag, which an
     explicit ``--out`` bypasses — so two shortlist budgets could land in one artifact with the
     corpus and prompt guards both satisfied."""
     refusal, _ = check(
-        _rows(4, knobs={"route_top_n": 8}), knobs_resolved={"route_top_n": 3}
+        _rows(4, settings={"route_top_n": 8}), knobs_resolved={"route_top_n": 3}
     )
     assert "route_top_n" in refusal
     assert "8" in refusal and "3" in refusal
 
 
-def test_a_knob_recorded_on_one_side_only_warns_rather_than_refusing() -> None:
-    """All seven ``proxy_*`` artifacts in ``runs/eval/`` are missing six comparability knobs.
+def test_a_setting_recorded_on_one_side_only_warns_rather_than_refusing() -> None:
+    """All seven ``proxy_*`` artifacts in ``runs/eval/`` are missing six comparability settings.
     Refusing on that would make every artifact on disk unresumable, which is not what a
     treatment guard is for."""
     refusal, warnings = check(
-        _rows(3, knobs={}),
+        _rows(3, settings={}),
         knobs_resolved={"route_top_n": 3},
         comparability=frozenset({"route_top_n"}),
     )
@@ -166,10 +166,10 @@ def test_a_knob_recorded_on_one_side_only_warns_rather_than_refusing() -> None:
     assert any("route_top_n" in w and "cannot be shown to share it" in w for w in warnings)
 
 
-def test_a_knob_absent_from_both_sides_is_silent() -> None:
+def test_a_setting_absent_from_both_sides_is_silent() -> None:
     """Both declined to say. A warning here would fire four times on every real resume."""
     refusal, warnings = check(
-        _rows(3, knobs={"route_top_n": 3}),
+        _rows(3, settings={"route_top_n": 3}),
         comparability=frozenset({"route_top_n", "sqlglot_version"}),
     )
     assert refusal == ""
@@ -199,7 +199,7 @@ def test_a_second_run_without_resume_refuses_rather_than_appending(tmp_path) -> 
     population. ``Population.of`` does raise on the repeated ids — afterwards, which is too
     late for a number already on the screen.
     """
-    path = tmp_path / "arm.jsonl"
+    path = tmp_path / "config.jsonl"
     path.write_text('{"question_id": "q1"}\n{"question_id": "q2"}\n', encoding="utf-8")
 
     refusal = append_refusal(path, resume=False, truncate=False)
@@ -224,12 +224,12 @@ def test_only_truncate_destroys_an_artifact_and_it_says_how_much(tmp_path) -> No
 
     ``--force-fresh`` was documented as relaxing the *sibling-artifact* abort -- a path where
     the output file does not exist -- and then quietly acquired ``out_path.write_text("")`` in
-    ``main``, where no test could reach it. An arm on this dataset is hours of paid model calls.
+    ``main``, where no test could reach it. An config on this dataset is hours of paid model calls.
 
     The regression this pins: a driver in which ``--force-fresh`` truncates makes the first
     assertion fail, because the notice would be non-empty for it.
     """
-    path = tmp_path / "arm.jsonl"
+    path = tmp_path / "config.jsonl"
     path.write_text('{"question_id": "q1"}\n{"question_id": "q2"}\n', encoding="utf-8")
 
     assert truncation_notice(path, resume=False, truncate=False) is None, (
@@ -283,8 +283,8 @@ def test_an_unpinned_run_refuses_an_artifact_whose_routing_was_replayed() -> Non
     assert ok == ""
 
 
-def test_a_knob_the_writer_reshapes_is_not_a_second_treatment() -> None:
-    r"""The defect that refused **every** resume of every arm ever written.
+def test_a_setting_the_writer_reshapes_is_not_a_second_treatment() -> None:
+    r"""The defect that refused **every** resume of every config ever written.
 
     ``asset_budgets`` is a ``tuple`` of ``tuple``\ s in the register and a ``list`` of
     ``list``\ s once it has been through ``json.dump``. The guard compared ``repr`` of the
@@ -292,12 +292,12 @@ def test_a_knob_the_writer_reshapes_is_not_a_second_treatment() -> None:
     on a value that had not changed -- and the refusal it printed tells the reader to "Rename
     the artifact and start a new one", discarding hours of paid model calls.
 
-    Found by resuming a three-row smoke on 2026-09-20. One of the 62 ``knob_names``
-    is affected and it is on every row, so the resume path was dead for every arm.
+    Found by resuming a three-row smoke on 2026-09-20. One of the 62 ``setting_names``
+    is affected and it is on every row, so the resume path was dead for every config.
     """
-    from governed_bi.register.knobs import defaults, knob_names
+    from governed_bi.registry.settings import defaults, setting_names
 
-    assert "asset_budgets" in knob_names()
+    assert "asset_budgets" in setting_names()
     shipped = defaults()["asset_budgets"]
     assert isinstance(shipped, tuple), "fixture assumes the register ships a tuple"
 
@@ -305,7 +305,7 @@ def test_a_knob_the_writer_reshapes_is_not_a_second_treatment() -> None:
     assert repr(as_written) != repr(shipped), "the round trip must actually reshape it"
 
     refusal, warnings = check(
-        _rows(3, knobs={"asset_budgets": as_written}),
+        _rows(3, settings={"asset_budgets": as_written}),
         knobs_resolved={"asset_budgets": shipped},
         comparability=frozenset({"asset_budgets"}),
     )
@@ -321,7 +321,7 @@ def test_a_string_and_the_number_it_spells_are_still_two_treatments() -> None:
     buy the resume back by reporting drift as agreement.
     """
     refusal, _ = check(
-        _rows(3, knobs={"route_top_n": "3"}),
+        _rows(3, settings={"route_top_n": "3"}),
         knobs_resolved={"route_top_n": 3},
         comparability=frozenset({"route_top_n"}),
     )

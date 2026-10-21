@@ -76,9 +76,9 @@ def _run_turn(model: Any) -> dict[str, Any]:
         "turn_id": "t-partial",
         "messages": [],
         "usage": [],
-        # `ASK` proposes `FROM beer_factory.customers`, so the table has to be licensed or the
+        # `ASK` proposes `FROM beer_factory.customers`, so the table has to be retrieved_tables or the
         # attempt is a TABLES refusal rather than the passing statement these tests are about.
-        "licensed": ["beer_factory.customers"],
+        "retrieved_tables": ["beer_factory.customers"],
     }
     config = {
         "configurable": {
@@ -150,7 +150,7 @@ def test_a_node_timeout_keeps_the_streamed_ledger() -> None:
     The bound lives inside the node and fires between astream frames, so a timeout
     still sees the last committed values snapshot (including attempts). A slow *next*
     model call after the tool is long enough past the deadline that the frame completes
-    and then the hang-stop stamps crashed — mid-call cancel is deliberately not used
+    and then the hang-stop writes crashed — mid-call cancel is deliberately not used
     (see F1 / ``wrap.py``'s to_thread hazard).
     """
     import os
@@ -205,7 +205,7 @@ def test_a_timeout_overlapping_in_flight_run_query_still_records_the_attempt(
         return (
             '{"columns":["n"],"rows":[[1]],"row_count":1,"truncated":false}',
             {
-                "verdict_layer": None,
+                "result_layer": None,
                 "passed": True,
                 "reason_code": "passed",
                 "path": "agent",

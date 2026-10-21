@@ -126,8 +126,8 @@ def _print_coverage(label: str, rows: list[dict], gold_sql: dict[str, str], tabl
         print(f"{label:<18}= unmeasured")
         return
     covered = table_coverage(rows, gold_sql)
-    rate = covered["all_gold_tables_licensed"]
-    print(f"{label:<18}= {rate:.3f}   all gold tables licensed")
+    rate = covered["all_gold_tables_retrieved_tables"]
+    print(f"{label:<18}= {rate:.3f}   all gold tables retrieved")
 
 
 def main(argv: list[str] | None = None) -> int:

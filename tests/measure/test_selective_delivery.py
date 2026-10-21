@@ -64,7 +64,7 @@ from governed_bi.measure.signals import (
     assert_no_signal_reads_the_grade,
 )
 from governed_bi.measure.stats import McNemarResult
-from governed_bi.register.quantity import NotMeasured
+from governed_bi.registry.quantity import NotMeasured
 
 
 def _row(qid: str, *, outcome: str = "answered", correct: bool | None = True, **extra: object):
@@ -77,7 +77,7 @@ def _tokens(n: int) -> list[dict[str, object]]:
     return [{"stage": "agent_core", "output_tokens": n, "input_tokens": 10, "model_calls": 1}]
 
 
-def _arm(rows: list[dict[str, object]]) -> Population:
+def _config(rows: list[dict[str, object]]) -> Population:
     return graded(Population.of("fixture", rows))
 
 
@@ -107,11 +107,11 @@ def test_a_signal_that_cannot_separate_gives_exactly_the_no_ranking_curve() -> N
     ``0, 0.5, 1/3, 0.5, 0.6`` and an AURC of ``0.3867`` -- a signal that separates
     nothing would look like the best one on the page.
     """
-    arm = _arm(_ALL_TIED)
-    curve = risk_coverage(arm, SIGNALS["agent_out_tok"])
+    config = _config(_ALL_TIED)
+    curve = risk_coverage(config, SIGNALS["agent_out_tok"])
     assert curve.errors == (0.5, 1.0, 1.5, 2.0, 3.0)
     assert curve.aurc.value == pytest.approx(0.52)
-    assert curve.aurc.value == pytest.approx(no_ranking(arm).aurc.value)
+    assert curve.aurc.value == pytest.approx(no_ranking(config).aurc.value)
     # And the AUC agrees: one distinct value cannot discriminate, so mid-ranks put it at
     # exactly 0.5. Without mid-ranks the same fixture scores 0.25 or 0.75 depending on
     # which of the two right answers the driver wrote first.
@@ -126,7 +126,7 @@ def test_a_tie_group_is_one_operating_point_and_a_policy_cannot_split_it() -> No
     ranking. The empty policy is the honest answer and its accuracy is unmeasured, not
     zero: no answers were given, so there is no accuracy to report.
     """
-    curve = risk_coverage(_arm(_ALL_TIED), SIGNALS["agent_out_tok"])
+    curve = risk_coverage(_config(_ALL_TIED), SIGNALS["agent_out_tok"])
     assert curve.realisable_coverages() == (0.8,)
     assert curve.policy_at_most(0.4).delivered == frozenset()
     with pytest.raises(NotMeasured):
@@ -140,7 +140,7 @@ def test_a_separating_signal_produces_the_hand_computed_curve() -> None:
     ``0, 0, 1/3, 0.5, 0.6``; AURC ``(0 + 0 + 1/3 + 0.5 + 0.6)/5 = 0.28667``.
     """
     curve = risk_coverage(
-        _arm(
+        _config(
             [
                 _row("a", correct=True, usage=_tokens(10)),
                 _row("b", correct=True, usage=_tokens(20)),
@@ -160,13 +160,13 @@ def test_a_separating_signal_produces_the_hand_computed_curve() -> None:
 def test_the_declared_direction_is_applied_and_not_fitted() -> None:
     """Flip which turns are right; the curve must get *worse*, not silently re-sign.
 
-    A ranker that chooses its sign per arm cannot lose, and would report the same AURC
+    A ranker that chooses its sign per config cannot lose, and would report the same AURC
     on both fixtures. Here the same four token counts are paired with the opposite
     grades, so the declared "fewer tokens is safer" claim is now false and the curve
     must show it: AURC goes from 0.2867 to 0.7533 while the raw AUC goes 0.0 to 1.0.
     """
     inverted = risk_coverage(
-        _arm(
+        _config(
             [
                 _row("a", correct=False, usage=_tokens(10)),
                 _row("b", correct=False, usage=_tokens(20)),
@@ -189,7 +189,7 @@ def test_one_delivered_turn_without_the_signal_makes_the_whole_curve_unavailable
     """Not a curve over the other two. An AURC over a sub-population is a different
     number wearing the same name, and the report puts them in one column."""
     curve = risk_coverage(
-        _arm(
+        _config(
             [
                 _row("a", correct=True, usage=_tokens(10)),
                 _row("b", correct=False, usage=_tokens(20)),
@@ -220,9 +220,9 @@ def test_an_absent_ledger_is_unmeasured_and_an_empty_one_is_zero() -> None:
 
 def test_a_turn_that_is_neither_answered_nor_a_declared_abstention_is_refused() -> None:
     """A third kind of ending has to be classified before coverage means anything."""
-    arm = Population.of("odd", [_row("a", outcome="mystery", correct=False)])
+    config = Population.of("odd", [_row("a", outcome="mystery", correct=False)])
     with pytest.raises(ValueError, match="neither an answer nor a declared abstention"):
-        engine_policy(arm)
+        engine_policy(config)
 
 
 def test_crashes_and_ungraded_turns_leave_the_population_with_their_filters_named() -> None:
@@ -231,7 +231,7 @@ def test_crashes_and_ungraded_turns_leave_the_population_with_their_filters_name
     ``correct is None`` leaves too -- ``docs/measurement.md`` says a grade the harness
     could not make is not a wrong answer.
     """
-    arm = graded(
+    config = graded(
         Population.of(
             "mixed",
             [
@@ -242,12 +242,12 @@ def test_crashes_and_ungraded_turns_leave_the_population_with_their_filters_name
             ],
         )
     )
-    assert arm.units == {"a", "d"}
-    assert arm.filtered_by == (
+    assert config.units == {"a", "d"}
+    assert config.filtered_by == (
         "excluded crashed turns",
         "excluded turns the grader could not judge",
     )
-    assert engine_policy(arm).point().coverage.value == pytest.approx(0.5)
+    assert engine_policy(config).point().coverage.value == pytest.approx(0.5)
 
 
 # ── 3. the grade never reaches a signal ───────────────────────────────────────
@@ -314,7 +314,7 @@ def test_the_oracle_is_the_ceiling_and_is_labelled_as_reading_gold() -> None:
     """It exists so the curve has a scale, and it must be impossible to mistake for a
     deployable ranker: two right and two wrong turns give perfect accuracy to 50%."""
     curve = oracle(
-        _arm(
+        _config(
             [
                 _row("a", correct=True, usage=_tokens(40)),
                 _row("b", correct=False, usage=_tokens(10)),
@@ -338,7 +338,7 @@ def test_abstention_precision_is_over_the_priced_subset_and_says_so() -> None:
     ``unpriceable`` carries the third. This is §4.1's 62-of-73 in miniature.
     """
     priced = PricedAbstention.of(
-        _arm(
+        _config(
             [
                 _row("a", correct=True, usage=_tokens(10)),
                 _row("b", outcome="refused", correct=False, computed_correct=False),
@@ -368,7 +368,7 @@ def test_the_rate_has_no_attribute_that_hands_it_over_without_the_denominator() 
     so a caller that has the rate has necessarily read the 62 it is over.
     """
     wrong = PricedAbstention.of(
-        _arm(
+        _config(
             [
                 _row("a", correct=True, usage=_tokens(10)),
                 _row("b", outcome="refused", correct=False, computed_correct=False),
@@ -395,7 +395,7 @@ def test_no_priceable_decline_leaves_the_rate_unmeasured_rather_than_perfect() -
     """Both runs of the null replicate pair are in this state: 162 and 176 declines,
     none of them priced. A rate of 1.0 there would read as flawless abstention."""
     priced = PricedAbstention.of(
-        _arm(
+        _config(
             [
                 _row("a", correct=True, usage=_tokens(10)),
                 _row("b", outcome="refused", correct=False),
@@ -412,15 +412,15 @@ def test_no_priceable_decline_leaves_the_rate_unmeasured_rather_than_perfect() -
 
 def test_a_numerator_and_denominator_that_never_met_are_refused() -> None:
     """The whole reason the type holds two populations instead of a float."""
-    arm = _arm(
+    config = _config(
         [
             _row("a", outcome="refused", correct=False, computed_correct=False),
             _row("b", correct=True, usage=_tokens(10)),
         ]
     )
-    declined = arm.restrict(lambda r: r.get("outcome") == "refused", "declined turns only")
+    declined = config.restrict(lambda r: r.get("outcome") == "refused", "declined turns only")
     with pytest.raises(ValueError, match="not a restriction"):
-        PricedAbstention(declined=declined, priced=arm)
+        PricedAbstention(declined=declined, priced=config)
 
 
 def test_a_priced_abstention_never_credits_the_engine_for_a_withheld_answer() -> None:
@@ -430,17 +430,17 @@ def test_a_priced_abstention_never_credits_the_engine_for_a_withheld_answer() ->
     coverage and selective accuracy do not move. Folding the two is how an engine that
     commits to nothing scores well.
     """
-    arm = _arm(
+    config = _config(
         [
             _row("a", correct=True, usage=_tokens(10)),
             _row("b", correct=False, usage=_tokens(20)),
             _row("c", outcome="capped", correct=False, computed_correct=True),
         ]
     )
-    point = engine_policy(arm).point()
+    point = engine_policy(config).point()
     assert (point.delivered, point.correct) == (2, 1.0)
     assert point.accuracy.value == pytest.approx(0.5)
-    wrong = PricedAbstention.of(arm).would_have_been_wrong
+    wrong = PricedAbstention.of(config).would_have_been_wrong
     assert (wrong.wrong, wrong.priced) == (0, 1)
     assert wrong.share(1).value == pytest.approx(0.0)
 
@@ -463,7 +463,7 @@ def test_a_nested_trade_is_reported_as_arithmetic_and_not_as_a_test() -> None:
     who sees a p-value is entitled to think a null was tested. Before the fix this returned
     a ``McNemarResult`` with ``only_b = 0``, which is why that literal is asserted absent.
     """
-    arm = _arm(
+    config = _config(
         [
             _row("a", correct=True, usage=_tokens(10)),
             _row("b", correct=True, usage=_tokens(20)),
@@ -471,8 +471,8 @@ def test_a_nested_trade_is_reported_as_arithmetic_and_not_as_a_test() -> None:
             _row("d", correct=False, usage=_tokens(40)),
         ]
     )
-    engine = engine_policy(arm)
-    ranked = risk_coverage(arm, SIGNALS["agent_out_tok"]).policy_at_most(0.5)
+    engine = engine_policy(config)
+    ranked = risk_coverage(config, SIGNALS["agent_out_tok"]).policy_at_most(0.5)
     assert (engine.useful, ranked.useful) == (3, 2)
 
     result = compare_policies(engine, ranked)
@@ -487,14 +487,14 @@ def test_a_nested_trade_is_reported_as_arithmetic_and_not_as_a_test() -> None:
 
 def test_the_order_of_a_nested_pair_does_not_change_what_is_reported() -> None:
     """Which side the caller passes first is a presentation choice, not a finding."""
-    arm = _arm(
+    config = _config(
         [
             _row("a", correct=True, usage=_tokens(10)),
             _row("b", correct=False, usage=_tokens(20)),
         ]
     )
-    engine = engine_policy(arm)
-    narrower = DeliveryPolicy(label="narrower", population=arm, delivered=frozenset({"a"}))
+    engine = engine_policy(config)
+    narrower = DeliveryPolicy(label="narrower", population=config, delivered=frozenset({"a"}))
 
     for pair in ((engine, narrower), (narrower, engine)):
         result = compare_policies(*pair)
@@ -510,7 +510,7 @@ def test_two_policies_that_are_not_nested_still_get_the_real_paired_test() -> No
     Four turns: each policy delivers two, sharing one. So each side gains exactly one useful
     answer the other lacks, both discordant cells are non-zero, and the delta is 0.
     """
-    arm = _arm(
+    config = _config(
         [
             _row("a", correct=True, usage=_tokens(10)),
             _row("b", correct=True, usage=_tokens(20)),
@@ -518,8 +518,8 @@ def test_two_policies_that_are_not_nested_still_get_the_real_paired_test() -> No
             _row("d", correct=False, usage=_tokens(40)),
         ]
     )
-    left = DeliveryPolicy(label="left", population=arm, delivered=frozenset({"a", "b"}))
-    right = DeliveryPolicy(label="right", population=arm, delivered=frozenset({"b", "c"}))
+    left = DeliveryPolicy(label="left", population=config, delivered=frozenset({"a", "b"}))
+    right = DeliveryPolicy(label="right", population=config, delivered=frozenset({"b", "c"}))
 
     result = compare_policies(left, right)
     assert isinstance(result, McNemarResult), "a crossing pair is a real comparison"
@@ -531,8 +531,8 @@ def test_a_policy_compared_against_itself_is_not_a_null_result() -> None:
     """Equal delivery sets are one policy, and p = 1.0 over zero discordant pairs reads as
     evidence of no difference rather than as the tautology it is -- ``open-work.md`` §3.9's
     "assert a constant equals itself" with a statistic attached."""
-    arm = _arm([_row("a", correct=True, usage=_tokens(10))])
-    engine = engine_policy(arm)
+    config = _config([_row("a", correct=True, usage=_tokens(10))])
+    engine = engine_policy(config)
 
     result = compare_policies(engine, engine)
     assert isinstance(result, NestedPolicies)
@@ -540,21 +540,21 @@ def test_a_policy_compared_against_itself_is_not_a_null_result() -> None:
 
 
 def test_a_comparison_across_two_different_populations_is_refused() -> None:
-    """Two arms are not one paired comparison, and ``mcnemar`` is where that is caught.
+    """Two configs are not one paired comparison, and ``mcnemar`` is where that is caught.
 
     This is what stops the sub-population curves the driver prints separately from being
     differenced against the main table.
     """
-    left = _arm([_row("a", correct=True, usage=_tokens(10))])
-    right = _arm([_row("z", correct=True, usage=_tokens(10))])
+    left = _config([_row("a", correct=True, usage=_tokens(10))])
+    right = _config([_row("z", correct=True, usage=_tokens(10))])
     with pytest.raises(ValueError, match="unit sets differ"):
         compare_policies(engine_policy(left), engine_policy(right))
 
 
 def test_a_policy_cannot_deliver_a_turn_the_population_does_not_contain() -> None:
-    arm = _arm([_row("a", correct=True, usage=_tokens(10))])
+    config = _config([_row("a", correct=True, usage=_tokens(10))])
     with pytest.raises(ValueError, match="absent from"):
-        DeliveryPolicy(label="invented", population=arm, delivered=frozenset({"a", "ghost"}))
+        DeliveryPolicy(label="invented", population=config, delivered=frozenset({"a", "ghost"}))
 
 
 # ── operating-point questions ─────────────────────────────────────────────────
@@ -571,7 +571,7 @@ def test_coverage_at_a_target_accuracy_ignores_a_lucky_prefix() -> None:
     rows += [
         _row(f"x{i}", correct=bool(i % 2), usage=_tokens(10 + i)) for i in range(50)
     ]
-    curve = risk_coverage(_arm(rows), SIGNALS["agent_out_tok"])
+    curve = risk_coverage(_config(rows), SIGNALS["agent_out_tok"])
     assert curve.coverage_for(0.95, min_delivered=2).delivered == 2
     assert curve.coverage_for(0.95).why_absent
     assert "no k >= 50" in curve.coverage_for(0.95).why_absent
@@ -585,7 +585,7 @@ def test_coverage_at_a_target_accuracy_is_the_largest_k_and_not_the_first() -> N
     coverage 0.2 where the honest answer is 0.8.
     """
     curve = risk_coverage(
-        _arm(
+        _config(
             [
                 _row("a", correct=True, usage=_tokens(10)),
                 _row("b", correct=False, usage=_tokens(20)),
@@ -602,20 +602,20 @@ def test_coverage_at_a_target_accuracy_is_the_largest_k_and_not_the_first() -> N
     assert point.accuracy.value == pytest.approx(0.75)
 
 
-def test_a_policy_carries_its_arms_filter_trail_so_mismatched_pairs_are_refused() -> None:
+def test_a_policy_carries_its_configs_filter_trail_so_mismatched_pairs_are_refused() -> None:
     """Two populations over the same turns but filtered differently are not one pair.
 
     ``as_population`` rebuilds rows from scratch, and a rebuild that forgot to carry
     ``filtered_by`` would let the driver's sub-population curves -- the ones printed
-    under "signals present on only part of the arm" -- be differenced against the main
+    under "signals present on only part of the config" -- be differenced against the main
     table. ``mcnemar`` is where that has to be caught, and it can only catch it if the
     trail survives the rebuild.
     """
-    arm = _arm([_row("a", correct=True, usage=_tokens(10)), _row("b", correct=False, usage=_tokens(20))])
-    narrower = arm.restrict(lambda _r: True, "delivered turns carrying some signal")
+    config = _config([_row("a", correct=True, usage=_tokens(10)), _row("b", correct=False, usage=_tokens(20))])
+    narrower = config.restrict(lambda _r: True, "delivered turns carrying some signal")
     assert engine_policy(narrower).as_population().filtered_by == narrower.filtered_by
     with pytest.raises(ValueError, match="filtered differently"):
-        compare_policies(engine_policy(arm), engine_policy(narrower))
+        compare_policies(engine_policy(config), engine_policy(narrower))
 
 
 def test_every_curve_meets_the_engine_at_the_engines_own_coverage() -> None:
@@ -626,7 +626,7 @@ def test_every_curve_meets_the_engine_at_the_engines_own_coverage() -> None:
     The assertion can fail: rank the declines above the delivered turns and the oracle
     reads 0.0 here instead of 0.5.
     """
-    arm = _arm(
+    config = _config(
         [
             _row("a", correct=True, usage=_tokens(10)),
             _row("b", correct=False, usage=_tokens(20)),
@@ -634,9 +634,9 @@ def test_every_curve_meets_the_engine_at_the_engines_own_coverage() -> None:
             _row("d", outcome="capped", correct=False, computed_correct=False),
         ]
     )
-    at = engine_policy(arm).point().coverage.value
+    at = engine_policy(config).point().coverage.value
     assert at == pytest.approx(0.5)
-    for curve in (oracle(arm), no_ranking(arm), risk_coverage(arm, SIGNALS["agent_out_tok"])):
+    for curve in (oracle(config), no_ranking(config), risk_coverage(config, SIGNALS["agent_out_tok"])):
         assert curve.accuracy_at(at).accuracy.value == pytest.approx(0.5), curve.signal
 
 
@@ -647,20 +647,20 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def test_the_driver_runs_end_to_end_on_a_synthetic_artifact(tmp_path: Path) -> None:
-    """``tools/selective_curve.py`` against a hand-built arm, as a subprocess.
+    """``tools/selective_curve.py`` against a hand-built config, as a subprocess.
 
     Its real inputs live under ``runs/``, which is gitignored and absent on CI, so
     without this the driver is a ``tools/`` script nothing ever executes -- the
     "declared machinery with no wire" shape ``open-work.md`` §3.10 says is this
     repository's recurring defect. Naming it ``check_*`` would instead subject it to
     ``tests/conformance/test_register_closure.py``'s CI-or-manual declaration, and it
-    reports rather than gates.
+    reports rather than checks.
 
     The asserted numbers are hand-computed: 4 delivered turns of which 3 are right, one
     decline, so coverage is 4/5 and selective accuracy 3/4. Both appear on the operating
     point line, and the coincidence line must print exactly one distinct accuracy.
     """
-    artifact = tmp_path / "synthetic_arm.jsonl"
+    artifact = tmp_path / "synthetic_config.jsonl"
     rows = [
         _row("a", correct=True, usage=_tokens(10), licensed=["t"], attempts=[{"passed": True}]),
         _row("b", correct=True, usage=_tokens(20), licensed=["t"], attempts=[{"passed": True}]),

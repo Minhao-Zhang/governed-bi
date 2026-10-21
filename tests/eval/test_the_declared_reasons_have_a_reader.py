@@ -1,7 +1,7 @@
 """ADR 0013 §2's consumer, built rather than described.
 
 **What the ADR claimed and what was there.** §2 argues that putting the abstention reasons in
-``register/stages.py::REFUSED_BY_TO_STAGE`` — rather than in a private set beside the policy —
+``registry/stages.py::REFUSED_BY_TO_STAGE`` — rather than in a private set beside the policy —
 is what makes them readable, and names three readers: ``classify_outcome``, "the refusal
 histogram", and ``eval/report.py``. Measured on 2026-08-12:
 
@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 from governed_bi.eval.report import refusal_histogram, summarise
-from governed_bi.register.stages import ABSTENTION_REASONS, REFUSED_BY_TO_STAGE, Stage
+from governed_bi.registry.stages import ABSTENTION_REASONS, REFUSED_BY_TO_STAGE, Stage
 
 
 def _row(qid: str, *, outcome: str = "refused", **extra: Any) -> dict[str, Any]:
@@ -110,10 +110,10 @@ def test_every_key_in_the_table_is_reachable_through_the_reader() -> None:
     assert sum(hist["by_stage"].values()) == len(REFUSED_BY_TO_STAGE)
 
 
-def test_the_arm_summary_carries_the_histogram() -> None:
+def test_the_config_summary_carries_the_histogram() -> None:
     """``summarise`` is what the drivers and the report read, so the wire ends there."""
     summary = summarise(
         {"v4": [_row("q1", terminal_reason="nothing_licensed"), _row("q2", outcome="answered")]}
     )
-    assert summary["arms"]["v4"]["refusals"]["by_stage"] == {Stage.abstain.value: 1}
-    assert summary["arms"]["v4"]["refusals"]["n_rows"] == 2
+    assert summary["configs"]["v4"]["refusals"]["by_stage"] == {Stage.abstain.value: 1}
+    assert summary["configs"]["v4"]["refusals"]["n_rows"] == 2

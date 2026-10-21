@@ -11,7 +11,7 @@ import math
 from dataclasses import dataclass
 from statistics import NormalDist
 
-from ..register.quantity import Measured, Relation
+from ..registry.quantity import Measured, Relation
 from .population import Population
 
 __all__ = ["McNemarResult", "mcnemar", "mde", "rule_of_three"]
@@ -73,7 +73,7 @@ def mcnemar(a: Population, b: Population, outcome: str) -> McNemarResult:
         raise ValueError(
             f"unit sets differ: {only_a} only in {a.label!r}, {only_b} only in "
             f"{b.label!r}. Intersect deliberately with .restrict() and label it — "
-            "units missing from one arm are not missing at random."
+            "units missing from one config are not missing at random."
         )
 
     rows_a, rows_b = a.by_unit(), b.by_unit()
@@ -123,7 +123,7 @@ def mcnemar(a: Population, b: Population, outcome: str) -> McNemarResult:
 def _exact_two_sided(only_a: int, only_b: int) -> Measured[float]:
     """Two-sided exact binomial p over the discordant pairs.
 
-    Under the null each discordant pair favours either arm with probability 1/2, so
+    Under the null each discordant pair favours either config with probability 1/2, so
     ``P = 2 * P(X <= min(b, c))`` for ``X ~ Binomial(b + c, 1/2)``, capped at 1. Zero
     discordant pairs yields 1.0 and is not special-cased: the MDE carries how
     informative that 1.0 is.
@@ -147,7 +147,7 @@ def mde(
 
     ``(z_{1-alpha/2} + z_{power}) * sqrt(d / n)``, where ``d`` is the discordance
     rate. **Requires** ``d``: the standard error of a paired difference depends on how
-    often the arms disagree, and an MDE computed from ``n`` and a base rate alone is a
+    often the configs disagree, and an MDE computed from ``n`` and a base rate alone is a
     smaller, different number that makes an underpowered comparison look decisive.
 
     Post-hoc by construction, since ``d`` is observed. State it as such wherever it
@@ -163,7 +163,7 @@ def mde(
     d = discordance.value
     if d <= 0:
         return Measured.unmeasured(
-            "zero discordant pairs: the arms never disagreed, so this comparison "
+            "zero discordant pairs: the configs never disagreed, so this comparison "
             "has no resolution to report. Widen n or accept that nothing is "
             "detectable here."
         )
@@ -176,9 +176,9 @@ def rule_of_three(n_trials: int) -> Measured[float]:
     """Upper bound on a rate after observing zero events in ``n_trials``.
 
     ``3/n`` at roughly 95% confidence. Returned as an
-    :attr:`~governed_bi.register.quantity.Relation.at_most` bound, so it renders with
+    :attr:`~governed_bi.registry.quantity.Relation.at_most` bound, so it renders with
     its inequality attached and cannot be quoted as a point estimate — which is what
-    v1 did when it published a refusal rate of 0% from a gate that had never fired.
+    v1 did when it published a refusal rate of 0% from a check that had never fired.
     """
     if n_trials <= 0:
         return Measured.unmeasured("no trials, so no bound")

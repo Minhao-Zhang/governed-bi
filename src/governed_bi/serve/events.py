@@ -33,7 +33,7 @@ __all__ = [
 ]
 
 #: Monotonic within this process. Client owns ordering across SSE connections.
-#: ``itertools.count`` is safe under concurrent facet fan-out.
+#: ``itertools.count`` is safe under concurrent channel fan-out.
 _SEQ = itertools.count(1)
 
 #: Stage that carries ``serve_path`` on its ``start``.
@@ -136,10 +136,10 @@ def _guard(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
         return "ok", {}
     outcome = guard.get("outcome")
     if outcome == "error_failed_open":
-        return "error", {"gate": "error_failed_open"}
+        return "error", {"check": "error_failed_open"}
     if outcome == "blocked":
         detail: dict[str, Any] = {}
-        # rule_id is closed-vocabulary; GuardVerdict.detail is free text and dropped.
+        # rule_id is closed-vocabulary; GuardResult.detail is free text and dropped.
         if guard.get("rule_id"):
             detail["rule_id"] = str(guard["rule_id"])
         return "blocked", detail
@@ -157,12 +157,12 @@ def _rewrite(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     return "ok", {"rewritten": outcome != "unchanged"}
 
 
-def _facet(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+def _channel(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     """``ok`` with hit count, or ``error`` when a declared channel failed."""
-    facets = update.get("facets")
-    if not isinstance(facets, Mapping):
+    channels = update.get("channels")
+    if not isinstance(channels, Mapping):
         return "ok", {}
-    for result in facets.values():
+    for result in channels.values():
         if not isinstance(result, Mapping):
             continue
         detail: dict[str, Any] = {"n_hits": len(result.get("hits") or ())}
@@ -196,9 +196,9 @@ def _resolve(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
         pulled_in = retrieved.get("pulled_in")
         if isinstance(pulled_in, Mapping):
             detail["n_pulled_in"] = len(pulled_in)
-    licensed = update.get("licensed")
-    if isinstance(licensed, (list, tuple)):
-        detail["n_licensed"] = len(licensed)
+    retrieved_tables = update.get("retrieved_tables")
+    if isinstance(retrieved_tables, (list, tuple)):
+        detail["n_licensed"] = len(retrieved_tables)
     return "ok", detail
 
 
@@ -207,9 +207,9 @@ def _connect(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     detail: dict[str, Any] = {}
     if isinstance(crossings, (list, tuple)):
         detail["n_crossings"] = len(crossings)
-    licensed = update.get("licensed")
-    if isinstance(licensed, (list, tuple)):
-        detail["n_licensed"] = len(licensed)
+    retrieved_tables = update.get("retrieved_tables")
+    if isinstance(retrieved_tables, (list, tuple)):
+        detail["n_licensed"] = len(retrieved_tables)
     return "ok", detail
 
 
@@ -248,11 +248,11 @@ _DETAIL_BY_STAGE: dict[str, Any] = {
     "accept": _accept,
     "guard": _guard,
     "rewrite": _rewrite,
-    "facet_schema": _facet,
-    "facet_term": _facet,
-    "facet_metric": _facet,
-    "facet_entity": _facet,
-    "facet_example": _facet,
+    "channel_schema": _channel,
+    "channel_term": _channel,
+    "channel_metric": _channel,
+    "channel_entity": _channel,
+    "channel_example": _channel,
     "route": _route,
     "resolve": _resolve,
     "connect": _connect,

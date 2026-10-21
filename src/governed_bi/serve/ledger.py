@@ -1,6 +1,6 @@
 """Attempt rows -> the turn's ``ExecutionRecord``. One projection, three readers.
 
-Lifted out of ``serve/tools.py`` so that ``stamp.py`` -- the recorder, which writes no tool and
+Lifted out of ``serve/tools.py`` so that ``finish.py`` -- the recorder, which writes no tool and
 calls no model -- does not import the tool surface. These functions are not about tools: they
 are about what a sequence of governed attempts *means*, and ``eval/`` and the register read the
 same vocabulary (``govern.ledger.ExecutionRecord``).
@@ -13,7 +13,7 @@ from typing import Any
 
 from governed_bi.govern.layers import GUARDRAIL_ERROR
 from governed_bi.govern.ledger import AttemptRecord, ExecutionRecord, ExecutorPath, execution_record
-from governed_bi.register.stages import ATTEMPT_CAP_REFUSED_BY
+from governed_bi.registry.stages import ATTEMPT_CAP_REFUSED_BY
 
 __all__ = [
     "attempt_field",
@@ -50,7 +50,7 @@ def attempt_field(attempt: Any, name: str) -> Any:
 def answering_attempts(attempts: Sequence[Any]) -> list[Any]:
     """The ledger rows from a path that can answer the question.
 
-    One function, three readers (``execution_from_attempts``, ``stamp``'s outcome derivation,
+    One function, three readers (``execution_from_attempts``, ``finish``'s outcome derivation,
     ``agent_core``'s ``generated_sql``): three copies of "which attempts count" is three
     answers, and the one that disagrees reports a turn as answered.
     """
@@ -70,7 +70,7 @@ def execution_from_attempts(attempts: Sequence[Any]) -> ExecutionRecord:
     **The cap is tested before the pass, and the order is load-bearing.** Reversed, ``"capped"``
     is unreachable on any turn where a statement ever succeeded, and that turn exists: measured
     live, an agent with two passing and two blocked attempts hit the cap, told the user it could
-    not answer, and was stamped ``terminal: "answered"``. ADR 0006 §5 — the cap **terminates the
+    not answer, and was written ``terminal: "answered"``. ADR 0006 §5 — the cap **terminates the
     turn**, and an earlier success does not undo that.
 
     The vocabulary is ``govern.ledger.ExecutionRecord``'s. ``"graded"`` belongs to the
@@ -88,9 +88,9 @@ def execution_from_attempts(attempts: Sequence[Any]) -> ExecutionRecord:
 
 
 def ledger_ended_without_answer(state: Mapping[str, Any]) -> bool:
-    """True when stamp will classify the turn capped/refused from ``execution.terminal``.
+    """True when finish will classify the turn capped/refused from ``execution.terminal``.
 
-    ``agent_core`` still writes ``path_kind: answered`` on those turns (stamp's ledger branch
+    ``agent_core`` still writes ``path_kind: answered`` on those turns (finish's ledger branch
     requires it). Reflect/narrate use this so they do not decorate a refusal.
     """
     execution = state.get("execution")
@@ -100,35 +100,35 @@ def ledger_ended_without_answer(state: Mapping[str, Any]) -> bool:
 
 
 def pipeline_error_attempt(path: ExecutorPath, detail: str) -> AttemptRecord:
-    """The ledger row for an attempt that died *before* a verdict existed.
+    """The ledger row for an attempt that died *before* a result existed.
 
     Closes the 2026-08-10 audit's C1, which was the worst measurement defect found: an exception
     escaping ``prepare()`` was caught on the tool surface, refunded, and returned to the model as
-    a string, with **no ledger row written at all**. ``stamp`` reads an empty ledger as "the model
+    a string, with **no ledger row written at all**. ``finish`` reads an empty ledger as "the model
     answered from the delivered context", so the turn recorded ``outcome: answered``,
-    ``guardrail_errors: 0``, every quotability gate green — and ``generated_sql`` holding a
+    ``guardrail_errors: 0``, every quotability check green — and ``generated_sql`` holding a
     statement that was never checked and never executed. A systematically broken ``check()``
-    presented as a clean, quotable arm.
+    presented as a clean, quotable config.
 
     That the escape is reachable is deliberate on the governance side and correct there:
     ``check()`` normalises its key arguments (the ``normalise_column_key`` calls over
     ``excluded_columns`` / ``suspect_columns`` / ``allowed_columns``) **outside** its own ``try`` so
-    that a malformed key raises instead of producing a blocked verdict, because "a security
+    that a malformed key raises instead of producing a blocked result, because "a security
     parameter was not wired up" is never a statement's fault. The defect was on the *recording*
     side — the raise had nowhere to land.
 
     ``reason_code`` is :data:`~governed_bi.govern.layers.GUARDRAIL_ERROR`, so
     ``govern.ledger.guardrail_errors`` counts it (it counts by reason code) and the
-    ``guardrail_errors == 0`` quotability gate fires. With ``stamp``'s crash branch that makes the
+    ``guardrail_errors == 0`` quotability check fires. With ``finish``'s crash branch that makes the
     turn ``crashed``, which is what a broken checker is.
 
-    ``verdict_layer`` is ``None`` for the same reason :func:`cap_attempt` gives: no layer ran, and
+    ``result_layer`` is ``None`` for the same reason :func:`cap_attempt` gives: no layer ran, and
     a rule id or a layer here would attribute our own failure to a governance layer that never
     executed. ``check()``'s *internal* ``except`` still uses ``internal_error(layer, ...)``,
     because there a layer genuinely was running.
     """
     return AttemptRecord(
-        verdict_layer=None,
+        result_layer=None,
         passed=False,
         reason_code=GUARDRAIL_ERROR,
         path=path,
@@ -143,13 +143,13 @@ def cap_attempt() -> AttemptRecord:
     and ``ExecutionRecord`` declared ``"capped"`` with nothing ever writing it.
 
     Built directly rather than through :func:`~governed_bi.govern.layers.refuse`: the cap is not
-    a layer verdict (ADR 0006 §5 keeps ``capped`` distinct from ``refused``), and a rule id would
+    a layer result (ADR 0006 §5 keeps ``capped`` distinct from ``refused``), and a rule id would
     attribute it to a governance layer that never ran. The reason code is
-    :data:`~governed_bi.register.stages.ATTEMPT_CAP_REFUSED_BY`, the declared value
+    :data:`~governed_bi.registry.stages.ATTEMPT_CAP_REFUSED_BY`, the declared value
     ``classify_outcome`` reads to return ``Outcome.capped``.
     """
     return AttemptRecord(
-        verdict_layer=None,
+        result_layer=None,
         passed=False,
         reason_code=ATTEMPT_CAP_REFUSED_BY,
         path="agent",

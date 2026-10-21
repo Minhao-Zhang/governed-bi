@@ -18,7 +18,7 @@ def check():
     def _check(
         sql: str,
         *,
-        licensed,
+        retrieved_tables,
         corpus=None,
         allowed_columns=None,
         excluded_columns=(),
@@ -32,7 +32,7 @@ def check():
                 excluded=excluded_columns,
                 suspect=suspect_columns,
             )
-        return real_check(sql, licensed=licensed, corpus=corpus, **kwargs)
+        return real_check(sql, retrieved_tables=retrieved_tables, corpus=corpus, **kwargs)
 
     return _check
 
@@ -45,7 +45,7 @@ def prepare():
     def _prepare(
         sql: str,
         *,
-        licensed,
+        retrieved_tables,
         corpus=None,
         allowed_columns=None,
         excluded_columns=(),
@@ -64,6 +64,6 @@ def prepare():
         # map here is the explicit "this call declares none" the signature asks for; a
         # test that cares passes its own.
         kwargs.setdefault("spellings", {})
-        return real_prepare(sql, licensed=licensed, corpus=corpus, **kwargs)
+        return real_prepare(sql, retrieved_tables=retrieved_tables, corpus=corpus, **kwargs)
 
     return _prepare

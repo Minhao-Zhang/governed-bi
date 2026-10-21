@@ -86,8 +86,8 @@ CREATE TABLE {s}.order_items (
     unit_price  numeric(10, 2) NOT NULL
 );
 
--- Reachable by no foreign key at all. Parcel F's contract needs a table that is licensed by
--- nothing, so that "the corpus does not license this" is distinguishable from "no connector".
+-- Reachable by no foreign key at all. Parcel F's contract needs a table that is not a retrieved table,
+-- so that "the corpus does not include this" is distinguishable from "no connector".
 CREATE TABLE {s}.audit_log (
     id          integer PRIMARY KEY,
     actor       text NOT NULL,
@@ -197,7 +197,7 @@ def main() -> int:
 
     print(f"schema {schema!r}: " + ", ".join(f"{t}={len(d)}" for t, d in rows.items()))
     print("foreign keys: 6 (one of them a self-join on employees.manager_id)")
-    print(f"audit_log is reachable by no foreign key, so it is licensed by nothing in {schema!r}")
+    print(f"audit_log is reachable by no foreign key, so nothing retrieves it in {schema!r}")
     return 0
 
 

@@ -1,16 +1,16 @@
 """The eval/datalake.py post-hoc measurement layer never lets its denominator shrink silently.
 
 Split out of ``test_eval_contract.py`` by the 1000-line cap (ADR 0005 §6), which was forcing the
-timing rather than the seam: that file's tests split cleanly into "run an arm and grade what it
+timing rather than the seam: that file's tests split cleanly into "run a config and grade what it
 did" (kept there) and this file's concern -- the functions that measure a *finished* run's
 population after the fact (``table_coverage``, ``routing_recall``, ``retrieval_funnel``,
 ``dataset_qid_lists``), plus the one ``retrieve.connect`` determinism test that exists because its
-output feeds directly into the ``licensed`` set those functions read.
+output feeds directly into the ``retrieved_tables`` set those functions read.
 
 Every test here is the same shape: a row, a gold statement or a Steiner tree that could be
 silently miscounted, defaulted to a real-looking zero, or dropped from the denominator instead of
 being counted, excluded, or made to raise. ``test_eval_contract.py``'s "authored against the
-plan, not the impl" and "do not re-derive gate logic here" apply equally to what moved.
+plan, not the impl" and "do not re-derive check logic here" apply equally to what moved.
 """
 
 from __future__ import annotations
@@ -20,17 +20,17 @@ from pathlib import Path
 import pytest
 
 
-def test_table_coverage_refuses_rows_that_do_not_carry_licensed() -> None:
+def test_table_coverage_refuses_rows_that_do_not_carry_retrieved_tables() -> None:
     """The EX ceiling must not read 0.000 because the producer named the field differently.
 
-    ``routing_recall`` published ``licensed_schemas`` and not ``licensed``, and
-    ``table_coverage`` reads exactly ``licensed`` — so the free harness fed to the function
+    ``routing_recall`` published ``licensed_schemas`` and not ``retrieved_tables``, and
+    ``table_coverage`` reads exactly ``retrieved_tables`` — so the free harness fed to the function
     this module documents as *"the EX ceiling"* reported ``all_gold_tables_licensed: 0.0`` for
-    two arms whose schema recall was 0.851 and 0.877, with ``reached_gold`` in the very same  [retired]
-    rows proving the tables had been licensed. A zero is a publishable number; a ``KeyError``
+    two configs whose schema recall was 0.851 and 0.877, with ``reached_gold`` in the very same  [retired]
+    rows proving the tables had been retrieved_tables. A zero is a publishable number; a ``KeyError``
     is not, and that asymmetry is the whole point.
 
-    Absent and empty stay different facts: a row that carries ``licensed: []`` licensed
+    Absent and empty stay different facts: a row that carries ``retrieved_tables: []`` retrieved_tables
     nothing, which is a measurement this counts.
     """
     from governed_bi.eval.datalake import table_coverage
@@ -38,16 +38,16 @@ def test_table_coverage_refuses_rows_that_do_not_carry_licensed() -> None:
     gold = {"q1": "SELECT * FROM restaurant.generalinfo"}
 
     with pytest.raises(KeyError, match="licensed"):
-        table_coverage([{"question_id": "q1", "licensed_schemas": ["restaurant"]}], gold)
+        table_coverage([{"question_id": "q1", "retrieved_tables_schemas": ["restaurant"]}], gold)
 
     empty = table_coverage([{"question_id": "q1", "licensed": []}], gold)
-    assert empty["all_gold_tables_licensed"] == 0.0, "licensed nothing is a real zero"
+    assert empty["all_gold_tables_retrieved_tables"] == 0.0, "an empty retrieved-table list is a real zero"
     assert empty["n"] == 1
 
     covered = table_coverage(
         [{"question_id": "q1", "licensed": ["restaurant.generalinfo"]}], gold
     )
-    assert covered["all_gold_tables_licensed"] == 1.0
+    assert covered["all_gold_tables_retrieved_tables"] == 1.0
 
 
 def test_routing_recall_rows_carry_what_table_coverage_reads() -> None:
@@ -61,7 +61,7 @@ def test_routing_recall_rows_carry_what_table_coverage_reads() -> None:
     from governed_bi.eval import datalake
 
     source = inspect.getsource(datalake.routing_recall)
-    assert '"licensed": licensed' in source, (
+    assert '"licensed": retrieved_tables' in source, (
         "routing_recall must publish the table ids under `licensed`; table_coverage reads "
         "that key and nothing else"
     )
@@ -72,7 +72,7 @@ def test_a_gold_statement_that_reads_no_table_is_not_a_coverage_miss() -> None:
 
     ``SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")`` reads nothing. It fell through
     ``needed and hits == len(needed)`` into the ``none`` bucket, so it counted as "no gold table
-    licensed" on every arm -- an unconditional miss no corpus change could fix, holding the
+    retrieved_tables" on every config -- an unconditional miss no corpus change could fix, holding the
     ceiling at 101/114 = 0.886 and deflating every published coverage figure by a fixed 11.4%.
 
     Excluded from the denominator, the way ``gold_sql_unparsed`` already handles a statement the
@@ -92,10 +92,10 @@ def test_a_gold_statement_that_reads_no_table_is_not_a_coverage_miss() -> None:
 
     assert out["gold_reads_no_table"] == 1
     assert out["n"] == 1, "the table-less question must leave the denominator"
-    assert out["all_gold_tables_licensed"] == 1.0, (
+    assert out["all_gold_tables_retrieved_tables"] == 1.0, (
         "the one scorable question was fully covered; the folded one must not drag it to 0.5"
     )
-    assert out["none_licensed"] == 0.0
+    assert out["none_retrieved_tables"] == 0.0
 
 
 def test_connect_seeds_its_tree_deterministically() -> None:
@@ -103,7 +103,7 @@ def test_connect_seeds_its_tree_deterministically() -> None:
 
     Python randomises string hashing per process, so the greedy builder started from a different
     terminal in every run and added different -- equally valid -- Steiner points. Those points
-    enter ``licensed``, which is what ``table_coverage`` reads, so every cross-session coverage
+    enter ``retrieved_tables``, which is what ``table_coverage`` reads, so every cross-session coverage
     comparison carried it as noise: one question of 114 was observed, and a direct probe produced
     three distinct Steiner sets across five hash seeds.
 
@@ -145,7 +145,7 @@ def test_connect_seeds_its_tree_deterministically() -> None:
     assert len(set(results)) == 1, (
         f"connect returned {len(set(results))} different Steiner sets for one terminal set: "
         f"{sorted(set(results))}. The tree must not depend on set iteration order -- those "
-        "points enter `licensed`, which table_coverage reads."
+        "points enter `licensed`, which table_coverage reads as the table ids."
     )
 
 
@@ -208,34 +208,34 @@ def _funnel_rows():
         {
             "question_id": "1",
             "db_id": "sales",
-            "licensed_schemas": ["ops"],
+            "retrieved_tables_schemas": ["ops"],
             "licensed": ["ops.things"],
             "outcome": "answered",
             "correct": False,
         },
-        # Right schema, but the gold table did not survive to `licensed`.
+        # Right schema, but the gold table did not survive to `retrieved_tables`.
         {
             "question_id": "2",
             "db_id": "sales",
-            "licensed_schemas": ["sales"],
+            "retrieved_tables_schemas": ["sales"],
             "licensed": ["sales.other"],
             "outcome": "answered",
             "correct": False,
         },
-        # Everything licensed, model answered, wrong result. This is a *generation* loss.
+        # Everything retrieved_tables, model answered, wrong result. This is a *generation* loss.
         {
             "question_id": "3",
             "db_id": "sales",
-            "licensed_schemas": ["sales"],
+            "retrieved_tables_schemas": ["sales"],
             "licensed": ["sales.customers"],
             "outcome": "answered",
             "correct": False,
         },
-        # Everything licensed and correct.
+        # Everything retrieved_tables and correct.
         {
             "question_id": "4",
             "db_id": "sales",
-            "licensed_schemas": ["sales"],
+            "retrieved_tables_schemas": ["sales"],
             "licensed": ["sales.customers"],
             "outcome": "answered",
             "correct": True,
@@ -260,16 +260,16 @@ def test_the_funnel_separates_routing_from_table_selection_from_generation() -> 
     assert counts["scorable"] == 4
     assert counts["schema_routed"] == 3, "row 1 routed to the wrong schema"
     assert counts["tables_in_routed_schemas"] == 3
-    assert counts["all_gold_tables_licensed"] == 2, "row 2 lost the table after routing"
+    assert counts["all_gold_tables_retrieved_tables"] == 2, "row 2 lost the table after routing"
     assert counts["correct"] == 1
 
     # Each stage is conditional on the one above, and each carries its own denominator.
     assert cond["schema_routed"] == {"rate": 0.75, "n": 3, "of": 4, "why": None}
-    assert cond["all_gold_tables_licensed"]["of"] == 3, (
+    assert cond["all_gold_tables_retrieved_tables"]["of"] == 3, (
         "the table-selection rate must be measured over questions that were routed correctly, "
         "not over every question — that conflation is the whole defect"
     )
-    assert cond["all_gold_tables_licensed"]["rate"] == pytest.approx(2 / 3, abs=1e-4)
+    assert cond["all_gold_tables_retrieved_tables"]["rate"] == pytest.approx(2 / 3, abs=1e-4)
     # The generation stage: two answerable, one right.
     assert cond["correct"] == {"rate": 0.5, "n": 1, "of": 2, "why": None}
     assert out["end_to_end"] == {"rate": 0.25, "n": 1, "of": 4, "why": None}
@@ -287,14 +287,14 @@ def test_an_empty_stage_is_unmeasured_and_not_a_rate_of_zero() -> None:
         {
             "question_id": "1",
             "db_id": "sales",
-            "licensed_schemas": ["ops"],
+            "retrieved_tables_schemas": ["ops"],
             "licensed": [],
             "outcome": "answered",
             "correct": False,
         }
     ]
     out = retrieval_funnel(rows, {"1": "SELECT 1 FROM sales.customers"})
-    stage = out["conditional"]["all_gold_tables_licensed"]
+    stage = out["conditional"]["all_gold_tables_retrieved_tables"]
     assert stage["rate"] is None, "a stage nothing reached must not report 0.0"
     assert stage["of"] == 0
     assert stage["why"], "an absence without a reason is a forgotten assignment"
@@ -331,8 +331,8 @@ def test_the_table_less_population_is_published_with_its_own_ex() -> None:
 
     127 of 1 351 questions have a constant-folded gold. They are gradeable — an engine that
     queries the database and returns the right value still matches the digest — but the gold
-    carries no table and no join, so every arm scores far below its headline there and
-    excluding them lifts all arms by roughly the same 3 points. That is a choice about what
+    carries no table and no join, so every config scores far below its headline there and
+    excluding them lifts all configs by roughly the same 3 points. That is a choice about what
     a headline means, not a correction, so the funnel reports the set as its own line and
     leaves the choice to the reader.
     """

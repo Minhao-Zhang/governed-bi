@@ -154,7 +154,7 @@ def test_a_thread_can_be_evicted_through_the_async_method(tmp_path: Path) -> Non
     bridges onto the saver's own loop and blocks when that loop is not running, which is why
     ``_evict`` refuses it by name rather than falling through
     (``tests/eval/test_eviction_fails_loudly_rather_than_hanging.py``). Pinned because a saver
-    that cannot evict makes an arm's database grow without bound.
+    that cannot evict makes a config's database grow without bound.
     """
     graph = compile_durable(path=tmp_path / "evict.sqlite")
     try:

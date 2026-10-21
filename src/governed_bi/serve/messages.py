@@ -11,7 +11,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
-from governed_bi.register.stages import Outcome
+from governed_bi.registry.stages import Outcome
 
 __all__ = ["last_ai_text", "last_proposed_sql", "surface_answer_text"]
 
@@ -49,7 +49,7 @@ def last_ai_text(state: Mapping[str, Any]) -> str | None:
 
 #: Outcomes whose prose is the model's own to show. Neither took a governance decision: one
 #: delivered a statement, the other delivered none. Every other member of
-#: :class:`~governed_bi.register.stages.Outcome` has system copy in ``answer["text"]`` instead,
+#: :class:`~governed_bi.registry.stages.Outcome` has system copy in ``answer["text"]`` instead,
 #: and backfilling model text over it is how a refusal came to read as an explanation.
 _MAY_ADOPT_MODEL_TEXT: frozenset[str] = frozenset({Outcome.answered.value, Outcome.no_sql.value})
 

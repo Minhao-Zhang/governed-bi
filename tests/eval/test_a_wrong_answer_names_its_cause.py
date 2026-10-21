@@ -1,10 +1,10 @@
-"""``error_type`` was ``None`` on all 78 answered-but-wrong rows of the arm that motivated this.
+"""``error_type`` was ``None`` on all 78 answered-but-wrong rows of the config that motivated this.
 
 The engine recorded *that* an answer was wrong and nothing about *why*, so a treatment could be
 aimed at a failure class holding 8 of 78 rows with no way to know it in advance. Those figures come
 from RyanChenJung/governed-bi-utkuai@12c3e15, the fork this module was taken from -- see
 ``eval/attribution.py``'s docstring, which says which numbers are theirs and why they are kept.
-These tests pin the categories that let a future arm state its target before it runs.
+These tests pin the categories that let a future config state its target before it runs.
 
 **Attribution never changes a grade.** Every row here arrives already graded; the classifier
 explains ``correct: false`` and cannot set it.
@@ -88,7 +88,7 @@ def test_a_cte_name_is_not_counted_as_a_table_gold_does_not_have() -> None:
     only ``sales``; restructuring a query into a CTE is not a wrong table choice.
 
     This mislabelled 9 of the fork's 23 ``table_set_differs`` rows, which was enough to make that
-    bucket look like the largest and license a curation arm against it."""
+    bucket look like the largest and license a curation config against it."""
     row = _row(
         "WITH ranked AS (SELECT id, n FROM sales) SELECT id, n FROM ranked",
         "SELECT id, n FROM sales",
@@ -113,7 +113,7 @@ def test_a_cte_does_not_hide_a_table_the_prediction_really_added() -> None:
 def test_decoy_contact_is_read_from_the_row_not_the_sql() -> None:
     """``touched_decoy`` is computed against BIRD-Obfuscation's manifest, which the SQL text
     cannot reveal. Ranked first because a decoy column is a *semantic-layer* failure -- the class
-    a corpus-curation arm exists to fix -- and must not be hidden behind a projection label."""
+    a corpus-curation config exists to fix -- and must not be hidden behind a projection label."""
     row = _row("SELECT a, b FROM t", "SELECT a FROM t", touched_decoy=True)
 
     assert attribute(row) is FailureCause.decoy_contact
@@ -178,7 +178,7 @@ def test_a_malformed_but_present_prediction_is_still_unparseable() -> None:
 
 
 def test_the_harness_row_carries_the_cause_in_its_own_field() -> None:
-    """The cause goes in ``failure_cause``, so counting the next arm's target during the run
+    """The cause goes in ``failure_cause``, so counting the next config's target during the run
     does not cost the meaning of ``error_type``."""
     from governed_bi.eval.harness import project_turn
 
@@ -194,14 +194,14 @@ def test_the_harness_row_carries_the_cause_in_its_own_field() -> None:
         "gold_columns": ["a"],
         "gold_rows": [[1]],
     }
-    row = project_turn(state, question=question, arm="test")
+    row = project_turn(state, question=question, config="test")
 
     assert row["correct"] is False
     assert row["failure_cause"] == FailureCause.projection_extra.value
 
 
 def test_the_classifier_never_writes_error_type() -> None:
-    """``register/record.py`` declares ``error_type`` as the exception CLASS of a turn that
+    """``registry/record.py`` declares ``error_type`` as the exception CLASS of a turn that
     raised, so a consumer reading ``error_type is not None`` as "this turn raised" is reading the
     declaration. Writing taxonomy labels there took the crashed count from 0 to 78 on the fork's
     own baseline, which is why the taxonomy gets its own field here.
@@ -219,7 +219,7 @@ def test_the_classifier_never_writes_error_type() -> None:
     wrong = project_turn(
         {"answer": {"outcome": "answered", "record": {"generated_sql": "SELECT a, b FROM t"}}},
         question=question,
-        arm="test",
+        config="test",
     )
 
     assert wrong["failure_cause"] == FailureCause.projection_extra.value
@@ -233,7 +233,7 @@ def test_the_classifier_never_writes_error_type() -> None:
             }
         },
         question=question,
-        arm="test",
+        config="test",
     )
 
     assert raised["error_type"] == "ValueError"
@@ -243,7 +243,7 @@ def test_the_classifier_never_writes_error_type() -> None:
 def test_a_run_concurrently_crash_never_reaches_the_classifier(tmp_path: Path) -> None:
     """``_run_concurrently``'s exception handler (``harness.py``'s ``run_index``) builds its
     own minimal row dict inline -- ``error_type`` set to the exception's class name -- and
-    returns it straight from ``run_arm``. This row never calls ``project_turn`` at all, so it
+    returns it straight from ``run_config``. This row never calls ``project_turn`` at all, so it
     carries no ``failure_cause`` key and the classifier cannot reach it. Pinned here because
     ``test_the_row_names_its_configuration.py`` already drives this exact branch (``workers=2``,
     an exploding ``compiled.invoke``) but never asserts on ``error_type``."""
@@ -251,7 +251,7 @@ def test_a_run_concurrently_crash_never_reaches_the_classifier(tmp_path: Path) -
 
     import governed_bi.eval.harness as harness
     from governed_bi.datasource.sqlite import SqliteConnector
-    from governed_bi.eval.arms import stub_arm
+    from governed_bi.eval.configs import stub_config
 
     db = tmp_path / "customers.db"
     conn = sqlite3.connect(db)
@@ -269,9 +269,9 @@ def test_a_run_concurrently_crash_never_reaches_the_classifier(tmp_path: Path) -
     original = harness.compile_durable
     harness.compile_durable = lambda *a, **k: _Exploding()  # type: ignore[assignment]
     try:
-        rows = harness.run_arm(
+        rows = harness.run_config(
             [{"question_id": "q1", "question": "how many customers", "db_id": "main"}],
-            stub_arm(connector=connector),
+            stub_config(connector=connector),
             workers=2,
             connector_factory=lambda: connector,
         )

@@ -102,7 +102,7 @@ def vector_cache_from_environment(*, model: str) -> VectorCache:
     colon, which is not a legal directory on Windows. Sanitising here keeps the server, the
     CLI and the eval driver pointing at one directory per model.
     """
-    from governed_bi.register.knobs import effective_settings
+    from governed_bi.registry.settings import effective_settings
 
     configured = str(effective_settings()["vector_cache"])
     root = Path(configured)

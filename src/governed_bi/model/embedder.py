@@ -20,14 +20,14 @@ from abc import ABC, abstractmethod
 from typing import Any, Sequence
 
 from governed_bi.ports import Embedder, Vector
-from governed_bi.register.knobs import knob_names
+from governed_bi.registry.settings import setting_names
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
     "PROBE_TEXT",
     "BaseEmbedder",
     "refuse_blank",
-    "embedding_knobs",
+    "embedding_settings",
     "embedding_provider",
 ]
 
@@ -136,7 +136,7 @@ def embedding_provider(model: str) -> str:
     return prefix.strip()
 
 
-def embedding_knobs(embedder: Any) -> dict[str, Any]:
+def embedding_settings(embedder: Any) -> dict[str, Any]:
     """The embedder's model and width, both declared settings.
 
     An unqualified model is refused: the prefix is the only thing that keeps two
@@ -148,10 +148,10 @@ def embedding_knobs(embedder: Any) -> dict[str, Any]:
         "embedding_model": model,
         "embedding_dimensions": int(embedder.dimensions),
     }
-    undeclared = sorted(set(values) - knob_names())
+    undeclared = sorted(set(values) - setting_names())
     if undeclared:
         raise KeyError(
-            f"{undeclared} are not declared knobs; a knob outside KNOB_REGISTER is "
+            f"{undeclared} are not declared settings; a setting outside SETTING_REGISTER is "
             "outside the config hash and outside the comparability set"
         )
     return values

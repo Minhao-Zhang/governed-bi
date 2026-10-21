@@ -10,7 +10,7 @@ received by the model and is not one, and ``delivery_hash`` audits what was show
 and ``sample_rows`` return the ledger row for the attempt.
 
 Both executing tools take the same route — build a statement, pass it through :func:`prepare`,
-ledger the verdict. ``sample_rows`` used to call ``connector.sample_values`` directly, reaching
+ledger the result. ``sample_rows`` used to call ``connector.sample_values`` directly, reaching
 the database through none of the layers and writing no ledger row, which made
 ``guardrail_errors == 0`` hold vacuously for that path and let one policy refuse a suspect
 column in ``run_query`` while returning its values here.
@@ -55,8 +55,8 @@ _DEFAULT_READ_BODY_MAX_CHARS = 80_000
 #: model-supplied argument with no ceiling (ADR 0006 §8: a tool that grants privilege must have
 #: a bound the model cannot widen).
 #:
-#: A constant rather than a knob because nothing can set a knob on this surface: ``the retired budget``
-#: ships UNSET and no env var, config key or ``int_knob`` entry can write it, so a knob here
+#: A constant rather than a setting because nothing can set a setting on this surface: ``the retired budget``
+#: ships UNSET and no env var, config key or ``int_setting`` entry can write it, so a setting here
 #: would be a declaration with no writer.
 SAMPLE_ROWS_MAX_VALUES = 20
 
@@ -225,12 +225,12 @@ def sample_rows(
         # never a statement's fault."* 2026-08-10 audit (C2).
         raise GovernanceUsageError(
             "sample_rows has no connector: configurable['connector'] is None. A missing "
-            "connector is a wiring failure, and recording it as a governance verdict attributes "
+            "connector is a wiring failure, and recording it as a governance result attributes "
             "our own misconfiguration to the statement."
         )
     if not isinstance(corpus, AnalystCorpus):
         # G1: a missing corpus is a wiring failure, and refusing on it would record a
-        # governance verdict for it.
+        # governance result for it.
         raise GovernanceUsageError(
             "sample_rows has no AnalystCorpus: configurable['corpus'] is "
             f"{type(corpus).__name__}. The sample path now runs through check(), which "
@@ -262,10 +262,10 @@ def sample_rows(
         limit=max(1, min(int(limit), SAMPLE_ROWS_MAX_VALUES)),
         dialect=dialect,
     )
-    spellings, ambiguous, by_table = spellings_for(corpus, bounds.licensed)
+    spellings, ambiguous, by_table = spellings_for(corpus, bounds.retrieved_tables)
     prepared = prepare(
         statement,
-        licensed=bounds.licensed,
+        retrieved_tables=bounds.retrieved_tables,
         corpus=corpus,
         spellings=spellings,
         ambiguous_folds=ambiguous,
@@ -273,9 +273,9 @@ def sample_rows(
         dialect=dialect,
         policy=policy,
     )
-    attempt = attempt_record(verdict=prepared.verdict, path="sample", executed_sql=prepared.sql)
+    attempt = attempt_record(result=prepared.result, path="sample", executed_sql=prepared.sql)
     if prepared.sql is None:
-        detail = prepared.verdict.get("detail") or prepared.verdict.get("reason_code")
+        detail = prepared.result.get("detail") or prepared.result.get("reason_code")
         return f"sample_rows refused: {detail}", False, attempt
 
     try:
@@ -335,15 +335,15 @@ def run_query(
         )
 
     # ADR 0008 D2/D7. Without these two the model's spelling reaches the engine unchanged:
-    # `check()` compares folded keys, so `FROM address.cbsa` matches the licensed
+    # `check()` compares folded keys, so `FROM address.cbsa` matches the retrieved_tables
     # `address.CBSA` and passes every layer, then Postgres folds the unquoted name and reports
     # no such relation — 81 tables and 610 columns in the obfuscated lake failed that way,
-    # each *after* a passing verdict. Scoped to `bounds.licensed`, because a corpus-wide map
+    # each *after* a passing result. Scoped to `bounds.retrieved_tables`, because a corpus-wide map
     # makes `name`, `id` and `city` ambiguous and would refuse nearly every query.
-    spellings, ambiguous, by_table = spellings_for(corpus, bounds.licensed)
+    spellings, ambiguous, by_table = spellings_for(corpus, bounds.retrieved_tables)
     prepared = prepare(
         sql,
-        licensed=bounds.licensed,
+        retrieved_tables=bounds.retrieved_tables,
         corpus=corpus,
         spellings=spellings,
         ambiguous_folds=ambiguous,
@@ -352,10 +352,10 @@ def run_query(
         policy=policy,
     )
     attempt = attempt_record(
-        verdict=prepared.verdict, path="agent", executed_sql=prepared.sql
+        result=prepared.result, path="agent", executed_sql=prepared.sql
     )
     if prepared.sql is None:
-        detail = prepared.verdict.get("detail") or prepared.verdict.get("reason_code")
+        detail = prepared.result.get("detail") or prepared.result.get("reason_code")
         return f"run_query refused: {detail}", attempt
 
     try:

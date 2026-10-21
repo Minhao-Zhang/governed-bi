@@ -4,7 +4,7 @@
 covers are not exceptions any node raises.** Three of them are silent: a channel read by the
 turn after the one that wrote it. One is loud in the wrong place: ``InvalidUpdateError``
 raised by the channel itself, after the nodes have returned, where ``wrap_node`` is no longer
-on the stack and ``stamp`` never runs.
+on the stack and ``finish`` never runs.
 
 That is the shape worth naming. The suite was green through all four, so a green suite was
 evidence about the nodes and not about the graph. These tests fail against the reducers and
@@ -25,13 +25,13 @@ from governed_bi.serve.state import (
     TEST_HOOKS,
     TURN_IDENTITY,
     ServeState,
+    merge_channels,
     merge_delta,
-    merge_facets,
     settle_failure,
     settle_path_kind,
 )
 
-CRASHING_FACETS = ("facet_term", "facet_metric")
+CRASHING_CHANNELS = ("channel_term", "channel_metric")
 
 
 def _turn(**overrides: Any) -> dict[str, Any]:
@@ -48,30 +48,30 @@ def _turn(**overrides: Any) -> dict[str, Any]:
 
 
 def _crash(real: Any, *, on_turn: int | None) -> Any:
-    """A facet node that raises, on one turn index or on all of them."""
+    """A channel node that raises, on one turn index or on all of them."""
 
-    # `async def`, because the facet nodes are. A sync double here does not fail loudly: it
+    # `async def`, because the channel nodes are. A sync double here does not fail loudly: it
     # returns the real node's coroutine unawaited, `wrap_node` hands that to
     # `rail_observation`, and the turn dies on `'coroutine' object has no attribute 'get'` —
     # a stack trace about the double, three frames away from anything real.
     async def node(state: dict, config: Any) -> dict:
         if on_turn is None or state.get("turn_index") == on_turn:
-            raise ValueError("facet exploded")
+            raise ValueError("retrieval channel exploded")
         return await real(state, config)
 
     return node
 
 
 @pytest.fixture
-def crashing_facets(monkeypatch):
-    """Make two of the five facet nodes raise. ``on_turn`` selects which turns."""
+def crashing_channels(monkeypatch):
+    """Make two of the five channel nodes raise. ``on_turn`` selects which turns."""
 
     def install(*, on_turn: int | None = None) -> None:
         patched = tuple(
-            (name, _crash(fn, on_turn=on_turn) if name in CRASHING_FACETS else fn)
-            for name, fn in graph_mod._FACET_NODES
+            (name, _crash(fn, on_turn=on_turn) if name in CRASHING_CHANNELS else fn)
+            for name, fn in graph_mod._CHANNEL_NODES
         )
-        monkeypatch.setattr(graph_mod, "_FACET_NODES", patched)
+        monkeypatch.setattr(graph_mod, "_CHANNEL_NODES", patched)
 
     return install
 
@@ -85,20 +85,20 @@ def _config(index: Any, assets: dict[str, Any], policy: Any, thread: str) -> dic
 # ── the loud one: a channel raising where nothing can catch it ────────────────
 
 
-def test_two_facets_crashing_in_one_super_step_still_produces_a_record(
-    crashing_facets, two_schema_index, two_schema_assets, guard_off_policy
+def test_two_channels_crashing_in_one_super_step_still_produces_a_record(
+    crashing_channels, two_schema_index, two_schema_assets, guard_off_policy
 ):
     """Two concurrent writes to one channel must not take the whole turn out.
 
-    The five facet nodes run in a single super-step, and ``wrap.py`` turns any exception into
+    The five channel nodes run in a single super-step, and ``wrap.py`` turns any exception into
     ``{"failure": ..., "path_kind": "crashed"}`` — so two of them failing means two writes to
     ``failure``, which had no reducer. LangGraph raises ``InvalidUpdateError: At key
     'failure': Can receive only one value per step`` **from the channel**, after both nodes
-    have returned successfully. ``wrap_node`` is off the stack, ``stamp`` never runs, and the
+    have returned successfully. ``wrap_node`` is off the stack, ``finish`` never runs, and the
     turn produces no record of any kind: the single failure mode the wrapper exists to
     prevent, reached through the wrapper working correctly.
     """
-    crashing_facets()
+    crashing_channels()
     out = graph_mod.compile_graph().invoke(
         _turn(),
         _config(two_schema_index, two_schema_assets, guard_off_policy, "t-concurrent"),
@@ -106,34 +106,34 @@ def test_two_facets_crashing_in_one_super_step_still_produces_a_record(
 
     answer = out.get("answer")
     assert answer is not None, (
-        "the turn ended with no answer at all. Two facet nodes crashed in one super-step and "
+        "the turn ended with no answer at all. Two retrieval-channel nodes crashed in one super-step and "
         "the un-reduced 'failure' channel raised InvalidUpdateError after they returned, "
         "which is past the point wrap_node can catch anything."
     )
     assert answer["outcome"] == "crashed", answer
-    assert answer["record"]["failed_stage"] in CRASHING_FACETS, answer["record"]
+    assert answer["record"]["failed_stage"] in CRASHING_CHANNELS, answer["record"]
 
 
 def test_the_concurrently_dropped_failure_is_named_rather_than_discarded(
-    crashing_facets, two_schema_index, two_schema_assets, guard_off_policy
+    crashing_channels, two_schema_index, two_schema_assets, guard_off_policy
 ):
     """``failed_stage`` holds one stage, so the second crash must still be legible.
 
-    The register has one ``failed_stage`` field and two facets crashed, so one of the two is
+    The register has one ``failed_stage`` field and two channels crashed, so one of the two is
     genuinely not representable there. Dropping it silently would be the reportable-state-
     treated-as-nothing shape this repository keeps re-finding, so ``settle_failure`` appends
     it to ``detail`` — free text that already reaches the record.
     """
-    crashing_facets()
+    crashing_channels()
     out = graph_mod.compile_graph().invoke(
         _turn(),
         _config(two_schema_index, two_schema_assets, guard_off_policy, "t-dropped"),
     )
     failure = out.get("failure") or {}
     detail = str(failure.get("detail") or "")
-    other = [name for name in CRASHING_FACETS if name != failure.get("stage")]
+    other = [name for name in CRASHING_CHANNELS if name != failure.get("stage")]
     assert other[0] in detail, (
-        f"two facets crashed and the record names only {failure.get('stage')!r}; "
+        f"two retrieval channels crashed and the record names only {failure.get('stage')!r}; "
         f"detail={detail!r} does not mention the other one"
     )
 
@@ -142,17 +142,17 @@ def test_the_concurrently_dropped_failure_is_named_rather_than_discarded(
 
 
 def test_a_crash_is_not_erased_by_the_node_that_runs_after_the_fan_in(
-    crashing_facets, two_schema_index, two_schema_assets, guard_off_policy
+    crashing_channels, two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """``route`` is the fan-in, so it runs after a facet crash — and must not proceed.
+    """``route`` is the fan-in, so it runs after a channel crash — and must not proceed.
 
     It had no terminal guard (every node downstream of it has one) and it wrote
     ``"path_kind": None`` unconditionally. Together that erased the crash outright: routing,
     reference closure, join connection, context assembly and a full billed model call all ran
-    on a turn that had already failed, and ``stamp`` then recorded the crash as though nothing
+    on a turn that had already failed, and ``finish`` then recorded the crash as though nothing
     had happened in between. The observable consequence is a usage row.
     """
-    crashing_facets()
+    crashing_channels()
     out = graph_mod.compile_graph().invoke(
         _turn(),
         _config(two_schema_index, two_schema_assets, guard_off_policy, "t-erased"),
@@ -170,18 +170,18 @@ def test_a_crash_is_not_erased_by_the_node_that_runs_after_the_fan_in(
 
 
 def test_the_turn_after_a_crashed_turn_is_still_servable(
-    crashing_facets, two_schema_index, two_schema_assets, guard_off_policy
+    crashing_channels, two_schema_index, two_schema_assets, guard_off_policy
 ):
     """A crash must not make the whole thread unservable.
 
     ``path_kind`` outlives its turn under a checkpointer and nothing cleared it, so a crashed
     turn 1 left ``"crashed"`` in the channel — and ``_after_guard`` reads exactly that key to
-    decide whether to skip straight to ``stamp``. Turn 2 was therefore routed to ``stamp``
-    before ``rewrite``, ``negative_gate`` or the fan-out ran, and stamped turn 1's failure as
+    decide whether to skip straight to ``finish``. Turn 2 was therefore routed to ``finish``
+    before ``rewrite``, ``negative_check`` or the fan-out ran, and wrote turn 1's failure as
     its own. Every later turn of that conversation did the same. This is the multi-turn REST
     path, which is live.
     """
-    crashing_facets(on_turn=1)
+    crashing_channels(on_turn=1)
     compiled = graph_mod.compile_graph()
     config = _config(two_schema_index, two_schema_assets, guard_off_policy, "t-next")
 
@@ -204,14 +204,14 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
     """The reset has to survive the reducers, not just appear in the dict.
 
     Three of these channels are reduced, and a reducer is free to ignore an update: writing
-    ``{}`` to ``facets`` is a no-op under ``merge_facets``, and writing ``None`` to
+    ``{}`` to ``channels`` is a no-op under ``merge_channels``, and writing ``None`` to
     ``path_kind`` is a no-op under ``settle_path_kind`` — deliberately, because that is what
     stops a node erasing a crash. So the reset is a **sentinel**, and asserting that
     ``turn()`` mentions the key would not show that the value clears anything. This applies
     each reducer by hand.
     """
     reducers = {
-        "facets": merge_facets,
+        "channels": merge_channels,
         "path_kind": settle_path_kind,
         "failure": settle_failure,
         # Reduced since 2026-08-11. Both matter here more than the three above: a merge rule
@@ -222,9 +222,9 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
     }
     stale: dict[str, Any] = {
         "path_kind": "crashed",
-        "failure": {"stage": "facet_term", "error_type": "ValueError"},
-        "facets": {"schema": {"facet": "schema", "queries": [], "hits": [1], "channels": {}}},
-        # A carried-over abstention verdict is the previous turn's decision, with the previous
+        "failure": {"stage": "channel_term", "error_type": "ValueError"},
+        "channels": {"schema": {"channel": "schema", "queries": [], "hits": [1], "channels": {}}},
+        # A carried-over abstention result is the previous turn's decision, with the previous
         # turn's evidence, filed against this turn's question — and because the policy writes
         # its reason into `terminal_reason`, a stale `withhold` explains a decline this turn
         # never took.
@@ -240,7 +240,7 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # render the previous turn's rows beside its own explanation.
         "result_table": {"columns": ["n"], "rows": [[1]], "row_count": 1, "truncated": False},
         "answer_text": "There are 9,590 restaurants in total.",
-        # A carried-over verdict is the previous turn's opinion filed against this turn's SQL,
+        # A carried-over result is the previous turn's opinion filed against this turn's SQL,
         # and the record would publish it as this turn's — an observer's judgement about a
         # statement it never saw.
         # A carried-over query vector would score the *previous* question's semantics against
@@ -255,7 +255,7 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # routing never ran. Eval-only, which is why it has to be reset here rather than
         # noticed in production.
         "pinned_schemas": ["ops_b"],
-        "licensed": ["ops_b.sensors"], "clarification_requested": True,
+        "retrieved_tables": ["ops_b.sensors"], "clarification_requested": True,
     }
     assert set(stale) == set(PER_TURN_RESET), (
         "this fixture must cover exactly the declared per-turn set; "
@@ -267,7 +267,7 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         settled = reducer(stale[name], reset) if reducer else reset
         assert not settled, (
             f"{name!r} still holds {settled!r} after the reset. The next turn of this thread "
-            "reads it and stamps it into its own record."
+            "reads it and writes it into its own record."
         )
         assert settled != RESET, f"{name!r} leaked the reset sentinel into state"
 
@@ -275,7 +275,7 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
 # ── a key one node adds must survive a node that never heard of it ────────────
 
 
-def test_the_budget_witness_reaches_stamp(
+def test_the_budget_witness_reaches_finish(
     monkeypatch, two_schema_index, two_schema_assets, guard_off_policy
 ):
     """``pass_two`` writes what the per-type cap discarded; ``resolve`` used to delete it.
@@ -288,7 +288,7 @@ def test_the_budget_witness_reaches_stamp(
     discard a gold table, and without a witness the miss reads as retrieval never having found
     it — the difference between a retrieval defect and a budget that is set too tight.
 
-    Asserted at ``stamp`` and not at ``route``, through a spy on the real node, because
+    Asserted at ``finish`` and not at ``route``, through a spy on the real node, because
     ``tests/retrieve/test_budget_witness.py`` already proves ``apply_budgets`` produces the
     counts and that is exactly as far as the evidence went. What was missing is the two
     super-steps in between.
@@ -302,20 +302,20 @@ def test_the_budget_witness_reaches_stamp(
     destructive because the channel was unreduced.
 
     So the mutation that turns this red is ``retrieved: Annotated[RetrievalResult, merge_delta]``
-    → ``right`` (or dropping the annotation, which is the same thing): ``stamp`` then sees
+    → ``right`` (or dropping the annotation, which is the same thing): ``finish`` then sees
     ``resolve``'s write and nothing else, and the witness is gone. Verified both ways.
     :func:`test_the_two_delta_channels_are_reduced` pins that annotation directly, because a
     mutation this test can only see through four super-steps of graph is one a reader cannot
     check by eye.
     """
     seen: list[dict[str, Any]] = []
-    real_stamp = graph_mod.stamp
+    real_finish = graph_mod.finish
 
     def spy(state):
         seen.append(dict(state))
-        return real_stamp(state)
+        return real_finish(state)
 
-    monkeypatch.setattr(graph_mod, "stamp", spy)
+    monkeypatch.setattr(graph_mod, "finish", spy)
     out = graph_mod.compile_graph().invoke(
         # `route_top_n=1` keeps the shortlist on `sales_a`, which holds 15 tables against a
         # register cap of 8 — so the cap has to bite, rather than happening to.
@@ -329,11 +329,11 @@ def test_the_budget_witness_reaches_stamp(
         f"would pass with the witness deleted. by_type={sorted(routed.get('by_type') or {})}"
     )
 
-    assert len(seen) == 1, "the spy must see exactly one stamp"
+    assert len(seen) == 1, "the spy must see exactly one finish"
     witness = (seen[0].get("retrieved") or {}).get("budget_dropped")
     assert witness == routed["budget_dropped"], (
-        "the cap's witness did not survive to stamp: resolve/connect rebuilt `retrieved` from "
-        f"their own key list and dropped it. stamp saw {witness!r}"
+        "the cap's witness did not survive to finish: resolve/connect rebuilt `retrieved` from "
+        f"their own key list and dropped it. finish saw {witness!r}"
     )
     assert (seen[0].get("retrieved") or {}).get("budget_best_dropped_score", {}).get("table"), (
         "the count survived and the best surviving-nothing score did not; a drop at 0.97 and a "
@@ -345,14 +345,14 @@ def test_the_budget_witness_reaches_stamp(
     assert "pulled_in" in (seen[0].get("retrieved") or {})
 
     # **And it reaches the record, which is the only artifact anything downstream opens.**
-    # Surviving to `stamp` was one super-step, not a destination: `stamp` projects a named list
+    # Surviving to `finish` was one super-step, not a destination: `finish` projects a named list
     # of keys off `retrieved`, and until 2026-08-12 neither budget key was on it or in
-    # `register/record.py`, so the witness was live in state and absent from every turn record,
-    # every trace page and every gate. Asserted through the register rather than by name, so a
+    # `registry/record.py`, so the witness was live in state and absent from every turn record,
+    # every trace page and every check. Asserted through the register rather than by name, so a
     # field declared and never projected fails here.
     record = out["answer"]["record"]
     assert record["budget_dropped"] == routed["budget_dropped"], (
-        "the cap's witness reached `stamp` and not the record. `register/citations.py` states "
+        "the cap's witness reached `finish` and not the record. `register/citations.py` states "
         "the requirement it exists for: a cap can discard a gold table, and without this in an "
         f"artifact the miss reads as retrieval never having found it. record={record!r}"
     )
@@ -369,12 +369,12 @@ def test_the_budget_witness_is_null_rather_than_absent_when_no_cap_bit(
 
     ``pass_two`` emits the two keys **only when a cap bit**, so a turn under budget is
     byte-identical and ``context_hash`` holds. The record must still carry them — as ``null``,
-    the value :class:`~governed_bi.register.record.Absence` ``not_applicable`` declares — rather
+    the value :class:`~governed_bi.registry.record.Absence` ``not_applicable`` declares — rather
     than omitting them, because a key that appears only on turns where something was dropped
     cannot afterwards be told from a projection that was never wired up. That is the same
-    argument the register makes for ``guard`` ("a gate that leaves a trace only when it fires").
+    argument the register makes for ``guard`` ("a check that leaves a trace only when it fires").
     """
-    from governed_bi.register.record import record_keys
+    from governed_bi.registry.record import record_keys
 
     out = graph_mod.compile_graph().invoke(
         # `route_top_n=1` and a question that reaches few tables: the caps must *not* bite.
@@ -401,7 +401,7 @@ def test_the_two_delta_channels_are_reduced() -> None:
 
     The mutation that breaks every claim in this section is one character wide — drop the
     ``Annotated[...]`` and LangGraph's default channel takes the last write whole — and until
-    this test existed nothing pinned it. ``test_the_budget_witness_reaches_stamp`` sees it, but
+    this test existed nothing pinned it. ``test_the_budget_witness_reaches_finish`` sees it, but
     only through four super-steps of a compiled graph, and
     ``test_turn_clears_every_per_turn_channel_through_the_real_reducers`` applies a
     hand-maintained ``{name: reducer}`` map that would go on testing ``merge_delta`` after the
@@ -486,7 +486,7 @@ def test_every_executor_path_is_classified_as_answering_or_introspecting():
     is only right if forgetting is caught. It is caught here.
 
     The distinction is load-bearing in three places: ``execution_from_attempts``' ``terminal``,
-    ``stamp``'s outcome, and ``agent_core``'s ``generated_sql``. A ``sample`` row counted as
+    ``finish``'s outcome, and ``agent_core``'s ``generated_sql``. A ``sample`` row counted as
     answering makes a turn whose every ``run_query`` was refused record ``answered``, and makes
     a ``SELECT DISTINCT`` over one column the statement an eval re-executes as the answer.
     """
@@ -546,9 +546,9 @@ def test_a_turn_built_by_the_session_seam_actually_answers(
     assert out.get("failure") in (None, RESET) or isinstance(out.get("failure"), dict), (
         f"failure holds {out.get('failure')!r}"
     )
-    # `facets` and `failure` are the two that raise rather than mis-report: `dict("reset")` and
+    # `channels` and `failure` are the two that raise rather than mis-report: `dict("reset")` and
     # `"reset".get(...)`. Reaching this line at all means neither did.
-    assert isinstance(out.get("facets"), dict) and out["facets"], "the fan-out produced nothing"
+    assert isinstance(out.get("channels"), dict) and out["channels"], "the fan-out produced nothing"
 
 
 def test_session_turn_writes_the_reset(guard_off_policy):
@@ -570,25 +570,25 @@ def test_session_turn_writes_the_reset(guard_off_policy):
 # ── the recorder itself ───────────────────────────────────────────────────────
 
 
-def test_a_failure_in_stamp_is_not_swallowed(
+def test_a_failure_in_finish_is_not_swallowed(
     monkeypatch, two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """``stamp`` is the one node that must not be wrapped.
+    """``finish`` is the one node that must not be wrapped.
 
     ``wrap_node`` converts an exception into state for the *next* node to record, and for
-    every other node that next node is ``stamp``. There is nothing after ``stamp``, so
+    every other node that next node is ``finish``. There is nothing after ``finish``, so
     wrapping it turned "the recorder crashed" into a run that returned a state with no
     ``answer`` key and no reason — and a caller reading ``out["answer"]["record"]`` got a
     ``KeyError`` several frames from the cause.
     """
     def boom(state):
-        raise RuntimeError("stamp exploded")
+        raise RuntimeError("finish exploded")
 
-    monkeypatch.setattr(graph_mod, "stamp", boom)
-    with pytest.raises(RuntimeError, match="stamp exploded"):
+    monkeypatch.setattr(graph_mod, "finish", boom)
+    with pytest.raises(RuntimeError, match="finish exploded"):
         graph_mod.compile_graph().invoke(
             _turn(),
-            _config(two_schema_index, two_schema_assets, guard_off_policy, "t-stamp"),
+            _config(two_schema_index, two_schema_assets, guard_off_policy, "t-finish"),
         )
 
 
@@ -631,10 +631,10 @@ def test_a_node_timeout_is_attached_only_where_it_can_fire() -> None:
     # The fan-out stays out by decision, not by constraint: moving the clock inside wrap_node
     # removed the concurrent-sibling problem, but five simultaneous bounds against a shared
     # provider quota is an unmeasured comparability change.
-    assert not (timed & {name for name, _ in graph_mod._FACET_NODES}), (
-        "a facet carries a timeout; that is now possible but is an unmeasured arm change"
+    assert not (timed & {name for name, _ in graph_mod._CHANNEL_NODES}), (
+        "a retrieval channel carries a timeout; that is now possible but is an unmeasured config change"
     )
-    assert "stamp" not in timed, "stamp is unwrapped and must stay so"
+    assert "finish" not in timed, "finish is unwrapped and must stay so"
     for name in timed:
         assert name in _CANCELLABLE, (
             f"{name!r} claims a wrap_node timeout but its body is not natively async, so the "
@@ -643,53 +643,53 @@ def test_a_node_timeout_is_attached_only_where_it_can_fire() -> None:
 
 
 def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
-    """A knob reachable only from source is the defect the register exists to abolish.
+    """A setting reachable only from source is the defect the register exists to abolish.
 
     Rail bounds are read from the environment before falling back to the declared default.
     ``agent_core``'s bound is settable the same way but lives on the node, not ``wrap_node``.
 
     ``agent_node_timeout_s`` must also be reachable from ``knobs_resolved``, because it is
-    ``a recorded setting``: it took no state at all, so two arms declaring different values
+    ``a recorded setting``: it took no state at all, so two configs declaring different values
     recorded two configurations that had behaved identically. And ``0`` must mean *no wall*
     rather than a zero-second deadline that fails every turn on its first frame.
     """
     import os
 
-    from governed_bi.register.knobs import knob_default
+    from governed_bi.registry.settings import setting_default
     from governed_bi.serve.graph import _node_timeout
     from governed_bi.serve.nodes.agent_core import _agent_node_timeout, _hang_grace
 
     assert _node_timeout("agent_core") is None, (
         "agent_core owns agent_node_timeout_s internally; wrap must not double-bound it"
     )
-    assert _node_timeout("guard") == float(knob_default("rail_node_timeout_s"))
+    assert _node_timeout("guard") == float(setting_default("rail_node_timeout_s"))
     assert _node_timeout("route") is None, "a to_thread node must not claim a bound"
-    assert _node_timeout("facet_term") is None, (
-        "a facet carries a timeout again: possible now, but an unmeasured comparability change"
+    assert _node_timeout("channel_term") is None, (
+        "a retrieval channel carries a timeout again: possible now, but an unmeasured comparability change"
     )
-    assert _agent_node_timeout({}) == float(knob_default("agent_node_timeout_s"))
+    assert _agent_node_timeout({}) == float(setting_default("agent_node_timeout_s"))
 
-    # The arm-settable path, which is the whole reason the knob is a recorded setting.
+    # The config-settable path, which is the whole reason the setting is a recorded setting.
     assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 55.0}}) == 55.0
 
     # `0` disables rather than kills. Both surfaces, because both used to parse it as a deadline.
     assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 0}}) is None
 
     # The grace is what lets the soft wall stay between-frames without losing the hang-stop.
-    assert _hang_grace({}) == float(knob_default("llm_timeout_s"))
+    assert _hang_grace({}) == float(setting_default("llm_timeout_s"))
     assert _hang_grace({"knobs_resolved": {"llm_timeout_s": 42.0}}) == 42.0
 
     os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "12.5"
     os.environ["GOVERNED_BI_RAIL_NODE_TIMEOUT_S"] = "7"
     try:
         assert _agent_node_timeout({}) == 12.5
-        # Env still wins over a resolved knob, as it does for every other node bound.
+        # Env still wins over a resolved setting, as it does for every other node bound.
         assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 55.0}}) == 55.0
         assert _node_timeout("guard") == 7.0
         os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "0"
         assert _agent_node_timeout({}) is None, "'0' from a deployment must mean off, not 0s"
         os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = ""
-        assert _agent_node_timeout({}) == float(knob_default("agent_node_timeout_s")), (
+        assert _agent_node_timeout({}) == float(setting_default("agent_node_timeout_s")), (
             "an empty env var is unset, not zero"
         )
     finally:

@@ -28,8 +28,8 @@ def accept_node(session: Any) -> Callable[[dict, Any], dict]:
         """Derive a turn from the conversation. Client provenance fields are ignored."""
         question = _last_human(state)
         if not question:
-            # Clear prior-turn LastValue channels before jumping to stamp. Without this (and
-            # without the accept→stamp edge) guard would still run on the previous question.
+            # Clear prior-turn LastValue channels before jumping to finish. Without this (and
+            # without the accept→finish edge) guard would still run on the previous question.
             return {
                 **PER_TURN_RESET,
                 "path_kind": "crashed",

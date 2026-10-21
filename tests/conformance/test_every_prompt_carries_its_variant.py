@@ -108,6 +108,6 @@ def test_no_prompt_is_resolved_at_import_time() -> None:
 def test_every_registered_prompt_the_engine_sends_is_reachable_by_name(name: str) -> None:
     """The registry is what ``prompt_set_hash`` digests; a prompt sent from outside it is a
     treatment the hash does not cover."""
-    from governed_bi.register.prompts import PROMPT_REGISTRY
+    from governed_bi.registry.prompts import PROMPT_REGISTRY
 
     assert name in PROMPT_REGISTRY

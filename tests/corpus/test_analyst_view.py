@@ -50,7 +50,7 @@ def test_no_tool_writes_authored_corpus_fields() -> None:
     assert offenders == []
 
 
-def test_b10_excluded_column_cannot_be_licensed_via_allow_set_drift() -> None:
+def test_b10_excluded_column_cannot_be_retrieved_tables_via_allow_set_drift() -> None:
     """Excluded in the raw corpus, absent from the analyst view: referencing it refuses."""
     from governed_bi.corpus.analyst import for_analyst
     from governed_bi.corpus.schema import ColumnAsset, Governance
@@ -76,10 +76,10 @@ def test_b10_excluded_column_cannot_be_licensed_via_allow_set_drift() -> None:
     ]
     corpus = for_analyst(raw)
     assert "customers.ssn" not in corpus.by_id
-    verdict = check(
+    result = check(
         "SELECT c.ssn FROM customers c",
-        licensed=frozenset({"customers"}),
+        retrieved_tables=frozenset({"customers"}),
         corpus=corpus,
     )
-    assert verdict["passed"] is False
-    assert verdict["failed_layer"] is Layer.COLUMNS
+    assert result["passed"] is False
+    assert result["failed_layer"] is Layer.COLUMNS

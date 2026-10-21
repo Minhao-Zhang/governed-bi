@@ -47,7 +47,7 @@ class _Recorder:
         # omitted it. When the callers began naming their runs for the trace, the fake
         # raised ``TypeError`` and the caller's ``except`` reported it as a provider
         # failure — a fake narrower than the interface turning a code change into a
-        # plausible-looking wrong verdict. It is recorded so a caller cannot pass one
+        # plausible-looking wrong result. It is recorded so a caller cannot pass one
         # silently, and ignored because nothing here reads it.
         self.configs.append(config)
         self.calls.append(messages)
@@ -58,7 +58,7 @@ class _Recorder:
 
         Same lesson as the ``config=`` parameter below: a fake that is narrower than
         ``BaseChatModel`` does not fail loudly, it makes the caller take its error branch. The
-        scope gate's error branch is ``error_failed_open``.
+        scope check's error branch is ``error_failed_open``.
         """
         return self.invoke(messages, config, **kwargs)
 
@@ -156,7 +156,7 @@ def _capped_state(result: Any = RESULT, last_ai: str = _CAP_EXIT_LINE) -> dict[s
 
 
 def test_an_all_refused_ledger_is_not_narrated() -> None:
-    """``agent_core`` still writes ``path_kind: answered``; stamp reclassifies from the ledger.
+    """``agent_core`` still writes ``path_kind: answered``; finish reclassifies from the ledger.
 
     A refused turn had every attempt rejected, so it executed nothing. Narrating it would put
     generated prose over a governance decision and invent a result to go with it.

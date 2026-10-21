@@ -255,7 +255,7 @@ def test_two_models_of_the_same_width_do_not_share_a_cache_entry() -> None:
     cover.**
 
     When this was written `build_index` took `vector_cache: Mapping[str, Vector]` keyed on
-    the **summary text alone**, while `register/knobs.py`'s `embedding_model` knob said `embedding_model` is
+    the **summary text alone**, while `registry/settings.py`'s `embedding_model` setting said `embedding_model` is
     *"part of every vector cache key"*. Those two statements contradicted each other, and
     `cosine` raising on a width mismatch (`semantic.py::cosine`) closes only the case where the
     widths **differ**. The signature is now `vector_cache: VectorCache | None` and the key is
@@ -278,7 +278,7 @@ def test_two_models_of_the_same_width_do_not_share_a_cache_entry() -> None:
 
     from governed_bi.model import DeterministicEmbedder
     from governed_bi.ports import Vector
-    from governed_bi.register.assets import AssetType
+    from governed_bi.registry.assets import AssetType
     from governed_bi.retrieve.index import IndexEntry, UnifiedIndex, build_index
     from governed_bi.retrieve.semantic import cache_key, cosine
     from governed_bi.retrieve.vector_cache import VectorCache
@@ -384,10 +384,10 @@ def test_the_adapter_reports_the_model_the_provider_actually_used(adapter: str) 
     describe what happened, not what was requested.**
 
     A provider may serve an alias, a dated snapshot, or a silently upgraded version of the
-    name it was asked for. `model` is a comparability knob, so a run that records the
+    name it was asked for. `model` is a comparability setting, so a run that records the
     *requested* name and compares against another that got a different snapshot is v1's
     reasoning-effort incident again: two ladders differing only in a live config field that
-    was recorded nowhere, and effort moved the baseline arm **+2.5pp against a 2.3pp
+    was recorded nowhere, and effort moved the baseline config **+2.5pp against a 2.3pp
     detection threshold**.
 
     Assert `adapter.model` reflects what the response reported, and that a mismatch between
@@ -452,52 +452,52 @@ def test_the_adapter_reports_the_model_the_provider_actually_used(adapter: str) 
 
 
 def test_the_embedding_knobs_reach_knobs_resolved() -> None:
-    """`embedding_model` and `embedding_dimensions` are declared knobs with
-    `a recorded setting` (`register/knobs.py`'s `embedding_model` and `embedding_dimensions`
+    """`embedding_model` and `embedding_dimensions` are declared settings with
+    `a recorded setting` (`registry/settings.py`'s `embedding_model` and `embedding_dimensions`
     rows), and when this was written nothing supplied either, because no embedder existed.
 
-    Assert that using an embedder puts both into the resolved knob set, so the serve config
+    Assert that using an embedder puts both into the resolved setting set, so the serve config
     hash moves when the embedder changes. Without this, two runs differing only in embedder
-    compare as one experiment — which is precisely what the knob was declared to prevent,
+    compare as one experiment — which is precisely what the setting was declared to prevent,
     and the declaration alone has never stopped anything in this repository.
     """
-    from governed_bi.model import DeterministicEmbedder, embedding_knobs
-    from governed_bi.register.knobs import knob_names
+    from governed_bi.model import DeterministicEmbedder, embedding_settings
+    from governed_bi.registry.settings import setting_names
 
     embedder = DeterministicEmbedder(dimensions=64)
-    knobs = embedding_knobs(embedder)
+    settings = embedding_settings(embedder)
 
-    assert set(knobs) == {"embedding_model", "embedding_dimensions"}
-    assert knobs["embedding_model"] == embedder.model
-    assert knobs["embedding_dimensions"] == 64
-    assert knobs["embedding_model"].startswith("deterministic:")
+    assert set(settings) == {"embedding_model", "embedding_dimensions"}
+    assert settings["embedding_model"] == embedder.model
+    assert settings["embedding_dimensions"] == 64
+    assert settings["embedding_model"].startswith("deterministic:")
 
     # Declared, and declared as `comparability` -- so they are IN the config hash rather
     # than recorded beside it. A threshold outside the comparability hash is v1's
-    # `serve_config_hash` defect, and a knob name no register backs is the same hole.
-    assert set(knobs) <= knob_names()
-    assert set(knobs) <= knob_names()
-    assert set(knobs) <= knob_names()
+    # `serve_config_hash` defect, and a setting name no register backs is the same hole.
+    assert set(settings) <= setting_names()
+    assert set(settings) <= setting_names()
+    assert set(settings) <= setting_names()
 
     base = {"route_top_n": 3, "candidate_depth": 50}
-    resolved = {**base, **knobs}
+    resolved = {**base, **settings}
     assert resolved["embedding_model"] == embedder.model
     assert resolved["embedding_dimensions"] == 64
 
-    # Two runs differing ONLY in embedder no longer resolve to the same knob set --
+    # Two runs differing ONLY in embedder no longer resolve to the same setting set --
     # neither in the model nor in the width, and the width is the one `cosine` cannot
     # catch when the two models were asked for the same one.
     other_model = {
         **base,
-        **embedding_knobs(DeterministicEmbedder(dimensions=64, salt="other")),
+        **embedding_settings(DeterministicEmbedder(dimensions=64, salt="other")),
     }
-    other_width = {**base, **embedding_knobs(DeterministicEmbedder(dimensions=128))}
+    other_width = {**base, **embedding_settings(DeterministicEmbedder(dimensions=128))}
     assert resolved != other_model
     assert resolved != other_width
 
     # ...and identical configuration still resolves identically, or the two lines above
     # would also pass for a resolver that simply never repeats itself.
-    assert resolved == {**base, **embedding_knobs(DeterministicEmbedder(dimensions=64))}
+    assert resolved == {**base, **embedding_settings(DeterministicEmbedder(dimensions=64))}
 
 
 # ── the deterministic adapter is an adapter, not a fake ───────────────────────
@@ -573,11 +573,11 @@ def test_the_deterministic_adapter_is_stable_across_processes() -> None:
     assert expected[0] != expected[1]
 
 
-def test_the_semantic_channel_scores_a_facet_that_declares_it() -> None:
+def test_the_semantic_channel_scores_a_channel_that_declares_it() -> None:
     """The end-to-end reason this parcel exists, and it is **not** schema routing.
 
-    `register/facets.py`'s `FACET_CHANNELS` gives `Stage.facet_example` only `Channel.semantic`. With no
-    embedder in the repository, that facet has never been able to retrieve anything at all —
+    `registry/channels.py`'s `DECLARED_CHANNELS` gives `Stage.channel_example` only `Channel.semantic`. With no
+    embedder in the repository, that channel has never been able to retrieve anything at all —
     few-shots are structurally unreachable, which is the same class of defect as v1's
     `NegativeExampleAsset` and as the five wiring hooks in ADR 0005 §2.8.2.
 
@@ -593,22 +593,22 @@ def test_the_semantic_channel_scores_a_facet_that_declares_it() -> None:
 
     That figure is a **single-channel shortlist ranking the 57 schema summaries directly**,
     and its own citation says to compare it only to another shortlist. Through v2's
-    five-facet path, measured 2026-08-05 on `gold-semantic-layer-20260804`, the same citation
+    five-channel path, measured 2026-08-05 on `gold-semantic-layer-20260804`, the same citation
     records lexical-only at 0.5468@1 / 0.7018@3 against semantic-only at 0.9064@1 /
     0.9825@3 — so on the served topology the semantic channel is not neutral to routing. What
-    this body asserts is narrower than either: a facet that declares only `Channel.semantic`
+    this body asserts is narrower than either: a channel that declares only `Channel.semantic`
     can retrieve at all.
     """
     from governed_bi.model import DeterministicEmbedder
-    from governed_bi.register.assets import AssetType
-    from governed_bi.register.facets import (
-        FACET_CHANNELS,
-        FACET_TARGETS,
+    from governed_bi.registry.assets import AssetType
+    from governed_bi.registry.channels import (
+        CHANNEL_TARGETS,
+        DECLARED_CHANNELS,
         Channel,
         ChannelState,
         expected_channel_state,
     )
-    from governed_bi.register.stages import Stage
+    from governed_bi.registry.stages import Stage
     from governed_bi.retrieve.index import IndexEntry, build_index
     from governed_bi.retrieve.semantic import semantic_search
     from governed_bi.retrieve.vector_cache import VectorCache
@@ -616,10 +616,10 @@ def test_the_semantic_channel_scores_a_facet_that_declares_it() -> None:
     # The declaration this body is about. One channel, and it is the semantic one, so a
     # few-shot has to be *findable* by cosine rather than merely scored by it once
     # something else has found it.
-    assert FACET_CHANNELS[Stage.facet_example] == frozenset({Channel.semantic})
-    assert Channel.lexical not in FACET_CHANNELS[Stage.facet_example]
-    assert expected_channel_state(Stage.facet_example, Channel.semantic) is ChannelState.ran
-    assert FACET_TARGETS[Stage.facet_example] == frozenset({AssetType.few_shot})
+    assert DECLARED_CHANNELS[Stage.channel_example] == frozenset({Channel.semantic})
+    assert Channel.lexical not in DECLARED_CHANNELS[Stage.channel_example]
+    assert expected_channel_state(Stage.channel_example, Channel.semantic) is ChannelState.ran
+    assert CHANNEL_TARGETS[Stage.channel_example] == frozenset({AssetType.few_shot})
 
     question = "how many customers registered in 2019"
 
@@ -662,7 +662,7 @@ def test_the_semantic_channel_scores_a_facet_that_declares_it() -> None:
     assert hits[0][1] > hits[1][1]
 
     # Without an embedder the same call reports `not_configured` -- which is the state
-    # this facet has been in for the whole life of the repository, and what made the
+    # this channel has been in for the whole life of the repository, and what made the
     # few-shot structurally unreachable rather than merely unlucky. A channel that
     # reported `ran` here would make "found nothing" and "never wired up" one
     # observation, which is the shape half this repo's retired numbers have.

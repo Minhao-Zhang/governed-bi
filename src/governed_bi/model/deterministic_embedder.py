@@ -9,7 +9,7 @@ and the acceptance criterion checks it in a subprocess under a different ``PYTHO
 **Hashing, not random.** A digest of the whole text is deterministic but cannot rank: two
 texts sharing every content word score no closer than two unrelated ones. Signed hashing
 into buckets plus L2 normalisation makes cosine monotone in token overlap, which is what
-lets a ``Channel.semantic``-only facet retrieve anything without a key.
+lets a ``Channel.semantic``-only channel retrieve anything without a key.
 
 **``model`` is a fingerprint of the algorithm's own output**, not a constant, because it is
 in every cache key: edit the tokeniser, bucket function, sign bit or normalisation and it
@@ -38,7 +38,7 @@ __all__ = ["DeterministicEmbedder"]
 DETERMINISTIC_DIMENSIONS = 256
 
 #: Bucket keys: lowercased alphanumeric runs. The crudest rule that works, because a
-#: tokeniser with options is a second knob nobody records.
+#: tokeniser with options is a second setting nobody records.
 #:
 #: Deliberately **not** ``retrieve.lexical``'s ``\\S+`` split: that one keeps punctuation
 #: attached because BM25 scores surface forms. Making them agree would assert an invariant

@@ -4,7 +4,7 @@ The bypass contract reaches ``check`` and ``is_valid_schema_id``; these are the 
 halves of the parcel. Same authoring rules: drive the real function, assert the effect,
 and pair every firing with a case where the same code path must **not** fire — v1's
 ``sample_rows`` license test asserted the substring ``"sample"`` was absent from
-generated SQL, which it never is, so deleting the gate left the test green.
+generated SQL, which it never is, so deleting the check left the test green.
 """
 
 from __future__ import annotations
@@ -123,9 +123,9 @@ def test_both_namespaces_are_legal_keys(policy) -> None:
 def test_each_rule_fires_on_its_own_shape(policy, question, rule) -> None:
     from governed_bi.govern.guard import guard
 
-    verdict = guard(question, all_rules_on(policy))
-    assert verdict["outcome"] == "blocked"
-    assert verdict["rule_id"] == rule
+    result = guard(question, all_rules_on(policy))
+    assert result["outcome"] == "blocked"
+    assert result["rule_id"] == rule
 
 
 @pytest.mark.parametrize(
@@ -140,15 +140,15 @@ def test_each_rule_fires_on_its_own_shape(policy, question, rule) -> None:
 )
 def test_no_rule_fires_on_an_ordinary_question(policy, question) -> None:
     """The false-positive half. Every question here contains a word one of the patterns
-    looks for, which is the point: v1's refuse gate was never measured against benign
+    looks for, which is the point: v1's refuse check was never measured against benign
     traffic and this is the cheapest possible version of doing so."""
     from governed_bi.govern.guard import guard
 
     assert guard(question, all_rules_on(policy))["outcome"] == "clear"
 
 
-def test_the_length_bound_is_the_knob_and_a_long_question_still_passes_below_it(policy) -> None:
-    """8,000 characters, from the knob register. Also the negative: 7,999 is fine.
+def test_the_length_bound_is_the_setting_and_a_long_question_still_passes_below_it(policy) -> None:
+    """8,000 characters, from the setting register. Also the negative: 7,999 is fine.
 
     ADR 0006 §13 is explicit about what the measurement behind 8,000 does and does not
     establish — across 10,962 BIRD dev + train questions the longest question +
@@ -158,10 +158,10 @@ def test_the_length_bound_is_the_knob_and_a_long_question_still_passes_below_it(
     """
     from governed_bi.govern.guard import guard
 
-    knobs = all_rules_on(policy)
-    limit = knobs.g_length_max_chars
-    assert guard("a" * (limit - 1), knobs)["outcome"] == "clear"
-    blocked = guard("a" * (limit + 1), knobs)
+    settings = all_rules_on(policy)
+    limit = settings.g_length_max_chars
+    assert guard("a" * (limit - 1), settings)["outcome"] == "clear"
+    blocked = guard("a" * (limit + 1), settings)
     assert blocked["outcome"] == "blocked" and blocked["rule_id"] == "g_length"
 
 
@@ -169,7 +169,7 @@ def test_a_broken_rule_fails_open_and_says_so(policy, monkeypatch) -> None:
     """``error_failed_open`` is an outcome, not a silent clear.
 
     A rule that raises must not end the turn — but the outcome has to be
-    distinguishable from a clear, or a systematically broken rule is a gate nobody
+    distinguishable from a clear, or a systematically broken rule is a check nobody
     knows is off. This is the ``NameError`` shape from v1's note-withholding predicate,
     which shipped invisible because ``any()`` short-circuits on an empty token set.
     """
@@ -178,15 +178,15 @@ def test_a_broken_rule_fails_open_and_says_so(policy, monkeypatch) -> None:
     guard_module = import_module("governed_bi.govern.guard")
     broken = dict(guard_module.GUARD_RULES)
 
-    def boom(_text, _knobs):
+    def boom(_text, _settings):
         raise NameError("simulated typo in the encoding rule")
 
     broken["g_encoding"] = boom
     monkeypatch.setattr(guard_module, "GUARD_RULES", broken)
     with pytest.warns(RuntimeWarning):
-        verdict = guard_module.guard("plain question", policy(guard_rules_enabled={"g_encoding": True}))
-    assert verdict["outcome"] == "error_failed_open"
-    assert verdict["rule_id"] == "g_encoding"
+        result = guard_module.guard("plain question", policy(guard_rules_enabled={"g_encoding": True}))
+    assert result["outcome"] == "error_failed_open"
+    assert result["rule_id"] == "g_encoding"
 
 
 def test_the_public_message_names_no_rule(policy) -> None:
@@ -222,17 +222,17 @@ def test_a_parse_failure_at_the_limit_step_refuses_rather_than_passing_the_strin
     assert isinstance(result, dict) and result["passed"] is False
 
 
-def test_prepare_returns_no_string_when_the_verdict_blocks(prepare) -> None:
+def test_prepare_returns_no_string_when_the_result_blocks(prepare) -> None:
     """The pipeline's only output that can be executed is ``Prepared.sql``, and a
     blocked statement must not produce one — there is nothing for a caller to
     accidentally use."""
-    blocked = prepare("DROP TABLE customers", licensed=CUSTOMERS)
-    assert blocked.sql is None and blocked.verdict["passed"] is False
+    blocked = prepare("DROP TABLE customers", retrieved_tables=CUSTOMERS)
+    assert blocked.sql is None and blocked.result["passed"] is False
 
     allowed = prepare(
-        "SELECT c.id FROM customers c", licensed=CUSTOMERS, allowed_columns=ALLOWED
+        "SELECT c.id FROM customers c", retrieved_tables=CUSTOMERS, allowed_columns=ALLOWED
     )
-    assert allowed.sql is not None and allowed.verdict["passed"] is True
+    assert allowed.sql is not None and allowed.result["passed"] is True
 
 
 @pytest.mark.parametrize(
@@ -241,19 +241,19 @@ def test_prepare_returns_no_string_when_the_verdict_blocks(prepare) -> None:
         # A column the corpus does not authorise: refused at Layer.COLUMNS, which is the
         # deepest layer an ordinary SELECT reaches, i.e. the case a real refusal looks like.
         ("SELECT secret FROM customers", "r_column_not_allowed"),
-        # An unlicensed table with no column binding: Layer.TABLES.
-        ("SELECT 1 FROM orders", "r_table_not_licensed"),
+        # An not_retrieved table with no column binding: Layer.TABLES.
+        ("SELECT 1 FROM orders", "r_table_not_retrieved"),
     ],
 )
 def test_a_refused_select_yields_no_executable_string(prepare, sql, reason_code) -> None:
-    """The verdict-to-statement wiring, which the DDL case above cannot reach.
+    """The result-to-statement wiring, which the DDL case above cannot reach.
 
-    ``test_prepare_returns_no_string_when_the_verdict_blocks`` used ``DROP TABLE`` and was
+    ``test_prepare_returns_no_string_when_the_result_blocks`` used ``DROP TABLE`` and was
     the package's only assertion on this property. DDL is refused a **second** time one step
     later, by ``apply_row_limit``'s ``not isinstance(tree, exp.Query)`` branch, so its
     ``sql is None`` holds even when the line under test is gone: deleting
-    ``if not verdict["passed"]`` from ``prepare`` left all 133 tests in this package passing
-    while ``prepare`` handed back ``'SELECT token FROM secrets LIMIT 200001'`` for a verdict
+    ``if not result["passed"]`` from ``prepare`` left all 133 tests in this package passing
+    while ``prepare`` handed back ``'SELECT token FROM secrets LIMIT 200001'`` for a result
     of ``passed=False``. The other refusal assertion in the package uses a bidi control
     character, refused before ``check()`` runs, so it cannot reach the wiring either.
 
@@ -261,10 +261,10 @@ def test_a_refused_select_yields_no_executable_string(prepare, sql, reason_code)
     survives to the row-limit step. ``reason_code`` is pinned because "refused for some
     coherent reason" is satisfied by a rule firing for the wrong cause.
     """
-    refused = prepare(sql, licensed=CUSTOMERS, allowed_columns=ALLOWED)
+    refused = prepare(sql, retrieved_tables=CUSTOMERS, allowed_columns=ALLOWED)
 
-    assert refused.verdict["passed"] is False
-    assert refused.verdict["reason_code"] == reason_code, refused.verdict
+    assert refused.result["passed"] is False
+    assert refused.result["reason_code"] == reason_code, refused.result
     assert refused.sql is None, (
         f"a refused statement produced an executable string: {refused.sql!r}. "
         "Prepared.sql is the pipeline's only runnable output; a caller that trusts the "
@@ -272,7 +272,7 @@ def test_a_refused_select_yields_no_executable_string(prepare, sql, reason_code)
     )
 
 
-def test_canonicalisation_precedes_the_check_so_the_verdict_is_about_what_runs(prepare) -> None:
+def test_canonicalisation_precedes_the_check_so_the_result_is_about_what_runs(prepare) -> None:
     """The corpus declares ``CustomerID``; the model wrote ``customerid``. The executed
     string carries the declared spelling **and quotes it**.
 
@@ -286,11 +286,11 @@ def test_canonicalisation_precedes_the_check_so_the_verdict_is_about_what_runs(p
     """
     prepared = prepare(
         "SELECT customerid FROM customers",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.CustomerID"}),
         spellings={"customerid": "CustomerID", "customers": "customers"},
     )
-    assert prepared.verdict["passed"] is True, prepared.verdict
+    assert prepared.result["passed"] is True, prepared.result
     assert '"CustomerID"' in (prepared.sql or ""), (
         f"the declared spelling must reach the engine quoted, or Postgres folds it back: "
         f"{prepared.sql!r}"
@@ -300,11 +300,11 @@ def test_canonicalisation_precedes_the_check_so_the_verdict_is_about_what_runs(p
 def test_a_mixed_case_table_survives_the_round_trip_to_the_engine(prepare) -> None:
     """ADR 0008 P1, reduced to one statement. **This is the regression test.**
 
-    ``check()`` compares folded keys, so ``FROM address.cbsa`` matched the licensed
+    ``check()`` compares folded keys, so ``FROM address.cbsa`` matched the retrieved_tables
     ``address.CBSA`` and passed every layer; nothing then rewrote the spelling, so
     Postgres received the folded name and answered ``relation "address.cbsa" does not
     exist``. 81 of 738 tables and 610 of 6,909 columns in the obfuscated lake are
-    mixed-case, and each of them failed *after* a passing verdict — which in the ledger
+    mixed-case, and each of them failed *after* a passing result — which in the ledger
     is indistinguishable from a flaky database.
 
     Verified against Postgres 18 on 2026-08-04: ``SELECT 1 FROM address.cbsa`` fails and
@@ -312,14 +312,14 @@ def test_a_mixed_case_table_survives_the_round_trip_to_the_engine(prepare) -> No
     """
     prepared = prepare(
         "SELECT cbsa_name FROM address.cbsa",
-        licensed=frozenset({"address.CBSA"}),
+        retrieved_tables=frozenset({"address.CBSA"}),
         allowed_columns=frozenset({"address.CBSA.CBSA_name"}),
         spellings={"cbsa": "CBSA", "cbsa_name": "CBSA_name", "address": "address"},
     )
-    assert prepared.verdict["passed"] is True, prepared.verdict
+    assert prepared.result["passed"] is True, prepared.result
     sql = prepared.sql or ""
     assert '"CBSA"' in sql and '"CBSA_name"' in sql, (
-        f"a passing verdict on a statement the engine cannot resolve is the whole defect: {sql!r}"
+        f"a passing result on a statement the engine cannot resolve is the whole defect: {sql!r}"
     )
     assert "address.cbsa" not in sql, f"the folded spelling still reaches the engine: {sql!r}"
 
@@ -331,20 +331,20 @@ def test_an_ambiguous_fold_refuses(prepare) -> None:
     fold is not ambiguous."""
     refused = prepare(
         "SELECT alias FROM customers",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.Alias"}),
         spellings={"alias": "Alias", "customers": "customers"},
         ambiguous_folds=frozenset({"alias"}),
     )
-    assert refused.verdict["reason_code"] == "r_ambiguous_fold"
+    assert refused.result["reason_code"] == "r_ambiguous_fold"
 
     fine = prepare(
         "SELECT alias FROM customers",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.Alias"}),
         spellings={"alias": "Alias", "customers": "customers"},
     )
-    assert fine.verdict["passed"] is True, fine.verdict
+    assert fine.result["passed"] is True, fine.result
 
 
 def test_the_encoding_check_runs_on_the_raw_statement_not_the_normalised_one(prepare) -> None:
@@ -357,8 +357,8 @@ def test_the_encoding_check_runs_on_the_raw_statement_not_the_normalised_one(pre
     """
     from governed_bi.govern.pipeline import normalise
 
-    refused = prepare("SELECT id" + BIDI_OVERRIDE + " FROM customers", licensed=CUSTOMERS)
-    assert refused.verdict["reason_code"] == "r_control_characters"
+    refused = prepare("SELECT id" + BIDI_OVERRIDE + " FROM customers", retrieved_tables=CUSTOMERS)
+    assert refused.result["reason_code"] == "r_control_characters"
     assert refused.sql is None
     assert normalise("ＳＥＬＥＣＴ") == "SELECT"
 
@@ -384,16 +384,16 @@ def test_the_row_that_is_actually_written_carries_the_statement_verbatim(prepare
 
     prepared = prepare(
         "SELECT c.id FROM customers c WHERE c.id = 424242",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=ALLOWED,
     )
-    row = attempt_record(prepared.verdict, "agent", executed_sql=prepared.sql)
+    row = attempt_record(prepared.result, "agent", executed_sql=prepared.sql)
     assert row["passed"] is True
     assert row["executed_sql"] == prepared.sql
     assert "424242" in str(row["executed_sql"]), (
         "the durable row carries the literal. If that changes, it is a decision, not a detail"
     )
-    assert "detail" not in row, "the verdict's detail quotes the statement and is not carried"
+    assert "detail" not in row, "the result's detail quotes the statement and is not carried"
 
 
 def test_a_refused_attempt_records_that_nothing_ran(check) -> None:
@@ -405,11 +405,11 @@ def test_a_refused_attempt_records_that_nothing_ran(check) -> None:
     """
     from governed_bi.govern.ledger import attempt_record
 
-    verdict = check("SELECT pg_read_file('/etc/passwd')", licensed=CUSTOMERS)
-    row = attempt_record(verdict, "agent")
+    result = check("SELECT pg_read_file('/etc/passwd')", retrieved_tables=CUSTOMERS)
+    row = attempt_record(result, "agent")
     assert row["executed_sql"] is None
     assert row["passed"] is False
-    assert row["verdict_layer"] == "FUNCTIONS"
+    assert row["result_layer"] == "FUNCTIONS"
     assert row["reason_code"] == "r_function_not_permitted"
 
 
@@ -435,8 +435,8 @@ def test_the_execution_record_derives_its_error_count_from_its_attempts() -> Non
     from governed_bi.govern.ledger import AttemptRecord, execution_record
 
     attempts = [
-        AttemptRecord(verdict_layer=None, passed=True, reason_code="passed", path="agent"),
-        AttemptRecord(verdict_layer=None, passed=False, reason_code=GUARDRAIL_ERROR, path="agent"),
+        AttemptRecord(result_layer=None, passed=True, reason_code="passed", path="agent"),
+        AttemptRecord(result_layer=None, passed=False, reason_code=GUARDRAIL_ERROR, path="agent"),
     ]
     assert execution_record(attempts, "answered")["guardrail_errors"] == 1
     assert execution_record(attempts[:1], "answered")["guardrail_errors"] == 0
@@ -445,8 +445,8 @@ def test_the_execution_record_derives_its_error_count_from_its_attempts() -> Non
 # ── tool bounds ───────────────────────────────────────────────────────────────
 
 
-def test_the_licensed_set_has_no_widening_method() -> None:
-    """B7: ``inspect_schema`` wrote straight into the licensed set, so inspecting
+def test_the_retrieved_tables_set_has_no_widening_method() -> None:
+    """B7: ``inspect_schema`` wrote straight into the retrieved tables, so inspecting
     anything authorised it. The fix is structural — there is no mutator to call, and
     assignment raises.
 
@@ -455,21 +455,21 @@ def test_the_licensed_set_has_no_widening_method() -> None:
     """
     from governed_bi.govern.bounds import ToolBounds
 
-    bounds = ToolBounds(licensed=frozenset({"beer_factory.customers"}))
+    bounds = ToolBounds(retrieved_tables=frozenset({"beer_factory.customers"}))
     assert not [
         name
         for name in dir(bounds)
         if name.startswith(("add", "extend", "update", "with")) and callable(getattr(bounds, name))
     ]
     with pytest.raises(Exception):
-        bounds.licensed = frozenset({"other.secrets"})  # type: ignore[misc]
+        bounds.retrieved_tables = frozenset({"other.secrets"})  # type: ignore[misc]
 
 
 def test_sample_rows_is_bounded_by_the_columns_table() -> None:
     """``sample_rows`` takes a column **id**; its bound is that column's table."""
     from governed_bi.govern.bounds import ToolBounds
 
-    bounds = ToolBounds(licensed=frozenset({"beer_factory.customers"}))
+    bounds = ToolBounds(retrieved_tables=frozenset({"beer_factory.customers"}))
     assert bounds.may_sample("beer_factory.customers.city") is True
     assert bounds.may_sample("beer_factory.secrets.token") is False
     assert bounds.may_sample("customers") is False, "a bare id has no table to license"
@@ -535,7 +535,7 @@ def test_the_ledger_records_the_statement_that_ran_not_the_one_that_was_asked_fo
 
     # A refused attempt sent nothing, and that is a value rather than a gap: the key is
     # present and null, so a reader never has to tell "absent" from "did not run".
-    refused = attempt_record(refuse("r_table_not_licensed", "nope"), "agent")
+    refused = attempt_record(refuse("r_table_not_retrieved", "nope"), "agent")
     assert "executed_sql" in refused and refused["executed_sql"] is None
 
     from governed_bi.serve.ledger import cap_attempt
@@ -563,31 +563,31 @@ def test_a_qualified_reference_is_not_ambiguous(prepare) -> None:
     """The collision two tables away must not refuse a reference that names its own table.
 
     ``r_ambiguous_fold`` compared every identifier against one flat namespace built from the
-    turn's whole licensed set — ~26 tables across ~8 schemas. Two of them declaring ``Name``
+    turn's whole retrieved tables — ~26 tables across ~8 schemas. Two of them declaring ``Name``
     and ``name`` therefore refused *every* reference to either, qualified or not. Measured on
-    the 2026-08-09 v3 arm: 119 of 1 351 turns, 112 of them ending ``capped`` at EX 0.025, and
+    the 2026-08-09 v3 config: 119 of 1 351 turns, 112 of them ending ``capped`` at EX 0.025, and
     24% of the run's input tokens spent re-trying a statement nothing told the model how to fix.
 
     ``T1."Name"`` names one table. Given that table's own spellings, there is nothing to guess.
     """
     refused = prepare(
         "SELECT alias FROM customers",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.Alias"}),
         spellings={"alias": "Alias", "customers": "customers"},
         ambiguous_folds=frozenset({"alias"}),
     )
-    assert refused.verdict["reason_code"] == "r_ambiguous_fold", "precondition"
+    assert refused.result["reason_code"] == "r_ambiguous_fold", "precondition"
 
     resolved = prepare(
         "SELECT customers.alias FROM customers",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.Alias"}),
         spellings={"alias": "Alias", "customers": "customers"},
         ambiguous_folds=frozenset({"alias"}),
         spellings_by_table={"customers": {"alias": "Alias"}},
     )
-    assert resolved.verdict["passed"] is True, resolved.verdict
+    assert resolved.result["passed"] is True, resolved.result
     assert '"Alias"' in (resolved.sql or ""), resolved.sql
 
 
@@ -596,17 +596,17 @@ def test_an_unqualified_ambiguous_reference_still_refuses(prepare) -> None:
     resolve against, and picking one is exactly the decoy hazard the rule exists for."""
     refused = prepare(
         "SELECT alias FROM customers",
-        licensed=CUSTOMERS,
+        retrieved_tables=CUSTOMERS,
         allowed_columns=frozenset({"customers.Alias"}),
         spellings={"alias": "Alias", "customers": "customers"},
         ambiguous_folds=frozenset({"alias"}),
         spellings_by_table={"customers": {"alias": "Alias"}},
     )
-    assert refused.verdict["reason_code"] == "r_ambiguous_fold", refused.verdict
+    assert refused.result["reason_code"] == "r_ambiguous_fold", refused.result
 
 
-def test_a_cte_name_does_not_resolve_against_a_licensed_table_that_shares_it() -> None:
-    """A CTE is a name the statement *defines*. Resolving a column against a licensed table of
+def test_a_cte_name_does_not_resolve_against_a_retrieved_tables_table_that_shares_it() -> None:
+    """A CTE is a name the statement *defines*. Resolving a column against a retrieved table of
     the same name would canonicalise a reference to something the query never read."""
     from governed_bi.govern.pipeline import canonicalise
 
@@ -619,7 +619,7 @@ def test_a_cte_name_does_not_resolve_against_a_licensed_table_that_shares_it() -
         by_table={"customers": {"alias": "Alias"}},
     )
     assert isinstance(out, dict) and out["reason_code"] == "r_ambiguous_fold", (
-        f"a CTE alias resolved against the licensed table sharing its name: {out!r}"
+        f"a CTE alias resolved against the retrieved table sharing its name: {out!r}"
     )
 
 
@@ -718,7 +718,7 @@ def test_a_handle_reused_for_two_tables_is_spelled_from_each_scope_s_own() -> No
     """The defect the first draft shipped: resolve on a tree-wide alias map and you answer a
     different question from ``binding.py``, which resolves per scope.
 
-    Each of these reached a **passing** verdict with the wrong spelling — the draft spelled the
+    Each of these reached a **passing** result with the wrong spelling — the draft spelled the
     inner ``T1`` from ``s.people``, which is a different column of a different table.
 
     **The property asserted here is stronger than the refusal that stood in for it**, and this
@@ -821,7 +821,7 @@ def test_an_alias_hides_the_table_name_behind_it() -> None:
     )
 
 
-def test_a_bare_table_name_shared_by_two_licensed_schemas_is_not_resolvable() -> None:
+def test_a_bare_table_name_shared_by_two_retrieved_tables_schemas_is_not_resolvable() -> None:
     """``country`` in two schemas must not have one of them own the bare key by sort order —
     the same collision this whole rule refuses, one scope up. The schema-qualified key stays."""
     from governed_bi.govern.pipeline import spellings_for

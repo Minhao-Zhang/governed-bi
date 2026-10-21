@@ -1,8 +1,8 @@
-"""The declared abstention policy — rules, evidence and verdict (ADR 0013).
+"""The declared abstention policy — rules, evidence and result (ADR 0013).
 
 **What this is for.** The project's headline is a system that answers with confidence and
-declines on purpose. On the v4 arm it declines by accident: 19 of 20 refusals end on
-``r_table_not_licensed`` and all four clarifications licensed nothing, so nothing *decided* to
+declines on purpose. On the v4 config it declines by accident: 19 of 20 refusals end on
+``r_table_not_retrieved`` and all four clarifications retrieved_tables nothing, so nothing *decided* to
 withhold — retrieval missed and Layer 6 mechanically blocked five statements later. This module
 is the decision, written down: a named policy, a closed vocabulary of reasons, and the evidence
 behind each one, evaluated **before** the agent spends its ``run_query`` budget.
@@ -20,8 +20,8 @@ one can be re-checked by a person reading the artifact, which is the property a 
 have.
 
 **Off by default.** ``abstention_policy_enabled`` ships ``False``, so v4 stays the control and
-the change costs one paired arm to measure. The verdict is written on **every** turn including
-the disabled ones, which is ``negative``'s argument one gate over: a gate that leaves a trace
+the change costs one paired config to measure. The result is written on **every** turn including
+the disabled ones, which is ``negative``'s argument one check over: a check that leaves a trace
 only when it fires cannot afterwards be told from one that was never wired up.
 
 **Not a node, and that is the point.** The graph adapter is
@@ -47,10 +47,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
-from governed_bi.register.facets import ChannelState
-from governed_bi.register.stages import ABSTENTION_REASONS
+from governed_bi.registry.channels import ChannelState
+from governed_bi.registry.stages import ABSTENTION_REASONS
 from governed_bi.serve.context import EMPTY_CONTEXT
-from governed_bi.serve.runtime import bool_knob
+from governed_bi.serve.runtime import bool_setting
 
 __all__ = [
     "ABSTENTION_POLICY",
@@ -63,11 +63,11 @@ __all__ = [
     "decide",
 ]
 
-#: The policy's name **and version**, carried on every verdict.
+#: The policy's name **and version**, carried on every result.
 #:
 #: Versioned because the rule set is the treatment: adding a fifth rule changes which turns are
-#: delivered, and two arms whose verdicts both said ``abstention_policy`` would compare as one.
-#: ``knobs_resolved`` carries the enabling knob; this says *which policy* the knob enabled.
+#: delivered, and two configs whose results both said ``abstention_policy`` would compare as one.
+#: ``knobs_resolved`` carries the enabling setting; this says *which policy* the setting enabled.
 ABSTENTION_POLICY = "context_sufficiency_v1"
 
 
@@ -76,11 +76,11 @@ class AbstentionInputs:
     """**Every channel the policy reads, and the whole of it.** The node's real interface.
 
     The enumeration, because it was previously nowhere. This node reads **eight** of
-    ``ServeState``'s 47 channels. Six of them become the eight fields below — ``licensed``,
-    ``delivery`` (both its ``context_block`` and its ``evicted`` counts), ``facets``,
+    ``ServeState``'s 47 channels. Six of them become the eight fields below — ``retrieved_tables``,
+    ``delivery`` (both its ``context_block`` and its ``evicted`` counts), ``channels``,
     ``retrieved``, ``schemas``, and ``knobs_resolved``, from which
-    :func:`~governed_bi.serve.runtime.bool_knob` resolves ``abstention_policy_enabled``. That
-    knob is also probed as a *state key of its own*, which ``ServeState`` does not declare: on
+    :func:`~governed_bi.serve.runtime.bool_setting` resolves ``abstention_policy_enabled``. That
+    setting is also probed as a *state key of its own*, which ``ServeState`` does not declare: on
     the ``accept`` graph ``input_schema`` drops it, so it can only arrive on the in-process path,
     and it is named here because an undeclared read is exactly the kind that goes unnoticed.
 
@@ -88,7 +88,7 @@ class AbstentionInputs:
     :func:`~governed_bi.serve.nodes.abstain.abstain_node`, which names them: ``path_kind``,
     the already-ended short-circuit every node in this graph has — routing, not policy input,
     and read *before* the projection so that a turn which already ended cannot be crashed by
-    this node's knob — and ``turn_id``, which
+    this node's setting — and ``turn_id``, which
     :func:`~governed_bi.serve.events.rail_event_id` keys the rail row on.
 
     **Written:** ``abstention`` on every turn the node runs, plus ``path_kind`` and
@@ -100,20 +100,20 @@ class AbstentionInputs:
     over a handful of named facts, and the 47-channel dict it used to be handed was an interface
     an order of magnitude wider than any of the implementations behind it.
 
-    Not a ``TypedDict`` beside ``AbstentionVerdict`` in ``serve/state.py``: this is a *read*
+    Not a ``TypedDict`` beside ``AbstentionResult`` in ``serve/state.py``: this is a *read*
     view, so the projection has to travel with it or there are two places that know how to pull
-    ``licensed`` out of a state dict — and the projection calls ``bool_knob``, which would make
+    ``retrieved_tables`` out of a state dict — and the projection calls ``bool_setting``, which would make
     ``state.py`` import ``serve/runtime.py`` and through it the whole of ``retrieve/``.
     """
 
     #: Table ids Layer 6 will accept for this turn, in the order ``connect`` left them.
-    licensed: tuple[str, ...] = ()
+    retrieved_tables: tuple[str, ...] = ()
     #: The rendered context block exactly as the model will be handed it.
     context_block: str = ""
-    #: ``("facet_schema.semantic", ...)``, sorted. ``failed`` only — :func:`_failed_channels` says
+    #: ``("channel_schema.semantic", ...)``, sorted. ``failed`` only — :func:`_failed_channels` says
     #: why ``not_configured`` is not one.
     failed_channels: tuple[str, ...] = ()
-    #: Whole tables the char budget dropped from the block after they were licensed.
+    #: Whole tables the char budget dropped from the block after they were retrieved_tables.
     tables_evicted: int = 0
     #: Column bodies the same budget dropped. Evidence only; no rule reads it.
     bodies_evicted: int = 0
@@ -122,33 +122,33 @@ class AbstentionInputs:
     #: ``retrieved["lexical_coverage"]``. **Evidence and never a rule** — see
     #: :func:`abstention_evidence` for why nothing may threshold it.
     question_terms_in_corpus: float | None = None
-    #: The resolved ``abstention_policy_enabled`` knob. ``False`` ships, so this is the default.
+    #: The resolved ``abstention_policy_enabled`` setting. ``False`` ships, so this is the default.
     policy_enabled: bool = False
 
     @classmethod
     def from_state(cls, state: Mapping[str, Any]) -> AbstentionInputs:
         """**The only reader of the state dict in the policy.**
 
-        One projection, so there is one answer to "where does ``licensed`` come from". Two
+        One projection, so there is one answer to "where does ``retrieved_tables`` come from". Two
         functions that both knew would be the defect this file is a probe against: a second
-        reader of a channel is where ``measure/gates.py`` came to witness "reached stamp" on
+        reader of a channel is where ``measure/checks.py`` came to witness "reached finish" on
         ``Outcome.clarification`` and silently drop rows from a denominator.
 
-        Eager, including on the turns where the knob is off. That is a handful of dict lookups
+        Eager, including on the turns where the setting is off. That is a handful of dict lookups
         for a decision nobody took, which is a real cost and a very small one — the alternative
         is a conditional projection, and a projection that runs differently depending on what it
-        is about to be used for is two projections again. What the knob-off turn still does not
-        pay for, and must not, is the *verdict*: :func:`_disabled` carries no evidence.
+        is about to be used for is two projections again. What the setting-off turn still does not
+        pay for, and must not, is the *result*: :func:`_disabled` carries no evidence.
         """
         return cls(
-            licensed=_licensed(state),
+            retrieved_tables=_retrieved_tables(state),
             context_block=_context_block(state),
             failed_channels=_failed_channels(state),
             tables_evicted=_evicted(state, "tables_dropped"),
             bodies_evicted=_evicted(state, "bodies_dropped"),
             schemas=tuple(str(s) for s in (state.get("schemas") or ())),
             question_terms_in_corpus=_lexical_coverage(state),
-            policy_enabled=bool_knob(state, "abstention_policy_enabled"),
+            policy_enabled=bool_setting(state, "abstention_policy_enabled"),
         )
 
 
@@ -162,15 +162,15 @@ class AbstentionPatch:
     and emits the row; it decides nothing, so no branch of the policy is reachable only by
     invoking a graph.
 
-    ``rail_status`` could be derived from ``verdict["outcome"]`` instead, and is not on purpose:
+    ``rail_status`` could be derived from ``result["outcome"]`` instead, and is not on purpose:
     a node's effect on the timeline is a claim of its own — ``reflect`` and this node are both
-    registered ``stream=False`` precisely because a disabled gate that still emitted two rows
-    would have changed the event stream of every arm measured so far — and the adapter deriving
+    registered ``stream=False`` precisely because a disabled check that still emitted two rows
+    would have changed the event stream of every config measured so far — and the adapter deriving
     it would mean the seam, not the policy, deciding what the timeline says.
     """
 
     #: Goes to the ``abstention`` channel, on **every** turn the node judges or declines to.
-    verdict: dict[str, Any]
+    result: dict[str, Any]
     #: The terminal this decision imposes, or ``None`` to leave the turn running. Written into
     #: the same channel ``route`` and ``connect`` write their declines into.
     path_kind: Literal["decline"] | None = None
@@ -184,7 +184,7 @@ class AbstentionPatch:
 class AbstentionRule:
     """One named reason to withhold, and the argument for it."""
 
-    #: A member of :data:`~governed_bi.register.stages.ABSTENTION_REASONS`. Reaches
+    #: A member of :data:`~governed_bi.registry.stages.ABSTENTION_REASONS`. Reaches
     #: ``terminal_reason``, so the refusal histogram separates it from every other terminal.
     reason: str
     #: Why withholding is the right answer here — the sentence a person gets when they ask why
@@ -197,23 +197,23 @@ class AbstentionRule:
 
 
 def _failed_channels(state: Mapping[str, Any]) -> tuple[str, ...]:
-    """``["facet_schema.semantic", ...]`` for every channel that ran and errored.
+    """``["channel_schema.semantic", ...]`` for every channel that ran and errored.
 
     **``failed`` only, never ``not_configured``.** A lexical-only deployment reports
-    ``not_configured`` on every semantic channel by design — ``register/facets.is_degraded``
-    counts that as degradation, correctly, for a *health* gate — and abstaining on it would
+    ``not_configured`` on every semantic channel by design — ``registry/channels.is_degraded``
+    counts that as degradation, correctly, for a *health* check — and abstaining on it would
     withhold every turn on a laptop with no embedder. The distinction is exactly the one
     ``ChannelState`` exists to carry: "there is nothing to embed with" is a deployment, "it
     should have run and did not" is a failure.
     """
     out: list[str] = []
-    for facet, result in (state.get("facets") or {}).items():
+    for stage, result in (state.get("channels") or {}).items():
         if not isinstance(result, Mapping):
             continue
         for channel, channel_state in (result.get("channels") or {}).items():
             value = getattr(channel_state, "value", channel_state)
             if str(value) == ChannelState.failed.value:
-                out.append(f"{facet}.{channel}")
+                out.append(f"{stage}.{channel}")
     return tuple(sorted(out))
 
 
@@ -235,8 +235,8 @@ def _context_block(state: Mapping[str, Any]) -> str:
     return str(delivery.get("context_block") or "")
 
 
-def _licensed(state: Mapping[str, Any]) -> tuple[str, ...]:
-    raw = state.get("licensed")
+def _retrieved_tables(state: Mapping[str, Any]) -> tuple[str, ...]:
+    raw = state.get("retrieved_tables")
     return (
         tuple(str(x) for x in raw)
         if isinstance(raw, Sequence) and not isinstance(raw, str)
@@ -274,12 +274,12 @@ ABSTENTION_RULES: tuple[AbstentionRule, ...] = (
     AbstentionRule(
         reason="nothing_licensed",
         why=(
-            "retrieval licensed no table, so every statement the agent can write names a "
+            "retrieval found no table, so every statement the agent can write names a "
             "relation Layer 6 will refuse. The five run_query attempts would end where connect "
             "already ended, and the refusal would be attributed to the layer stack rather than "
             "to the empty shortlist that caused it"
         ),
-        fires=lambda inputs: not inputs.licensed,
+        fires=lambda inputs: not inputs.retrieved_tables,
     ),
     AbstentionRule(
         reason="empty_context",
@@ -292,9 +292,9 @@ ABSTENTION_RULES: tuple[AbstentionRule, ...] = (
     AbstentionRule(
         reason="licensed_table_evicted",
         why=(
-            "the character budget dropped a whole licensed table before the model saw it, so "
+            "the character budget dropped a whole retrieved table before the model saw it, so "
             "this turn is asking for SQL over a relation it did not show. A table can be "
-            "routed, licensed, counted as covered and then evicted; `evicted` is the only "
+            "routed, retrieved, counted as covered and then evicted; `evicted` is the only "
             "record that it happened"
         ),
         fires=lambda inputs: inputs.tables_evicted > 0,
@@ -306,19 +306,19 @@ def abstention_evidence(inputs: AbstentionInputs) -> dict[str, Any]:
     """The facts behind the decision, in a form a person can check against the record.
 
     Three questions, which is what open-work.md §4.1 asks an abstention to be able to answer:
-    **what was licensed** (``licensed`` / ``n_licensed`` / ``schemas``), **what was missing**
+    **what was retrieved_tables** (``retrieved_tables`` / ``n_licensed`` / ``schemas``), **what was missing**
     (``failed_channels``, ``tables_evicted``, ``bodies_evicted``, ``context_chars``), and **what
     the question asked for that the context could not supply** (``question_terms_in_corpus``).
 
     That last one is ``lexical_coverage`` — the share of the question's terms the corpus
     vocabulary has — and it is evidence, never a rule. No threshold reads it.
 
-    ``licensed`` is capped: it is evidence, and a 40-table list on every row is an artifact
+    ``retrieved_tables`` is capped: it is evidence, and a 40-table list on every row is an artifact
     cost. The count beside it is not capped, so the cap cannot hide the size.
     """
     return {
-        "n_licensed": len(inputs.licensed),
-        "licensed": sorted(inputs.licensed)[:_EVIDENCE_LIST_CAP],
+        "n_licensed": len(inputs.retrieved_tables),
+        "licensed": sorted(inputs.retrieved_tables)[:_EVIDENCE_LIST_CAP],
         "schemas": list(inputs.schemas),
         "context_chars": len(inputs.context_block),
         "tables_evicted": inputs.tables_evicted,
@@ -328,7 +328,7 @@ def abstention_evidence(inputs: AbstentionInputs) -> dict[str, Any]:
     }
 
 
-#: How many licensed keys the evidence carries. Evidence, not the record's ``licensed`` field —
+#: How many retrieved_tables keys the evidence carries. Evidence, not the record's ``retrieved_tables`` field —
 #: that one is complete and is what a reader joins on.
 _EVIDENCE_LIST_CAP = 12
 
@@ -336,7 +336,7 @@ _EVIDENCE_LIST_CAP = 12
 def decide(inputs: AbstentionInputs) -> dict[str, Any]:
     """Run the policy over ``inputs``. **The whole decision, and a pure function of them.**
 
-    Pure so the same verdict can be recomputed offline from an artifact's own fields, which is
+    Pure so the same result can be recomputed offline from an artifact's own fields, which is
     what makes "the engine can say why it withheld, in terms a person can check" true rather
     than asserted. Nothing here reads a model, a clock, the environment or the network — and,
     since the signature changed, nothing here reads the graph's state dict either: what it can
@@ -365,7 +365,7 @@ def decide(inputs: AbstentionInputs) -> dict[str, Any]:
     }
 
 
-#: The verdict written when the knob is off. **No evidence**: a verdict nobody took carrying the
+#: The result written when the setting is off. **No evidence**: a result nobody took carrying the
 #: facts behind it would be a cost with no reader, and an empty mapping cannot be mistaken for a
 #: judgement. (The *projection* still runs on those turns — :meth:`AbstentionInputs.from_state`
 #: says why that is the cheaper of the two mistakes — so what this saves is the payload, which is
@@ -381,19 +381,19 @@ def _disabled() -> dict[str, Any]:
 
 
 def apply_policy(inputs: AbstentionInputs) -> AbstentionPatch:
-    """The knob, then the policy. **Everything this node decides, and no state dict in sight.**
+    """The setting, then the policy. **Everything this node decides, and no state dict in sight.**
 
     Here rather than in :func:`~governed_bi.serve.nodes.abstain.abstain_node` so that the
     adapter has no branch of its own: a condition at the seam is a condition only a graph
-    invocation can reach, and this one — "the knob is off, so record that a policy existed and
-    let the turn through" — is half of what makes the knob honest.
+    invocation can reach, and this one — "the setting is off, so record that a policy existed and
+    let the turn through" — is half of what makes the setting honest.
     """
     if not inputs.policy_enabled:
-        return AbstentionPatch(verdict=_disabled())
-    verdict = decide(inputs)
-    if verdict["outcome"] != "withhold":
-        return AbstentionPatch(verdict=verdict, rail_status="ok")
-    return AbstentionPatch(verdict=verdict, path_kind="decline", rail_status="declined")
+        return AbstentionPatch(result=_disabled())
+    result = decide(inputs)
+    if result["outcome"] != "withhold":
+        return AbstentionPatch(result=result, rail_status="ok")
+    return AbstentionPatch(result=result, path_kind="decline", rail_status="declined")
 
 
 def _assert_the_policy_speaks_the_declared_vocabulary() -> None:
@@ -412,7 +412,7 @@ def _assert_the_policy_speaks_the_declared_vocabulary() -> None:
         raise AssertionError(f"two abstention rules share a reason: {sorted(reasons)}")
     if set(reasons) != ABSTENTION_REASONS:  # pragma: no cover - import-time guard
         raise AssertionError(
-            "the policy's rules and register.stages.ABSTENTION_REASONS disagree: "
+            "the policy's rules and registry.stages.ABSTENTION_REASONS disagree: "
             f"rules-only={sorted(set(reasons) - ABSTENTION_REASONS)}, "
             f"declared-only={sorted(ABSTENTION_REASONS - set(reasons))}"
         )

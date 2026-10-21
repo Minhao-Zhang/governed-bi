@@ -46,7 +46,7 @@ def _isolated():
 
 
 class _EchoConnector:
-    """A connector double, for the one test whose subject is the *governance verdict*.
+    """A connector double, for the one test whose subject is the *governance result*.
 
     Real enough that a refusal is a refusal: with ``connector=None`` a governed block is a
     wiring failure and proves nothing (``tests/serve/turn_contract_fixtures`` says so at
@@ -85,7 +85,7 @@ def test_a_client_cannot_set_any_provenance_field() -> None:
     not that it forgets: it is that it **merges** what the client sent.
 
     `run_id`, `turn_id`, `question_id`, `corpus_content_hash`, `prompt_set_hash`,
-    `knobs_resolved` are the run's own claims about itself, and `measure/gates.py` reads them
+    `knobs_resolved` are the run's own claims about itself, and `measure/checks.py` reads them
     to decide whether a run is quotable. A client that can set `corpus_content_hash` can make
     two different corpora report as one, which is a forged comparison rather than a bad one.
 
@@ -104,11 +104,11 @@ def test_a_client_cannot_set_any_provenance_field() -> None:
     keys at the entry, so most sentinels never reach a channel; `accept` then *overwrites* the
     turn identity from `Session.turn`, so the ones that are declared channels do not survive
     either. Asserting on the record rather than on either mechanism is deliberate — the record
-    is what a gate reads.
+    is what a check reads.
     """
     from langchain_core.messages import HumanMessage
 
-    from governed_bi.register.record import record_keys, required_keys
+    from governed_bi.registry.record import record_keys, required_keys
 
     session = _indexed_session()
     forged = {name: SENTINEL for name in required_keys()}
@@ -122,7 +122,7 @@ def test_a_client_cannot_set_any_provenance_field() -> None:
 
     survived = sorted(name for name in required_keys() if _mentions(record.get(name)))
     assert not survived, (
-        f"{survived} reached the record from the client's payload. Every quotability gate "
+        f"{survived} reached the record from the client's payload. Every quotability check "
         "reads these, so a client-settable one is a forged record rather than a wrong one"
     )
     # Not merely dropped — minted. A turn that silently produced nothing would also have no
@@ -194,7 +194,7 @@ def test_the_graph_is_loadable_the_way_langgraph_json_loads_it() -> None:
         f"Server can send: failed_stage={answer['failed_stage']!r} "
         f"error_type={answer['error_type']!r}"
     )
-    assert answer["record"]["licensed"], "nothing was licensed, so no node reached the corpus"
+    assert answer["record"]["licensed"], "no table was retrieved, so no node reached the corpus"
 
 
 # ── /capabilities: observations, and false is a real answer ───────────────────

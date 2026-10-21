@@ -9,37 +9,37 @@ from __future__ import annotations
 
 import pytest
 
-from governed_bi.register import assets, facets, knobs, record, stages
-from governed_bi.register.knobs import config_hash, resolve_settings
+from governed_bi.registry import assets, channels, record, settings, stages
+from governed_bi.registry.settings import config_hash, resolve_settings
 
 # ── cross-table closure: the reason this package exists ────────────────────────
 
 
-def test_every_facet_target_is_a_real_asset_type() -> None:
-    """``FACET_TARGETS`` is keyed on the enum, so this is a type error rather than a
+def test_every_channel_target_is_a_real_asset_type() -> None:
+    """``CHANNEL_TARGETS`` is keyed on the enum, so this is a type error rather than a
     runtime one — but the *union* still has to cover the index, which no type says."""
     retrieved: set[assets.AssetType] = set()
-    for targets in facets.FACET_TARGETS.values():
+    for targets in channels.CHANNEL_TARGETS.values():
         retrieved |= targets
-    reachable = retrieved | facets.GATE_CONSUMED_TYPES
+    reachable = retrieved | channels.CHECK_CONSUMED_TYPES
     assert reachable == assets.INDEXED_TYPES, (
-        "an indexed asset type that no facet retrieves and no gate consumes is "
+        "an indexed asset type that no retrieval channel retrieves and no check consumes is "
         "unreachable — which is exactly how v1's negative examples were embedded, "
         "budgeted at zero by a dict default, and never retrievable"
     )
 
 
-def test_every_gate_reads_a_declared_field() -> None:
-    assert record.gate_keys() <= record.record_keys()
+def test_every_check_reads_a_declared_field() -> None:
+    assert record.check_keys() <= record.record_keys()
 
 
-def test_every_health_field_is_read_by_a_gate() -> None:
+def test_every_health_field_is_read_by_a_check() -> None:
     """The ``health`` tier's definition is "every one of these is a quotability
-    input". A health field no gate reads is the v1 incident where a degradation
+    input". A health field no check reads is the v1 incident where a degradation
     counter reached ``summary.json`` and ``quotable()`` read neither it nor its
     rate."""
     health = {f.name for f in record.RECORD_REGISTER if f.tier is record.Tier.health}
-    assert health <= record.gate_keys()
+    assert health <= record.check_keys()
 
 
 def test_every_record_owner_is_a_real_stage() -> None:
@@ -66,7 +66,7 @@ def test_changing_one_setting_changes_the_config_hash(monkeypatch) -> None:
 
 
 def test_presence_test_rejects_a_record_of_nulls() -> None:
-    """The check that makes ``missing_required`` more than a rubber stamp.
+    """The check that makes ``missing_required`` more than a rubber finish.
 
     ``project`` writes every declared key, so key-presence alone always passes. This
     is the same defect as v1's ``corpus_content_hash == "unknown"`` comparing equal
@@ -79,10 +79,10 @@ def test_presence_test_rejects_a_record_of_nulls() -> None:
 def test_a_refusal_path_record_passes() -> None:
     """The complement, and the reason eleven fields are stage-conditional.
 
-    A guard-blocked turn reaches ``stamp`` without running the facets, ``connect``
+    A guard-blocked turn reaches ``finish`` without running the channels, ``connect``
     or the agent loop. Declaring those fields ``never`` would either fail every
     refusal or force an empty-collection encoding — and an empty ``facet_channels``
-    reads as *clean* to a gate looking for degradation.
+    reads as *clean* to a check looking for degradation.
     """
     rec = {f.name: None for f in record.RECORD_REGISTER}
     for f in record.RECORD_REGISTER:
@@ -91,39 +91,39 @@ def test_a_refusal_path_record_passes() -> None:
     assert not record.missing_required(rec)
 
 
-def test_unset_knobs_refuse_truth_testing() -> None:
+def test_unset_settings_refuse_truth_testing() -> None:
     """``if not permitted_functions`` must not silently read as "empty allowlist"."""
     with pytest.raises(TypeError):
-        bool(knobs.UNSET)
-    unset = [k.name for k in knobs.KNOB_REGISTER if k.default is knobs.UNSET]
+        bool(settings.UNSET)
+    unset = [k.name for k in settings.SETTING_REGISTER if k.default is settings.UNSET]
     assert "permitted_functions" in unset
     assert "guard_rules_enabled" in unset
 
 
-def test_expected_channel_state_refuses_a_non_facet() -> None:
+def test_expected_channel_state_refuses_a_non_channel() -> None:
     with pytest.raises(KeyError):
-        facets.expected_channel_state(stages.Stage.route, facets.Channel.lexical)
+        channels.expected_channel_state(stages.Stage.route, channels.Channel.lexical)
 
 
 def test_unconfigured_where_configured_is_degradation() -> None:
-    """A channel that silently stops being wired up must not pass a gate that only
+    """A channel that silently stops being wired up must not pass a check that only
     looks for ``failed``."""
-    assert facets.is_degraded(
-        stages.Stage.facet_entity, facets.Channel.lexical, facets.ChannelState.not_configured
+    assert channels.is_degraded(
+        stages.Stage.channel_entity, channels.Channel.lexical, channels.ChannelState.not_configured
     )
-    assert not facets.is_degraded(
-        stages.Stage.facet_example, facets.Channel.lexical, facets.ChannelState.not_configured
+    assert not channels.is_degraded(
+        stages.Stage.channel_example, channels.Channel.lexical, channels.ChannelState.not_configured
     )
 
 
 def test_extra_channel_is_drift_not_degradation() -> None:
     """More retrieval than declared is worth reporting and must not refuse a run."""
-    anomaly = facets.channel_anomaly(
-        stages.Stage.facet_example, facets.Channel.lexical, facets.ChannelState.ran
+    anomaly = channels.channel_anomaly(
+        stages.Stage.channel_example, channels.Channel.lexical, channels.ChannelState.ran
     )
-    assert anomaly is facets.Anomaly.extra_channel
-    assert not facets.is_degraded(
-        stages.Stage.facet_example, facets.Channel.lexical, facets.ChannelState.ran
+    assert anomaly is channels.Anomaly.extra_channel
+    assert not channels.is_degraded(
+        stages.Stage.channel_example, channels.Channel.lexical, channels.ChannelState.ran
     )
 
 
@@ -138,8 +138,8 @@ def test_cap_classifies_as_capped_not_refused() -> None:
 
 
 def test_model_error_classifies_as_crashed_even_with_sql() -> None:
-    """A crash wearing a refusal's clothes. v1 pooled these and every arm-to-arm
-    delta was contaminated by a different amount, because arms do not crash at the
+    """A crash wearing a refusal's clothes. v1 pooled these and every config-to-config
+    delta was contaminated by a different amount, because configs do not crash at the
     same rate."""
     assert (
         stages.classify_outcome(error=None, refused_by="model_error", has_sql=True)
@@ -162,7 +162,7 @@ def test_no_sql_and_no_refusal_is_a_crash() -> None:
     """A turn that decided nothing did not refuse. Calling it a refusal is the
     original defect.
 
-    Still a crash **with no ledger verdict handed over**: ``classify_outcome`` returns
+    Still a crash **with no ledger result handed over**: ``classify_outcome`` returns
     ``Outcome.no_sql`` only for a caller that read ``execution.terminal`` (see below), so a turn
     nothing observed ending keeps the name for that.
     """
@@ -175,8 +175,8 @@ def test_no_sql_and_no_refusal_is_a_crash() -> None:
 def test_the_statement_less_outcome_is_the_ledger_s_own_word() -> None:
     """``Outcome.no_sql`` and ``ExecutionRecord.terminal``'s ``"no_sql"`` are one string.
 
-    ``stamp`` classifies the outcome by reading that field — the same way it reads the ledger's
-    verdict for ``capped``, and for the same reason: the two cannot then disagree about whether a
+    ``finish`` classifies the outcome by reading that field — the same way it reads the ledger's
+    result for ``capped``, and for the same reason: the two cannot then disagree about whether a
     statement ran. If the spellings drift, ``classify_outcome``'s comparison stops matching, the
     member becomes unreachable, and every statement-less turn silently records ``crashed``.
     ``govern/ledger.py`` asserts the same pair at import; this is the readable half.
@@ -216,7 +216,7 @@ def _base_turn(**overrides):
         "prompt_set_hash": "prompt-hash",
         "knobs_resolved": {"route_top_n": 3},
         "n_re_served": 0,
-        "facet_route_hits": [],
+        "channel_route_hits": [],
         "messages": [],
         "usage": [],
     }
@@ -231,10 +231,10 @@ def _config(thread_id: str, policy) -> dict:
 def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> None:
     """A real turn on refuse / decline / answered paths leaves no missing required field.
 
-    Refusal paths skip facets and still must write every ``Absence.never`` field.
+    Refusal paths skip channels and still must write every ``Absence.never`` field.
     """
     from governed_bi.govern.policy import GovernancePolicy
-    from governed_bi.register.record import missing_required
+    from governed_bi.registry.record import missing_required
     from governed_bi.serve.graph import compile_graph
 
     graph = compile_graph()
@@ -264,7 +264,7 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> Non
         _base_turn(
             question="how many sensors",
             turn_id="turn-decline",
-            facet_route_hits=[],
+            channel_route_hits=[],
         ),
         _config("t-decline", off),
     )
@@ -275,7 +275,7 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> Non
     # The third terminal, and it is **not** the answered path: this file configures no
     # ``agent_model``, so ``agent_core`` takes ``_stub`` and the turn ends having executed no
     # statement. It asserted ``outcome == "answered"`` until 2026-08-18 and passed, because
-    # ``stamp`` hardcoded ``has_sql=True`` whenever the agent loop finished with an empty ledger.
+    # ``finish`` hardcoded ``has_sql=True`` whenever the agent loop finished with an empty ledger.
     # ``Outcome.no_sql`` is what that turn is; the answered path with a real ledger is pinned in
     # ``tests/serve/test_turn_contract.py``. Named for the property under test either way — every
     # ``Absence.never`` field is written on every terminal, including this one.
@@ -283,7 +283,7 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> Non
         _base_turn(
             question="how many customers",
             turn_id="turn-no-statement",
-            facet_route_hits=[("facet_schema", "beer_factory", 0.9)],
+            channel_route_hits=[("channel_schema", "beer_factory", 0.9)],
         ),
         _config("t-no-statement", off),
     )

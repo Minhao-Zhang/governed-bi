@@ -1,8 +1,8 @@
 """Eval over the pooled BIRD data lake — one Postgres, 57 curated schemas, no pin.
 
 **Two stages, cheap one first.** :func:`routing_recall` needs no model — with no extraction
-model the facet queries fall back to the raw question — so it answers *is the gold schema
-even a candidate* for free. The paid **live arm** (``harness.run_arm`` with ``arms.live_arm``,
+model the channel queries fall back to the raw question — so it answers *is the gold schema
+even a candidate* for free. The paid **live config** (``harness.run_config`` with ``configs.live_config``,
 driven by ``tools/run_datalake_eval.py``) runs second, because paying to discover the router
 never shortlisted the right schema buys a result available for nothing.
 
@@ -24,7 +24,7 @@ from collections.abc import Collection, Iterable, Mapping, MutableMapping, Seque
 from pathlib import Path
 from typing import Any
 
-from governed_bi.register.stages import Outcome
+from governed_bi.registry.stages import Outcome
 
 __all__ = [
     "load_questions",
@@ -79,7 +79,7 @@ def dataset_leakage_qids(dataset: str | Path) -> set[str]:
 
     Its note: *"Test question_ids recoverable from the train split by retrieval rather than
     induction. Same-database comparisons only."* Reads the ``union`` of its four detectors, so
-    a question is suspect if any flagged it — 9 of the pooled arm's 1,351 (0.67%).
+    a question is suspect if any flagged it — 9 of the pooled config's 1,351 (0.67%).
 
     Tagged rather than dropped (:func:`attach_quality_flags`). A missing file means no leakage
     declared; unreadable keys raise, for the reason in :func:`dataset_qid_lists`.
@@ -159,9 +159,9 @@ def attach_gold_fingerprints(
 
     The dataset ships a digest for every question, recorded against this database
     (``gold_result_hashes_rename_decoy.jsonl``, ``dsn_key="rename_decoy"``). It is what makes
-    the grader-ceiling arm measurable at all (:mod:`governed_bi.eval.oracle`) and is the gold of
+    the grader-ceiling config measurable at all (:mod:`governed_bi.eval.oracle`) and is the gold of
     record. The harness still executes the gold statement when there is a prediction to grade,
-    because the verdict compares rows with a numeric tolerance a digest cannot carry.
+    because the result compares rows with a numeric tolerance a digest cannot carry.
 
     Four guards, each because using the digest anyway would be wrong rather than unhelpful:
 
@@ -171,7 +171,7 @@ def attach_gold_fingerprints(
         the gold did not execute when the digest was taken; there is no digest to use.
     ``sql_sha256``
         the digest belongs to a *statement* and the dataset's statement can move under it — it
-        disagrees with ``sha256(gold_sql)`` on 2 of the arm's 1,351 questions today, which
+        disagrees with ``sha256(gold_sql)`` on 2 of the config's 1,351 questions today, which
         would grade every prediction against the wrong target.
     ``order_sensitive``
         ``hash_lenient`` is ``normalise_result``, which always sorts, so it is an
@@ -303,10 +303,10 @@ def routing_recall(
     """Per question: was the gold schema shortlisted, and at what rank. **No model.**
 
     Costs nothing because a session with ``agent_model=None`` serves the stub answer path:
-    facets, routing, retrieval, resolve and connect all run for real, no provider call.
+    channels, routing, retrieval, resolve and connect all run for real, no provider call.
 
-    **Runs the compiled graph, never the nodes by hand.** The five facet nodes all write to
-    one ``facets`` channel whose reducer merges by name, so assembling state with
+    **Runs the compiled graph, never the nodes by hand.** The five channel nodes all write to
+    one ``channels`` channel whose reducer merges by name, so assembling state with
     ``dict.update`` replaces it four times and measures 0.000 recall with every gold schema
     "never scored" — wrong in a way that looks like a finding.
 
@@ -322,7 +322,7 @@ def routing_recall(
     # 101 KB after one turn and 844 KB after six, so one thread per question over a pooled run
     # retains on the order of 135 MB for state no later question reads. This driver is the one
     # most likely to be run at full scale on a laptop, because retrieval measurement is free --
-    # the vector cache is warm and a stub-answer arm calls no provider.
+    # the vector cache is warm and a stub-answer config calls no provider.
     saver = getattr(graph, "checkpointer", None)
     rows: list[dict[str, Any]] = []
     for index, question in enumerate(questions):
@@ -340,7 +340,7 @@ def routing_recall(
         ranking = [
             str(pair[0]) for pair in ((out.get("retrieved") or {}).get("schema_ranking") or ())
         ]
-        licensed = [str(x) for x in (out.get("licensed") or ())]
+        retrieved_tables = [str(x) for x in (out.get("retrieved_tables") or ())]
         gold = str(question["db_id"])
         rows.append(
             {
@@ -354,12 +354,12 @@ def routing_recall(
                 "n_scored": len(ranking),
                 # The table ids themselves, not only their schemas: `table_coverage` reads
                 # exactly this key, and without it reports `all_gold_tables_licensed: 0.0`
-                # for every arm — a plausible number rather than an error.
-                "licensed": licensed,
+                # for every config — a plausible number rather than an error.
+                "licensed": retrieved_tables,
                 # What survived `connect`'s component pick. `hit` says the router
                 # shortlisted the gold schema; this says the turn could still reach it.
-                "licensed_schemas": sorted({t.split(".", 1)[0] for t in licensed}),
-                "reached_gold": any(t.startswith(f"{gold}.") for t in licensed),
+                "retrieved_tables_schemas": sorted({t.split(".", 1)[0] for t in retrieved_tables}),
+                "reached_gold": any(t.startswith(f"{gold}.") for t in retrieved_tables),
                 "path_kind": out.get("path_kind"),
                 "terminal_reason": out.get("terminal_reason"),
             }
@@ -439,15 +439,15 @@ def gold_tables(sql: str) -> set[str] | None:
 
 
 def gold_table_ids(qualified: str) -> set[str]:
-    """The lowercased asset ids under which a gold statement's table could have been licensed.
+    """The lowercased asset ids under which a gold statement's table could have been retrieved_tables.
 
     ``gold_tables`` returns the identifier the *dataset* wrote — ``airline.Air Carriers``, the
-    engine's spelling. ``licensed`` carries **asset ids**, and an id is a key rather than a name
+    engine's spelling. ``retrieved_tables`` carries **asset ids**, and an id is a key rather than a name
     (ADR 0008 D1): that table is ``airline.Air_Carriers_66c534`` in the corpus, with
     ``physical_name: Air Carriers``. Comparing the two strings compares two different nouns, and
     the answer only came out right because ``slug`` returns a bare identifier unchanged — 655 of
-    the 656 tables of the shipped BIRD corpus. The one that differs was scored as an unlicensed
-    table on every turn that had in fact licensed it (5 of 1 351 rows on the v4 arm, and in each
+    the 656 tables of the shipped BIRD corpus. The one that differs was scored as an not_retrieved
+    table on every turn that had in fact retrieved_tables it (5 of 1 351 rows on the v4 config, and in each
     the only miss), so the ceiling read low, never high.
 
     Recovered by **re-deriving the id**: ``corpus.identity.slug`` is the one rule that turns a
@@ -466,7 +466,7 @@ def gold_table_ids(qualified: str) -> set[str]:
         equating a rename decoy with the table it decoys.
     having the row producer write the physical names beside the ids
         the mapping would be right and arrive too late: every artifact already in ``runs/eval/``
-        would stay unfixable without re-running a paid arm, and the figures quoted from them are
+        would stay unfixable without re-running a paid config, and the figures quoted from them are
         the ones under discussion. It also puts two spellings of one fact on every row.
     passing a corpus resolver in
         makes a pure function over a finished artifact depend on the corpus, which moves. The
@@ -504,20 +504,20 @@ def gold_table_ids(qualified: str) -> set[str]:
 def table_coverage(
     rows: Sequence[Mapping[str, Any]], gold_sql_by_qid: Mapping[str, str]
 ) -> dict[str, Any]:
-    """**The EX ceiling.** How often every table the gold statement reads was licensed.
+    """**The EX ceiling.** How often every table the gold statement reads was retrieved_tables.
 
     Sharper than schema reachability: a turn can route to the right schema and still fail,
     because the per-type budget licenses at most ``ASSET_REGISTER[table].budget`` ranked
     tables. That splits "was the question answerable under this retrieval" from "did the model
-    convert it", which one EX number cannot. Measured on the xhigh arm at 344 rows: 51.2% of
+    convert it", which one EX number cannot. Measured on the xhigh config at 344 rows: 51.2% of
     questions had all their gold tables against 62.5% schema reachability — **not** retired
-    with the EX figures, because these measure what was *licensed* and no grader touches them.
+    with the EX figures, because these measure what was *retrieved_tables* and no grader touches them.
 
     Compared case-insensitively, and against the gold table's id rather than its spelling —
-    licensed ids carry the slug (ADR 0008 D1) and gold statements carry the engine's identifier.
+    retrieved_tables ids carry the slug (ADR 0008 D1) and gold statements carry the engine's identifier.
     :func:`gold_table_ids` re-derives the one from the other and says why that and not a resolver.
     Until it did, ``Air Carriers`` — the one table of 656 whose id is not its own name — read as
-    unlicensed on every turn that had licensed it.
+    not_retrieved on every turn that had retrieved_tables it.
     """
     full = partial = none = unparsed = tableless = 0
     for row in rows:
@@ -537,18 +537,18 @@ def table_coverage(
             # because a silently smaller denominator is the other half of the same defect.
             tableless += 1
             continue
-        # A row with no ``licensed`` key is a caller error, not a coverage of zero: absent
-        # means the producer does not carry the field, empty means the turn licensed nothing
+        # A row with no ``retrieved_tables`` key is a caller error, not a coverage of zero: absent
+        # means the producer does not carry the field, empty means the turn retrieved nothing
         # and is a real measurement. Scoring absent as zero published a 0.000 ceiling for two
-        # arms that had in fact routed well (their recalls are retired; citations.py).
+        # configs that had in fact routed well (their recalls are retired; citations.py).
         if "licensed" not in row:
             raise KeyError(
                 "table_coverage needs `licensed` (the table ids) on every row and this one "
                 f"carries {sorted(row)}. Scoring it as zero coverage would publish a ceiling "
-                "of 0.000 for a run that licensed tables on every turn."
+                "of 0.000 for a run that retrieved tables on every turn."
             )
-        licensed = {str(t).lower() for t in (row.get("licensed") or ())}
-        hits = sum(1 for table in needed if gold_table_ids(table) & licensed)
+        retrieved_tables = {str(t).lower() for t in (row.get("licensed") or ())}
+        hits = sum(1 for table in needed if gold_table_ids(table) & retrieved_tables)
         if needed and hits == len(needed):
             full += 1
         elif hits:
@@ -558,9 +558,9 @@ def table_coverage(
     total = full + partial + none or 1
     return {
         "n": full + partial + none,
-        "all_gold_tables_licensed": full / total,
-        "some_licensed": partial / total,
-        "none_licensed": none / total,
+        "all_gold_tables_retrieved_tables": full / total,
+        "some_retrieved_tables": partial / total,
+        "none_retrieved_tables": none / total,
         "gold_sql_unparsed": unparsed,
         #: Gold statements that read no table (constant-folded ``VALUES`` rows). Excluded from
         #: ``n``. A run comparing itself against an older number must check this moved the
@@ -591,37 +591,37 @@ def retrieval_funnel(
     ``all_gold_tables_licensed``
         given that, every gold table survived pass two, the budget and ``connect``.
     ``answered``
-        given a licensed set that could support an answer. The gap from the stage above is
+        given a retrieved tables that could support an answer. The gap from the stage above is
         generation, the only one a corpus change cannot touch.
     ``graded`` / ``correct``
         given an answer this grader could judge at all. ``graded`` is the *instrument's* stage:
         a turn with no comparable gold is unmeasured, and keeping it out of EX's denominator is
         the difference between "the system was wrong" and "we did not look".
 
-    Rates come from :meth:`~governed_bi.register.quantity.Measured.rate`, so a stage with no
+    Rates come from :meth:`~governed_bi.registry.quantity.Measured.rate`, so a stage with no
     population reports *unmeasured* rather than ``0.000`` — the ``or 1`` idiom elsewhere in
     this module is what lets a zero-row coverage read as a real ceiling of zero.
 
     The stages above are over ``scorable``, which excludes golds that read no table. On the
-    2026-08-07 pooled run that set is 127 of 1 351 and every arm does badly on it, so
+    2026-08-07 pooled run that set is 127 of 1 351 and every config does badly on it, so
     ``gold_reads_no_table`` is returned beside them with **its own EX** — published as a
-    population rather than dropped, because an exclusion that lifts every arm by the same
+    population rather than dropped, because an exclusion that lifts every config by the same
     ~3 points is a reporting choice and the reader is the one who has to make it.
     """
-    from governed_bi.register.quantity import Measured
+    from governed_bi.registry.quantity import Measured
 
     counts = {
         "rows": 0,
         "scorable": 0,
         "schema_routed": 0,
         "tables_in_routed_schemas": 0,
-        "all_gold_tables_licensed": 0,
+        "all_gold_tables_retrieved_tables": 0,
         "answered": 0,
         # Counted rather than skipped, this module's own rule one stage on: before the
         # `Outcome.no_sql` split these rows arrived as `answered` with no `generated_sql`, so they
         # sat in `answered` and `graded` as guaranteed misses. They now leave the funnel at the
-        # `answered` gate, which *raises* `correct/graded` -- so the count they left with is on
-        # the artifact beside it. (`headline_ex` in `eval/report.py` is over the whole arm and
+        # `answered` check, which *raises* `correct/graded` -- so the count they left with is on
+        # the artifact beside it. (`headline_ex` in `eval/report.py` is over the whole config and
         # keeps scoring them wrong, so no published EX moved.)
         "answered_without_a_statement": 0,
         "graded": 0,
@@ -663,7 +663,7 @@ def retrieval_funnel(
             continue
         counts["scorable"] += 1
 
-        routed = {str(s) for s in (row.get("licensed_schemas") or ())}
+        routed = {str(s) for s in (row.get("retrieved_tables_schemas") or ())}
         if not routed:
             routed = {str(t).split(".", 1)[0] for t in (row.get("licensed") or ())}
         gold_db = str((gold_db_by_qid or {}).get(qid) or row.get("db_id") or "")
@@ -675,13 +675,13 @@ def retrieval_funnel(
             continue
         counts["tables_in_routed_schemas"] += 1
 
-        licensed = {str(t).lower() for t in (row.get("licensed") or ())}
-        # Through ``gold_table_ids`` and not ``str(t).lower() in licensed``: the same stage in
+        retrieved_tables = {str(t).lower() for t in (row.get("licensed") or ())}
+        # Through ``gold_table_ids`` and not ``str(t).lower() in retrieved_tables``: the same stage in
         # ``table_coverage`` reads the same two nouns, and two rules for "was this gold table
-        # licensed" is one number disagreeing with another over the same rows.
-        if not all(gold_table_ids(str(t)) & licensed for t in needed):
+        # retrieved_tables" is one number disagreeing with another over the same rows.
+        if not all(gold_table_ids(str(t)) & retrieved_tables for t in needed):
             continue
-        counts["all_gold_tables_licensed"] += 1
+        counts["all_gold_tables_retrieved_tables"] += 1
 
         if str(row.get("outcome") or "") != "answered":
             if str(row.get("outcome") or "") == Outcome.no_sql.value:
@@ -703,8 +703,8 @@ def retrieval_funnel(
     stages = (
         ("schema_routed", "scorable"),
         ("tables_in_routed_schemas", "schema_routed"),
-        ("all_gold_tables_licensed", "tables_in_routed_schemas"),
-        ("answered", "all_gold_tables_licensed"),
+        ("all_gold_tables_retrieved_tables", "tables_in_routed_schemas"),
+        ("answered", "all_gold_tables_retrieved_tables"),
         ("graded", "answered"),
         ("correct", "graded"),
     )
@@ -740,11 +740,11 @@ def retrieval_funnel(
     # The excluded population, with the same shape as ``end_to_end`` so the two are read side
     # by side. These questions *are* gradeable — an engine that queries the database and gets
     # the right value still matches the digest — but the gold names no table and no join, so
-    # nothing above ``answered`` can be conditioned on them and every arm scores poorly.
-    # Measured over the seven ``proxy_*`` arms in ``runs/eval/`` (corpus 30872d3, 1 351
+    # nothing above ``answered`` can be conditioned on them and every config scores poorly.
+    # Measured over the seven ``proxy_*`` configs in ``runs/eval/`` (corpus 30872d3, 1 351
     # questions each): 127 tableless, and their EX runs 0.29 to 0.34 against 0.60 to 0.71 on
     # the other 1 224. Reported, not dropped: the ~3-point lift from excluding them is uniform
-    # across arms and changes no ranking, which makes it a choice about what a headline means
+    # across configs and changes no ranking, which makes it a choice about what a headline means
     # rather than a correction, and the reader owns that choice.
     tableless = _stage(
         counts["gold_reads_no_table_correct"],
@@ -823,7 +823,7 @@ def observed_tokens(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "calls_measured": calls_measured,
         "input_tokens": tokens_in,
         "output_tokens": tokens_out,
-        # Per stage: ``llm_utility_model`` is a comparability knob justified by cost and
+        # Per stage: ``llm_utility_model`` is a comparability setting justified by cost and
         # latency, and "which stage spent it" is the only way to argue either.
         "by_stage": dict(sorted(per_stage.items())),
     }

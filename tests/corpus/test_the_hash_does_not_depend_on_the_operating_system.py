@@ -13,8 +13,8 @@ compute a *different* corpus hash from the tree that produced the number". That 
 from rewriting bytes on checkout. It cannot stop this engine from rewriting them on write,
 and ``corpus/store.py::write`` did.
 
-What it reaches: every arm digest in ``register/arms.toml`` is keyed on
-``corpus_content_hash``, and ``measure/gates.py``'s corpus gate compares rows on it. A
+What it reaches: every config digest in ``registry/configs.toml`` is keyed on
+``corpus_content_hash``, and ``measure/checks.py``'s corpus check compares rows on it. A
 Windows-side corpus edit moved the hash for reasons that had nothing to do with the corpus.
 
 The assertion is on **bytes**, not on a round-trip: PyYAML normalises ``\\r\\n`` inside quoted
@@ -48,13 +48,13 @@ def test_a_written_asset_carries_no_carriage_return() -> None:
     raw = path.read_bytes()
     assert b"\r" not in raw, (
         "the corpus was written with platform line endings, so this tree hashes differently "
-        "on Windows than on Linux and every arm digest keyed on corpus_content_hash moves"
+        "on Windows than on Linux and every config digest keyed on corpus_content_hash moves"
     )
     assert raw.count(b"\n") > 1, "nothing was written, so the assertion above proved nothing"
 
 
 def test_the_same_asset_hashes_the_same_whatever_wrote_the_bytes() -> None:
-    """The consequence, end to end through the digest the arms are keyed on.
+    """The consequence, end to end through the digest the configs are keyed on.
 
     The control is a hand-written CRLF copy of the *same* asset: without it this asserts only
     that a hash function is deterministic, which it would be either way.
@@ -116,6 +116,6 @@ def test_the_writer_does_not_rely_on_the_platform_newline(monkeypatch) -> None:
     assert raw.count(b"\n") > 1, "nothing was written, so the assertion below proves nothing"
     assert b"\r" not in raw, (
         "corpus/store.py::write let the platform choose the line ending. On a CRLF host the "
-        "same corpus then hashes differently, and every arm digest in register/arms.toml is "
+        "same corpus then hashes differently, and every config digest in registry/configs.toml is "
         "keyed on corpus_content_hash"
     )

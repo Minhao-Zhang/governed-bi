@@ -320,7 +320,7 @@ def test_the_tag_rule_predicate_guard_fires_on_a_rule_with_no_predicate(monkeypa
     ``budgets.get(cls, 0)`` shape, where the rule exists, something iterates the enum,
     and the missing row is silent."""
     from governed_bi.corpus import validate
-    from governed_bi.register.assets import TagRule
+    from governed_bi.registry.assets import TagRule
 
     monkeypatch.delitem(validate.TAG_RULE_FIELDS, TagRule.own_schema)  # type: ignore[arg-type]
     with pytest.raises(AssertionError, match="own_schema"):
@@ -332,7 +332,7 @@ def test_the_common_field_guard_fires_on_a_class_that_forgets_governance(monkeyp
     inheritance orders them wrongly. Repetition nothing checks is how two v1 tables
     disagreed for a year."""
     from governed_bi.corpus import schema as module
-    from governed_bi.register.assets import AssetType
+    from governed_bi.registry.assets import AssetType
 
     @dataclasses.dataclass(frozen=True)
     class Forgetful:
@@ -416,9 +416,9 @@ def test_a_metric_is_not_written_into_a_directory_named_after_the_metric(tmp_pat
 
 
 def test_the_hash_ignores_a_schema_outside_the_manifest(tmp_path) -> None:
-    """An arm's treatment identity must cover exactly the schemas that arm served.
+    """An config's treatment identity must cover exactly the schemas that config served.
     A leftover subtree moving the digest would make two runs over the same treatment
-    look differently treated, which passes the delivery gate for the wrong reason."""
+    look differently treated, which passes the delivery check for the wrong reason."""
     from governed_bi.corpus.hash import corpus_content_hash
 
     for schema in ("beer_factory", "leftover"):

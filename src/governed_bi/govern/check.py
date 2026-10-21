@@ -2,9 +2,9 @@
 
 Invariants (G1 / ADR 0006 §12):
 
-* Every security parameter is required; ``licensed=None`` / missing ``corpus``
+* Every security parameter is required; ``retrieved_tables=None`` / missing ``corpus``
   raise :class:`GovernanceUsageError` (caller error, not a statement fault).
-* An empty ``licensed`` set licenses nothing.
+* An empty ``retrieved_tables`` set licenses nothing.
 * Column authorization is an :class:`~governed_bi.corpus.analyst.AnalystCorpus`.
 * Any exception inside the walk is ``passed=False`` with
   :data:`~governed_bi.govern.layers.GUARDRAIL_ERROR` (counted by the ledger).
@@ -23,7 +23,7 @@ from ..corpus.analyst import AnalystCorpus
 from .binding import Bindings, LayerRefusal, bind
 from .functions import canonical_function_name
 from .identifiers import normalise_column_key, normalise_table_key
-from .layers import CheckVerdict, Layer, allow, internal_error, refuse
+from .layers import CheckResult, Layer, allow, internal_error, refuse
 from .policy import DEFAULT_DIALECT, GovernancePolicy
 from .scopes import ScopeView, iter_scopes
 
@@ -59,22 +59,22 @@ READ_ROOTS: tuple[type[exp.Expr], ...] = (exp.Select, exp.SetOperation, exp.Subq
 def check(
     sql: str,
     *,
-    licensed: frozenset[str] | None,
+    retrieved_tables: frozenset[str] | None,
     corpus: AnalystCorpus | None,
     default_schema: str | None = None,
     dialect: str = DEFAULT_DIALECT,
     policy: GovernancePolicy | None = None,
-) -> CheckVerdict:
+) -> CheckResult:
     """Run the layer stack against ``sql``. Returns on the first failure.
 
-    ``licensed`` is table keys. Column authorization is derived from ``corpus``
+    ``retrieved_tables`` is table keys. Column authorization is derived from ``corpus``
     (ADR 0005 §1.5 / ADR 0006 §1) — never from a parallel set that can drift.
     """
-    if licensed is None or isinstance(licensed, (str, bytes)):
+    if retrieved_tables is None or isinstance(retrieved_tables, (str, bytes)):
         raise GovernanceUsageError(
-            "licensed must be a set of table keys. None is not 'no restriction' and a "
+            "retrieved_tables must be a set of table keys. None is not 'no restriction' and a "
             "string is not a set of one; v1's `if allowlist is not None` fell through to "
-            "gateway.execute, and a blocked verdict here would record 'this query was "
+            "gateway.execute, and a blocked result here would record 'this query was "
             "unsafe' for what is really 'the authorization argument was never wired up'."
         )
     if corpus is None or not isinstance(corpus, AnalystCorpus):
@@ -86,8 +86,8 @@ def check(
     policy = policy or GovernancePolicy()
 
     # Normalised OUTSIDE the try: a malformed key is a caller error, and a blocked
-    # verdict would report a broken caller as an unsafe query.
-    licensed_keys = frozenset(normalise_table_key(key, default_schema) for key in licensed)
+    # result would report a broken caller as an unsafe query.
+    retrieved_tables_keys = frozenset(normalise_table_key(key, default_schema) for key in retrieved_tables)
     excluded_keys = frozenset(
         normalise_column_key(key, default_schema) for key in corpus.excluded_columns
     )
@@ -138,7 +138,7 @@ def check(
 
         layer = Layer.TABLES
         evaluated.append(layer)
-        blocked = _tables(bound, licensed_keys, evaluated)
+        blocked = _tables(bound, retrieved_tables_keys, evaluated)
         if blocked is not None:
             return blocked
 
@@ -151,7 +151,7 @@ def check(
         )
 
 
-def _parse(sql: str, dialect: str, evaluated: list[Layer]) -> exp.Expr | CheckVerdict:
+def _parse(sql: str, dialect: str, evaluated: list[Layer]) -> exp.Expr | CheckResult:
     evaluated.append(Layer.PARSE)
     try:
         statements = [statement for statement in sqlglot.parse(sql, dialect=dialect) if statement]
@@ -168,7 +168,7 @@ def _parse(sql: str, dialect: str, evaluated: list[Layer]) -> exp.Expr | CheckVe
     return statements[0]
 
 
-def _no_write(tree: exp.Expr, evaluated: list[Layer]) -> CheckVerdict | None:
+def _no_write(tree: exp.Expr, evaluated: list[Layer]) -> CheckResult | None:
     if not isinstance(tree, READ_ROOTS):
         return refuse(
             "r_not_a_read",
@@ -221,7 +221,7 @@ def _scope_arguments(func: exp.Func, own: frozenset[int]) -> Iterator[exp.Column
 
 def _functions(
     views: Sequence[ScopeView], policy: GovernancePolicy, evaluated: list[Layer]
-) -> CheckVerdict | None:
+) -> CheckResult | None:
     """The allowlist, plus the whole-row argument rule that closes B2."""
     for view in views:
         own = frozenset(id(node) for node in view.nodes)
@@ -239,8 +239,8 @@ def _functions(
             # adversarial suite's 115 cases, counting *executions* — every case runs the stack
             # twice, once through `check()` and once through `prepare()`, so each figure is two
             # per case: the carve-out `continue` below fires 12 (6 cases), the qualified branch
-            # 2 (`b2_count_qualified_star`) and the bare branch's *refuse* arm 2
-            # (`b2_count_distinct_star`). The bare arm had **no case at all** when the branches
+            # 2 (`b2_count_qualified_star`) and the bare branch's *refuse* config 2
+            # (`b2_count_distinct_star`). The bare config had **no case at all** when the branches
             # were first instrumented, which is what `b2_count_distinct_star` was written to
             # close: `count(DISTINCT *)` parses as `Count(this=Distinct(expressions=[Star()]))`,
             # so `func.this` is the Distinct and the Star reaches the refusal. Dropping
@@ -276,7 +276,7 @@ def _columns(
     suspect: frozenset[str],
     policy: GovernancePolicy,
     evaluated: list[Layer],
-) -> CheckVerdict | None:
+) -> CheckResult | None:
     """Three rules in a fixed order: excluded, suspect, then not allowed."""
     for binding in bound.columns:
         if binding.column_key in excluded:
@@ -303,23 +303,23 @@ def _columns(
 
 def _tables(
     bound: Bindings,
-    licensed: frozenset[str],
+    retrieved_tables: frozenset[str],
     evaluated: list[Layer],
-) -> CheckVerdict | None:
-    """A base table must be in the set the turn licensed."""
+) -> CheckResult | None:
+    """A base table must be in the set the turn retrieved_tables."""
     for reference, key in bound.tables.items():
-        if key not in licensed:
+        if key not in retrieved_tables:
             return refuse(
-                "r_table_not_licensed",
+                "r_table_not_retrieved",
                 f"{reference} resolves to {key}, which this turn does not license",
                 evaluated=evaluated,
             )
     return None
 
 
-def graded_delivery_eligible(verdict: CheckVerdict, policy: GovernancePolicy | None = None) -> bool:
+def graded_delivery_eligible(result: CheckResult, policy: GovernancePolicy | None = None) -> bool:
     """Graded delivery went with the cost layer. No remaining failure is eligible."""
-    del verdict, policy
+    del result, policy
     return False
 
 

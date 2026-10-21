@@ -53,13 +53,13 @@ def test_a_governance_refusal_is_never_scored_correct() -> None:
 
     Reproduced in the existing implementation:
 
-        [tool] run_query refused: r_table_not_licensed
+        [tool] run_query refused: r_table_not_retrieved
         outcome: answered   generated_sql: SELECT count(*) FROM customers
         -> project_turn -> {"correct": true, "grade_detail": "match"}
 
     `harness.py` called `connector.execute(str(generated_sql))` with **no
     `govern.prepare`**, so it re-ran a statement governance had refused and graded it
-    against gold. The `scripted` arm's `ex=1.00` was produced with **zero** successful
+    against gold. The `scripted` config's `ex=1.00` was produced with **zero** successful
     in-turn executions.
 
     Two things are wrong and both must be fixed. The grader must not execute SQL outside
@@ -116,7 +116,7 @@ def test_the_grader_has_no_execution_path_that_skips_govern() -> None:
         ),
         "oracle.py": (
             1,
-            ("the oracle arm executes gold directly; it is the upper bound, not a served turn",),
+            ("the oracle config executes gold directly; it is the upper bound, not a served turn",),
         ),
     }
 
@@ -157,7 +157,7 @@ def test_a_missing_outcome_is_not_counted_as_a_crash() -> None:
 
     A turn whose outcome was not recorded is a turn we know nothing about. Counting it as
     a crash is the v1 contamination in mirror image — crashes and refusals landing in one
-    stratum, every arm-to-arm delta contaminated by a different amount because arms do not
+    stratum, every config-to-config delta contaminated by a different amount because configs do not
     crash at the same rate. It must be `not_measured`, and a population containing one
     must not be quotable.
     """
@@ -170,10 +170,10 @@ def test_an_unrecorded_health_field_is_not_recorded_as_clean(field: str) -> None
     """Three instances of one line: `int(record.get(...) or 0)`, `bool(... or False)`.
 
     Each turns "we did not record this" into "this did not happen", which is the exact
-    input the quotability gates read. `measure/gates.py` already distinguishes
+    input the quotability checks read. `measure/checks.py` already distinguishes
     `cannot_evaluate` from `pass` — the harness must hand it the distinction rather than
     resolving it. `facet_degraded` is the sharpest case: nothing in `serve/` writes it at
-    all, so `or False` made the degradation gate pass vacuously on every run.
+    all, so `or False` made the degradation check pass vacuously on every run.
     """
     pytest.fail("not implemented: see docstring")
 
@@ -182,12 +182,12 @@ def test_an_unrecorded_health_field_is_not_recorded_as_clean(field: str) -> None
 
 
 @UNWRITTEN
-def test_an_arm_with_zero_successful_executions_is_not_quotable() -> None:
+def test_an_config_with_zero_successful_executions_is_not_quotable() -> None:
     """The property that would have caught all of the above at once.
 
-    An arm reporting `ex=1.00` where no statement ever reached a database is not a good
-    arm; it is a broken measurement. Whatever the mechanism, a run must refuse to publish
-    an EX for an arm in which the in-turn execution count is zero — and the count must be
+    An config reporting `ex=1.00` where no statement ever reached a database is not a good
+    config; it is a broken measurement. Whatever the mechanism, a run must refuse to publish
+    an EX for a config in which the in-turn execution count is zero — and the count must be
     recorded so the refusal is checkable rather than inferred.
     """
     pytest.fail("not implemented: see docstring")
@@ -200,7 +200,7 @@ def test_the_report_never_renders_an_unmeasured_quantity_as_a_number() -> None:
     quantity does the damage.
 
     The rest of that file was clean, which is the point: one bypass is enough, and it was
-    on the line that prints the gate's own verdict.
+    on the line that prints the check's own result.
     """
     pytest.fail("not implemented: see docstring")
 
@@ -211,23 +211,23 @@ def test_a_clean_run_is_quotable(capsys) -> None:
 
     Every test above is satisfied by a harness that refuses everything, and a harness
     that never publishes is indistinguishable from one that has no data. A fully
-    instrumented arm with real executions, no crashes and distinct context hashes must
-    come out quotable — otherwise the gates get switched off, which is how v1's ended up
+    instrumented config with real executions, no crashes and distinct context hashes must
+    come out quotable — otherwise the checks get switched off, which is how v1's ended up
     unread.
     """
     pytest.fail("not implemented: see docstring")
 
 
-def test_an_unwritten_count_does_not_pass_the_gate_as_a_clean_zero() -> None:
-    """Audit M2. ``int(record.get(...) or 0)`` turned three gates from absent into pass.
+def test_an_unwritten_count_does_not_pass_the_check_as_a_clean_zero() -> None:
+    """Audit M2. ``int(record.get(...) or 0)`` turned three checks from absent into pass.
 
     ``0`` is both the clean measured value for a count and the shape an absent field takes, so
-    substituting it converts "nobody counted" into "nothing went wrong" — and the quotability gates
+    substituting it converts "nobody counted" into "nothing went wrong" — and the quotability checks
     read that as a **pass**. Measured before the fix: a record with ``guardrail_errors`` never
-    written made all seven gates pass.
+    written made all seven checks pass.
 
-    ``facet_degraded`` is the sharper one. ``serve/nodes/stamp.py`` returns a deliberate ``None``
-    there, with a comment saying ``False`` would be "the degradation gate reading absence as clean",
+    ``facet_degraded`` is the sharper one. ``serve/nodes/finish.py`` returns a deliberate ``None``
+    there, with a comment saying ``False`` would be "the degradation check reading absence as clean",
     and ``project_turn``'s ``or False`` turned it straight back into ``False`` one function later —
     the fix and its defeat in the same repository.
     """
@@ -236,10 +236,10 @@ def test_an_unwritten_count_does_not_pass_the_gate_as_a_clean_zero() -> None:
     row = project_turn(
         {"answer": {"record": {"outcome": "answered"}}},
         question={"question_id": "q1", "db_id": "sales", "question": "how many"},
-        arm="test",
+        config="test",
     )
     for field in ("guardrail_error", "re_served", "facet_degraded"):
         assert row[field] is None, (
-            f"{field} reads {row[field]!r} for a turn that never recorded it, and the gate then "
+            f"{field} reads {row[field]!r} for a turn that never recorded it, and the check then "
             "passes on a measurement nobody took"
         )

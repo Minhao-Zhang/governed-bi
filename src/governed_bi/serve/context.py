@@ -55,7 +55,7 @@ def render_context(
 
     ``evicted`` is an **out-parameter**, filled only when the budget actually bit: the caller
     needs a fact the return value has no room for. Without it, a table that was routed,
-    retrieved, licensed and then evicted for space is indistinguishable in every artifact from
+    retrieved, retrieved_tables and then evicted for space is indistinguishable in every artifact from
     one that was rendered — a blind spot sitting exactly between "table selection" and
     "generation", the two stages any attribution of the remaining loss has to tell apart.
     :func:`_assemble_and_evict` also returns over-budget text when the ladder is exhausted.
@@ -466,11 +466,11 @@ def _tool_key(asset: Any, spelled: str) -> list[str]:
 
     **A key is not a name** (ADR 0008 D1). The context renders ``physical_name`` because that
     is what a ``SELECT`` must say, while ``bounds.may_inspect_schema`` / ``may_sample`` /
-    ``may_read_body`` test membership of ``licensed`` and ``readable_assets``, which hold
+    ``may_read_body`` test membership of ``retrieved_tables`` and ``readable_assets``, which hold
     **asset ids**. Wherever ``slug()`` fired the two diverge — ``table airline.Air Carriers``
-    rendered, ``airline.Air_Carriers_66c534`` licensed — so every tool call on the rendered
+    rendered, ``airline.Air_Carriers_66c534`` retrieved_tables — so every tool call on the rendered
     spelling returned ``OUT_OF_SCOPE_MESSAGE``, deliberately indistinguishable from "not
-    licensed" (``bounds.py``).
+    retrieved_tables" (``bounds.py``).
 
     Emitted only on divergence, so the 655 of 656 gold tables whose id and name agree keep
     their ``context_hash``.

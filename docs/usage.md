@@ -16,7 +16,7 @@ CI runs `uv sync --frozen`. The app and the eval use OpenAI.
 
 ## Configuration
 
-Settings are named defaults in [`register/knobs.py`](../src/governed_bi/register/knobs.py).
+Settings are named defaults in [`registry/settings.py`](../src/governed_bi/registry/settings.py).
 A `GOVERNED_BI_*` variable in the process environment overrides one for a run and enters the
 config hash. Settings are not read from `.env`. A `.env` that sets anything other than a secret
 stops startup and names the key.
@@ -40,7 +40,7 @@ The code defaults, matching the owner's environment on 2026-10-20:
 | `GOVERNED_BI_LLM_TIMEOUT_S` | `300` |
 | `GOVERNED_BI_UTILITY_TIMEOUT_S` | `30` |
 
-`src/` ships two TOMLs of its own (`govern/adversarial.toml`, `register/arms.toml`), but those are
+`src/` ships two TOMLs of its own (`govern/adversarial.toml`, `registry/configs.toml`), but those are
 declared claims the test suite holds the code to, not configuration you edit.
 
 ### Environment
@@ -63,7 +63,7 @@ declared claims the test suite holds the code to, not configuration you edit.
 | `GOVERNED_BI_CONVERSATION_DB` | Served conversations' checkpoint database; defaults to `runs/conversations.sqlite`. A **file path**: `serve/checkpointer.py::assert_not_a_warehouse` refuses a value carrying `host=`, `dbname=`, `password=` or a `postgres://`-style URL at configuration time, because a checkpointer pointed at the analytics warehouse writes conversation state into it on the first turn |
 | `GOVERNED_BI_HARNESS_DB` | The one-turn CLI's and the eval driver's checkpoint database; defaults to `runs/harness-checkpoints.sqlite`. Separate from the above so 131 benchmark questions do not become the conversation history. Same refusal applies |
 | `GOVERNED_BI_VECTOR_CACHE` | Persistent vector cache directory — one LanceDB database per model, one table per vector width. Defaults to `runs/vectors/`. The server, the one-turn CLI and the eval driver share it |
-| `GOVERNED_BI_CORPUS_RELEASE` | The corpus **tag** an arm is measured against — a name a human pinned, not a directory and not the content hash, which moves for reasons that are not a treatment. Overrides the `corpus_release` comparability knob, so it participates in the config hash and `register/arm_profiles.py::recorded_corpus_release` refuses a profile claiming a different one. Set it when the treatment *is* the corpus |
+| `GOVERNED_BI_CORPUS_RELEASE` | The corpus **tag** an arm is measured against — a name a human pinned, not a directory and not the content hash, which moves for reasons that are not a treatment. Overrides the `corpus_release` comparability knob, so it participates in the config hash and `registry/config_profiles.py::recorded_corpus_release` refuses a profile claiming a different one. Set it when the treatment *is* the corpus |
 | `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` | Wall clock for the whole `agent_core` loop, overriding the `agent_node_timeout_s` knob (default 1200.0). `0` means no wall; empty means unset |
 | `GOVERNED_BI_AGENT_RECURSION_LIMIT` | Superstep ceiling for the nested `create_agent` graph, overriding the `agent_recursion_limit` knob (default 40) |
 | `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | Wall clock for one cancellable utility rail — today only `guard` — overriding the `rail_node_timeout_s` knob (default 120.0) |
@@ -77,7 +77,7 @@ nothing — delete it from an old `.env` rather than assuming it still gates som
 absence costs is in [Serve](#serve-langgraph-server).
 
 Entry points call `boot.resolve_settings` once. The names and defaults live in
-[`register/knobs.py`](../src/governed_bi/register/knobs.py). Secrets live in
+[`registry/settings.py`](../src/governed_bi/registry/settings.py). Secrets live in
 [`credentials.py`](../src/governed_bi/credentials.py). Check those rather than this table.
 
 ### Configuration audit (M9, 2026-09)
@@ -105,10 +105,10 @@ operator tunes), **unmeasured** (a knob override no arm has ever varied). "Read 
 | `GOVERNED_BI_LLM_MAX_RETRIES` | `api/graph_app.py` | operational | keep |
 | `GOVERNED_BI_LLM_TIMEOUT_S` | `api/graph_app.py` | operational | keep |
 | `GOVERNED_BI_UTILITY_TIMEOUT_S` | `api/graph_app.py` | operational | keep |
-| `GOVERNED_BI_CORPUS_RELEASE` | `register/knobs.py` | operational | keep for arms; consider moving to `register/arms.toml` |
-| `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` | `register/knobs.py`, `serve/nodes/agent_core.py` | unmeasured | keep as the one wall clock on a turn |
-| `GOVERNED_BI_AGENT_RECURSION_LIMIT` | `register/knobs.py`, `serve/nodes/agent_core.py` | unmeasured | remove: the knob default is the only value ever run |
-| `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | `register/knobs.py`, `serve/graph.py` | unmeasured | remove: the knob default is the only value ever run |
+| `GOVERNED_BI_CORPUS_RELEASE` | `registry/settings.py` | operational | keep for configs; consider moving to `registry/configs.toml` |
+| `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` | `registry/settings.py`, `serve/nodes/agent_core.py` | unmeasured | keep as the one wall clock on a turn |
+| `GOVERNED_BI_AGENT_RECURSION_LIMIT` | `registry/settings.py`, `serve/nodes/agent_core.py` | unmeasured | remove: the knob default is the only value ever run |
+| `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | `registry/settings.py`, `serve/graph.py` | unmeasured | remove: the knob default is the only value ever run |
 
 ### Leak checks
 

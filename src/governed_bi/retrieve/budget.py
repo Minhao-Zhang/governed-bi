@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from governed_bi.register.assets import ASSET_REGISTER, AssetType, Budget
+from governed_bi.registry.assets import ASSET_REGISTER, AssetType, Budget
 
 __all__ = ["BudgetResult", "budget_for", "apply_budgets"]
 
@@ -63,9 +63,9 @@ def apply_budgets(
     from a retrieval that never found the asset.
 
     **Ties break on the asset id**, matching every other ordering in the retrieval path
-    (``(-score, str(id))``). Score alone left the tie to ``hits_by_facet`` dict order, so
+    (``(-score, str(id))``). Score alone left the tie to ``hits_by_channel`` dict order, so
     two equal-scoring tables swapped across processes at the cap boundary — and equal
-    scores were common, because each facet min-maxed its own scored population and so put
+    scores were common, because each channel min-maxed its own scored population and so put
     its best hit at exactly 1.0. That scaler is gone (``fuse.scale_to_ceiling``, audit I1),
     which makes ties rarer rather than impossible: the ceiling still clamps, so every cosine
     at or above ``semantic_ceiling`` scores exactly 1.0.

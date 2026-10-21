@@ -71,7 +71,7 @@ class Bindings:
     opaque: dict[str, str] = field(default_factory=dict)
 
     def as_bound(self) -> dict[str, str]:
-        """The verdict's ``bound`` map: every reference → the source it bound to."""
+        """The result's ``bound`` map: every reference → the source it bound to."""
         out = dict(self.tables)
         out.update({binding.reference: binding.table_key for binding in self.columns})
         out.update(self.opaque)

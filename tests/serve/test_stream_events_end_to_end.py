@@ -7,7 +7,7 @@ matters, because the emitter being correct and the *graph* delivering its events
 and only the second is what a user sees.
 
 **Why these three paths and not the happy one.** A live streamed run against Postgres and a real
-model was captured while ADR 0010 was built, so `accept → … → check → execute → stamp` is observed
+model was captured while ADR 0010 was built, so `accept → … → check → execute → finish` is observed
 fact. What that run could not reach is every path that ends badly: `guard` never blocks on the
 served policy (it ships with no rules armed), `route` did not decline, and no query was refused or
 capped. Those are exactly the paths where a timeline earns its keep — a turn that fails should say
@@ -49,7 +49,7 @@ def _events(turn: dict[str, Any], conf: dict[str, Any]) -> list[dict[str, Any]]:
 
     **``subgraphs=True`` is not optional here, and the first draft of this file proved it.**
     Without it, ``check``, ``execute``, ``cap`` and every tool event vanished while ``guard``
-    through ``stamp`` arrived intact — because the tools run inside the nested ``create_agent``
+    through ``finish`` arrived intact — because the tools run inside the nested ``create_agent``
     graph, and LangGraph does not propagate a nested graph's writer to the parent's stream
     unless asked. ADR 0010 M2 is about exactly this, on the HTTP flag (``stream_subgraphs``);
     this is the same trap one layer down, and it caught the person who wrote the ADR. A test
@@ -95,8 +95,8 @@ def test_a_guard_blocked_turn_says_where_it_stopped() -> None:
         ("guard", "blocked"),
         ("refuse", "start"),
         ("refuse", "refused"),
-        ("stamp", "refused"),
-    ], "the refuse path is guard → refuse → stamp, and nothing else may appear"
+        ("finish", "refused"),
+    ], "the refuse path is guard → refuse → finish, and nothing else may appear"
 
     # The rule id is the whole point of showing a block, and the record retains it as closed
     # vocabulary. The free-text `detail` beside it must not appear (ADR 0006 rule probing).
@@ -105,7 +105,7 @@ def test_a_guard_blocked_turn_says_where_it_stopped() -> None:
     assert "detail" not in blocked
 
     assert _detail(events, "refuse", "refused").get("terminal_reason") == "guard"
-    assert _detail(events, "stamp", "refused").get("outcome") == "refused"
+    assert _detail(events, "finish", "refused").get("outcome") == "refused"
 
 
 def test_the_skipped_nodes_of_a_refused_turn_are_silent() -> None:
@@ -121,8 +121,8 @@ def test_the_skipped_nodes_of_a_refused_turn_are_silent() -> None:
     steps = {step for step, _ in _pairs(_events(turn, conf))}
 
     assert steps.isdisjoint(
-        {"rewrite", "facet_schema", "facet_term", "facet_metric",
-         "facet_entity", "facet_example", "route", "resolve", "connect", "assemble",
+        {"rewrite", "channel_schema", "channel_term", "channel_metric",
+         "channel_entity", "channel_example", "route", "resolve", "connect", "assemble",
          "agent_core", "read_body", "check", "execute", "decline"}
     ), f"a skipped node emitted: {sorted(steps)}"
 
@@ -130,16 +130,16 @@ def test_the_skipped_nodes_of_a_refused_turn_are_silent() -> None:
 def test_a_refused_statement_emits_check_blocked_and_no_execute(probe: Any) -> None:  # noqa: F811
     """The governance row a user most needs, and the one the live run did not reach.
 
-    ``audit_log`` is a table no join path reaches, so ``licensed`` excludes it and the table layer
+    ``audit_log`` is a table no join path reaches, so ``retrieved_tables`` excludes it and the table layer
     refuses. The assertion that matters is the *absence* of ``execute``: nothing reached the
     database, and an ``execute`` row would be an execution that never executed.
     """
-    unlicensed = f"SELECT count(*) FROM {probe.schema}.audit_log"
+    not_retrieved = f"SELECT count(*) FROM {probe.schema}.audit_log"
     conf = {
         "thread_id": "t-blocked", "policy": _policy(),
         "index": probe.index, "assets_by_id": probe.assets_by_id, "corpus": probe.corpus,
         "connector": probe.connector,
-        "agent_model": _scripted_run_query(unlicensed, calls=1),
+        "agent_model": _scripted_run_query(not_retrieved, calls=1),
     }
     turn = _base_turn(question="customers", db_id=probe.schema, turn_id="turn-blocked")
     events = _events(turn, conf)
@@ -155,7 +155,7 @@ def test_a_refused_statement_emits_check_blocked_and_no_execute(probe: Any) -> N
     assert blocked.get("attempt") == 1
     assert blocked.get("layer"), "a block must name the layer that refused it"
     assert blocked.get("reason_code"), "a block must carry its closed-vocabulary reason"
-    # Retention: the verdict's free-text `detail` is the field libpq puts statements in.
+    # Retention: the result's free-text `detail` is the field libpq puts statements in.
     assert "detail" not in blocked
     assert "sql" not in blocked
 
@@ -167,12 +167,12 @@ def test_the_attempt_cap_emits_one_cap_row(probe: Any) -> None:  # noqa: F811
     exists: a row per call would inflate the attempt count with calls where nothing was
     attempted.
     """
-    unlicensed = f"SELECT count(*) FROM {probe.schema}.audit_log"
+    not_retrieved = f"SELECT count(*) FROM {probe.schema}.audit_log"
     conf = {
         "thread_id": "t-cap", "policy": _policy(attempt_cap=1),
         "index": probe.index, "assets_by_id": probe.assets_by_id, "corpus": probe.corpus,
         "connector": probe.connector,
-        "agent_model": _scripted_run_query(unlicensed, calls=3),
+        "agent_model": _scripted_run_query(not_retrieved, calls=3),
     }
     turn = _base_turn(question="customers", db_id=probe.schema, turn_id="turn-cap")
     events = _events(turn, conf)
@@ -189,14 +189,14 @@ def test_the_attempt_cap_emits_one_cap_row(probe: Any) -> None:  # noqa: F811
     assert len([p for p in pairs if p == ("check", "start")]) == 1, pairs
 
 
-def test_the_turn_ends_on_a_final_stamp_event_whatever_the_path(probe: Any) -> None:  # noqa: F811
-    """Every path funnels through ``stamp``, so every timeline has exactly one terminal row.
+def test_the_turn_ends_on_a_final_finish_event_whatever_the_path(probe: Any) -> None:  # noqa: F811
+    """Every path funnels through ``finish``, so every timeline has exactly one terminal row.
 
     Asserted across the three bad paths together because the claim is about the *set* of paths:
     a client that renders a spinner until a `final` arrives hangs forever on the one path that
     forgot to emit it, and which path that is cannot be known from any single test.
     """
-    unlicensed = f"SELECT count(*) FROM {probe.schema}.audit_log"
+    not_retrieved = f"SELECT count(*) FROM {probe.schema}.audit_log"
     base = {
         "index": probe.index, "assets_by_id": probe.assets_by_id, "corpus": probe.corpus,
         "connector": probe.connector,
@@ -209,12 +209,12 @@ def test_the_turn_ends_on_a_final_stamp_event_whatever_the_path(probe: Any) -> N
         "governance_blocked": (
             _base_turn(question="customers", db_id=probe.schema, turn_id="t-f2"),
             {**base, "thread_id": "t-f2", "policy": _policy(),
-             "agent_model": _scripted_run_query(unlicensed, calls=1)},
+             "agent_model": _scripted_run_query(not_retrieved, calls=1)},
         ),
         "capped": (
             _base_turn(question="customers", db_id=probe.schema, turn_id="t-f3"),
             {**base, "thread_id": "t-f3", "policy": _policy(attempt_cap=1),
-             "agent_model": _scripted_run_query(unlicensed, calls=3)},
+             "agent_model": _scripted_run_query(not_retrieved, calls=3)},
         ),
     }
 
@@ -222,7 +222,7 @@ def test_the_turn_ends_on_a_final_stamp_event_whatever_the_path(probe: Any) -> N
         events = _events(turn, conf)
         finals = [e for e in events if e["kind"] == "final"]
         assert len(finals) == 1, f"{name}: expected one final event, got {_pairs(events)}"
-        assert finals[0]["step"] == "stamp"
+        assert finals[0]["step"] == "finish"
         assert finals[0]["status"] in {"ok", "refused", "declined", "error", "cap"}
         assert finals[0] is events[-1], f"{name}: the final event must be last"
 
@@ -236,7 +236,7 @@ def test_a_bounds_refused_read_is_blocked_not_ok(probe: Any) -> None:  # noqa: F
     entry, so the event is not a coarse label, it is the sole record of what happened.
 
     Driven through the real ``build_tools`` rather than the graph, because the model has to be
-    made to ask for a specific unlicensed id and a scripted model that calls ``inspect_schema``
+    made to ask for a specific not_retrieved id and a scripted model that calls ``inspect_schema``
     is more machinery than the claim needs.
     """
     from langchain.tools import ToolRuntime
@@ -252,7 +252,7 @@ def test_a_bounds_refused_read_is_blocked_not_ok(probe: Any) -> None:  # noqa: F
         state={"attempts_by_call": {}}, context=None, config={"configurable": {}},
         stream_writer=lambda _chunk: None, tool_call_id="call-bounds", store=None,
     )
-    state = {"turn_id": "t-bounds", "licensed": [f"{probe.schema}.customers"], "retrieved": {}}
+    state = {"turn_id": "t-bounds", "retrieved_tables": [f"{probe.schema}.customers"], "retrieved": {}}
     conf = {"configurable": {"corpus": probe.corpus, "connector": probe.connector,
                              "assets_by_id": probe.assets_by_id}}
     tools = {t.name: t for t in build_tools(state, conf)}
@@ -296,9 +296,9 @@ def test_a_streamed_turn_reaches_the_audit_log() -> None:
     looking exactly like a page with nothing to show. Measured before the fix: three streamed
     turns, zero rows.
 
-    The recorder is injected by ``api/graph_app.make_graph`` rather than living in ``stamp``,
+    The recorder is injected by ``api/graph_app.make_graph`` rather than living in ``finish``,
     because ``serve`` does not import ``api``. This asserts the seam,
-    not the file: a ``record`` node placed after ``stamp`` is called once, with the finished
+    not the file: a ``record`` node placed after ``finish`` is called once, with the finished
     answer, on a turn that ends in a refusal — the cheapest path that still produces a record.
     """
     from governed_bi.serve.graph import as_sync, build_graph
@@ -317,7 +317,7 @@ def test_a_streamed_turn_reaches_the_audit_log() -> None:
     assert len(seen) == 1, "the recorder runs exactly once per turn"
     logged = seen[0]
     assert (logged.get("answer") or {}).get("record", {}).get("turn_id") == "turn-logged", (
-        "the recorder must see the finished record, so it has to sit after stamp"
+        "the recorder must see the finished record, so it has to sit after finish"
     )
     assert logged["answer"]["outcome"] == "refused"
     assert out["answer"] is logged["answer"], "the recorder must not alter the answer"
@@ -326,7 +326,7 @@ def test_a_streamed_turn_reaches_the_audit_log() -> None:
 def test_a_malformed_turn_cannot_fail_a_served_turn() -> None:
     """A turn that answered is not a turn that failed.
 
-    The node is unwrapped — there is nothing after it to receive a ``crashed`` stamp — so it
+    The node is unwrapped — there is nothing after it to receive a ``crashed`` finish — so it
     swallows its own failures rather than propagating them.
 
     **This test used to be about a log that raised**, and that case is gone with the log: the node

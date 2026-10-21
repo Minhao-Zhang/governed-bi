@@ -150,7 +150,7 @@ def test_a_column_summary_may_drop_the_table_qualifier(store, tmp_path) -> None:
 
 def test_the_content_hash_has_no_unknown_sentinel(tmp_path, valid_asset_yaml) -> None:
     """v1's ``corpus_content_hash == "unknown"`` compared equal to itself, so two runs
-    with **no recorded treatment** passed the comparability gate. There must be no
+    with **no recorded treatment** passed the comparability check. There must be no
     in-band value meaning "I do not know"."""
     from governed_bi.corpus.hash import corpus_content_hash  # type: ignore[import-not-found]
 
@@ -160,9 +160,9 @@ def test_the_content_hash_has_no_unknown_sentinel(tmp_path, valid_asset_yaml) ->
 
 
 def test_the_content_hash_changes_when_content_changes(tmp_path, valid_asset_yaml) -> None:
-    """The hash IS the treatment identity: ADR 0005's delivery gate reads it to prove
-    two arms received different corpora. A hash insensitive to content would let the
-    v1 ladder that compared two byte-identical arms pass again."""
+    """The hash IS the treatment identity: ADR 0005's delivery check reads it to prove
+    two configs received different corpora. A hash insensitive to content would let the
+    v1 ladder that compared two byte-identical configs pass again."""
     from governed_bi.corpus.hash import corpus_content_hash  # type: ignore[import-not-found]
 
     path = tmp_path / "a.yaml"
@@ -175,7 +175,7 @@ def test_the_content_hash_changes_when_content_changes(tmp_path, valid_asset_yam
 def test_the_content_hash_is_stable_across_calls(tmp_path, valid_asset_yaml) -> None:
     """The complement. A hash that changes every call also satisfies the test above and
     would make every comparison incomparable — which reads as "the treatment differed"
-    and passes the delivery gate for the wrong reason."""
+    and passes the delivery check for the wrong reason."""
     from governed_bi.corpus.hash import corpus_content_hash  # type: ignore[import-not-found]
 
     (tmp_path / "a.yaml").write_text(valid_asset_yaml, encoding="utf-8")

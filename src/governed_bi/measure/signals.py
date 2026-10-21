@@ -4,11 +4,11 @@ Separated from :mod:`.selective` because the two answer different questions. Thi
 module answers "what did the artifact actually record", which is a fact about
 ``eval/projection.py::project_turn`` (re-exported from ``eval/harness.py``);
 :mod:`.selective` answers "what does ranking on it
-buy", which is a fact about the arm.
+buy", which is a fact about the config.
 
 Every entry declares its **direction** and the **mechanism** behind that direction
 before any curve is drawn. That is the whole discipline here: a sign chosen after
-seeing which way the arm went is not a prediction, and
+seeing which way the config went is not a prediction, and
 ``git-history:docs/analysis/risk-coverage-v4.md`` §4 was a page of AUCs sitting either side of 0.5
 by a couple of points, where picking the winning side per signal would manufacture
 separation out of noise.
@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Mapping
 
-from ..register.stages import Outcome
+from ..registry.stages import Outcome
 from .population import TurnRow
 
 __all__ = [
@@ -67,7 +67,7 @@ class Signal:
     """A ranking signal, its declared direction, and the claim behind the direction.
 
     ``why`` is not decoration. It is the pre-registration: a direction with no stated
-    mechanism is a sign fitted on the arm being scored and then written down.
+    mechanism is a sign fitted on the config being scored and then written down.
     """
 
     name: str
@@ -133,7 +133,7 @@ def _size(row: TurnRow, field: str) -> float | None:
     lost that distinction before (L-R1, ``Population.count``'s import-time guard). Both
     states are on disk right now: ``attempts`` is *absent* on all 1,351 rows of run1 and
     run2, and *empty* on the two v4 turns that delivered an answer with no statement at
-    all. Reading the first as "zero attempts" gives those two arms a constant signal with
+    all. Reading the first as "zero attempts" gives those two configs a constant signal with
     a tidy AUC of exactly 0.5000, which reads as "the ledger carries no information"
     when the truth is that the ledger was never recorded.
     """
@@ -174,13 +174,13 @@ SIGNALS: Mapping[str, Signal] = {
         ),
         _declare(
             "total_out_tok", Direction.lower_first,
-            "the same claim with the four facet rewriters added, which are near-constant "
+            "the same claim with the four retrieval-channel rewriters added, which are near-constant "
             "per turn and so should carry slightly less",
             lambda row: _total_usage(row, "output_tokens"),
         ),
         _declare(
             "agent_in_tok", Direction.lower_first,
-            "prompt size stands in for licensed-context size, and a turn that needed a "
+            "prompt size stands in for retrieved-table context size, and a turn that needed a "
             "large context is a turn retrieval could not narrow",
             lambda row: _agent_usage(row, "input_tokens"),
         ),
@@ -198,12 +198,12 @@ SIGNALS: Mapping[str, Signal] = {
         _declare(
             "n_failed_attempts", Direction.lower_first,
             "how many of those the governance stack refused. This is the layer stack's own "
-            "thesis stated as a prediction, and it is the one the arm falsifies",
+            "thesis stated as a prediction, and it is the one the config falsifies",
             _failed_attempts,
         ),
         _declare(
             "n_licensed", Direction.lower_first,
-            "a turn licensed many tables is a turn retrieval could not narrow",
+            "a turn that retrieved many tables is a turn retrieval could not narrow",
             lambda row: _size(row, "licensed"),
         ),
         _declare(

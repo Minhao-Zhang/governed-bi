@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 
 from governed_bi.model.deterministic_embedder import DeterministicEmbedder
-from governed_bi.register.assets import AssetType
+from governed_bi.registry.assets import AssetType
 from governed_bi.retrieve import index as index_mod
 from governed_bi.retrieve.index import IndexEntry, build_index
 from governed_bi.retrieve.semantic import cache_key
@@ -286,7 +286,7 @@ def test_a_cold_store_costs_nothing_when_the_build_reuses_nothing() -> None:
         f"a cold build made a call it did not need: {embedder.texts}"
     )
     assert not cache.at_width(WIDTH).space_is_verified((embedder.model, WIDTH)), (
-        "a cold store recorded a verdict it never reached"
+        "a cold store recorded a result it never reached"
     )
 
 
@@ -318,9 +318,9 @@ def test_the_same_embedder_adding_rows_is_not_refused() -> None:
 
 
 def test_a_repoint_within_one_process_is_caught_when_anything_misses() -> None:
-    """**The hole the ``opened_with`` gate opened, found in review.**
+    """**The hole the ``opened_with`` check opened, found in review.**
 
-    The gate's justification was that rows this process wrote came from an embedder it holds, and a
+    The check's justification was that rows this process wrote came from an embedder it holds, and a
     row written by another embedder in the same process is under a different key because the key
     carries the model. The second half is true and irrelevant: the incident *is* a gateway repointed
     behind an unchanged id, which is why ``_Counted`` reports a fixed one.

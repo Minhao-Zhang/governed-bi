@@ -7,9 +7,9 @@ full asset set, so an excluded column still scored in both channels, still spent
 table.
 
 This matters for a specific measurement. On BIRD-Obfuscation the corpus documents 422 planted
-decoy columns; the arm that answers "is it better to warn about a decoy or to withhold it?"
+decoy columns; the config that answers "is it better to warn about a decoy or to withhold it?"
 needs withholding to actually withhold. Implemented as a flag rather than a file deletion so
-both arms load the same tree and differ in one field.
+both configs load the same tree and differ in one field.
 
 **Why the fixture is verbose.** The first version of these tests built tables without
 ``columns=`` and no join at all, and passed against code that refused to serve the moment
@@ -91,7 +91,7 @@ def _assets(
         ),
         JoinAsset(
             id="join_addr_zip_data_zones_deadbeef",
-            # Deliberately the *bare physical name* on one arm when asked: an endpoint may be
+            # Deliberately the *bare physical name* on one config when asked: an endpoint may be
             # any of four spellings, and a string comparison against asset ids would miss it.
             left_table="addr.zip_data",
             right_table="zones" if bare_join_endpoint else "addr.zones",

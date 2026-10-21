@@ -16,7 +16,7 @@ def test_a_dropped_in_corpus_is_found_but_ambiguity_is_refused(tmp_path, monkeyp
     """A curated corpus is dropped into ``corpora/`` and the server should find it, because
     typing three env vars before a dev command is how a wrong corpus gets served by accident.
     But *two* directories is a question only the operator can settle: picking one would make
-    ``corpus_content_hash`` — the field every quotability gate reads — depend on directory
+    ``corpus_content_hash`` — the field every quotability check reads — depend on directory
     ordering. So one is an answer and two is an error naming both.
     """
     from governed_bi.api import graph_app

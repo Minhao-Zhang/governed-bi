@@ -34,7 +34,7 @@ export const MOCK_CAPABILITIES: Capabilities = {
 /* ── Chat: a placeholder answer + a refusal, for the mock transport ──────── */
 
 /**
- * The turn record `stamp` projects onto every terminal answer. Keys and value shapes are the
+ * The turn record `finish` projects onto every terminal answer. Keys and value shapes are the
  * register's (`register/record.py`); only the values are synthetic. The `null`s keep "not
  * measured" apart from "measured zero" (ADR 0005 §6).
  */
@@ -58,7 +58,7 @@ export const MOCK_RUN_RECORD: Record<string, unknown> = {
 
   /* Tier.decision */
   facet_hits: {
-    facet_schema: { queries: ["customers per region"], hits: [{ asset_id: "gbi_demo_sales.customers", asset_type: "table", lexical: 2.9, semantic: 0.81 }] },
+    channel_schema: { queries: ["customers per region"], hits: [{ asset_id: "gbi_demo_sales.customers", asset_type: "table", lexical: 2.9, semantic: 0.81 }] },
   },
   facet_degraded: true,
   schema_ranking: [["gbi_demo_sales", 2.9], ["gbi_demo_support", 2.62], ["gbi_demo_hr", 1.14]],
@@ -92,8 +92,8 @@ export const MOCK_RUN_RECORD: Record<string, unknown> = {
 
   /* Tier.health */
   facet_channels: {
-    facet_schema: { lexical: "ran", semantic: "ran" },
-    facet_entity: { lexical: "ran", semantic: "failed" },
+    channel_schema: { lexical: "ran", semantic: "ran" },
+    channel_entity: { lexical: "ran", semantic: "failed" },
   },
   guardrail_errors: 0,
 };
@@ -147,7 +147,7 @@ export const MOCK_GRADED_ANSWER: AnswerView = {
  *
  * With no backend attached this is the **only** way to see the live timeline, so
  * it is a full turn rather than a sketch, and it is faithful to the emitters in
- * `serve/wrap.py`, `serve/tools.py` and `serve/nodes/stamp.py`: the same stage
+ * `serve/wrap.py`, `serve/tools.py` and `serve/nodes/finish.py`: the same stage
  * names, the same statuses, and the same closed-vocabulary detail keys — nothing
  * here carries a field the wire does not (ADR 0010 §4 keeps result rows, driver
  * text and nested item bags off the stream, so this fixture has none).
@@ -163,7 +163,7 @@ export const MOCK_GRADED_ANSWER: AnswerView = {
  *  - the agent loop: two reads, a `check` that governance **blocks**, the repair,
  *    then a passing `check` + the `execute` that carries the statement and its
  *    digest — the pair that replaced v1's single `run_query` row;
- *  - `stamp`, the one `final` event, agreeing with the answer fixture's outcome.
+ *  - `finish`, the one `final` event, agreeing with the answer fixture's outcome.
  *
  * `useChat` replays it through `reduceSteps` on a timer. `seq` starts at 1 because
  * the engine's counter does (`itertools.count(1)`), and `execute` deliberately has
@@ -194,18 +194,18 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
   },
 
   /* ── the five facets, concurrent ─────────────────────────────────────────── */
-  { seq: 9, id: "facet_schema:turn_mock", kind: "rail", step: "facet_schema", status: "start" },
-  { seq: 10, id: "facet_term:turn_mock", kind: "rail", step: "facet_term", status: "start" },
-  { seq: 11, id: "facet_metric:turn_mock", kind: "rail", step: "facet_metric", status: "start" },
-  { seq: 12, id: "facet_entity:turn_mock", kind: "rail", step: "facet_entity", status: "start" },
-  { seq: 13, id: "facet_example:turn_mock", kind: "rail", step: "facet_example", status: "start" },
-  { seq: 14, id: "facet_term:turn_mock", kind: "rail", step: "facet_term", status: "ok", detail: { n_hits: 2 } },
-  { seq: 15, id: "facet_schema:turn_mock", kind: "rail", step: "facet_schema", status: "ok", detail: { n_hits: 6 } },
-  { seq: 16, id: "facet_example:turn_mock", kind: "rail", step: "facet_example", status: "ok", detail: { n_hits: 3 } },
-  { seq: 17, id: "facet_metric:turn_mock", kind: "rail", step: "facet_metric", status: "ok", detail: { n_hits: 1 } },
+  { seq: 9, id: "channel_schema:turn_mock", kind: "rail", step: "channel_schema", status: "start" },
+  { seq: 10, id: "channel_term:turn_mock", kind: "rail", step: "channel_term", status: "start" },
+  { seq: 11, id: "channel_metric:turn_mock", kind: "rail", step: "channel_metric", status: "start" },
+  { seq: 12, id: "channel_entity:turn_mock", kind: "rail", step: "channel_entity", status: "start" },
+  { seq: 13, id: "channel_example:turn_mock", kind: "rail", step: "channel_example", status: "start" },
+  { seq: 14, id: "channel_term:turn_mock", kind: "rail", step: "channel_term", status: "ok", detail: { n_hits: 2 } },
+  { seq: 15, id: "channel_schema:turn_mock", kind: "rail", step: "channel_schema", status: "ok", detail: { n_hits: 6 } },
+  { seq: 16, id: "channel_example:turn_mock", kind: "rail", step: "channel_example", status: "ok", detail: { n_hits: 3 } },
+  { seq: 17, id: "channel_metric:turn_mock", kind: "rail", step: "channel_metric", status: "ok", detail: { n_hits: 1 } },
   // Zero hits, and it says so rather than going quiet: a facet that found nothing
   // is a fact about the corpus.
-  { seq: 18, id: "facet_entity:turn_mock", kind: "rail", step: "facet_entity", status: "ok", detail: { n_hits: 0 } },
+  { seq: 18, id: "channel_entity:turn_mock", kind: "rail", step: "channel_entity", status: "ok", detail: { n_hits: 0 } },
 
   /* ── post-fan-in, deterministic ──────────────────────────────────────────── */
   { seq: 19, id: "route:turn_mock", kind: "rail", step: "route", status: "start" },
@@ -332,9 +332,9 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
   /* ── terminal ───────────────────────────────────────────────────────────── */
   {
     seq: 40,
-    id: "stamp:turn_mock",
+    id: "finish:turn_mock",
     kind: "final",
-    step: "stamp",
+    step: "finish",
     status: "ok",
     detail: { outcome: "answered", failed_stage: null },
   },

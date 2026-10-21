@@ -1,7 +1,7 @@
-"""Shared serve runtime knobs (config + candidate depth + fuse weights).
+"""Shared serve runtime settings (config + candidate depth + fuse weights).
 
-One home so facet / pass-two / route / assemble do not each redefine the same
-helpers (ADR 0005 §6 one-implementation gate).
+One home so channel / pass-two / route / assemble do not each redefine the same
+helpers (ADR 0005 §6 one-implementation check).
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from governed_bi.register.facets import ChannelState
-from governed_bi.register.knobs import Unset, knob_default
+from governed_bi.registry.channels import ChannelState
+from governed_bi.registry.settings import Unset, setting_default
 from governed_bi.retrieve.fuse import fuse, scale_to_ceiling
 from governed_bi.retrieve.structure import CorpusStructure, build_structure
 
@@ -20,16 +20,16 @@ __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
     "channel_scale",
     "assets_by_id",
-    "bool_knob",
+    "bool_setting",
     "candidate_depth",
     "combine_channels",
     "configurable",
     "corpus_structure",
     "facet_hits",
-    "facet_weights",
+    "channel_weights",
     "vector_for_query",
-    "float_knob",
-    "int_knob",
+    "float_setting",
+    "int_setting",
     "model_id",
     "trust",
     "trusted",
@@ -40,14 +40,14 @@ DEFAULT_CONTEXT_BUDGET = 80_000
 
 @dataclass(frozen=True, slots=True)
 class ChannelScale:
-    """The three fusion knobs **this turn** resolved, carried instead of read at import.
+    """The three fusion settings **this turn** resolved, carried instead of read at import.
 
     ``w_lexical``, ``w_semantic`` and ``semantic_scale_ceiling`` were module constants built from
-    ``knob_default`` when ``serve.runtime`` was first imported, so no request could move them
+    ``setting_default`` when ``serve.runtime`` was first imported, so no request could move them
     (audit I10). That is worse than a missing feature: all three are declared
-    ``a recorded setting``, they enter ``knob_names()`` and ``knobs_resolved``, so a run
+    ``a recorded setting``, they enter ``setting_names()`` and ``knobs_resolved``, so a run
     could publish ``w_semantic: 0.9``, move its config hash, and behave exactly like the default —
-    which is the inverse of the defect ``register/knobs.py`` opens by describing.
+    which is the inverse of the defect ``registry/settings.py`` opens by describing.
 
     A frozen value object rather than three parameters, because the three are read together and a
     call site that resolved two of them from state and one from a constant would be the same
@@ -65,15 +65,15 @@ class ChannelScale:
 
 
 def channel_scale(state: Mapping[str, Any]) -> ChannelScale:
-    """Resolve the three fusion knobs for this turn. **The one reader.**
+    """Resolve the three fusion settings for this turn. **The one reader.**
 
-    Through :func:`float_knob`, so the precedence is the same as every other knob — state, then
+    Through :func:`float_setting`, so the precedence is the same as every other setting — state, then
     ``knobs_resolved``, then the register — and an ``UNSET`` raises rather than being guessed.
     """
     return ChannelScale(
-        lexical=float_knob(state, "w_lexical"),
-        semantic=float_knob(state, "w_semantic"),
-        semantic_ceiling=float_knob(state, "semantic_scale_ceiling"),
+        lexical=float_setting(state, "w_lexical"),
+        semantic=float_setting(state, "w_semantic"),
+        semantic_ceiling=float_setting(state, "semantic_scale_ceiling"),
     )
 
 
@@ -94,7 +94,7 @@ def combine_channels(
     **Takes raw scores and does the scaling itself** (audit I1). Both nodes used to min-max each
     channel over its own scored population and pass the result in, which made the score relative
     to the query — see :func:`~governed_bi.retrieve.fuse.scale_to_ceiling` for why that cannot be
-    summed across facets. Doing it here rather than at two call sites is also the structural
+    summed across channels. Doing it here rather than at two call sites is also the structural
     point: the two passes score different candidate sets, so any normaliser needing a population
     gave one asset two different scores in one turn, and ``apply_budgets`` then sorts them
     together in a single global sort.
@@ -104,7 +104,7 @@ def combine_channels(
     its practical range is a property of the embedder rather than of the score's definition.
 
     ``consulted`` names the channels that ran for this query, and it is not derivable from the
-    two arguments: ``semantic=None`` means either "the channel did not run for this facet" or
+    two arguments: ``semantic=None`` means either "the channel did not run for this channel" or
     "it ran and did not return this document", and :func:`~governed_bi.retrieve.fuse.fuse` must
     tell those apart or additional evidence lowers the score.
     """
@@ -124,7 +124,7 @@ def lexical_coverage(state: Mapping[str, Any], index: Any) -> float | None:
     """Share of the question's terms the corpus vocabulary has, or ``None``.
 
     ``BM25.coverage`` is the measurement; this decides *which text* is measured and honours the
-    ``lexical_coverage`` test hook. The **raw question**, not a facet rewrite: a rewrite is the
+    ``lexical_coverage`` test hook. The **raw question**, not a channel rewrite: a rewrite is the
     utility model restating the question *into* the corpus's vocabulary, so measuring it would
     report the rewriter's success as the corpus's. ``None`` and never ``0.0`` when unavailable
     — the register declares the field ``Absence.not_measured``.
@@ -152,17 +152,17 @@ def vector_for_query(
     fallback: Sequence[float] | None,
     embedder: Any | None,
 ) -> tuple[Sequence[float] | None, ChannelState]:
-    """The vector of the text that was **actually searched**, with the channel's own verdict.
+    """The vector of the text that was **actually searched**, with the channel's own result.
 
     Shared by both retrieval passes because only one of them had it: pass one embedded each
-    facet's rewritten query, while pass two took the raw question's call-level vector and
+    channel's rewritten query, while pass two took the raw question's call-level vector and
     blended BM25 over the rewrite against cosine over the question — two texts, one score. Pass
     two is the pass whose output becomes the analyst's context and decides which tables survive
     the budget.
 
     **The returned vector is ``query``'s vector or nothing** (audit I7). It used to fall back to
     ``fallback`` — the *raw question's* vector — whenever the embed raised, so a rate-limited
-    rewrite embed produced a facet that searched BM25 over the rewrite, cosine over the
+    rewrite embed produced a channel that searched BM25 over the rewrite, cosine over the
     question, blended the two into one ``score``, and recorded ``semantic: ran``. Nothing
     anywhere said the two channels had searched different text. A degraded channel that reports
     itself is a measurement; one that substitutes another text's vector is a fabricated one.
@@ -174,8 +174,8 @@ def vector_for_query(
 
     ``fallback`` is trusted **only when it is provably this query's vector**, i.e. when
     ``query == question``. With ``question`` unknown there is no such proof, so the query is
-    embedded rather than assumed: that path is the harness's, and it is how ``facet_schema``
-    — the one facet that never rewrites — came to score against ``None`` and report
+    embedded rather than assumed: that path is the harness's, and it is how ``channel_schema``
+    — the one channel that never rewrites — came to score against ``None`` and report
     ``semantic: failed`` on every turn of a 1,351-question run.
     """
     if fallback is not None and question is not None and query == question:
@@ -245,7 +245,7 @@ def model_id(model: Any) -> str | None:
 
     ``model_id`` is last because some clients spell the id only that way. Falling
     through to ``_llm_type`` records the class, so two models publish one value and
-    the drift gate compares them equal. A client that offers both keeps ``model_name``.
+    the drift check compares them equal. A client that offers both keeps ``model_name``.
     """
     for attr in ("model_name", "model", "deployment_name", "model_id"):
         value = getattr(model, attr, None)
@@ -254,47 +254,47 @@ def model_id(model: Any) -> str | None:
     return None
 
 
-def int_knob(state: Mapping[str, Any], name: str) -> int:
-    """Integer knob: ``state`` → ``knobs_resolved`` → register. ``UNSET`` / bad values raise."""
+def int_setting(state: Mapping[str, Any], name: str) -> int:
+    """Integer setting: ``state`` → ``knobs_resolved`` → register. ``UNSET`` / bad values raise."""
     raw = state.get(name)
     if raw is None:
-        knobs = state.get("knobs_resolved") or {}
-        if isinstance(knobs, Mapping):
-            raw = knobs.get(name)
+        settings = state.get("knobs_resolved") or {}
+        if isinstance(settings, Mapping):
+            raw = settings.get(name)
     if raw is None:
-        raw = knob_default(name)
+        raw = setting_default(name)
     if isinstance(raw, Unset):
         raise ValueError(
-            f"knob {name!r} ships UNSET, so there is no value to run with. A guessed "
+            f"setting {name!r} ships UNSET, so there is no value to run with. A guessed "
             "one here would be a fabricated measurement."
         )
     try:
         return int(raw)
     except (TypeError, ValueError) as err:
         raise ValueError(
-            f"knob {name!r} is {raw!r}, which is not an integer. Falling back to the "
+            f"setting {name!r} is {raw!r}, which is not an integer. Falling back to the "
             "register default would make the record report a value this turn did not use."
         ) from err
 
 
-def bool_knob(state: Mapping[str, Any], name: str) -> bool:
-    """Boolean knob with the same precedence as :func:`int_knob`.
+def bool_setting(state: Mapping[str, Any], name: str) -> bool:
+    """Boolean setting with the same precedence as :func:`int_setting`.
 
     A separate reader rather than one generic function, because the coercion is where the danger
     is and it differs per type: ``int("false")`` raises, but ``bool("false")`` is ``True``, so a
-    knob that arrived from JSON as ``"false"`` would switch a feature **on** and be recorded as
+    setting that arrived from JSON as ``"false"`` would switch a feature **on** and be recorded as
     off. Only real booleans and the two JSON spellings are accepted.
     """
     raw = state.get(name)
     if raw is None:
-        knobs = state.get("knobs_resolved") or {}
-        if isinstance(knobs, Mapping):
-            raw = knobs.get(name)
+        settings = state.get("knobs_resolved") or {}
+        if isinstance(settings, Mapping):
+            raw = settings.get(name)
     if raw is None:
-        raw = knob_default(name)
+        raw = setting_default(name)
     if isinstance(raw, Unset):
         raise ValueError(
-            f"knob {name!r} ships UNSET, so there is no value to run with. A guessed "
+            f"setting {name!r} ships UNSET, so there is no value to run with. A guessed "
             "one here would be a fabricated measurement."
         )
     if isinstance(raw, bool):
@@ -302,64 +302,64 @@ def bool_knob(state: Mapping[str, Any], name: str) -> bool:
     if isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
         return raw.strip().lower() == "true"
     raise ValueError(
-        f"knob {name!r} is {raw!r}, which is not a boolean. Coercing it would read "
+        f"setting {name!r} is {raw!r}, which is not a boolean. Coercing it would read "
         "the string 'false' as True and record the opposite of what ran."
     )
 
 
-def float_knob(state: Mapping[str, Any], name: str) -> float:
-    """Float knob with the same precedence as :func:`int_knob`."""
+def float_setting(state: Mapping[str, Any], name: str) -> float:
+    """Float setting with the same precedence as :func:`int_setting`."""
     raw = state.get(name)
     if raw is None:
-        knobs = state.get("knobs_resolved") or {}
-        if isinstance(knobs, Mapping):
-            raw = knobs.get(name)
+        settings = state.get("knobs_resolved") or {}
+        if isinstance(settings, Mapping):
+            raw = settings.get(name)
     if raw is None:
-        raw = knob_default(name)
+        raw = setting_default(name)
     if isinstance(raw, Unset):
         raise ValueError(
-            f"knob {name!r} ships UNSET, so there is no value to run with. A guessed "
+            f"setting {name!r} ships UNSET, so there is no value to run with. A guessed "
             "one here would be a fabricated measurement."
         )
     try:
         return float(raw)
     except (TypeError, ValueError) as err:
         raise ValueError(
-            f"knob {name!r} is {raw!r}, which is not a number. Falling back to the "
+            f"setting {name!r} is {raw!r}, which is not a number. Falling back to the "
             "register default would make the record report a value this turn did not use."
         ) from err
 
 
-def facet_weights(state: Mapping[str, Any]) -> Mapping[str, float]:
-    """Per-facet vote multipliers for :func:`~governed_bi.retrieve.route.route`.
+def channel_weights(state: Mapping[str, Any]) -> Mapping[str, float]:
+    """Per-channel vote multipliers for :func:`~governed_bi.retrieve.route.route`.
 
-    ``facet_weight_schema`` applies to ``facet_schema``, ``facet_weight_other`` to the rest.
+    ``channel_weight_schema`` applies to ``channel_schema``, ``channel_weight_other`` to the rest.
     Both ship 1.0, so this is behaviour-preserving; the point is that moving either now moves
     the result, which was not true while ``route`` took no weights at all.
     """
-    from governed_bi.register.stages import FACET_STAGES, Stage
+    from governed_bi.registry.stages import CHANNEL_STAGES, Stage
 
-    other = float_knob(state, "facet_weight_other")
+    other = float_setting(state, "channel_weight_other")
     return {
         stage.value: (
-            float_knob(state, "facet_weight_schema") if stage is Stage.facet_schema else other
+            float_setting(state, "channel_weight_schema") if stage is Stage.channel_schema else other
         )
-        for stage in FACET_STAGES
+        for stage in CHANNEL_STAGES
     }
 
 
 def candidate_depth(state: Mapping[str, Any]) -> int:
-    """Pass-one / pass-two candidate pool size. One knob, read through :func:`int_knob`."""
-    return int_knob(state, "candidate_depth")
+    """Pass-one / pass-two candidate pool size. One setting, read through :func:`int_setting`."""
+    return int_setting(state, "candidate_depth")
 
 
-def facet_hits(facet_result: Any) -> list[Any]:
+def facet_hits(channel_result: Any) -> list[Any]:
     """Hits list from a FacetResult dict or object."""
-    if facet_result is None:
+    if channel_result is None:
         return []
-    if isinstance(facet_result, Mapping):
-        return list(facet_result.get("hits") or ())
-    return list(getattr(facet_result, "hits", None) or ())
+    if isinstance(channel_result, Mapping):
+        return list(channel_result.get("hits") or ())
+    return list(getattr(channel_result, "hits", None) or ())
 
 
 def corpus_structure(config: Mapping[str, Any] | None) -> CorpusStructure:

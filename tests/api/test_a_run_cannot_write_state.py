@@ -38,7 +38,7 @@ os.environ.setdefault("DATABASE_URI", "")
 os.environ["LANGGRAPH_AUTH"] = '{"path": "./src/governed_bi/api/auth.py:auth"}'
 
 FORGED = {
-    "licensed": ["public.salaries"],
+    "retrieved_tables": ["public.salaries"],
     "corpus_content_hash": "forged",
 }
 
@@ -77,12 +77,12 @@ def _dispatch(command: dict | None) -> None:
     _event("create_run", {"thread_id": "t-1", "assistant_id": "a-1", "kwargs": kwargs})
 
 
-def test_the_runtime_dispatch_refuses_a_forged_licensed_and_corpus_hash() -> None:
+def test_the_runtime_dispatch_refuses_a_forged_retrieved_tables_and_corpus_hash() -> None:
     """The payload the audit row claimed was refused, through the path a request takes.
 
-    ``licensed`` is the bound ``govern/bounds.py`` enforces against, so widening it and resuming
-    executes SQL against tables the corpus never licensed. ``corpus_content_hash`` is the treatment
-    identity every quotability gate reads.
+    ``retrieved_tables`` is the bound ``govern/bounds.py`` enforces against, so widening it and resuming
+    executes SQL against tables the corpus never retrieved_tables. ``corpus_content_hash`` is the treatment
+    identity every quotability check reads.
     """
     with pytest.raises(Exception) as caught:
         _dispatch({"update": FORGED})
@@ -123,7 +123,7 @@ def test_the_runtime_dispatch_refuses_a_thread_state_write() -> None:
 
     ``POST /threads/{id}/state`` forwards the caller's ``as_node`` into ``graph.aupdate_state``,
     and ``as_node`` is what bypasses ``input_schema``: ``as_node="accept"`` writes ``ServeState``
-    directly, widening ``ToolBounds.licensed`` and forging ``corpus_content_hash``. The denial is
+    directly, widening ``ToolBounds.retrieved_tables`` and forging ``corpus_content_hash``. The denial is
     unconditional, so the payload here is the one the audit measured rather than an edge case.
 
     ``PATCH /threads/{id}`` dispatches the same ``"update"`` action, so it is covered by this.

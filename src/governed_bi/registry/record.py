@@ -1,9 +1,9 @@
-"""Turn-record schema: projection, presence, quotability gates.
+"""Turn-record schema: projection, presence, quotability checks.
 
-Adding a row records and gates a field by default. Gates are declared on fields;
+Adding a row records and checks a field by default. Checks are declared on fields;
 :func:`missing_required` treats ``None`` and unmeasured
-:class:`~.quantity.Measured` as absent for :attr:`Absence.never`. Not the knob
-register (:mod:`.knobs`).
+:class:`~.quantity.Measured` as absent for :attr:`Absence.never`. Not the setting
+register (:mod:`.settings`).
 
 A fifth column, ``redaction``, is gone (audit §8.1/§10): nothing enforced it, and
 the recorded turn carried the question, the answer and ``executed_sql``
@@ -18,17 +18,17 @@ from enum import Enum
 from typing import Any, Callable, Mapping
 
 from .quantity import Measured
-from .stages import FACET_STAGES, Stage
+from .stages import CHANNEL_STAGES, Stage
 
 __all__ = [
     "Tier",
     "Absence",
     "RecordField",
     "RECORD_REGISTER",
-    "GATE_CONDITIONS",
+    "CHECK_CONDITIONS",
     "record_keys",
     "required_keys",
-    "gate_keys",
+    "check_keys",
     "live_capture_keys",
     "missing_required",
     "undeclared_keys",
@@ -41,7 +41,7 @@ class Tier(str, Enum):
 
     #: Identifies the turn or the run. A comparison joins on these.
     identity = "identity"
-    #: The treatment. The delivery gate reads these.
+    #: The treatment. The delivery check reads these.
     treatment = "treatment"
     #: Retrieval and governance decisions. Attribution reads these.
     decision = "decision"
@@ -49,7 +49,7 @@ class Tier(str, Enum):
     outcome = "outcome"
     #: Cost and latency.
     cost = "cost"
-    #: Degradation counters. Every health field must feed a quotability gate
+    #: Degradation counters. Every health field must feed a quotability check
     #: (enforced at import).
     health = "health"
 
@@ -82,7 +82,7 @@ class RecordField:
     why: str
 
     #: Quotability precondition this field feeds, if any.
-    gate: str | None = None
+    check: str | None = None
 
     #: Recoverable from other artifacts after the run; otherwise capture live.
     reconstructable: bool = False
@@ -94,102 +94,102 @@ def _f(
     owner: Stage,
     why: str,
     *,
-    gate: str | None = None,
+    check: str | None = None,
     reconstructable: bool = False,
 ) -> RecordField:
-    return RecordField(name, tier, absence, owner, why, gate=gate, reconstructable=reconstructable)
+    return RecordField(name, tier, absence, owner, why, check=check, reconstructable=reconstructable)
 
 
 #: The register. **Adding a row here is the only way to add a recorded field.**
 RECORD_REGISTER: tuple[RecordField, ...] = (
     # ── identity ────────────────────────────────────────────────────────────
-    _f("run_id", Tier.identity, Absence.never, Stage.stamp,
+    _f("run_id", Tier.identity, Absence.never, Stage.finish,
        "joins a turn to its run", reconstructable=True),
-    _f("turn_id", Tier.identity, Absence.never, Stage.stamp,
+    _f("turn_id", Tier.identity, Absence.never, Stage.finish,
        "the upsert key. Derived per invoke, never at build time: a reused graph "
        "deriving it once wrote every question to the same id and the idempotent "
        "upsert overwrote each row with the next"),
-    _f("thread_id", Tier.identity, Absence.never, Stage.stamp, "multi-turn grouping"),
-    _f("question_id", Tier.identity, Absence.never, Stage.stamp, "joins to gold"),
-    _f("db_id", Tier.identity, Absence.never, Stage.stamp,
+    _f("thread_id", Tier.identity, Absence.never, Stage.finish, "multi-turn grouping"),
+    _f("question_id", Tier.identity, Absence.never, Stage.finish, "joins to gold"),
+    _f("db_id", Tier.identity, Absence.never, Stage.finish,
        "schema-qualified. A pooled corpus repeats table names across schemas, so a "
        "bare name would credit a table from the wrong schema"),
-    _f("attempt_id", Tier.identity, Absence.never, Stage.stamp,
+    _f("attempt_id", Tier.identity, Absence.never, Stage.finish,
        "which resume attempt served this row. Without it a ladder blends attempts at "
        "different worker counts into one file, and worker count saturates the shared "
-       "quota the crash and degradation gates read"),
+       "quota the crash and degradation checks read"),
 
     # ── treatment ───────────────────────────────────────────────────────────
     _f("evicted", Tier.treatment, Absence.not_applicable, Stage.assemble,
        "what the char budget dropped before the model saw it: bodies, whole tables, and by "
        "how much the block still overran. Null means the block fit, which the assemble node "
        "distinguishes from an empty mapping. Treatment, not outcome, because it changes what "
-       "was served: `table_coverage` is computed over `licensed` and is therefore a LICENSING "
-       "figure -- a table can be routed, licensed, counted as covered, and then evicted here. "
-       "First measured on the 2026-08-09 v3-fold arm: the budget bit on 19 of 1 351 turns "
+       "was served: `table_coverage` is computed over `licensed` and is therefore a retrieval "
+       "figure -- a table can be routed, retrieved, counted as covered, and then evicted here. "
+       "First measured on the 2026-08-09 v3-fold config: the budget bit on 19 of 1 351 turns "
        "(1.4%), dropping bodies only and never a whole table. So the 80 000-char budget is "
        "NOT the binding constraint an offline reconstruction had suggested -- that estimate "
-       "built the context from every licensed table's every column and ignored the per-type "
+       "built the context from every retrieved table's every column and ignored the per-type "
        "budgets pass two applies. `DeliveryTracker.merge_into` destroyed this field mid-turn "
-       "for its whole life before it was carried, which is why no earlier arm can report it"),
+       "for its whole life before it was carried, which is why no earlier config can report it"),
 
     _f("context_hash", Tier.treatment, Absence.not_applicable, Stage.assemble,
-       "the delivery gate. Deterministic: a pure function of corpus content and "
+       "the delivery check. Deterministic: a pure function of corpus content and "
        "pipeline decisions. Null on paths that skip assemble, and NEVER the string "
        "'unknown' — v1's sentinel compared equal to itself and let two runs with no "
        "recorded treatment pass comparability",
-       gate="both arms recorded a context_hash on every shared question. Distinctness was "
+       check="both configs recorded a context_hash on every shared question. Distinctness was "
             "the condition until audit D9: it measured retrieval nondeterminism rather than "
             "treatment change and passed at 0.9993 on a seed-only pair, so the treatment "
             "judgement moved to knobs_resolved"),
-    _f("delivery_hash", Tier.treatment, Absence.not_applicable, Stage.stamp,
+    _f("delivery_hash", Tier.treatment, Absence.not_applicable, Stage.finish,
        "context plus every tool-delivered body. NOT deterministic -- it depends on "
-       "which read_body calls the model chose -- so it is a diagnostic, never a gate. "
+       "which read_body calls the model chose -- so it is a diagnostic, never a check. "
        "The only field that answers whether curated bodies reached the model"),
     _f("tool_delivered", Tier.treatment, Absence.not_applicable, Stage.agent_core,
        "call_id -> sha256 of every corpus- or database-derived tool return. Not just "
-       "read_body: real database values are the largest source of arm-to-arm variation "
+       "read_body: real database values are the largest source of config-to-config variation "
        "in what the model sees. Null when the agent loop did not run"),
-    _f("corpus_content_hash", Tier.treatment, Absence.never, Stage.stamp,
+    _f("corpus_content_hash", Tier.treatment, Absence.never, Stage.finish,
        "the corpus IS the treatment. Gated from 2026-08-10 (audit D7): the sentence above was "
-       "written and nothing enforced it, so two arms measured over two different corpora passed "
-       "all six gates and compared as one treatment. The two runs the power analysis designates "
+       "written and nothing enforced it, so two configs measured over two different corpora passed "
+       "all six checks and compared as one treatment. The two runs the power analysis designates "
        "as its null replicate carry this field as null on all 1351 rows, which is how a corpus "
-       "identity of `unknown` passing a comparability gate happened a second time",
-       gate="every row in one arm carries the same non-null corpus_content_hash"),
-    _f("prompt_set_hash", Tier.treatment, Absence.never, Stage.stamp,
+       "identity of `unknown` passing a comparability check happened a second time",
+       check="every row in one config carries the same non-null corpus_content_hash"),
+    _f("prompt_set_hash", Tier.treatment, Absence.never, Stage.finish,
        "hashes the prompt TEXT, not the variant id — editing a variant in place "
        "must change the digest, or an edited prompt is indistinguishable from the "
        "one it replaced"),
-    _f("knobs_resolved", Tier.treatment, Absence.never, Stage.stamp,
-       "the resolved value of every comparability knob. Without it a turn cannot be "
+    _f("knobs_resolved", Tier.treatment, Absence.never, Stage.finish,
+       "the resolved value of every comparability setting. Without it a turn cannot be "
        "joined against the configuration it ran under, and a manifest-only record lets "
        "two runs over different corpora on different splits compare as one",
-       gate="every row in one arm agrees on knobs.knob_names(); across two arms the "
-            "declared treatment differs and every other knobs.knob_names() entry is "
+       check="every row in one config agrees on settings.setting_names(); across two configs the "
+            "declared treatment differs and every other settings.setting_names() entry is "
             "recorded on both and equal"),
 
     # ── decision ────────────────────────────────────────────────────────────
     _f("facet_hits", Tier.decision, Absence.not_applicable, Stage.route,
-       "per facet: asset_id, asset_type, queries, lexical, semantic. Counts alone "
+       "per retrieval channel: asset_id, asset_type, queries, lexical, semantic. Counts alone "
        "cannot attribute a finding to an asset, so no feedback loop is possible. Null "
        "when the fan-out did not run"),
     _f("facet_channels", Tier.health, Absence.not_applicable, Stage.route,
-       "per facet per channel: ran / not_configured / failed, as explicit values never "
-       "inferred from scores. If the extractor is rate-limited every facet falls back "
-       "to the raw question, the run completes and grades normally, and the arm quietly "
-       "IS single-pass retrieval. Null when the fan-out did not run -- which the gate "
+       "per retrieval channel, per scoring channel: ran / not_configured / failed, as explicit values never "
+       "inferred from scores. If the extractor is rate-limited every retrieval channel falls back "
+       "to the raw question, the run completes and grades normally, and the config quietly "
+       "IS single-pass retrieval. Null when the fan-out did not run -- which the check "
        "must not read as clean",
-       gate="on turns where the fan-out ran, no channel state differs from its "
+       check="on turns where the fan-out ran, no channel state differs from its "
             "declared expectation; the observed count is published beside the rate"),
     _f("facet_degraded", Tier.decision, Absence.not_applicable, Stage.route,
-       "true when some facet ran on fewer channels than FACET_CHANNELS declares -- "
-       "`register.facets.is_degraded` over the field above, computed once and stamped "
+       "true when some retrieval channel ran on fewer scoring channels than it declares -- "
+       "`registry.channels.is_degraded` over the field above, computed once and written "
        "rather than re-derived by each reader. Unregistered, `project()` cannot write "
-       "it and the degradation gate published `[pass] facet_channels 0.0000` on an arm "
+       "it and the degradation check published `[pass] facet_channels 0.0000` on a config "
        "with no index. Null when the fan-out did not run. Tier is `decision`, not "
        "`health`: the quotability condition over this evidence is declared on "
-       "`facet_channels`, and a second gate here would be two verdicts on one comparison",
+       "`facet_channels`, and a second check here would be two results on one comparison",
        reconstructable=True),
     _f("schema_ranking", Tier.decision, Absence.not_applicable, Stage.route,
        "ALL scored schemas pre-truncation. Without it, 'the gold schema was not a "
@@ -208,8 +208,8 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "cap bit -- which `pass_two` distinguishes from an empty mapping -- or that the fan-out "
        "did not run, and `schema_ranking` being null is what tells those two apart. Declared "
        "2026-08-12: `pass_two` had written the key since the caps existed and `resolve` "
-       "destroyed it one super-step later, so carrying it to `stamp` (the `merge_delta` fix) "
-       "moved it one step and no further -- it reached no artifact a gate or a reader could "
+       "destroyed it one super-step later, so carrying it to `finish` (the `merge_delta` fix) "
+       "moved it one step and no further -- it reached no artifact a check or a reader could "
        "open until it was a register row"),
     _f("budget_best_dropped_score", Tier.decision, Absence.not_applicable, Stage.route,
        "asset_type -> the highest score that did not survive the cap. The count alone cannot "
@@ -226,7 +226,7 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "accuracy on those turns' is a query rather than a guess"),
     _f("lexical_coverage", Tier.decision, Absence.not_measured, Stage.route,
        "feeds weak_retrieval. With an embedder every asset scores above zero, so an "
-       "out-of-corpus question still returns top_k tables and a clean run stamps "
+       "out-of-corpus question still returns top_k tables and a clean run writes "
        "confidence"),
     _f("rewrite", Tier.decision, Absence.not_applicable, Stage.rewrite,
        "before / after / outcome. Null means the node did not run (single turn); "
@@ -234,20 +234,20 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "those apart and any rate built on it reads 0.0 on a run where every rewrite "
        "failed. Free text: it holds the user's question"),
     _f("guard", Tier.decision, Absence.never, Stage.guard,
-       "total record, written every turn including clear. A gate that leaves a trace "
+       "total record, written every turn including clear. A check that leaves a trace "
        "only when it fires cannot afterwards be told from one never wired up. The "
        "rule_id is closed-vocabulary; the detail is free text and dropped"),
     _f("abstention", Tier.decision, Absence.not_applicable, Stage.abstain,
        "what the declared abstention policy decided and the evidence behind it (ADR 0013): "
        "{policy, outcome, reason, rules_evaluated, evidence}, outcome one of answer | withhold "
        "| disabled and `reason` a member of stages.ABSTENTION_REASONS. **The engine's answer to "
-       "'why did you not answer'**, which until 2026-08-12 it did not have: 19 of the v4 arm's "
-       "20 refusals end on `r_table_not_licensed`, so the histogram said which layer objected "
+       "'why did you not answer'**, which until 2026-08-12 it did not have: 19 of the v4 config's "
+       "20 refusals end on `r_table_not_retrieved`, so the histogram said which layer objected "
        "and nothing said whether anything had decided. Null means the turn ended before the "
-       "node -- guard, negative gate, route or connect -- which is a different fact from "
+       "node -- guard, negative check, route or connect -- which is a different fact from "
        "`disabled`, and both are different from a policy that ran and let the turn through. "
-       "The verdict is a pure function of state, so a reader can recompute it from the row.\n"
-       "**No gate, and no score in it.** There is no confidence, certainty or graded field "
+       "The result is a pure function of state, so a reader can recompute it from the row.\n"
+       "**No check, and no score in it.** There is no confidence, certainty or graded field "
        "here and there will not be: a learned abstainer was measured at OOF AUC 0.597 with an "
        "'unsure' bucket as likely to be right as its 'correct' one (open-work.md 3.11), every "
        "risk-coverage curve reads 0.7144 at the engine's own coverage, and ADR 0007 forbids a "
@@ -257,32 +257,32 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "`_refusal_layers`, and had to be built: that one counts ledger attempts, and a withheld "
        "turn writes no ledger row, so the abstention reasons were unreachable to it. This field "
        "carries the evidence beside the reason"),
-    _f("execution", Tier.decision, Absence.never, Stage.stamp,
-       "attempts, per-attempt verdict layer, terminal, guardrail_errors "
+    _f("execution", Tier.decision, Absence.never, Stage.finish,
+       "attempts, per-attempt result layer, terminal, guardrail_errors "
        "(ADR 0006 section 12). Total, including the 'no SQL was attempted' case"),
-    _f("guardrail_errors", Tier.health, Absence.never, Stage.stamp,
+    _f("guardrail_errors", Tier.health, Absence.never, Stage.finish,
        "exceptions swallowed by check(). Zero is a measured zero, including on a turn "
        "where check never ran. Without the counter, a NameError there turns every turn "
-       "in an arm into a refusal while crash_rate stays 0 and the run reads as quotable",
-       gate="guardrail_errors == 0"),
+       "in a config into a refusal while crash_rate stays 0 and the run reads as quotable",
+       check="guardrail_errors == 0"),
 
     # ── outcome ─────────────────────────────────────────────────────────────
-    _f("outcome", Tier.outcome, Absence.never, Stage.stamp,
-       "stamped at the source and never re-derived: `stages.classify_outcome` under `stamp` "
+    _f("outcome", Tier.outcome, Absence.never, Stage.finish,
+       "written at the source and never re-derived: `stages.classify_outcome` under `finish` "
        "is the only derivation, and nothing downstream recomputes it. The second entry point "
-       "that preferred the stamp over re-derivation was deleted (audit section 10), so a row "
-       "whose stamped `outcome` does not parse is a broken row, not a row to guess about",
-       gate="no turn classified crashed"),
-    _f("terminal_reason", Tier.outcome, Absence.not_applicable, Stage.stamp,
+       "that preferred the finish over re-derivation was deleted (audit section 10), so a row "
+       "whose written `outcome` does not parse is a broken row, not a row to guess about",
+       check="no turn classified crashed"),
+    _f("terminal_reason", Tier.outcome, Absence.not_applicable, Stage.finish,
        "WHY a turn declined: missing_join_path / no_schema_matched / "
        "over_connect_bounds / no_sql are four different engineering problems and "
        "`outcome: declined` is one value for all of them. Held only in graph state, "
        "'routing found nothing' and 'the join graph is disconnected' are the same row"),
-    _f("failed_stage", Tier.outcome, Absence.not_applicable, Stage.stamp,
+    _f("failed_stage", Tier.outcome, Absence.not_applicable, Stage.finish,
        "null when the turn did not fail"),
-    _f("error_type", Tier.outcome, Absence.not_applicable, Stage.stamp,
+    _f("error_type", Tier.outcome, Absence.not_applicable, Stage.finish,
        "exception CLASS only. Tracebacks echo SQL and row values"),
-    _f("failure_cause", Tier.outcome, Absence.not_applicable, Stage.stamp,
+    _f("failure_cause", Tier.outcome, Absence.not_applicable, Stage.finish,
        "why an answered-but-WRONG turn was wrong, as a `eval.attribution.FailureCause` member. "
        "A separate field from `error_type` above, deliberately, and for the same reason "
        "`computed_correct` is separate from `correct` (`eval/projection.py`: 'one merge of the "
@@ -290,17 +290,17 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "`error_type` is declared as the exception CLASS of a turn that RAISED, and a consumer "
        "reading `error_type is not None` as 'this turn crashed' is reading the declaration. The "
        "downstream fork wrote taxonomy strings into it first and measured what that cost -- the "
-       "crashed count on one arm's baseline went from 0 to 78 -- which is why this is a field "
+       "crashed count on one config's baseline went from 0 to 78 -- which is why this is a field "
        "and not a second meaning. Null when the turn is not "
        "answered-and-wrong -- which includes every correct answer, every refusal, and a row "
        "whose gold is missing, since `correct: None` means the instrument had nothing to "
        "compare against and is not a failure to explain. Also null on every served turn: this "
        "is written by `eval/projection.py::project_turn`, which is the only place both the "
-       "prediction and the answer key are in one row, so `stamp` projects the null the register "
+       "prediction and the answer key are in one row, so `finish` projects the null the register "
        "declares. Reconstructable by construction -- a pure function of `outcome`, `correct`, "
        "`generated_sql`, `gold_sql` and `touched_decoy`, all carried on the same row",
        reconstructable=True),
-    _f("generated_sql", Tier.outcome, Absence.not_applicable, Stage.stamp,
+    _f("generated_sql", Tier.outcome, Absence.not_applicable, Stage.finish,
        "null when no SQL was produced, which is not the same as empty. **This is the "
        "statement the engine SENT** -- canonicalised, quoted and row-limited, read from the "
        "ledger's `executed_sql` and from nothing else. There is **no fallback to the model's "
@@ -310,7 +310,7 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "and any capped turn whose attempts were all declined; a capped turn that did execute "
        "carries its last executed statement. The proposal is recoverable from the transcript "
        "through `serve.messages.last_proposed_sql`, which is where `eval/projection.py` reads it "
-       "to price an abstention. A consumer that re-runs this field must still gate on "
+       "to price an abstention. A consumer that re-runs this field must still check on "
        "`outcome == 'answered'`, or it reports a decline as a broken statement -- which is "
        "how 14 capped turns looked like an engine defect on 2026-08-04 "
        "(git-history:198e76e)"),
@@ -320,27 +320,27 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
     # alternatives that do not exist records nothing.
 
     # ── cost ────────────────────────────────────────────────────────────────
-    _f("usage", Tier.cost, Absence.never, Stage.stamp,
-       "one record per model call including facet and rewrite calls. An empty list is "
+    _f("usage", Tier.cost, Absence.never, Stage.finish,
+       "one record per model call including retrieval-channel and rewrite calls. An empty list is "
        "a measured zero -- a guard-blocked turn made no model calls"),
-    _f("cache_read_tokens", Tier.cost, Absence.not_measured, Stage.stamp,
+    _f("cache_read_tokens", Tier.cost, Absence.not_measured, Stage.finish,
        "null means the provider did not report it, NOT zero"),
-    _f("cache_write_tokens", Tier.cost, Absence.not_measured, Stage.stamp,
+    _f("cache_write_tokens", Tier.cost, Absence.not_measured, Stage.finish,
        "billed at 1.25x, so it cannot be folded into the input count"),
-    _f("latency_sec", Tier.cost, Absence.not_measured, Stage.stamp, "wall clock"),
+    _f("latency_sec", Tier.cost, Absence.not_measured, Stage.finish, "wall clock"),
 
-    # ── frozen witness (not health: health fields must gate quotability) ────
-    _f("n_re_served", Tier.decision, Absence.never, Stage.stamp,
+    # ── frozen witness (not health: health fields must check quotability) ────
+    _f("n_re_served", Tier.decision, Absence.never, Stage.finish,
        "always 0 on every production path: Session.turn seeds it and nothing increments. "
        "Retained so historical rows and the schema stay comparable. It was meant to catch "
        "LangGraph node RetryPolicy re-serving a crashed draw; that policy is banned, and "
        "provider SDK retries (llm_max_retries) are invisible here. Demoted from Tier.health "
-       "so it cannot sit as an always-pass quotability gate"),
+       "so it cannot sit as an always-pass quotability check"),
 )
 
 #: Quotability preconditions derived from the register. Refuse; do not warn.
-GATE_CONDITIONS: Mapping[str, str] = {
-    f.name: f.gate for f in RECORD_REGISTER if f.gate is not None
+CHECK_CONDITIONS: Mapping[str, str] = {
+    f.name: f.check for f in RECORD_REGISTER if f.check is not None
 }
 
 
@@ -354,9 +354,9 @@ def required_keys() -> frozenset[str]:
     return frozenset(f.name for f in RECORD_REGISTER if f.absence is Absence.never)
 
 
-def gate_keys() -> frozenset[str]:
-    """Fields a quotability precondition reads. Gates are declared on fields."""
-    return frozenset(GATE_CONDITIONS)
+def check_keys() -> frozenset[str]:
+    """Fields a quotability precondition reads. Checks are declared on fields."""
+    return frozenset(CHECK_CONDITIONS)
 
 
 def live_capture_keys() -> frozenset[str]:
@@ -400,7 +400,7 @@ def project(
 
 
 def _assert_register_is_coherent() -> None:
-    """Import-time: unique names, Stage owners, every health field gated, no facet owners."""
+    """Import-time: unique names, Stage owners, every health field gated, no channel owners."""
     names = [f.name for f in RECORD_REGISTER]
     dupes = sorted({n for n in names if names.count(n) > 1})
     if dupes:  # pragma: no cover - import-time guard
@@ -411,19 +411,19 @@ def _assert_register_is_coherent() -> None:
         raise AssertionError(f"fields whose owner is not a Stage: {bad_owner}")
 
     ungated_health = sorted(
-        f.name for f in RECORD_REGISTER if f.tier is Tier.health and f.gate is None
+        f.name for f in RECORD_REGISTER if f.tier is Tier.health and f.check is None
     )
     if ungated_health:  # pragma: no cover - import-time guard
         raise AssertionError(
-            "health-tier fields with no gate reading them: "
+            "health-tier fields with no check reading them: "
             f"{ungated_health}. Every health field must be a quotability input."
         )
 
-    per_facet = sorted(f.name for f in RECORD_REGISTER if f.owner in FACET_STAGES)
-    if per_facet:  # pragma: no cover - import-time guard
+    per_channel = sorted(f.name for f in RECORD_REGISTER if f.owner in CHANNEL_STAGES)
+    if per_channel:  # pragma: no cover - import-time guard
         raise AssertionError(
-            f"fields owned by a facet stage: {per_facet}. `owner` is the stage after "
-            "which the value is final; facet evidence is finalised by `route`."
+            f"fields owned by a retrieval-channel stage: {per_channel}. `owner` is the stage after "
+            "which the value is final; retrieval-channel evidence is finalised by `route`."
         )
 
 

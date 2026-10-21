@@ -1,9 +1,9 @@
 """Negative tests for ``tools/check_no_benchmark_discriminators.py`` (audit §6.1).
 
-A gate that only leaves a trace when it fires cannot afterwards be told from a gate that was
+A check that only leaves a trace when it fires cannot afterwards be told from a check that was
 never wired up. Every assertion here makes it fire.
 
-This file is on the gate's ``EXEMPT`` list, because it quotes the phrases it is checking for.
+This file is on the check's ``EXEMPT`` list, because it quotes the phrases it is checking for.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-GATE = ROOT / "tools" / "check_no_benchmark_discriminators.py"
+CHECK = ROOT / "tools" / "check_no_benchmark_discriminators.py"
 
 
 def _probe(tmp_path: Path, name: str, text: str) -> Path:
@@ -21,7 +21,7 @@ def _probe(tmp_path: Path, name: str, text: str) -> Path:
 
     ``--root`` rather than a fixed path under ``corpora/``: a probe in the real tree is shared
     by every process in the working tree, so two pytest runs raced on the same filename, and a
-    crashed run left a planted discriminator behind that failed the gate for everything after.
+    crashed run left a planted discriminator behind that failed the check for everything after.
     """
     corpora = tmp_path / "corpora"
     corpora.mkdir(parents=True, exist_ok=True)
@@ -31,7 +31,7 @@ def _probe(tmp_path: Path, name: str, text: str) -> Path:
 
 def _run(root: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(GATE), "--root", str(root)],
+        [sys.executable, str(CHECK), "--root", str(root)],
         capture_output=True,
         text=True,
         cwd=ROOT,
@@ -41,7 +41,7 @@ def _run(root: Path) -> subprocess.CompletedProcess[str]:
 def test_the_repository_tree_passes() -> None:
     """The check exits 0 on this tree. A skip would look the same as a pass."""
     result = subprocess.run(
-        [sys.executable, str(GATE)],
+        [sys.executable, str(CHECK)],
         capture_output=True,
         text=True,
         cwd=ROOT,
@@ -117,7 +117,7 @@ def test_rule_b_scans_a_misspelled_asset_type(tmp_path: Path) -> None:
 def test_rule_a_fires_on_the_second_producers_lead_phrase(tmp_path: Path) -> None:
     """The table the audit never mentioned.
 
-    ``tools/_revise_miss_summaries.py`` held 26 of these and was found by running this gate,
+    ``tools/_revise_miss_summaries.py`` held 26 of these and was found by running this check,
     not by the ten-dimension audit. Its phrases are worse than the ones §6.1 named: they carry
     negative discriminators, and its ``MISS_SCHEMAS`` set names the schemas the router got
     wrong — so the text is a transcription of which held-out questions were missed.
@@ -137,7 +137,7 @@ def test_rule_a_fires_on_the_second_producers_lead_phrase(tmp_path: Path) -> Non
 def test_rule_b_fires_on_a_newly_invented_shouted_negative(tmp_path: Path) -> None:
     """A phrase in none of the tables, caught by its shape.
 
-    Rule A only catches a repeat. Rule B is what gives the gate any reach beyond the two
+    Rule A only catches a repeat. Rule B is what gives the check any reach beyond the two
     deleted scripts: a summary shouting what its schema is **not** is someone steering a
     router away from a sibling they learned about from an evaluation.
     """
@@ -152,7 +152,7 @@ def test_rule_b_fires_on_a_newly_invented_shouted_negative(tmp_path: Path) -> No
 
 
 def test_rule_b_leaves_ordinary_prose_alone(tmp_path: Path) -> None:
-    """The paired negative. A gate that fires on normal wording gets switched off.
+    """The paired negative. A check that fires on normal wording gets switched off.
 
     Lower-case "does not" is how a real summary says this, and it must pass.
     """
@@ -169,7 +169,7 @@ def test_rule_b_ignores_python_comments(tmp_path: Path) -> None:
     """Rule B is scoped to corpus data, and this tree writes "NOT a bypass" in prose.
 
     Scanning ``.py`` for the shouted form would fire on the codebase's own commentary, and a
-    gate with false positives in its own repository is a gate that gets an exemption list until
+    check with false positives in its own repository is a check that gets an exemption list until
     it means nothing.
     """
     root = _probe(tmp_path, "notes.py", "# This is NOT a bypass; see ADR 0006.\n")

@@ -1,11 +1,11 @@
-"""Nine declared record fields reached ``stamp`` and stopped there.
+"""Nine declared record fields reached ``finish`` and stopped there.
 
-Same defect as ``reflect_verdict`` (see the test beside this one): ``stamp`` projects the field
+Same defect as ``reflect_verdict`` (see the test beside this one): ``finish`` projects the field
 into the turn record, ``eval/harness.project_turn`` builds the measurement row from a fixed key
-list, and the field is not on it — so the arm that would have used the evidence produced an
+list, and the field is not on it — so the config that would have used the evidence produced an
 artifact without it. The nine were ``schema_ranking``, ``facet_hits``, ``lexical_coverage``,
 ``guard``, ``crossings``, ``pulled_in``, ``delivery_hash``, ``tool_delivered`` and
-``latency_sec``; the last means none of the 1351-row arms in ``runs/eval/`` records wall clock
+``latency_sec``; the last means none of the 1351-row configs in ``runs/eval/`` records wall clock
 at all.
 
 **Every test asserts a value the test supplied**, never that the key is present: `None` is
@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 from governed_bi.eval.harness import project_turn
-from governed_bi.register.quantity import Measured
+from governed_bi.registry.quantity import Measured
 
 
 def _record(**over: Any) -> dict[str, Any]:
@@ -43,14 +43,14 @@ def _row(record: dict[str, Any], *, state: dict[str, Any] | None = None) -> dict
     """Project one turn whose record is under test."""
     turn: dict[str, Any] = {
         "answer": {"answer_text": "42", "outcome": "answered", "record": record},
-        "licensed": ["s.t"],
+        "retrieved_tables": ["s.t"],
         "schemas": ["s"],
     }
     turn.update(state or {})
     return project_turn(
         turn,
         question={"question_id": "q1", "db_id": "beer_factory", "question": "how many?"},
-        arm="test",
+        config="test",
     )
 
 
@@ -103,29 +103,29 @@ def test_a_turn_that_never_routed_carries_no_ranking_and_an_empty_one_carries_ze
 # ── facet_hits ───────────────────────────────────────────────────────────────
 
 
-def test_the_row_attributes_a_facets_hits_to_named_assets():
+def test_the_row_attributes_a_channels_hits_to_named_assets():
     """The register's reason for the field is attribution, so the asset ids must survive."""
     hits = [{"asset_id": f"beer_factory.t{i}", "score": 1.0 - i / 100} for i in range(50)]
-    row = _row(_record(facet_hits={"facet_term": {"queries": ["beer"], "hits": hits}}))
-    facet = row["facet_hits"]["facet_term"]
-    assert facet["queries"] == ["beer"]
-    assert facet["top"][0] == "beer_factory.t0"
-    assert facet["top"][9] == "beer_factory.t9"
+    row = _row(_record(facet_hits={"channel_term": {"queries": ["beer"], "hits": hits}}))
+    channel = row["facet_hits"]["channel_term"]
+    assert channel["queries"] == ["beer"]
+    assert channel["top"][0] == "beer_factory.t0"
+    assert channel["top"][9] == "beer_factory.t9"
 
 
 def test_the_hit_count_is_taken_before_the_summary_truncates():
     """`n_hits` says the fan-out returned fifty; `top` is the ten kept. A count of the kept
-    list would report every facet as returning ten and hide a facet that returned two."""
+    list would report every channel as returning ten and hide a channel that returned two."""
     hits = [{"asset_id": f"a{i}"} for i in range(50)]
-    row = _row(_record(facet_hits={"facet_term": {"queries": ["q"], "hits": hits}}))
-    assert row["facet_hits"]["facet_term"]["n_hits"] == 50
-    assert len(row["facet_hits"]["facet_term"]["top"]) == 10
+    row = _row(_record(facet_hits={"channel_term": {"queries": ["q"], "hits": hits}}))
+    assert row["facet_hits"]["channel_term"]["n_hits"] == 50
+    assert len(row["facet_hits"]["channel_term"]["top"]) == 10
 
-    thin = _row(_record(facet_hits={"facet_term": {"queries": ["q"], "hits": hits[:2]}}))
-    assert thin["facet_hits"]["facet_term"]["n_hits"] == 2
+    thin = _row(_record(facet_hits={"channel_term": {"queries": ["q"], "hits": hits[:2]}}))
+    assert thin["facet_hits"]["channel_term"]["n_hits"] == 2
 
 
-def test_a_turn_whose_fan_out_did_not_run_carries_no_facet_hits():
+def test_a_turn_whose_fan_out_did_not_run_carries_no_channel_hits():
     assert _row(_record())["facet_hits"] is None
 
 
@@ -170,7 +170,7 @@ def test_the_row_names_the_schemas_a_turn_crossed():
 
 
 def test_a_cleared_guard_leaves_a_trace_and_a_blocked_one_names_its_rule():
-    """"A gate that leaves a trace only when it fires cannot afterwards be told from one never
+    """"A check that leaves a trace only when it fires cannot afterwards be told from one never
     wired up" — the register's own words, and the reason `clear` is carried."""
     cleared = _row(_record(guard={"outcome": "clear", "rule_id": None, "detail": None}))
     assert cleared["guard"] == {"outcome": "clear", "rule_id": None}
@@ -190,7 +190,7 @@ def test_the_row_carries_the_digest_that_audits_what_reached_the_model():
     digest = "a" * 64
     row = _row(_record(delivery_hash=digest, context_hash="c" * 64))
     assert row["delivery_hash"] == digest
-    assert row["context_hash"] == "c" * 64, "the two are different fields and one gates"
+    assert row["context_hash"] == "c" * 64, "the two are different fields and one checks"
 
 
 def test_an_empty_delivery_map_is_a_loop_that_delivered_nothing_not_a_loop_that_did_not_run():

@@ -2,7 +2,7 @@
 
 Cases live in :mod:`.adversarial`. ``check()`` is the layer stack; ``prepare()``
 can still emit SQL after a refusal, so an attack with ``Prepared.sql`` set is a
-bypass whatever the verdict said. A layer that owns no attacks is unmeasured,
+bypass whatever the result said. A layer that owns no attacks is unmeasured,
 not a perfect score.
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Iterable, Mapping
 
-from ..register.quantity import Measured
+from ..registry.quantity import Measured
 from .adversarial import (
     CASE_FAMILIES,
     AdversarialCase,
@@ -22,8 +22,8 @@ from .adversarial import (
     load_adversarial_suite,
 )
 from .check import check
-from .guard import GuardVerdict, guard
-from .layers import GUARDRAIL_ERROR, CheckVerdict, Layer
+from .guard import GuardResult, guard
+from .layers import GUARDRAIL_ERROR, CheckResult, Layer
 from .pipeline import Prepared, prepare
 from .policy import DEFAULT_DIALECT, GUARD_RULE_IDS, GovernancePolicy
 
@@ -45,7 +45,7 @@ class CaseResult:
     """What one case did, through both entry points."""
 
     case: AdversarialCase
-    verdict: CheckVerdict
+    result: CheckResult
     prepared: Prepared
     #: One of ``caught`` / ``bypassed`` / ``misattributed`` for an attack, ``allowed`` /
     #: ``false_refusal`` for a benign control, or ``guardrail_error`` on either half.
@@ -53,17 +53,17 @@ class CaseResult:
     detail: str
 
     @property
-    def observed(self) -> CheckVerdict:
-        """The verdict the expectation is read from (:attr:`AdversarialCase.enforced_by`)."""
-        return self.prepared.verdict if self.case.enforced_by == "pipeline" else self.verdict
+    def observed(self) -> CheckResult:
+        """The result the expectation is read from (:attr:`AdversarialCase.enforced_by`)."""
+        return self.prepared.result if self.case.enforced_by == "pipeline" else self.result
 
 
-def _classify(case: AdversarialCase, result: CheckVerdict, prepared: Prepared) -> tuple[str, str]:
-    observed = prepared.verdict if case.enforced_by == "pipeline" else result
+def _classify(case: AdversarialCase, result: CheckResult, prepared: Prepared) -> tuple[str, str]:
+    observed = prepared.result if case.enforced_by == "pipeline" else result
     crashed = [
         name
-        for name, verdict in (("check", result), ("prepare", prepared.verdict))
-        if verdict["reason_code"] == GUARDRAIL_ERROR
+        for name, result in (("check", result), ("prepare", prepared.result))
+        if result["reason_code"] == GUARDRAIL_ERROR
     ]
     if crashed:
         return "guardrail_error", f"{'/'.join(crashed)} raised: {observed['detail']}"
@@ -72,16 +72,16 @@ def _classify(case: AdversarialCase, result: CheckVerdict, prepared: Prepared) -
         if observed["passed"] and prepared.sql is not None:
             return "allowed", ""
         if observed["passed"]:
-            return "false_refusal", "the verdict passed and prepare() still produced no string"
+            return "false_refusal", "the result passed and prepare() still produced no string"
         layer = observed["failed_layer"]
         return "false_refusal", f"{layer.name if layer else '?'}/{observed['reason_code']}"
 
-    # An attack that yields an executable string is a bypass whatever the verdict says: the
+    # An attack that yields an executable string is a bypass whatever the result says: the
     # string is the thing the database sees.
     if prepared.sql is not None:
         return "bypassed", "prepare() produced an executable string"
     if observed["passed"]:
-        return "bypassed", f"{case.enforced_by} returned a passing verdict"
+        return "bypassed", f"{case.enforced_by} returned a passing result"
     layer = observed["failed_layer"]
     if layer is not case.expect_layer or observed["reason_code"] != case.expect_rule:
         return "misattributed", (
@@ -92,9 +92,9 @@ def _classify(case: AdversarialCase, result: CheckVerdict, prepared: Prepared) -
 
 
 def _run_case(case: AdversarialCase, fixture: WorldFixture, policy: GovernancePolicy) -> CaseResult:
-    verdict = check(
+    result = check(
         case.sql,
-        licensed=fixture.licensed,
+        retrieved_tables=fixture.retrieved_tables,
         corpus=fixture.corpus,
         default_schema=fixture.default_schema,
         dialect=DEFAULT_DIALECT,
@@ -102,7 +102,7 @@ def _run_case(case: AdversarialCase, fixture: WorldFixture, policy: GovernancePo
     )
     prepared = prepare(
         case.sql,
-        licensed=fixture.licensed,
+        retrieved_tables=fixture.retrieved_tables,
         corpus=fixture.corpus,
         spellings=fixture.spellings,
         ambiguous_folds=fixture.ambiguous,
@@ -111,8 +111,8 @@ def _run_case(case: AdversarialCase, fixture: WorldFixture, policy: GovernancePo
         dialect=DEFAULT_DIALECT,
         policy=policy,
     )
-    status, detail = _classify(case, verdict, prepared)
-    return CaseResult(case=case, verdict=verdict, prepared=prepared, status=status, detail=detail)
+    status, detail = _classify(case, result, prepared)
+    return CaseResult(case=case, result=result, prepared=prepared, status=status, detail=detail)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +160,7 @@ class SuiteReport:
         return out
 
     def failures(self) -> tuple[CaseResult, ...]:
-        """Every result the gate fails on: a bypass, a misattribution, a crash, or a false
+        """Every result the check fails on: a bypass, a misattribution, a crash, or a false
         refusal nobody declared."""
         return tuple(
             r
@@ -189,30 +189,30 @@ class GuardCaseResult:
     """One :class:`~governed_bi.govern.adversarial.GuardCase`, run."""
 
     case: GuardCase
-    verdict: GuardVerdict
+    result: GuardResult
     status: str
     detail: str
 
 
-def _classify_guard(case: GuardCase, verdict: GuardVerdict) -> tuple[str, str]:
+def _classify_guard(case: GuardCase, result: GuardResult) -> tuple[str, str]:
     """The statuses the statement half uses, minus the two that need a statement.
 
     ``bypassed`` keeps its meaning — an attack that reached the model — but there is no
-    ``prepare()`` string to check, so a passing verdict is the whole of it. ``error_failed_open``
+    ``prepare()`` string to check, so a passing result is the whole of it. ``error_failed_open``
     is this half's ``guardrail_error``: :func:`~governed_bi.govern.guard.guard` returns it when
     a predicate raises, and it is a **bypass in effect** (``serve/graph.py::_after_guard``
     routes anything that is not ``blocked`` onward) which is why it is counted apart rather
     than folded into ``caught``.
     """
-    if verdict["outcome"] == "error_failed_open":
-        return "guardrail_error", f"{verdict['rule_id']} raised: {verdict['detail']}"
-    blocked = verdict["outcome"] == "blocked"
+    if result["outcome"] == "error_failed_open":
+        return "guardrail_error", f"{result['rule_id']} raised: {result['detail']}"
+    blocked = result["outcome"] == "blocked"
     if not case.is_attack:
-        return ("false_refusal", str(verdict["rule_id"])) if blocked else ("allowed", "")
+        return ("false_refusal", str(result["rule_id"])) if blocked else ("allowed", "")
     if not blocked:
-        return "bypassed", "guard returned a clear verdict"
-    if verdict["rule_id"] != case.expect_rule:
-        return "misattributed", f"expected {case.expect_rule}, got {verdict['rule_id']}"
+        return "bypassed", "guard returned a clear result"
+    if result["rule_id"] != case.expect_rule:
+        return "misattributed", f"expected {case.expect_rule}, got {result['rule_id']}"
     return "caught", ""
 
 
@@ -272,10 +272,10 @@ def run_guard_suite(
     )
     results = []
     for case in suite.guard_cases:
-        verdict = guard(case.text, resolved)
-        status, detail = _classify_guard(case, verdict)
+        result = guard(case.text, resolved)
+        status, detail = _classify_guard(case, result)
         results.append(
-            GuardCaseResult(case=case, verdict=verdict, status=status, detail=detail)
+            GuardCaseResult(case=case, result=result, status=status, detail=detail)
         )
     return GuardReport(version=suite.version, results=tuple(results))
 

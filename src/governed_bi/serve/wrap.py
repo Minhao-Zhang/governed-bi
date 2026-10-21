@@ -1,14 +1,14 @@
-"""Node exception wrapper — every failure routes through ``stamp`` (ADR 0005 §3.1), and
+"""Node exception wrapper — every failure routes through ``finish`` (ADR 0005 §3.1), and
 every rail reports itself to the live stream (ADR 0010 §1).
 
 One emitter here rather than a ``writer(...)`` call per node: it covers every rail and derives
 its ``step`` from the name the graph registered, so no node can be forgotten. The two things it
 cannot see emit for themselves — the tools, which run inside the nested ``create_agent`` graph
-(``serve/tools.py``), and ``stamp``, which is never wrapped (``graph.py``).
+(``serve/tools.py``), and ``finish``, which is never wrapped (``graph.py``).
 
 Also where the turn's clock starts, so ``turn_started_at`` has one answer rather than one per
 entry point (the graph starts at ``accept`` on the served path, ``guard`` on the CLI and eval
-paths, and a stamp in each would be two clocks that drift).
+paths, and a finish in each would be two clocks that drift).
 """
 
 import asyncio
@@ -55,25 +55,25 @@ def _turn_clock(
        does today; the case exists so that the wrapper's ownership is a default and not a
        seizure.
     2. The update carries ``turn_started_at: None``. That is ``PER_TURN_RESET``, and it means
-       **a turn is starting at this node**. Stamp ``entered_at``.
-    3. Otherwise, stamp only if the channel is empty, i.e. the first node of the first turn.
+       **a turn is starting at this node**. Finish ``entered_at``.
+    3. Otherwise, finish only if the channel is empty, i.e. the first node of the first turn.
 
     **Case 2 is the fix, and it replaces a function that did the opposite.** Until 2026-09-18
-    this was ``_without_cleared_clock``, which *dropped* the null and let an earlier stamp
-    survive. That closed a real defect — the reset used to win over the stamp taken
+    this was ``_without_cleared_clock``, which *dropped* the null and let an earlier finish
+    survive. That closed a real defect — the reset used to win over the finish taken
     microseconds earlier, so a 0.266 s turn recorded 0.010 s — and opened a larger one, because
     the reset was the only thing that ever cleared the channel. With it dropped, case 3 could
-    never fire again after turn one: the incoming state always held turn one's stamp, so
-    the stamp branch returned ``{}`` and the channel kept its first value for the life of the
+    never fire again after turn one: the incoming state always held turn one's finish, so
+    the finish branch returned ``{}`` and the channel kept its first value for the life of the
     thread. Turn *n* reported the whole conversation's wall clock, and
-    ``serve/nodes/stamp.py``'s ``latency_sec`` — which the audit list projects — grew without
-    bound. The two halves each cited the other: this docstring said the stamp must survive the
-    reset, and the stamp helper's said the reset was what stopped turn two inheriting
+    ``serve/nodes/finish.py``'s ``latency_sec`` — which the audit list projects — grew without
+    bound. The two halves each cited the other: this docstring said the finish must survive the
+    reset, and the finish helper's said the reset was what stopped turn two inheriting
     turn one's clock. Both could not be true.
 
     Only served turns were affected either way: ``eval/harness.py`` builds no ``accept`` node,
     so ``PER_TURN_RESET`` reaches its graph through the input channel rather than a node update
-    and never passes through here. No measured arm moves.
+    and never passes through here. No measured config moves.
     """
     if "turn_started_at" in update:
         # Present-and-null and absent are different signals, so membership is tested
@@ -98,8 +98,8 @@ def wrap_node(
     wrapped function declares a ``config`` parameter (LangGraph injects ``RunnableConfig``).
 
     ``stream=False`` suppresses the two stream events. The ``fanout`` passthrough needs it: it
-    is registered under the name ``facet_schema``, so leaving it on emits a phantom row
-    immediately before the real one, which reads as the facet having run twice.
+    is registered under the name ``channel_schema``, so leaving it on emits a phantom row
+    immediately before the real one, which reads as the channel having run twice.
 
     ``timeout`` is enforced here rather than via ``add_node(..., timeout=...)``: measured on
     langgraph 1.2.10, that bound fires outside the node function and its ``error_handler`` runs
@@ -142,7 +142,7 @@ def wrap_node(
         }
 
     def _entered_at() -> float:
-        """When this node began, for :func:`_turn_clock` to use if it decides to stamp.
+        """When this node began, for :func:`_turn_clock` to use if it decides to finish.
 
         Taken unconditionally and before the body, because the decision needs a timestamp
         from *before* the work and cannot be made until the update is in hand.
@@ -227,7 +227,7 @@ def wrap_node(
                 # No resolve event: the node is suspended, not ended, so the row stays
                 # `running`. `ask_user` emits its own pair around the pause.
                 raise
-            except Exception as e:  # noqa: BLE001 — becomes the turn's crashed stamp
+            except Exception as e:  # noqa: BLE001 — becomes the turn's crashed finish
                 _log_crash(stage, state)
                 update = _crashed(e)
             if live:
@@ -245,7 +245,7 @@ def wrap_node(
             update = await _body(state, None)
         except GraphInterrupt:
             raise
-        except Exception as e:  # noqa: BLE001 — becomes the turn's crashed stamp
+        except Exception as e:  # noqa: BLE001 — becomes the turn's crashed finish
             _log_crash(stage, state)
             update = _crashed(e)
         if live:

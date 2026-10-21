@@ -2,7 +2,7 @@
 
 ``/livez`` answers without touching the session, so under bare ``uvicorn`` a missing DSN was a
 500 on the first user request while the liveness probe stayed green (``docs/open-work.md``
-§6.8). The ``record`` node swallows its own failures because nothing after it can stamp them,
+§6.8). The ``record`` node swallows its own failures because nothing after it can finish them,
 which made a lost audit row invisible (§6.1).
 """
 

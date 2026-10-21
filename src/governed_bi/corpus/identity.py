@@ -124,7 +124,7 @@ def slug(physical_name: str) -> str:
 def table_id(schema: str, physical_name: str) -> str:
     """Table id in ``schema`` (ADR 0005 §2.8.2, ADR 0008 D1).
 
-    Single spelling shared by seed, join reconciliation, and licensed lookups.
+    Single spelling shared by seed, join reconciliation, and retrieved_tables lookups.
     """
     return f"{schema}.{slug(physical_name)}"
 

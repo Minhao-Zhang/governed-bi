@@ -1,11 +1,11 @@
 """Acceptance tests for Parcel G — authored against the plan, not the impl.
 
-Effects asserted with hand-built fixtures. Do not re-derive gate logic here.
+Effects asserted with hand-built fixtures. Do not re-derive check logic here.
 
 **Split, 2026-08-19**, at 44 lines under ADR 0005 §6's hard cap of 1,000. What moved is the
 post-hoc half — the ``eval/datalake.py`` functions that measure a *finished* run's population
 (``table_coverage``, ``routing_recall``, ``retrieval_funnel``, ``dataset_qid_lists``) — to
-``test_the_funnel_denominator_never_shrinks_silently.py``. What stayed is "run an arm and grade
+``test_the_funnel_denominator_never_shrinks_silently.py``. What stayed is "run a config and grade
 what it did". The two rules above apply to both halves.
 """
 
@@ -17,19 +17,19 @@ from pathlib import Path
 import pytest
 
 from governed_bi.datasource.sqlite import SqliteConnector
-from governed_bi.eval.arms import oracle_arm, stub_arm
+from governed_bi.eval.configs import oracle_config, stub_config
 from governed_bi.eval.grade import grade_turn, result_fingerprint
-from governed_bi.eval.harness import run_arm, run_comparison
+from governed_bi.eval.harness import run_comparison, run_config
 from governed_bi.eval.oracle import oracle_grade
 from governed_bi.eval.report import (
-    arm_population,
     comparison_quotable,
+    config_population,
     context_hashes_distinct,
     headline_ex,
     paired_ex,
     summarise,
 )
-from governed_bi.measure.gates import Verdict
+from governed_bi.measure.checks import Result
 from governed_bi.measure.stats import mcnemar
 
 
@@ -87,7 +87,7 @@ def test_crash_stays_crashed_not_refused() -> None:
     assert grade["detail"] != refused["detail"]
 
 
-def test_the_oracle_arm_is_unmeasured_without_an_independent_gold(tmp_path: Path) -> None:
+def test_the_oracle_config_is_unmeasured_without_an_independent_gold(tmp_path: Path) -> None:
     """Not 1.000, and not 0.000. There is nothing to claim, so it claims nothing.
 
     The branch this replaces called ``grade_results`` with ``gold_columns=pred[0],
@@ -97,7 +97,7 @@ def test_the_oracle_arm_is_unmeasured_without_an_independent_gold(tmp_path: Path
     so this was the branch every run took. The predecessor of this test asserted
     ``ex.value == 1.0`` and thereby made the construction the contract.
 
-    What it cost: the arm exists to establish that the grader is not the bottleneck, it could
+    What it cost: the config exists to establish that the grader is not the bottleneck, it could
     establish nothing, and it was cited as having established it — while the grader *was* a
     bottleneck, comparing every Postgres ``numeric`` cell as a string.
 
@@ -115,16 +115,16 @@ def test_the_oracle_arm_is_unmeasured_without_an_independent_gold(tmp_path: Path
         "to become measurable"
     )
 
-    rows = run_arm(_questions(), oracle_arm(connector=connector))
-    ex = headline_ex(arm_population(rows, label="oracle"))
-    assert not ex.is_measured, f"an arm with no independent gold reported {ex.value}"
+    rows = run_config(_questions(), oracle_config(connector=connector))
+    ex = headline_ex(config_population(rows, label="oracle"))
+    assert not ex.is_measured, f"a config with no independent gold reported {ex.value}"
     assert "correct" in ex.why
 
 
-def test_the_oracle_arm_measures_against_an_independent_gold(tmp_path: Path) -> None:
+def test_the_oracle_config_measures_against_an_independent_gold(tmp_path: Path) -> None:
     """With a reference fingerprint it is a real measurement, and it can fail.
 
-    This is the arm doing its job: a disagreement here is the grader, the engine or the
+    This is the config doing its job: a disagreement here is the grader, the engine or the
     harness, never the model — there is no model on this path.
     """
     from governed_bi.eval.grade import result_fingerprint
@@ -140,12 +140,12 @@ def test_the_oracle_arm_measures_against_an_independent_gold(tmp_path: Path) -> 
     assert matching["grade_detail"] == "match"
 
     wrong = oracle_grade({**question, "gold_fingerprint": "0" * 64}, connector)
-    assert wrong["correct"] is False, "the arm must be able to fail, or it is not a baseline"
+    assert wrong["correct"] is False, "the config must be able to fail, or it is not a baseline"
     assert wrong["grade_detail"] == "result_mismatch"
 
 
-def test_one_unexecutable_gold_statement_does_not_end_the_oracle_arm(tmp_path: Path) -> None:
-    """It did. The arm was one list comprehension, so the exception escaped ``run_arm``.
+def test_one_unexecutable_gold_statement_does_not_end_the_oracle_config(tmp_path: Path) -> None:
+    """It did. The config was one list comprehension, so the exception escaped ``run_config``.
 
     Every row already computed went with it — on the 1 351-question dataset that is hours of
     execution discarded by one bad statement, and the symptom is a shorter output file rather
@@ -163,9 +163,9 @@ def test_one_unexecutable_gold_statement_does_not_end_the_oracle_arm(tmp_path: P
         _questions()[1],
     ]
     streamed: list[str] = []
-    rows = run_arm(
+    rows = run_config(
         questions,
-        oracle_arm(connector=connector),
+        oracle_config(connector=connector),
         on_row=lambda _i, r: streamed.append(str(r["question_id"])),
     )
 
@@ -183,38 +183,38 @@ def test_context_hash_is_an_existence_check_not_a_treatment_test() -> None:
 
     Identical hashes on every shared question no longer fail: distinctness measured retrieval
     nondeterminism, not treatment change, and passed at 0.9993 on a seed-only null pair. The
-    treatment judgement moved to ``report.knobs_comparable``, which reads declared knobs.
+    treatment judgement moved to ``report.settings_comparable``, which reads declared settings.
 
-    What this gate still owes a caller is coverage — a shared question where either arm
+    What this check still owes a caller is coverage — a shared question where either config
     assembled no context cannot be compared on that question.
     """
-    a = arm_population(
+    a = config_population(
         [_clean_row(f"q{i}", context_hash=f"a-{i}") for i in range(20)],
-        label="arm_a",
+        label="config_a",
     )
-    b = arm_population(
+    b = config_population(
         [_clean_row(f"q{i}", context_hash=f"b-{i}") for i in range(20)],
-        label="arm_b",
+        label="config_b",
     )
-    same = arm_population(
+    same = config_population(
         [_clean_row(f"q{i}", context_hash=f"a-{i}") for i in range(20)],
-        label="arm_same",
+        label="config_same",
     )
-    assert context_hashes_distinct(a, b).verdict is Verdict.passed
-    assert context_hashes_distinct(a, same).verdict is Verdict.passed
+    assert context_hashes_distinct(a, b).result is Result.passed
+    assert context_hashes_distinct(a, same).result is Result.passed
 
-    thin = arm_population(
+    thin = config_population(
         [_clean_row(f"q{i}", context_hash=None) for i in range(20)],
-        label="arm_thin",
+        label="config_thin",
     )
-    assert context_hashes_distinct(a, thin).verdict is Verdict.cannot_evaluate
+    assert context_hashes_distinct(a, thin).result is Result.cannot_evaluate
 
 
 def test_mcnemar_uses_same_population_as_headline() -> None:
     rows_a = [_clean_row(f"q{i}", correct=(i % 2 == 0)) for i in range(10)]
     rows_b = [_clean_row(f"q{i}", correct=True) for i in range(10)]
-    a = arm_population(rows_a, label="a")
-    b = arm_population(rows_b, label="b")
+    a = config_population(rows_a, label="a")
+    b = config_population(rows_b, label="b")
     shared = a.units & b.units
     a_s = a.restrict(lambda r: str(r["question_id"]) in shared, "shared questions")
     b_s = b.restrict(lambda r: str(r["question_id"]) in shared, "shared questions")
@@ -230,19 +230,19 @@ def test_mcnemar_uses_same_population_as_headline() -> None:
 
 
 def test_quotable_false_when_crash_rate_positive() -> None:
-    a = arm_population(
+    a = config_population(
         [_clean_row(f"q{i}", context_hash=f"a{i}") for i in range(10)], label="clean"
     )
-    b = arm_population(
+    b = config_population(
         [
             _clean_row("q0", correct=False, crashed=True, outcome="crashed", context_hash="b0"),
             *[_clean_row(f"q{i}", context_hash=f"b{i}") for i in range(1, 10)],
         ],
         label="crashy",
     )
-    ok, _results_a, results_b, _ctx, _knobs = comparison_quotable(a, b)
+    ok, _results_a, results_b, _ctx, _settings = comparison_quotable(a, b)
     assert not ok
-    assert any(r.field == "outcome" and r.verdict is Verdict.failed for r in results_b)
+    assert any(r.field == "outcome" and r.result is Result.failed for r in results_b)
 
 
 def test_eval_imports_one_mcnemar() -> None:
@@ -252,13 +252,13 @@ def test_eval_imports_one_mcnemar() -> None:
     assert report_mod.mcnemar is stats_mod.mcnemar
 
 
-def test_stub_arm_invokes_serve(tmp_path: Path) -> None:
+def test_stub_config_invokes_serve(tmp_path: Path) -> None:
     _, connector = _fixture_db(tmp_path)
-    rows = run_arm(_questions()[:1], stub_arm(connector=connector))
+    rows = run_config(_questions()[:1], stub_config(connector=connector))
     assert len(rows) == 1
-    # `no_sql` is what the stub arm produces: `agent_core._stub` finishes the loop having
+    # `no_sql` is what the stub config produces: `agent_core._stub` finishes the loop having
     # executed nothing, and since 2026-08-18 that is its own outcome rather than `answered`.
-    # The set stays a set because this test's subject is that the arm reached serve at all.
+    # The set stays a set because this test's subject is that the config reached serve at all.
     assert rows[0]["outcome"] in {"answered", "refused", "crashed", "no_sql"}
     assert rows[0]["crashed"] == (rows[0]["outcome"] == "crashed")
     assert "question_id" in rows[0]
@@ -267,16 +267,16 @@ def test_stub_arm_invokes_serve(tmp_path: Path) -> None:
 # ── what a refused row says, and what an abstention would have answered ───────
 
 
-def _governed_arm(connector: SqliteConnector, sql_by_qid: dict[str, str]):
-    """A scripted arm with a real corpus, so ``check()`` runs instead of raising.
+def _governed_config(connector: SqliteConnector, sql_by_qid: dict[str, str]):
+    """A scripted config with a real corpus, so ``check()`` runs instead of raising.
 
-    ``licensed`` is empty on this path — there is no index, so routing licenses nothing — which
+    ``retrieved_tables`` is empty on this path — there is no index, so routing licenses nothing — which
     makes every statement naming a table refuse at ``Layer.TABLES``. That is the population the
     two tests below need: a turn that abstained while holding a statement.
     """
     from governed_bi.corpus.analyst import for_analyst
     from governed_bi.corpus.schema import ColumnAsset, TableAsset
-    from governed_bi.eval.arms import scripted_arm
+    from governed_bi.eval.configs import scripted_config
 
     assets = [
         TableAsset(
@@ -288,7 +288,7 @@ def _governed_arm(connector: SqliteConnector, sql_by_qid: dict[str, str]):
             physical_name="id", summary="id", physical_type="INTEGER",
         ),
     ]
-    return scripted_arm(
+    return scripted_config(
         gold_sql_by_qid=sql_by_qid,
         connector=connector,
         assets_by_id={a.id: a for a in assets},
@@ -299,28 +299,28 @@ def _governed_arm(connector: SqliteConnector, sql_by_qid: dict[str, str]):
 def test_a_measured_row_says_which_layer_refused_each_attempt(tmp_path: Path) -> None:
     """``refused`` names *that* governance declined; ``attempts`` names which layer.
 
-    ``CheckVerdict`` has carried ``failed_layer`` and ``reason_code`` all along and they stopped
+    ``CheckResult`` has carried ``failed_layer`` and ``reason_code`` all along and they stopped
     at the turn record. Reading the 2026-08-09 run therefore meant replaying every refused
-    statement through ``check()`` offline to learn that 18 of 21 were ``r_table_not_licensed`` —
+    statement through ``check()`` offline to learn that 18 of 21 were ``r_table_not_retrieved`` —
     a *retrieval* failure the analysis had until then attributed to a guardrail false-positive.
     Those two findings ask for opposite work.
 
-    Three questions producing three different verdicts, asserted as the whole list. A trace that
+    Three questions producing three different results, asserted as the whole list. A trace that
     is empty, or constant, cannot separate them — and "empty" is what the field silently
     degrades to, because every reader of it treats no attempts as a turn that attempted nothing.
     """
     _, connector = _fixture_db(tmp_path)
     questions = [
-        {"question_id": "unlicensed", "question": "how many customers", "db_id": "main"},
+        {"question_id": "not_retrieved", "question": "how many customers", "db_id": "main"},
         {"question_id": "no_table", "question": "the answer", "db_id": "main"},
         {"question_id": "not_a_read", "question": "delete them", "db_id": "main"},
     ]
-    rows = run_arm(
+    rows = run_config(
         questions,
-        _governed_arm(
+        _governed_config(
             connector,
             {
-                "unlicensed": "SELECT COUNT(*) AS n FROM customers",
+                "not_retrieved": "SELECT COUNT(*) AS n FROM customers",
                 # Names no table, so the licensing layer has nothing to refuse: this one passes.
                 "no_table": "SELECT 999 AS n",
                 "not_a_read": "DROP TABLE customers",
@@ -329,10 +329,10 @@ def test_a_measured_row_says_which_layer_refused_each_attempt(tmp_path: Path) ->
     )
     trace = {str(r["question_id"]): r["attempts"] for r in rows}
 
-    assert trace["unlicensed"] == [
-        {"layer": "TABLES", "reason_code": "r_table_not_licensed", "passed": False,
+    assert trace["not_retrieved"] == [
+        {"layer": "TABLES", "reason_code": "r_table_not_retrieved", "passed": False,
          "path": "agent"}
-    ], trace["unlicensed"]
+    ], trace["not_retrieved"]
     assert trace["not_a_read"] == [
         {"layer": "NO_WRITE", "reason_code": "r_not_a_read", "passed": False, "path": "agent"}
     ], trace["not_a_read"]
@@ -367,18 +367,18 @@ def test_an_abstained_turn_is_priced_without_being_scored(tmp_path: Path) -> Non
          "gold_sql": gold, "gold_fingerprint": gold_fingerprint}
         for qid in ("refused_right", "refused_wrong", "refused_unrunnable", "answered")
     ]
-    rows = run_arm(
+    rows = run_config(
         questions,
-        _governed_arm(
+        _governed_config(
             connector,
             {
-                # Refused for naming an unlicensed table -- and right anyway.
+                # Refused for naming an not_retrieved table -- and right anyway.
                 "refused_right": gold,
                 # Same refusal, wrong answer.
                 "refused_wrong": "SELECT 999 AS n FROM customers",
                 # Refused and would not have run, so there is nothing to price.
                 "refused_unrunnable": "DROP TABLE customers",
-                # Names no table, so it passes: `grade` already holds this one's verdict.
+                # Names no table, so it passes: `grade` already holds this one's result.
                 "answered": "SELECT 999 AS n",
             },
         ),
@@ -407,7 +407,7 @@ def test_an_abstained_turn_is_priced_without_being_scored(tmp_path: Path) -> Non
     assert by_qid["refused_unrunnable"]["computed_correct"] is None
     assert by_qid["answered"]["outcome"] == "answered"
     assert by_qid["answered"]["computed_correct"] is None, (
-        "an answered turn is graded by `grade_turn`; a second verdict beside it invites the "
+        "an answered turn is graded by `grade_turn`; a second result beside it invites the "
         "merge the field exists to prevent"
     )
 
@@ -424,12 +424,12 @@ def test_result_fingerprint_order_insensitive() -> None:
 def test_summarise_pair_runs(tmp_path: Path) -> None:
     _, connector = _fixture_db(tmp_path)
     questions = _questions()
-    arms = run_comparison(
+    configs = run_comparison(
         questions,
-        [oracle_arm(connector=connector), stub_arm(connector=connector)],
+        [oracle_config(connector=connector), stub_config(connector=connector)],
     )
-    summary = summarise(arms, pair=("oracle", "stub"))
-    assert "arms" in summary and "oracle" in summary["arms"]
+    summary = summarise(configs, pair=("oracle", "stub"))
+    assert "configs" in summary and "oracle" in summary["configs"]
     assert summary["comparison"]["pair"] == ("oracle", "stub")
 
 
@@ -439,18 +439,18 @@ def test_a_different_column_alias_is_not_a_wrong_answer() -> None:
     The fingerprint included column names, so ``SELECT COUNT(*) AS paper_count`` graded wrong
     against a gold of ``SELECT COUNT(*)`` with both returning 100 — and the penalty tracked
     how verbose the model was about aliasing rather than whether it was right. Measured on the
-    xhigh arm: 5% of answerable-but-wrong turns were exactly this.  [retired]
+    xhigh config: 5% of answerable-but-wrong turns were exactly this.  [retired]
     """
     from governed_bi.eval.grade import grade_results, result_fingerprint
 
     assert result_fingerprint(["paper_count"], [[100]]) == result_fingerprint(["count"], [[100]])
-    verdict = grade_results(
+    result = grade_results(
         pred_columns=["paper_count"],
         pred_rows=[[100]],
         gold_columns=["count"],
         gold_rows=[[100]],
     )
-    assert verdict["correct"] is True
+    assert result["correct"] is True
 
 
 def test_the_relaxation_stops_at_names() -> None:
@@ -458,7 +458,7 @@ def test_the_relaxation_stops_at_names() -> None:
 
     Over-answering is still wrong: an extra column makes a longer row tuple, which is how
     BIRD catches it. And element order **within** a row still matters — ``(url, 2028)`` and
-    ``(2028, url)`` answer different questions, and this exact pair appeared in the arm.
+    ``(2028, url)`` answer different questions, and this exact pair appeared in the config.
     """
     from governed_bi.eval.grade import result_fingerprint
 
@@ -507,10 +507,10 @@ def test_a_numeric_cell_is_compared_as_a_number() -> None:
         ("ABC", "abc"),
     ]
     for pred, gold in pairs:
-        verdict = grade_results(
+        result = grade_results(
             pred_columns=["c"], pred_rows=[[pred]], gold_columns=["c"], gold_rows=[[gold]]
         )
-        assert verdict["correct"] is True, f"{pred!r} vs {gold!r}: {verdict['detail']}"
+        assert result["correct"] is True, f"{pred!r} vs {gold!r}: {result['detail']}"
 
     # The paired negative: loosening the cell comparison must not make a wrong number pass.
     assert (

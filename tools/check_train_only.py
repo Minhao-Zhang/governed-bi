@@ -5,9 +5,9 @@ content words; few_shots exempt, with stricter provenance); n-gram rate versus
 a train-only control; and V12, a held-out question quoted in summary or body.
 
 ``--control`` is required. A control that is the corpus under test is refused:
-that comparison has ratio 1, so the rate arm cannot fail.
+that comparison has ratio 1, so the rate config cannot fail.
 
-This gate cannot run in CI: it needs a corpus tree, the held-out question file,
+This check cannot run in CI: it needs a corpus tree, the held-out question file,
 and a third corpus certified train-only. The data-free half is
 ``tools/check_no_benchmark_discriminators.py``.
 
@@ -224,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="a corpus certified train-only, measured alongside as the reference rate. "
         "Required, with no default: a control equal to the corpus under test is refused, "
-        "because that ratio is 1 and the rate arm cannot fail. Pass '' to skip.",
+        "because that ratio is 1 and the rate config cannot fail. Pass '' to skip.",
     )
     parser.add_argument("--dataset", type=pathlib.Path, default=DEFAULT_DATASET)
     parser.add_argument(
@@ -241,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"the control and the corpus under test are the same tree ({args.corpus!r}). "
             "A corpus compared against itself has a collision ratio of exactly 1.00x, so the "
-            "rate arm cannot fail and reports ok having measured nothing. This was the "
+            "rate config cannot fail and reports ok having measured nothing. This was the "
             "shipped default.",
             file=sys.stderr,
         )
@@ -296,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if not args.control:
-        print("\nno control arm: the collision rate above is uninterpretable on its own")
+        print("\nno control config: the collision rate above is uninterpretable on its own")
         return 0
 
     control = scan(REPO / args.control, questions)

@@ -1,8 +1,8 @@
-"""The gate over the adversarial governance suite (``govern/adversarial.toml``).
+"""The check over the adversarial governance suite (``govern/adversarial.toml``).
 
 This is the build-failing half of the instrument open-work.md 3.11 asks for. It fails on a
-**bypass** (an attack that reached a passing verdict, or that produced an executable string
-whatever the verdict said), on a **misattribution** (an attack refused by the wrong layer or
+**bypass** (an attack that reached a passing result, or that produced an executable string
+whatever the result said), on a **misattribution** (an attack refused by the wrong layer or
 the wrong rule — refusing for the wrong reason means the rule meant to catch it did not), on a
 **guardrail error** (the checker crashed rather than deciding), and on a false refusal nobody
 declared. It reports the false-refusal rate whether or not it is zero.
@@ -14,7 +14,7 @@ code and the criterion is a diff in a data file.
 **This file has positive controls.** The loader tests below plant a case that must
 fail to load — a suite that accepted a malformed case would report a perfect score
 over fewer cases than it appears to run. Misattribution is measured separately from
-a bypass: a statement refused by the wrong rule is still refused, and a gate that
+a bypass: a statement refused by the wrong rule is still refused, and a check that
 only asks "was it refused" reports a deleted rule as working.
 """
 
@@ -72,7 +72,7 @@ def test_a_suite_with_no_benign_controls_is_refused(report) -> None:
 # ── the numbers ───────────────────────────────────────────────────────────────
 
 
-def test_no_attack_reaches_a_passing_verdict(report) -> None:
+def test_no_attack_reaches_a_passing_result(report) -> None:
     """Bypass rate, denominator: every attack case. This one must be zero and there is no
     tier below it — a governance layer that closes nine of ten bypasses is not 90% of a
     governance layer (ADR 0006's own framing)."""
@@ -105,7 +105,7 @@ def test_no_case_makes_the_checker_crash(report) -> None:
     """Guardrail-error rate, denominator: every case, both halves.
 
     ADR 0006 §1 makes any exception inside ``check()`` a block, and §12 requires it also be
-    *counted*: a systematically broken checker otherwise presents as an arm that refuses
+    *counted*: a systematically broken checker otherwise presents as a config that refuses
     everything, with ``crash_rate == 0`` and every register key present.
     """
     from governed_bi.govern.adversarial_run import format_case_failures
@@ -115,16 +115,16 @@ def test_no_case_makes_the_checker_crash(report) -> None:
 
 
 def test_every_attack_leaves_prepare_with_nothing_to_execute(report) -> None:
-    """``Prepared.sql is None`` for every attack, asserted separately from the verdict.
+    """``Prepared.sql is None`` for every attack, asserted separately from the result.
 
-    A refusal branch that never runs hands back executable SQL while the verdict
-    tests still pass. The verdict is not the artifact; the string is.
+    A refusal branch that never runs hands back executable SQL while the result
+    tests still pass. The result is not the artifact; the string is.
     """
     leaked = [
         r for r in report.of_kind("attack") if r.prepared.sql is not None
     ]
     assert not leaked, "\n".join(
-        f"{r.case.id}: verdict={r.observed['reason_code']} sql={r.prepared.sql!r}" for r in leaked
+        f"{r.case.id}: result={r.observed['reason_code']} sql={r.prepared.sql!r}" for r in leaked
     )
 
 
@@ -184,11 +184,11 @@ def test_every_layer_that_owns_an_attack_catches_all_of_them(report) -> None:
 def test_the_two_confirmed_resolver_defects_refuse(report, case_id: str) -> None:
     """Both were reproduced in open-work.md 3.2a and neither was fixed until this suite.
 
-    Named individually as well as being covered by the bypass gate, because the gate reports
+    Named individually as well as being covered by the bypass check, because the check reports
     "an attack passed" and these two want their own diagnosis: the first is a derived-source
     alias borrowing a base table's spelling map, the second is a self-colliding table failing
     to poison its bare handle. Each ``prepare()`` emitted valid SQL reading a column the
-    verdict never approved.
+    result never approved.
     """
     result = next(r for r in report.results if r.case.id == case_id)
     assert result.prepared.sql is None, result.prepared.sql
@@ -227,8 +227,8 @@ kind = "attack"
 family = "table"
 sql = "SELECT u.b FROM s.u AS u"
 expect_layer = "TABLES"
-expect_rule = "r_table_not_licensed"
-why = "s.u is not licensed."
+expect_rule = "r_table_not_retrieved"
+why = "s.u is not a retrieved table."
 origin = "this docstring"
 
 [[case]]
@@ -236,7 +236,7 @@ id = "benign_one"
 kind = "benign"
 family = "table"
 sql = "SELECT t.a FROM s.t AS t"
-why = "s.t is licensed."
+why = "s.t is a retrieved table."
 origin = "this docstring"
 
 # The prompt-injection half, minimally. Present so the negative tests below isolate the one
@@ -312,7 +312,7 @@ def test_the_probe_suite_loads(tmp_path: Path) -> None:
     "find, replace, expect",
     [
         pytest.param(
-            'why = "s.u is not licensed."\n', "", "why", id="attack_with_no_why"
+            'why = "s.u is not a retrieved table."\n', "", "why", id="attack_with_no_why"
         ),
         pytest.param(
             'origin = "this docstring"\n\n[[case]]\nid = "benign_one"',
@@ -321,13 +321,13 @@ def test_the_probe_suite_loads(tmp_path: Path) -> None:
             id="attack_with_no_origin",
         ),
         pytest.param(
-            'expect_rule = "r_table_not_licensed"\n', "", "expect_layer", id="attack_with_no_rule"
+            'expect_rule = "r_table_not_retrieved"\n', "", "expect_layer", id="attack_with_no_rule"
         ),
         pytest.param(
             'expect_layer = "TABLES"', 'expect_layer = "COLUMNS"', "RULES says", id="layer_typo"
         ),
         pytest.param(
-            'expect_rule = "r_table_not_licensed"',
+            'expect_rule = "r_table_not_retrieved"',
             'expect_rule = "r_table_not_licenced"',
             "not a rule",
             id="rule_typo",
@@ -342,7 +342,7 @@ def test_the_probe_suite_loads(tmp_path: Path) -> None:
             'id = "benign_one"', 'id = "attack_one"', "duplicate case id", id="duplicate_id"
         ),
         pytest.param(
-            'licensed = ["s.t"]', 'licensed = ["s.t", "s.u"]', "licenses every table", id="all_licensed"
+            'licensed = ["s.t"]', 'licensed = ["s.t", "s.u"]', "lists every table", id="all_retrieved_tables"
         ),
         pytest.param(
             'licensed = ["s.t"]', 'licensed = ["s.absent"]', "no [world.tables] entry", id="phantom_licence"
@@ -475,7 +475,7 @@ def test_a_benign_case_may_not_declare_a_refusal(tmp_path: Path) -> None:
     """Declaring a layer for a benign case would make a false refusal look intended, which is
     the one thing the benign half exists to make impossible to hide."""
     broken = VALID.replace(
-        'why = "s.t is licensed."', 'expect_layer = "TABLES"\nwhy = "s.t is licensed."', 1
+        'why = "s.t is a retrieved table."', 'expect_layer = "TABLES"\nwhy = "s.t is a retrieved table."', 1
     )
     with pytest.raises(ValueError, match="must not declare an expected refusal"):
         _load(tmp_path, broken)
@@ -497,7 +497,7 @@ def test_nothing_outside_the_licence_is_disclosed_on_any_surface(probes) -> None
 
     A ``[[case]]`` asks whether a statement was refused. A ``[[probe]]`` asks what a turn was
     shown, and ``inspect_schema`` and ``sample_rows`` build no statement for the layer stack to
-    read, so a suite that measured only SQL would let them hand over an unlicensed table.
+    read, so a suite that measured only SQL would let them hand over an not_retrieved table.
     """
     leaked = [r for r in probes if r.kind == "attack" and r.failed]
     assert not leaked, "\n".join(f"{r.id} [{r.surface}]: {r.detail}" for r in leaked)
