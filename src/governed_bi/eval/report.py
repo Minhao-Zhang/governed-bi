@@ -31,7 +31,7 @@ from governed_bi.measure.gates import (
 )
 from governed_bi.measure.population import Population
 from governed_bi.measure.stats import McNemarResult, mcnemar
-from governed_bi.register.knobs import comparability_keys
+from governed_bi.register.knobs import knob_names
 from governed_bi.register.quantity import Measured
 from governed_bi.register.record import GATE_CONDITIONS as _GATE_TEXT
 from governed_bi.register.stages import REFUSED_BY_TO_STAGE, Outcome
@@ -335,8 +335,8 @@ def knobs_comparable(
     Both halves are necessary and the second one is audit D9's fix.
 
     **Confounders.** Every comparability knob *except* the declared treatment must be recorded
-    on both arms and equal. Until 2026-08-11 nothing checked this: ``comparability_keys()``
-    and ``config_hash_keys()` had no production caller, so a pair differing in ``chat_model``
+    on both arms and equal. Until 2026-08-11 nothing checked this: ``knob_names()``
+    and ``knob_names()` had no production caller, so a pair differing in ``chat_model``
     was published as a delta because each arm was internally homogeneous.
 
     **The treatment itself must have moved.** A comparison whose declared treatment is
@@ -355,16 +355,16 @@ def knobs_comparable(
     the mapping is the arm declining to say. Collapsing them is how the within-arm gate once
     certified a configuration it never saw.
     """
-    keys = comparability_keys()
+    keys = knob_names()
 
     undeclared = sorted(treatment - keys)
     if undeclared:
         return _gate(
             "knobs_resolved",
             Verdict.cannot_evaluate,
-            Measured.unmeasured("treatment names a knob that is not a comparability knob"),
+            Measured.unmeasured("treatment names a setting that is not declared"),
             a,
-            "declared treatment is not in comparability_keys(): " + ", ".join(undeclared),
+            "declared treatment is not in knob_names(): " + ", ".join(undeclared),
         )
 
     values_a = _arm_knob_values(a, keys)

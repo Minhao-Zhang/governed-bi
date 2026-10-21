@@ -138,7 +138,9 @@ def _path_signals(
         reason = inputs.terminal_reason
         if not isinstance(reason, str) or not reason:
             guard = inputs.guard or {}
-            reason = "guard" if guard.get("outcome") == "blocked" else "negative_example"
+            if not isinstance(guard, Mapping):
+                raise AttributeError("guard must be a mapping")
+            reason = "guard"
         return reason, None, None, GUARD_PUBLIC_MESSAGE, False, None
 
     if path_kind == "decline":
@@ -239,12 +241,8 @@ def _extract_factory(
             "knobs_resolved",
             "guard",
             "rewrite",
-            "negative",
             "crossings",
             "licensed",
-            # Copied and never interpreted: `stamp` reading it to adjust `outcome` would be
-            # the control flow `reflect` is defined not to have.
-            "reflect_verdict",
             # Why a decline declined. `outcome: "declined"` is one value for four different
             # engineering problems, so without this "routing found nothing" and "the join
             # graph is disconnected" are the same recorded row.

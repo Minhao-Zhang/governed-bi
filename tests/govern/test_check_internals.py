@@ -106,7 +106,7 @@ def test_a_layer_that_did_not_run_has_no_entry(check, layer) -> None:
         licensed=CUSTOMERS,
         allowed_columns=frozenset({"customers.id"}),
     )
-    assert layer.COST not in verdict["layers_evaluated"]
+    assert "COST" not in layer.__members__
     assert verdict["layers_evaluated"] == [
         layer.PARSE, layer.NO_WRITE, layer.FUNCTIONS, layer.BINDING, layer.COLUMNS, layer.TABLES
     ]

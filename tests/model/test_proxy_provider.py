@@ -127,7 +127,7 @@ def test_the_embedder_satisfies_the_port_and_records_a_provider_qualified_knob(c
     """
     from governed_bi.model import ProxyEmbedder, embedding_knobs
     from governed_bi.ports import Embedder
-    from governed_bi.register.knobs import comparability_keys, config_hash_keys
+    from governed_bi.register.knobs import knob_names
 
     clean_env.setenv("GOVERNED_BI_PROXY_SECRET", "a-secret-name-supplied-by-the-environment")
     clean_env.setattr(
@@ -152,8 +152,8 @@ def test_the_embedder_satisfies_the_port_and_records_a_provider_qualified_knob(c
         # register default while `embedding_model` on the same row said `proxy:`.
         "embedding_provider": "proxy",
     }
-    assert set(knobs) <= comparability_keys()
-    assert set(knobs) <= config_hash_keys()
+    assert set(knobs) <= knob_names()
+    assert set(knobs) <= knob_names()
 
     # The port's blank rule holds here too, and it is `BaseEmbedder` that enforces it -- so it
     # refuses before the proxy's own empty-input substitution can turn a corpus defect into a

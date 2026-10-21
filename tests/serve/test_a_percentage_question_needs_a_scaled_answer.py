@@ -20,7 +20,7 @@ from typing import Any
 from governed_bi.corpus.analyst import for_analyst
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.register.knobs import comparability_keys, knob_default
+from governed_bi.register.knobs import knob_default, knob_names
 from governed_bi.serve.structured_check import percentage_scale_suffix
 from governed_bi.serve.tools import build_tools
 
@@ -86,7 +86,7 @@ def test_the_knob_ships_on_and_is_a_comparability_key() -> None:
     it can change which statement the turn ends on.
     """
     assert knob_default("enable_structured_percentage_check") is True
-    assert "enable_structured_percentage_check" in comparability_keys()
+    assert "enable_structured_percentage_check" in knob_names()
 
 
 # ── wired to the tool, on the executed statement ───────────────────────────────

@@ -41,8 +41,6 @@ class Stage(str, Enum):
     guard = "guard"
     #: Follow-up rewritten into a self-contained question (multi-turn only).
     rewrite = "rewrite"
-    #: Gate over ``NegativeExampleAsset``.
-    negative_gate = "negative_gate"
 
     # ── The five facets, concurrent ──
     # Named individually: "which facet degraded" is a quotability input.
@@ -82,14 +80,9 @@ class Stage(str, Enum):
     cap = "cap"
 
     #: The declared abstention policy (ADR 0013), between ``assemble`` and ``agent_core``.
-    #: It **decides**, unlike ``reflect``, so it appears in the refusal table below — and it
-    #: sits before the agent because deciding after five ``run_query`` attempts is not a
-    #: decision, it is a report on one.
+    #: It decides, and it sits before the agent: deciding after five ``run_query``
+    #: attempts is a report on a turn, not a decision about one.
     abstain = "abstain"
-
-    #: Post-hoc judgement of whether the statement answered the question. An observer:
-    #: it decides nothing, so it appears in no refusal table and ends no turn.
-    reflect = "reflect"
 
     #: Turns the turn into a sentence. Adopts the agent's closing text when present;
     #: generates only when the loop ended without prose.
@@ -203,7 +196,6 @@ ABSTENTION_REASONS: frozenset[str] = frozenset({
 #: :func:`classify_outcome`.
 REFUSED_BY_TO_STAGE: Mapping[str, Stage] = {
     "guard": Stage.guard,
-    "negative_example": Stage.negative_gate,
     "no_schema_matched": Stage.route,
     # `resolve` runs inside the connect parcel and has no stage of its own; its decline is
     # attributed where the closure it refused would have been used.

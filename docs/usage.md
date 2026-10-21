@@ -31,16 +31,33 @@ CI runs `uv sync --frozen --extra bedrock`.
 
 ## Configuration
 
-No knob is settable from a config file. Runtime configuration is, in precedence order:
+Settings are named defaults in [`register/knobs.py`](../src/governed_bi/register/knobs.py).
+A `GOVERNED_BI_*` variable in the process environment overrides one for a run and enters the
+config hash. Settings are not read from `.env`. A `.env` that sets anything other than a secret
+stops startup and names the key.
 
-1. Secrets and the DSN in `.env` or the process environment.
-2. `GOVERNED_BI_*` variables (see below).
-3. Defaults in [`register/knobs.py`](../src/governed_bi/register/knobs.py).
+Secrets — `OPENAI_API_KEY`, `GOVERNED_BI_PG_DSN`, `PG_RENAME_DECOY_DSN`, and `LANGSMITH_*` —
+are read from the environment and then `.env`. They never enter the config hash or the turn
+record. LangSmith reads its own variables. Copy [`.env.example`](../.env.example) and keep only
+those names.
+
+The code defaults, matching the owner's environment on 2026-10-20:
+
+| Setting | Default |
+|---|---|
+| `GOVERNED_BI_CORPUS_DIR` | `../BIRD-corpus`, resolved against the repo root |
+| `GOVERNED_BI_MODEL` | `gpt-6-luna` |
+| `GOVERNED_BI_MODEL_EFFORT` | `xhigh` |
+| `GOVERNED_BI_UTILITY_MODEL` | `gpt-6-luna` |
+| `GOVERNED_BI_UTILITY_MODEL_EFFORT` | `medium` |
+| `GOVERNED_BI_EMBEDDING_MODEL` | `text-embedding-3-large` |
+| `GOVERNED_BI_MODEL_PROVIDER`, `GOVERNED_BI_UTILITY_PROVIDER`, `GOVERNED_BI_EMBEDDING_PROVIDER` | `openai` |
+| `GOVERNED_BI_LLM_MAX_RETRIES` | `3` |
+| `GOVERNED_BI_LLM_TIMEOUT_S` | `300` |
+| `GOVERNED_BI_UTILITY_TIMEOUT_S` | `30` |
 
 `src/` ships two TOMLs of its own (`govern/adversarial.toml`, `register/arms.toml`), but those are
 declared claims the test suite holds the code to, not configuration you edit.
-
-Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 
 ### Environment
 
@@ -55,10 +72,10 @@ Copy [`.env.example`](../.env.example) to `.env` and fill in what you need.
 | `GOVERNED_BI_PROXY_SECRET` | Name of the Secrets Manager secret holding the `proxy` gateway's API key and base URL — the name, never the value. Unset means the proxy provider refuses |
 | `GOVERNED_BI_PROXY_REGION` | AWS region for that secret lookup. Unset falls through to boto3's own resolution chain |
 | `GOVERNED_BI_PROXY_CA_BUNDLE` | Path to a CA bundle for the proxy's TLS chain. Unset disables verification |
-| `GOVERNED_BI_CORPUS_DIR` | Corpus directory (else one dir under `corpora/`, or seed via schema) |
+| `GOVERNED_BI_CORPUS_DIR` | Corpus directory. Default `../BIRD-corpus`, resolved against the repo root |
 | `GOVERNED_BI_SCHEMA` | Optional: seed / pin schema from the live database |
-| `GOVERNED_BI_MODEL` | Main chat model, read by the server and the one-turn CLI both. Unset → `has_live_model: false` on the server, and exit 2 from the CLI unless `--model` or `--no-model` is passed |
-| `GOVERNED_BI_UTILITY_MODEL` | Small model for facet rewrite / scope gate |
+| `GOVERNED_BI_MODEL` | Main chat model. Default `gpt-6-luna`. The CLI still accepts `--model` and `--no-model` |
+| `GOVERNED_BI_UTILITY_MODEL` | Model for facet rewrite and the scope gate. Default `gpt-6-luna` |
 | `GOVERNED_BI_UTILITY_MODEL_EFFORT` | Effort knob for the utility model |
 | `GOVERNED_BI_EMBEDDING_MODEL` | Embedder id |
 | `GOVERNED_BI_LLM_MAX_RETRIES` | Retries |
@@ -82,13 +99,9 @@ that calls this server. `GOVERNED_BI_API_KEY` was a row here until 2026-08-13 an
 nothing — delete it from an old `.env` rather than assuming it still gates something. What its
 absence costs is in [Serve](#serve-langgraph-server).
 
-The provider, the per-surface model ids, the AWS region and the credential names are read in
-exactly one module, [`model/provider.py`](../src/governed_bi/model/provider.py) (`PROVIDER_VAR`,
-`SURFACE_PROVIDER_VARS`, `SURFACE_MODEL_VARS`, `AWS_REGION_VARS`, `_CREDENTIAL_NAMES`). The proxy's own
-three are read in
-[`model/proxy_gateway.py`](../src/governed_bi/model/proxy_gateway.py)
-(`PROXY_SECRET_NAME_VAR`, `PROXY_REGION_VAR`, `PROXY_CA_BUNDLE_VAR`). Check them
-there rather than against this table.
+Entry points call `boot.resolve_settings` once. The names and defaults live in
+[`register/knobs.py`](../src/governed_bi/register/knobs.py). Secrets live in
+[`credentials.py`](../src/governed_bi/credentials.py). Check those rather than this table.
 
 ### Configuration audit (M9, 2026-09)
 

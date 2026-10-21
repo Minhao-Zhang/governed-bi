@@ -146,22 +146,6 @@ def _guard(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     return "ok", {}
 
 
-def _negative(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
-    """``hit`` / ``miss`` / ``ok`` (disabled gate reports ``ok``, not ``miss``)."""
-    negative = update.get("negative")
-    if not isinstance(negative, Mapping):
-        return "ok", {}
-    outcome = negative.get("outcome")
-    if outcome == "hit":
-        matched = negative.get("matched_id")
-        return "hit", ({"asset_id": str(matched)} if matched else {})
-    if outcome == "miss":
-        return "miss", {}
-    if outcome == "error_failed_open":
-        return "error", {"gate": "error_failed_open"}
-    return "ok", {"gate": str(outcome or "unknown")}
-
-
 def _rewrite(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     rewrite = update.get("rewrite")
     if not isinstance(rewrite, Mapping):
@@ -263,7 +247,6 @@ def _narrate(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
 _DETAIL_BY_STAGE: dict[str, Any] = {
     "accept": _accept,
     "guard": _guard,
-    "negative_gate": _negative,
     "rewrite": _rewrite,
     "facet_schema": _facet,
     "facet_term": _facet,

@@ -104,7 +104,7 @@ def test_no_prompt_is_resolved_at_import_time() -> None:
     )
 
 
-@pytest.mark.parametrize("name", ["analyst", "bi_scope", "narrate", "reflect"])
+@pytest.mark.parametrize("name", ["analyst", "bi_scope", "narrate"])
 def test_every_registered_prompt_the_engine_sends_is_reachable_by_name(name: str) -> None:
     """The registry is what ``prompt_set_hash`` digests; a prompt sent from outside it is a
     treatment the hash does not cover."""

@@ -44,7 +44,6 @@ config hash. That argument does not weaken for the utility model or the embedder
 
 from __future__ import annotations
 
-import os
 from typing import Any, Callable, Literal, Mapping
 
 __all__ = [
@@ -121,22 +120,21 @@ def provider_for(surface: Surface, *, override: str | None = None) -> str:
     """
     if override:
         return str(override).strip().lower()
-    var = SURFACE_PROVIDER_VARS.get(surface)
-    for name in (var, PROVIDER_VAR):
-        if not name:
-            continue
-        value = (os.environ.get(name) or "").strip()
-        if value:
-            return value.lower()
-    return DEFAULT_PROVIDER
+    from governed_bi.register.knobs import effective_settings
+
+    settings = effective_settings()
+    knob = {"agent": "llm_provider", "utility": "llm_utility_provider", "embedding": "embedding_provider"}[
+        surface
+    ]
+    value = str(settings.get(knob) or "").strip()
+    return value.lower() if value else DEFAULT_PROVIDER
 
 
 def aws_region() -> str | None:
-    for name in AWS_REGION_VARS:
-        value = (os.environ.get(name) or "").strip()
-        if value:
-            return value
-    return None
+    from governed_bi.register.knobs import effective_settings
+
+    value = str(effective_settings().get("aws_region") or "").strip()
+    return value or None
 
 
 def _openai_kwargs(
@@ -379,7 +377,13 @@ def credentials_present(provider: str) -> bool:
         except ImportError:
             return False
         return botocore.session.get_session().get_credentials() is not None
-    return any(os.environ.get(name) for name in credential_names(provider))
+    if provider == "proxy":
+        from governed_bi.register.knobs import effective_settings
+
+        return bool(str(effective_settings().get("proxy_secret") or "").strip())
+    from governed_bi.credentials import have
+
+    return have(*credential_names(provider))
 
 
 def default_embedding_model(provider: str | None = None) -> str:

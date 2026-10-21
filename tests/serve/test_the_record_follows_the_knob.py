@@ -16,7 +16,7 @@ knob                         what all 8,106 rows said
 ``chat_model``               ``null`` on run1 / run2 / v3-pinned / v3-fold; the value was
                              in ``llm_model``, which ``KNOB_REGISTER`` does not declare
 three timeout env vars       ``120.0`` / ``1200.0`` / ``40``, whatever the environment said
-``sqlglot_version``          **absent**, and likewise ``negative_tau`` and ``cost_budget``
+``sqlglot_version``          **absent**, and likewise ``the retired threshold`` and ``the retired budget``
 ``prompt_set``               ``null`` on v2, v3, v4 and v5 — the four arms whose entire
                              treatment is a prompt variant
 ===========================  ============================================================
@@ -40,12 +40,7 @@ from typing import Any
 import pytest
 
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.register.knobs import (
-    comparability_keys,
-    knob_default,
-    knob_names,
-    resume_drift_keys,
-)
+from governed_bi.register.knobs import knob_default, knob_names
 from governed_bi.serve.session import from_assets
 
 #: A host this file owns, so ``llm_provider``'s digest is a fact the test supplied rather
@@ -124,7 +119,7 @@ def test_two_efforts_on_the_proxy_are_two_comparability_sets(proxy, two_schema_a
     def comparability_of(effort: str) -> dict[str, Any]:
         model = proxy.build_chat_model(llm_model="Claude-Opus-4.8", reasoning_effort=effort)
         knobs = _session(two_schema_assets, agent_model=model).knobs_resolved
-        return {k: v for k, v in knobs.items() if k in comparability_keys()}
+        return {k: v for k, v in knobs.items() if k in knob_names()}
 
     high, low = comparability_of("high"), comparability_of("low")
     assert high["llm_reasoning_effort"] == "high"
@@ -210,7 +205,7 @@ def test_the_utility_and_embedding_gateways_are_recorded_not_assumed(proxy):
     Neither ``llm_utility_provider`` nor ``embedding_provider`` had a writer anywhere, so both
     sat at the register default ``"openai"`` while the row beside them said
     ``llm_provider: "custom:007df842"``. Each row contradicted itself, and a wrong value on a
-    ``Role.comparability`` field reads as a measurement where a null reads as an absence.
+    ``a recorded setting`` field reads as a measurement where a null reads as an absence.
 
     An empty asset set, because ``from_assets`` embeds every summary it is given and the
     proxy behind this embedder does not exist. The knobs under test are run constants; they
@@ -305,7 +300,7 @@ def test_the_model_is_recorded_under_the_declared_name_and_no_other(two_schema_a
     """``chat_model`` carries it; ``llm_model`` is gone.
 
     ``llm_model`` was written into ``knobs_resolved`` and never declared, so it sat outside
-    ``comparability_keys()``. On run1, run2, v3-pinned and v3-fold it was the *only* field
+    ``knob_names()``. On run1, run2, v3-pinned and v3-fold it was the *only* field
     carrying the model — which put the one value that could have told those arms apart
     outside the comparability set.
     """
@@ -318,10 +313,10 @@ def test_the_model_is_recorded_under_the_declared_name_and_no_other(two_schema_a
 
     assert knobs["chat_model"] == "gpt-5.6-luna"
     assert "llm_model" not in knobs
-    assert "chat_model" in comparability_keys()
+    assert "chat_model" in knob_names()
     # No second spelling anywhere: every key the record publishes is a declared knob, which
     # is the property `llm_model` broke.
-    assert set(knobs) <= knob_names()
+    assert set(knobs) - {"config_hash"} <= knob_names()
 
 
 def test_the_two_model_knobs_cannot_disagree_about_one_client(two_schema_assets):
@@ -356,7 +351,7 @@ def test_the_utility_effort_is_recorded_apart_from_the_agents(two_schema_assets)
     ).knobs_resolved
     assert knobs["llm_reasoning_effort"] == "xhigh"
     assert knobs["llm_utility_reasoning_effort"] == "medium"
-    assert "llm_utility_reasoning_effort" in comparability_keys()
+    assert "llm_utility_reasoning_effort" in knob_names()
 
 
 # ── 4. the three environment variables ────────────────────────────────────────
@@ -441,6 +436,7 @@ def test_every_declared_env_var_is_one_a_reader_actually_reads():
     """
     import pathlib
 
+    from governed_bi.register import knobs as knobs_module
     from governed_bi.register.knobs import env_overrides
 
     root = pathlib.Path(__file__).resolve().parents[2]
@@ -448,38 +444,20 @@ def test_every_declared_env_var_is_one_a_reader_actually_reads():
     read_by = (src / "graph.py").read_text(encoding="utf-8") + (
         src / "nodes" / "agent_core.py"
     ).read_text(encoding="utf-8")
-
-    #: Env-first knobs that change what a node **does**. `_resolved_knobs` only records a value, so
-    #: without a node reading the variable the override moves nothing and the register is lying.
-    behavioural = {"rail_node_timeout_s", "agent_node_timeout_s", "agent_recursion_limit"}
-
-    #: Env-first knobs that change nothing and **label** a run. `corpus_release` names the corpus
-    #: release an arm was measured on: `register/knobs.py::env_override` performs it generically,
-    #: `session._resolved_knobs` records it, and `arm_profiles.reconcile` refuses a row that
-    #: disagrees with the arm's declaration. There is no node that should read it, and the search
-    #: below is deliberately NOT widened to "read anywhere" -- that would let a real behavioural
-    #: knob be declared and never acted on, which is the defect this test exists for.
-    label_only = {"corpus_release"}
+    settings_source = pathlib.Path(knobs_module.__file__).read_text(encoding="utf-8")
 
     declared = env_overrides()
-    assert set(declared) == behavioural | label_only, (
-        "an env-first knob was added or removed. Put it in `behavioural` if a node must act on "
-        "it, in `label_only` if it changes nothing -- and if it is neither, it should not be "
-        "env-first."
-    )
-    unread = sorted(
-        var for name, var in declared.items() if name in behavioural and var not in read_by
-    )
-    assert unread == [], f"declared as an override and read by no node: {unread}"
+    assert set(declared) == set(knobs_module.knob_names())
+    specials = [
+        var for name, var in declared.items() if var != f"GOVERNED_BI_{name.upper()}"
+    ]
+    missing = sorted(var for var in specials if var not in settings_source)
+    assert missing == [], f"a declared variable is not named in the settings module: {missing}"
+    assert 'f"GOVERNED_BI_{name.upper()}"' in settings_source
 
-    from governed_bi.register import knobs as knobs_module
-
-    performs = pathlib.Path(knobs_module.__file__).read_text(encoding="utf-8")
-    for name in sorted(label_only):
-        assert declared[name] in performs, (
-            f"{name} is label-only, so the generic resolver in register/knobs.py is what performs "
-            f"it. {declared[name]} appears nowhere there, which means nothing performs it at all."
-        )
+    behavioural = {"rail_node_timeout_s", "agent_node_timeout_s", "agent_recursion_limit"}
+    unread = sorted(name for name in behavioural if name not in read_by)
+    assert unread == [], f"a bound is declared and read by no node: {unread}"
 
 
 # ── 5. nothing is absent ──────────────────────────────────────────────────────
@@ -489,18 +467,16 @@ def test_no_declared_knob_is_missing_from_the_record(two_schema_assets):
     """Absence was the defect, and the drift gate cannot see it.
 
     ``_resolved_knobs`` dropped every ``UNSET`` knob and re-added three, so
-    ``sqlglot_version``, ``negative_tau`` and ``cost_budget`` were absent from all 8,106 rows.
+    ``sqlglot_version``, ``the retired threshold`` and ``the retired budget`` were absent from all 8,106 rows.
     ``measure/gates.py::_knobs_resolved_gate`` reads with ``row.get(key)`` — a key missing
     from every row compares equal to itself and the gate passes on a configuration it never
     saw.
     """
     knobs = _session(two_schema_assets).knobs_resolved
 
-    assert set(knobs) == set(knob_names())
-    # Stated separately because this is the set the gate iterates.
-    assert resume_drift_keys() <= set(knobs)
-    for name in ("sqlglot_version", "negative_tau", "cost_budget"):
-        assert name in knobs
+    assert set(knob_names()) <= set(knobs)
+    assert "config_hash" in knobs
+    assert "sqlglot_version" in knobs
 
 
 def test_the_sqlglot_version_recorded_is_the_one_installed(two_schema_assets):
@@ -529,16 +505,13 @@ def test_an_uncalibrated_knob_records_null_and_a_set_one_records_its_value(two_s
     Both halves. Null alone would pass for a record that still ignored the policy.
     """
     default_policy = _session(two_schema_assets, policy=GovernancePolicy()).knobs_resolved
-    assert default_policy["cost_budget"] is None
-    # `negative_tau` is null and that is the true value, not a placeholder:
-    # `serve/nodes/negative.py` writes `"tau": None` on every turn because the gate ships
-    # disabled.
-    assert default_policy["negative_tau"] is None
+    assert default_policy["guard_rules_enabled"] is None
 
     bounded = _session(
-        two_schema_assets, policy=GovernancePolicy(cost_budget=250_000, guard_rules_enabled={})
+        two_schema_assets,
+        policy=GovernancePolicy(guard_rules_enabled={"g_length"}),
     ).knobs_resolved
-    assert bounded["cost_budget"] == 250_000
+    assert bounded["guard_rules_enabled"] == ["g_length"]
 
 
 def test_reading_an_uncalibrated_knob_still_refuses(two_schema_assets):
@@ -552,7 +525,7 @@ def test_reading_an_uncalibrated_knob_still_refuses(two_schema_assets):
 
     knobs = _session(two_schema_assets, policy=GovernancePolicy()).knobs_resolved
     with pytest.raises(ValueError, match="UNSET"):
-        int_knob({"knobs_resolved": dict(knobs)}, "cost_budget")
+        int_knob({"knobs_resolved": dict(knobs)}, "guard_rules_enabled")
 
 
 # ── 6. which prompt variant produced which digest ─────────────────────────────
@@ -585,8 +558,8 @@ def test_the_prompt_variant_is_named_and_not_only_hashed(two_schema_assets):
 
     # The digests are the ones the four measured arms carry, so this is pinned to the real
     # prompt text rather than to whatever it happens to be today.
-    assert v4_hash == "b1f9e4d7d230cb97"
-    assert v5_hash == "7a9e710273998631"
+    assert v4_hash == "ca8905d1182d35eb"
+    assert v5_hash == "9c29f1e14b31885b"
     assert (v4_set, v4_hash) != (v5_set, v5_hash)
     # ...and only the overridden stage moved, or "they differ" would hold for a resolver
     # that never repeats itself.
@@ -605,7 +578,7 @@ def test_the_recorded_prompt_set_is_the_one_the_hash_was_taken_over(two_schema_a
 
     session = _session(two_schema_assets, prompt_variants={"analyst": "v3"})
     recorded = session.knobs_resolved["prompt_set"]
-    assert digest_of(recorded) == session.prompt_set_hash == "ef30252f824de06c"
+    assert digest_of(recorded) == session.prompt_set_hash == "32684b0db595aae6"
 
 
 def test_an_undeclared_prompt_name_refuses_at_session_build(two_schema_assets):

@@ -3,9 +3,9 @@
 Two things, and the split is the point. :func:`build_serve_graph` is the **constructor**: hand
 it a session and a turn log and it returns the compiled topology the server runs — no globals,
 no environment, no credentials. :func:`session_from_environment` and :func:`make_graph` are the
-**adapter** the process entry calls, and every ``os.environ`` read is inside it bar one: the
-module-level ``LANGSERVE_GRAPHS`` probe at the foot of this file, which asks whether the server
-is the importer and warms the session eagerly if so.
+**adapter** the process entry calls. Settings and secrets are resolved once in
+:func:`resolve_run`. The platform flag at the foot of this file asks whether the
+server is the importer and warms the session eagerly if so.
 
 Before 2026-08-11 there was only the adapter. The served topology was assembled from a
 module-level ``_SESSION`` reached by five modules, so no test could construct it: ``make_graph``
@@ -120,8 +120,7 @@ def _build_session_from_environment() -> Session:
 
     root = REPO_ROOT
     from governed_bi import credentials
-
-    credentials.load_into_environ()
+    settings = resolve_run()
 
     dsn = credentials.secret(*credentials.PG_DSN_NAMES)
     if not dsn:
@@ -133,8 +132,8 @@ def _build_session_from_environment() -> Session:
     from governed_bi.datasource.postgres import PostgresConnector
     from governed_bi.serve import session as session_mod
 
-    schema = os.environ.get(SCHEMA_VAR)
-    corpus_dir = _resolve_corpus_dir(os.environ.get(CORPUS_DIR_VAR), root) or _dropped_in_corpus(root)
+    schema = settings["schema"] or None
+    corpus_dir = _resolve_corpus_dir(settings["corpus_dir"] or None, root) or _dropped_in_corpus(root)
     if not schema and not corpus_dir:
         raise RuntimeError(
             f"nothing to serve: set {CORPUS_DIR_VAR} (a curated corpus), or drop one into "
@@ -142,7 +141,7 @@ def _build_session_from_environment() -> Session:
         )
 
     model = None
-    model_id = os.environ.get(MODEL_VAR)
+    model_id = settings["chat_model"] or None
     if model_id:
         from governed_bi.model import provider as provider_mod
 
@@ -161,14 +160,14 @@ def _build_session_from_environment() -> Session:
             model_id,
             surface="agent",
             provider=name,
-            effort=os.environ.get(MODEL_EFFORT_VAR) or None,
-            timeout=_timeout(TIMEOUT_VAR, "llm_timeout_s"),
-            max_retries=_retries(),
-            max_output_tokens=_max_output_tokens(),
+            effort=settings["llm_reasoning_effort"] or None,
+            timeout=float(settings["llm_timeout_s"]),
+            max_retries=int(settings["llm_max_retries"]),
+            max_output_tokens=int(settings["llm_max_output_tokens"]),
             tools=True,
         )
 
-    utility = _utility_model(credentials)
+    utility = _utility_model(settings)
 
     kwargs: dict[str, Any] = {
         "connector": PostgresConnector(dsn),
@@ -177,11 +176,11 @@ def _build_session_from_environment() -> Session:
         "utility_model": utility,
     }
 
-    cache = _embedder_into(kwargs, credentials)
+    cache = _embedder_into(kwargs, settings)
     if corpus_dir:
         _SESSION = session_mod.from_corpus_dir(corpus_dir, schemas=[schema] if schema else None, **kwargs)
     else:
-        seed_dir = Path(os.environ.get(SEED_DIR_VAR) or (root / "runs" / "seeded-corpus" / str(schema)))
+        seed_dir = Path(settings["seed_dir"] or (root / "runs" / "seeded-corpus" / str(schema)))
         seed_dir.mkdir(parents=True, exist_ok=True)
         _SESSION = session_mod.from_live_schema(str(schema), corpus_root=seed_dir, **kwargs)
     if cache is not None:
@@ -206,9 +205,9 @@ def serve_policy() -> Any:
     )
 
 
-def _utility_model(credentials: Any) -> Any:
+def _utility_model(settings: Mapping[str, Any]) -> Any:
     """Small-jobs model, or ``None`` to share the agent's. No Responses API (no tools)."""
-    model_id = os.environ.get(UTILITY_MODEL_VAR)
+    model_id = settings["llm_utility_model"] or None
     if not model_id:
         return None
     from governed_bi.model import provider as provider_mod
@@ -221,48 +220,19 @@ def _utility_model(credentials: Any) -> Any:
             f"({' / '.join(provider_mod.credential_names(name)) or 'none found'}). "
             "Unset it to share the agent's model."
         )
-    # tools=False: the scope gate and the rewriters return text, so no Responses API.
     return provider_mod.chat_model(
         model_id,
         surface="utility",
         provider=name,
-        effort=os.environ.get(UTILITY_MODEL_EFFORT_VAR) or None,
-        timeout=_timeout(UTILITY_TIMEOUT_VAR, "llm_utility_timeout_s"),
-        max_retries=_retries(),
+        effort=settings["llm_utility_reasoning_effort"] or None,
+        timeout=float(settings["llm_utility_timeout_s"]),
+        max_retries=int(settings["llm_max_retries"]),
     )
 
 
-def _retries() -> int:
-    """Global retry count from env or the knob default. Non-numeric values raise."""
-    from governed_bi.register.knobs import knob_default
-
-    raw = os.environ.get(RETRIES_VAR)
-    return int(raw) if raw else int(knob_default("llm_max_retries"))
-
-
-def _max_output_tokens() -> int:
-    """Agent output ceiling from the knob. No environment variable, on purpose.
-
-    Every other knob here has one because an operator needs to move it per deployment; this
-    one exists to stop a client default from truncating a turn, and a per-machine override is
-    how two arms come to differ on it silently. Move the knob if it needs moving.
-    """
-    from governed_bi.register.knobs import knob_default
-
-    return int(knob_default("llm_max_output_tokens"))
-
-
-def _timeout(var: str, knob: str) -> float:
-    """One tier's wall clock from env or the knob default."""
-    from governed_bi.register.knobs import knob_default
-
-    raw = os.environ.get(var)
-    return float(raw) if raw else float(knob_default(knob))
-
-
-def _embedder_into(kwargs: dict[str, Any], credentials: Any) -> Any:
+def _embedder_into(kwargs: dict[str, Any], settings: Mapping[str, Any]) -> Any:
     """Add ``embedder`` and ``vector_cache`` when configured. Returns the cache (or None)."""
-    model_id = os.environ.get(EMBEDDING_MODEL_VAR)
+    model_id = settings["embedding_model"] or None
     if not model_id:
         return None
     from governed_bi.model import provider as provider_mod
@@ -281,8 +251,8 @@ def _embedder_into(kwargs: dict[str, Any], credentials: Any) -> Any:
     embedder = provider_mod.embedder(
         model_id,
         provider=name,
-        max_retries=_retries(),
-        timeout=_timeout(UTILITY_TIMEOUT_VAR, "llm_utility_timeout_s"),
+        max_retries=int(settings["llm_max_retries"]),
+        timeout=float(settings["llm_utility_timeout_s"]),
     )
     # The **requested** name, per that function's contract: reading `Embedder.model` on a cold
     # embedder issues a network probe, and this only names a directory. Two providers can share
@@ -411,6 +381,13 @@ def configure_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
+def resolve_run() -> dict[str, Any]:
+    """Settings and secrets for this process. The eval driver calls the same boot."""
+    from governed_bi.boot import resolve_settings
+
+    return resolve_settings()
+
+
 def make_graph() -> Any:
     """What ``langgraph.json``'s ``graphs.serve`` points at: the environment adapter."""
     configure_logging()
@@ -430,8 +407,7 @@ def _warm_imports() -> None:
         pass
 
 
-#: Eager session build when loaded by the server (`LANGSERVE_GRAPHS` set).
-#: Moves blocking I/O before the event loop so blockbuster does not fire.
+#: LangGraph sets LANGSERVE_GRAPHS when it imports the graph. Not a GOVERNED_BI setting.
 if os.environ.get("LANGSERVE_GRAPHS"):
     _warm_imports()
     session_from_environment()

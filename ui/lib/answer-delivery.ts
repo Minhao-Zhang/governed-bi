@@ -87,10 +87,8 @@ const REFUSED_BY_SENTENCE: Record<string, string> = {
   // closure around the matched tables reached further than the engine follows.
   over_resolve_bounds:
     "The tables that matched this question are linked to more of the semantic layer than this engine will pull in at once.",
-  // Stage.guard / Stage.negative_gate — refused before any retrieval.
+  // Stage.guard — refused before any retrieval.
   guard: "The question was stopped by an input check before anything was queried.",
-  negative_example:
-    "This question matches one the corpus marks as one not to answer from this data.",
   // Stage.check — the layer stack refused the statement itself.
   guardrail:
     "A query was written and the safety checks refused it, so it never ran against your data.",

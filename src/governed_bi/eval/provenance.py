@@ -384,7 +384,7 @@ def _knob_problem(
     artifact older than the knob, and refusing on it would strand every artifact on disk. That
     is the branch every artifact on disk hits — five comparability knobs are absent from all
     seven ``proxy_*`` artifacts in ``runs/eval/`` (``abstention_policy_enabled``,
-    ``cost_budget``, ``negative_tau``, ``semantic_scale_ceiling``,
+    ``the retired budget``, ``the retired threshold``, ``semantic_scale_ceiling``,
     ``sqlglot_version``) and recorded by any run that would resume one.
 
     "Absent" and "recorded ``None``" stay apart throughout, which is why membership is tested
@@ -436,7 +436,7 @@ def _as_recorded(value: Any) -> str:
     back from JSON, and bare ``repr`` compared the two representations rather than the two
     configurations. ``asset_budgets`` ships as a ``tuple`` of ``tuple``\\ s and comes back from
     the artifact as a ``list`` of ``list``\\ s, so ``repr`` disagreed with itself on **every
-    resume of every arm that has ever been written** — 1 of the 62 ``resume_drift_keys``, and
+    resume of every arm that has ever been written** — 1 of the 62 ``knob_names``, and
     the one on every row. The refusal that produced said "Two treatments in one artifact is not
     an arm. Rename the artifact and start a new one", over hours of paid model calls, for a
     value that had not changed. It was found by resuming a 3-row smoke; a full arm takes hours

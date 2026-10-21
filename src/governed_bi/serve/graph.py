@@ -23,8 +23,6 @@ from governed_bi.serve.nodes.facets import (
 )
 from governed_bi.serve.nodes.guard import guard_node
 from governed_bi.serve.nodes.narrate import narrate_node
-from governed_bi.serve.nodes.negative import negative_node
-from governed_bi.serve.nodes.reflect import reflect_node
 from governed_bi.serve.nodes.rewrite import rewrite_node
 from governed_bi.serve.nodes.route_retrieve import connect_node, resolve_node, route_node
 from governed_bi.serve.nodes.stamp import stamp
@@ -59,19 +57,10 @@ def _after_guard(state: ServeState) -> Literal["refuse", "rewrite", "stamp"]:
     return "rewrite"
 
 
-def _after_rewrite(state: ServeState) -> Literal["negative_gate", "stamp"]:
-    """Rewrite used to fall through to ``negative_gate`` even after a wrap crash."""
+def _after_rewrite(state: ServeState) -> Literal["fanout", "stamp"]:
+    """A wrap crash skips retrieval. Otherwise the facets run."""
     if state.get("path_kind") == "crashed":
         return "stamp"
-    return "negative_gate"
-
-
-def _after_negative(state: ServeState) -> Literal["decline", "fanout", "stamp"]:
-    if state.get("path_kind") == "crashed":
-        return "stamp"
-    negative: Mapping[str, Any] = state.get("negative") or {}
-    if negative.get("outcome") == "hit":
-        return "decline"
     return "fanout"
 
 
@@ -117,9 +106,8 @@ def _skip_if_terminal(state: ServeState) -> Literal["stamp", "continue"]:
 #: on a sync node: cancelling the ``await`` around ``asyncio.to_thread`` leaves the thread
 #: running, so the bound would be a claim rather than a fact.
 #:
-#: ``narrate`` is excluded on purpose (same reason as ``reflect``): a timeout marks the turn
-#: ``crashed``, and by then ``agent_core`` may already have answered. Model failures inside
-#: narrate are swallowed; a wall-clock bound would still rewrite the outcome.
+#: ``narrate`` is excluded: a timeout marks the turn ``crashed``, and by then
+#: ``agent_core`` may already have answered. Model failures inside narrate are swallowed.
 #:
 #: The five facets are excluded by **decision, not constraint**: five concurrent bounds interact
 #: with the shared provider quota in a way nobody has measured, and turning them on is a
@@ -128,31 +116,16 @@ _CANCELLABLE = frozenset({"guard"})
 
 
 def _node_timeout(name: str) -> float | None:
-    """The node's wall clock in seconds, or ``None`` where it would be a false promise.
+    """Wall clock in seconds for a cancellable rail, else ``None``.
 
-    Env-settable through the same names the model timeouts use, because a knob reachable only
-    from code is the defect the register was written to abolish (``tests/conformance`` pins it).
-
-    Plain seconds, not a ``TimeoutPolicy``: the bound is applied by ``wrap_node`` with
-    ``asyncio.wait_for`` and never reaches LangGraph's node-timeout machinery. See
-    ``wrap_node``'s docstring for the measurement that moved it.
-
-    ``agent_core`` is excluded on purpose: its hang-stop lives inside the node so a timeout
-    still projects the streamed ledger (``serve/nodes/agent_core.py``). Putting the bound in
-    ``wrap_node`` would reduce the update to ``{failure, path_kind}`` again.
+    Read from the bound settings, not the environment. ``agent_core`` keeps its own
+    clock so a timeout can still project the ledger.
     """
-    import os
+    from governed_bi.register.knobs import effective_settings
 
-    from governed_bi.register.knobs import knob_default
-
-    if name == "agent_core":
+    if name not in _CANCELLABLE:
         return None
-    if name in _CANCELLABLE:
-        var, knob = "GOVERNED_BI_RAIL_NODE_TIMEOUT_S", "rail_node_timeout_s"
-    else:
-        return None
-    raw = os.environ.get(var)
-    return float(raw) if raw else float(knob_default(knob))
+    return float(effective_settings()["rail_node_timeout_s"])
 
 
 def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
@@ -191,7 +164,6 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
 
     rail("guard", guard_node)
     rail("rewrite", rewrite_node)
-    rail("negative_gate", negative_node)
     for name, fn in _FACET_NODES:
         rail(name, fn)
     rail("route", route_node)
@@ -204,12 +176,6 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     # state with no model call and nothing to hang on.
     graph.add_node("abstain", wrap_node("abstain", abstain_node, stream=False))
     rail("agent_core", agent_core_node)
-    # Not through `rail`. `stream=False`: the node emits its own single row only on the turns
-    # where it judged something, so a default-off turn's event stream is unchanged. No timeout,
-    # deliberately: a timeout marks the turn `crashed` and jumps to `stamp`, which would let an
-    # **observer** fail a turn that had already answered. The model call is bounded by its own
-    # `request_timeout` (`llm_utility_timeout_s`) and any exception is recorded as unmeasured.
-    graph.add_node("reflect", wrap_node("reflect", reflect_node, stream=False))
     # Through `rail` like every other wrapped node, and it gets no timeout because it is absent
     # from `_CANCELLABLE` — which is the single place that decision is written down. Registering
     # it with a bare `add_node` said the same thing twice and made `_CANCELLABLE` a liar: adding
@@ -249,12 +215,7 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
     graph.add_conditional_edges(
         "rewrite",
         _after_rewrite,
-        {"negative_gate": "negative_gate", "stamp": "stamp"},
-    )
-    graph.add_conditional_edges(
-        "negative_gate",
-        _after_negative,
-        {"decline": "decline", "fanout": "fanout", "stamp": "stamp"},
+        {"fanout": "fanout", "stamp": "stamp"},
     )
     for name, _ in _FACET_NODES:
         graph.add_edge("fanout", name)
@@ -285,11 +246,8 @@ def build_graph(*, accept: Any = None, record: Any = None) -> StateGraph:
         _after_abstain,
         {"decline": "decline", "agent_core": "agent_core", "stamp": "stamp"},
     )
-    # Terminals skip narrate: refusal/decline wording is system copy. `reflect` is a plain edge
-    # and not a conditional one, because an edge reading its verdict is exactly the control flow
-    # the observer must not have.
-    graph.add_edge("agent_core", "reflect")
-    graph.add_edge("reflect", "narrate")
+    # Terminals skip narrate: refusal and decline wording is system copy.
+    graph.add_edge("agent_core", "narrate")
     graph.add_edge("narrate", "stamp")
     graph.add_edge("refuse", "stamp")
     graph.add_edge("decline", "stamp")

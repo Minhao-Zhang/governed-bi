@@ -22,7 +22,6 @@ from governed_bi.register.quantity import Measured
 
 __all__ = [
     "RewriteResult",
-    "NegativeVerdict",
     "AbstentionVerdict",
     "FacetResult",
     "SchemaCrossing",
@@ -84,13 +83,6 @@ class RewriteResult(TypedDict):
     outcome: Literal["rewritten", "unchanged", "failed"]
 
 
-class NegativeVerdict(TypedDict):
-    outcome: Literal["hit", "clear", "disabled", "error_failed_open"]
-    tau: float | None
-    top_score: float | None
-    matched_id: str | None
-
-
 class FacetResult(TypedDict):
     """One facet branch's output. ``facet`` is a
     :class:`~governed_bi.register.stages.Stage` value."""
@@ -131,8 +123,8 @@ class AbstentionVerdict(TypedDict):
     """What the declared abstention policy decided, and the evidence behind it (ADR 0013).
 
     Written on **every** turn that reaches the node, including the turns where the policy is
-    off — ``negative``'s argument, one gate over: a gate that leaves a trace only when it fires
-    cannot afterwards be told from one that was never wired up. ``outcome: "disabled"`` is the
+    off. A gate that leaves a trace only when it fires cannot afterwards be told from one
+    that was never wired up. ``outcome: "disabled"`` is the
     knob-off value and it carries no evidence, because gathering evidence for a decision nobody
     took would be a cost with no reader.
 
@@ -562,7 +554,6 @@ class ServeState(TypedDict, total=False):
 
     guard: GuardVerdict
     rewrite: RewriteResult | None
-    negative: NegativeVerdict
     #: The declared abstention policy's verdict (ADR 0013). Written by ``abstain``, read by
     #: ``graph._after_abstain`` for the routing and by ``stamp`` for the record.
     abstention: AbstentionVerdict | None
@@ -624,9 +615,6 @@ class ServeState(TypedDict, total=False):
     result_table: dict[str, Any] | None
     #: Prose answer from ``narrate``. Live only; distinct from system ``answer["text"]``.
     answer_text: str | None
-    #: The post-hoc observer's judgement (``serve/nodes/reflect.py``). Nothing routes on it:
-    #: no conditional edge reads it and ``stamp`` only copies it to the record.
-    reflect_verdict: dict[str, Any] | None
     #: Question embedding. Per-turn (streamed path cannot put it on load-time config).
     query_vector: list[float] | None
     #: Epoch seconds when the turn's first node ran. ``wrap_node`` writes it, ``stamp`` derives
@@ -654,7 +642,6 @@ PER_TURN_RESET: dict[str, Any] = {
     "terminal_reason": None,
     "guard": None,
     "rewrite": None,
-    "negative": None,
     "abstention": None,
     "retrieved": None,
     "delivery": None,
@@ -663,7 +650,6 @@ PER_TURN_RESET: dict[str, Any] = {
     "generated_sql": None,
     "result_table": None,
     "answer_text": None,
-    "reflect_verdict": None,
     "query_vector": None,
     # Cleared per turn, or turn two's `latency_sec` spans everything the user did in between.
     "turn_started_at": None,

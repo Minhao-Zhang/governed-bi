@@ -24,7 +24,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
-from .knobs import comparability_keys
+from .knobs import knob_names
 
 __all__ = [
     "ARMS_FILE",
@@ -167,7 +167,7 @@ def _parse_profiles(data: Mapping[str, Any], *, source: str) -> dict[str, ArmPro
     if not isinstance(arms, Mapping):
         raise ValueError(f"{source}: no [arm.*] tables")
 
-    keys = comparability_keys()
+    keys = knob_names()
     out: dict[str, ArmProfile] = {}
     for name, body in arms.items():
         if not isinstance(body, Mapping):
@@ -193,7 +193,7 @@ def _parse_profiles(data: Mapping[str, Any], *, source: str) -> dict[str, ArmPro
         if unknown:
             raise ValueError(
                 f"{source}: [arm.{name}].treatment names {unknown}, which are not "
-                "Role.comparability knobs in register/knobs.py"
+                "declared settings in register/knobs.py"
             )
         # **Mandatory, and this is the half that outlived the first fix.** `reconcile` was
         # repaired on 2026-08-11 and `v3_fold` — the baseline v4 is measured against — still
@@ -402,7 +402,7 @@ def reconcile(profile: ArmProfile, row: Mapping[str, Any]) -> tuple[str, ...]:
 def recorded_corpus_release(row: Mapping[str, Any]) -> Any:
     """``corpus_release`` as this row records it, or ``None``.
 
-    Read out of the knob mapping, where a ``Role.comparability`` knob lives, and **not** off the
+    Read out of the knob mapping, where a ``a recorded setting`` knob lives, and **not** off the
     top of the row: ``corpus_content_hash`` is a ``RecordField`` and lives at the top, and the
     2026-08-11 defect was reading one from the other's home. Each field is read from its own.
 

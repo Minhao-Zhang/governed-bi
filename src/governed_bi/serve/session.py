@@ -26,7 +26,6 @@ from ..corpus.store import write as write_asset
 from ..model.embedder import embedding_knobs
 from ..model.provider import reasoning_effort_of
 from ..ports import Embedder
-from ..register.knobs import defaults as knob_defaults
 from ..retrieve.index import UnifiedIndex, build_index
 from ..retrieve.structure import (
     CorpusStructure,
@@ -336,46 +335,20 @@ def _model_name(model: Any) -> str:
 
 
 def _resolved_knobs(policy: Any) -> dict[str, Any]:
-    """Every declared knob, resolved. **No key is ever omitted.**
+    """Every declared setting, with ``UNSET`` written as ``None``. No key is omitted.
 
-    Omission was the defect. This dropped every ``UNSET`` knob and re-added exactly three from
-    the policy, so ``sqlglot_version``, ``negative_tau`` and ``cost_budget`` were *absent* —
-    not null — from all 8,106 rows of the six arms in ``runs/eval/``. That is worse than it
-    sounds: ``measure/gates.py::_knobs_resolved_gate`` compares rows with ``row.get(key)``, so
-    a key missing from every row compares equal to itself and the drift gate passes on a
-    configuration it never saw.
-
-    Three resolutions, in order:
-
-    * **``UNSET`` becomes ``None``.** ``UNSET`` is not JSON and "this run had no calibrated
-      value" is a measurement worth writing down. Readers are unaffected: ``int_knob`` and
-      friends fall through a ``None`` to ``knob_default``, which is still ``UNSET`` and still
-      raises rather than substituting a number.
-    * **The policy, then the resolvers.** ``sqlglot_version``'s own note says it is UNSET
-      "so it cannot be silently absent" and it was silently absent on every row;
-      ``govern/functions.py`` has implemented exactly that resolver all along and nothing
-      called it. Canonical function names are release-dependent and the ADR 0006 allowlist is
-      keyed on them, so without it no artifact says which vocabulary the governance layer was
-      enforcing. ``negative_tau`` stays ``None`` and that is the true value: the gate ships
-      disabled and ``serve/nodes/negative.py`` writes ``"tau": None`` on every turn.
-    * **The environment last**, because that is the order the readers use — see
-      :func:`~governed_bi.register.knobs.env_override`.
+    The policy overlays the two settings it owns. ``sqlglot_version`` is resolved from
+    the installed package. The environment is already applied by ``effective_settings``.
     """
     from ..govern.functions import sqlglot_version
-    from ..register.knobs import UNSET, env_override
+    from ..register.knobs import UNSET, effective_settings
 
-    knobs = {k: (None if v is UNSET else v) for k, v in knob_defaults().items()}
-    for name in ("guard_rules_enabled", "permitted_functions", "cost_budget"):
+    knobs = {k: v for k, v in effective_settings().items() if k != "config_hash"}
+    for name in ("guard_rules_enabled", "permitted_functions"):
         value = getattr(policy, name, UNSET)
         if value is not UNSET and value is not None:
-            # `frozenset` and `Mapping` both need a serializable form: the record is written
-            # to JSON and read by a gate, and a set is not JSON.
             knobs[name] = sorted(value) if isinstance(value, (set, frozenset)) else value
     knobs["sqlglot_version"] = sqlglot_version()
-    for name in knobs:
-        override = env_override(name)
-        if override is not None:
-            knobs[name] = override
     return knobs
 
 
@@ -424,7 +397,7 @@ def from_assets(
     if agent_model is not None:
         # The agent model itself, under the name the register declares. `llm_model` used to be
         # written here beside it and is gone: `KNOB_REGISTER` never declared it, so it sat
-        # outside `comparability_keys()` -- and on run1, run2, v3-pinned and v3-fold it was the
+        # outside `knob_names()` -- and on run1, run2, v3-pinned and v3-fold it was the
         # ONLY field carrying the model, which meant the one value that could have told those
         # arms apart was outside the comparability set. One spelling, and it is the declared
         # one.
@@ -433,8 +406,7 @@ def from_assets(
         # "reasoning_effort")` was here and is only OpenAI's, so the proxy arms recorded null
         # while running at `high` -- see `model/provider.py::reasoning_effort_of`.
         effort = reasoning_effort_of(agent_model)
-        if effort:
-            knobs["llm_reasoning_effort"] = str(effort)
+        knobs["llm_reasoning_effort"] = str(effort) if effort else None
         # The gateway, not the model. Read off the client's base URL because that is the one
         # place a proxy differs from the vendor while `model_id` returns the same string for
         # both -- see the knob's own note for what that cost.
@@ -455,11 +427,13 @@ def from_assets(
         # `llm_provider` on the same row said "custom:007df842".
         knobs["llm_utility_provider"] = _provider_of(resolved_utility)
         utility_effort = reasoning_effort_of(resolved_utility)
-        if utility_effort:
-            knobs["llm_utility_reasoning_effort"] = str(utility_effort)
+        knobs["llm_utility_reasoning_effort"] = str(utility_effort) if utility_effort else None
         timeout = getattr(resolved_utility, "request_timeout", None)
         if timeout is not None:
             knobs["llm_utility_timeout_s"] = float(timeout)
+    from ..register.knobs import config_hash
+
+    knobs["config_hash"] = config_hash(knobs)
     return Session(
         index=index,
         structure=structure,

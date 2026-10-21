@@ -224,7 +224,7 @@ def test_statement_timeout_cancels_one_statement_and_keeps_the_connection(dsn) -
 def test_the_statement_timeout_default_is_the_registers_and_not_a_literal() -> None:
     """A second copy of the number is a second thing to forget when it changes.
 
-    ``statement_timeout_ms`` is ``Role.comparability``: the value a run *records* and the
+    ``statement_timeout_ms`` is ``a recorded setting``: the value a run *records* and the
     value it *enforces* have to be one value, or two arms sharing a config hash ran
     different bounds.
     """

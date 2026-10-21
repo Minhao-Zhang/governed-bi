@@ -8,7 +8,6 @@ One store per vector width; keys carry embedder identity via
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from governed_bi.paths import REPO_ROOT
@@ -104,6 +103,10 @@ def vector_cache_from_environment(*, model: str) -> VectorCache:
     directory on Windows. Sanitising here rather than at the call sites keeps the server, the
     CLI and the eval driver pointing at one directory per model.
     """
-    configured = os.environ.get(VECTOR_CACHE_VAR)
-    root = Path(configured) if configured else REPO_ROOT / "runs" / "vectors"
+    from governed_bi.register.knobs import effective_settings
+
+    configured = str(effective_settings()["vector_cache"])
+    root = Path(configured)
+    if not root.is_absolute():
+        root = REPO_ROOT / root
     return VectorCache(uri=root / _directory_name(model))

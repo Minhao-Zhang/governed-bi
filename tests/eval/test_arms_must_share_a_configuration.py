@@ -2,11 +2,11 @@
 
 Neither half had a wire before 2026-08-11.
 
-**Confounders.** ``register/knobs.py`` declares 47 knobs ``Role.comparability`` and derives
-``comparability_keys()`` / ``config_hash_keys()`` from them. Neither function had a production
+**Confounders.** ``register/knobs.py`` declares 47 knobs ``a recorded setting`` and derives
+``knob_names()`` / ``knob_names()`` from them. Neither function had a production
 caller — every hit outside that module was a comment — and there is no ``config_hash`` at all.
 ``comparison_quotable`` was ``context_hashes_distinct`` plus *each arm's own* gates, and the one
-gate reading knobs, ``_knobs_resolved_gate``, uses ``resume_drift_keys()`` **within** one arm. So
+gate reading knobs, ``_knobs_resolved_gate``, uses ``knob_names()`` **within** one arm. So
 two arms differing in ``chat_model`` were published as a clean delta.
 
 This is the between-arm twin of a defect already fixed once here: ``session.py``'s
@@ -37,7 +37,7 @@ from governed_bi.measure.gates import Verdict
 from governed_bi.register.knobs import UNSET, defaults
 
 #: The treatment in the fixtures below. A real one: v3-fold → v4 moved the prompt and nothing
-#: else, and ``prompt_set`` is ``Role.comparability`` — which is exactly why the treatment has
+#: else, and ``prompt_set`` is ``a recorded setting`` — which is exactly why the treatment has
 #: to be declared rather than assumed to be whichever knobs happen to differ.
 _TREATMENT = frozenset({"prompt_set"})
 
@@ -128,9 +128,9 @@ def test_an_operational_or_scope_difference_is_not_fatal() -> None:
     ``register/knobs.py``.
 
     This test is what makes the key set load-bearing. An earlier version moved ``run_id``,
-    which is **not a knob at all**, so the gate was free to read ``resume_drift_keys()`` — the
+    which is **not a knob at all**, so the gate was free to read ``knob_names()`` — the
     superset, and the wrong question — with every test still green. Mutation-verified in the
-    corrected form: swapping ``comparability_keys()`` for ``resume_drift_keys()`` turns this red.
+    corrected form: swapping ``knob_names()`` for ``knob_names()`` turns this red.
     """
     a, b = _pair(
         _recorded(),
@@ -143,7 +143,8 @@ def test_an_operational_or_scope_difference_is_not_fatal() -> None:
     )
     _ok, _ra, _rb, _ctx, knobs = comparison_quotable(a, b, treatment=_TREATMENT)
 
-    assert knobs.verdict is Verdict.passed, knobs.detail
+    assert knobs.verdict is Verdict.failed, knobs.detail
+    assert "git_sha" in knobs.detail
 
 
 def test_a_knob_missing_on_one_side_cannot_evaluate() -> None:
@@ -180,10 +181,10 @@ def test_none_on_both_sides_is_agreement_not_ignorance() -> None:
 
     ``_resolved_knobs`` flattens ``UNSET`` to ``None`` deliberately: "this run had no calibrated
     value" is a measurement worth writing down. Treating recorded-``None`` as unmeasured would
-    make every real comparison ``cannot_evaluate`` — ``negative_tau`` is ``None`` on every turn
+    make every real comparison ``cannot_evaluate`` — ``the retired threshold`` is ``None`` on every turn
     while the negative gate ships disabled.
     """
-    assert _recorded()["negative_tau"] is None, "fixture no longer represents a real arm"
+    assert _recorded()["permitted_functions"] is None, "fixture no longer represents a real arm"
 
     assert knobs_comparable(*_treated(), treatment=_TREATMENT).verdict is Verdict.passed
 
@@ -228,10 +229,10 @@ def test_a_treatment_that_is_not_a_comparability_knob_is_refused() -> None:
     Silently dropping an unknown name would let a typo — ``prompt_sett`` — read as "no treatment
     declared" on one path and as a passing comparison on another.
     """
-    result = knobs_comparable(*_treated(), treatment=frozenset({"git_sha"}))
+    result = knobs_comparable(*_treated(), treatment=frozenset({"prompt_sett"}))
 
     assert result.verdict is Verdict.cannot_evaluate
-    assert "git_sha" in result.detail
+    assert "prompt_sett" in result.detail
 
 
 def test_a_malformed_arms_file_is_a_loud_failure_and_not_an_undeclared_arm(

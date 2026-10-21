@@ -122,9 +122,8 @@ class PendingClarifications:
 def _in_process_client() -> Any:
     """``langgraph_sdk``'s in-process client, or a named refusal -- never a leak."""
     reason: str | None = None
+    # LangGraph sets this while importing the app, before a request can arrive.
     if os.environ.get("__LANGGRAPH_DEFER_LOOPBACK_TRANSPORT") == "true":
-        # `get_client` registers a deferred `app=None` transport on this flag ahead of any import.
-        # It is set only while the server imports this app, when no request can arrive.
         reason = "the server is still importing this application"
     else:
         try:

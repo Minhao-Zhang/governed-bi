@@ -165,8 +165,8 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "the resolved value of every comparability knob. Without it a turn cannot be "
        "joined against the configuration it ran under, and a manifest-only record lets "
        "two runs over different corpora on different splits compare as one",
-       gate="every row in one arm agrees on knobs.resume_drift_keys(); across two arms the "
-            "declared treatment differs and every other knobs.comparability_keys() entry is "
+       gate="every row in one arm agrees on knobs.knob_names(); across two arms the "
+            "declared treatment differs and every other knobs.knob_names() entry is "
             "recorded on both and equal"),
 
     # ── decision ────────────────────────────────────────────────────────────
@@ -237,11 +237,6 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "total record, written every turn including clear. A gate that leaves a trace "
        "only when it fires cannot afterwards be told from one never wired up. The "
        "rule_id is closed-vocabulary; the detail is free text and dropped"),
-    _f("negative", Tier.decision, Absence.not_applicable, Stage.negative_gate,
-       "total record: hit | clear | disabled | error_failed_open. The last must be "
-       "countable, and a nullable hit cannot express it. Null only when guard "
-       "blocked first",
-       gate="no negative_gate error_failed_open"),
     _f("abstention", Tier.decision, Absence.not_applicable, Stage.abstain,
        "what the declared abstention policy decided and the evidence behind it (ADR 0013): "
        "{policy, outcome, reason, rules_evaluated, evidence}, outcome one of answer | withhold "
@@ -323,20 +318,6 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
     # There is one rule for selecting the final statement -- `agent_core._last_executed_sql`
     # reads the ledger, not the tool arguments -- so a field naming a choice between
     # alternatives that do not exist records nothing.
-
-    _f("reflect_verdict", Tier.decision, Absence.not_measured, Stage.reflect,
-       "what the post-hoc observer made of the turn: {verdict, reason, model, "
-       "prompt_sha256, signals}, verdict one of answered / wrong / unsure. **Null means "
-       "reflection did not run** -- knob off, no model wired, no statement produced, or "
-       "the turn ended before the node -- and never 'the turn looked fine'. Absence is "
-       "not_measured for that reason, and a judge that ran and could not decide writes "
-       "verdict: null beside why_unmeasured rather than a label.\n"
-       "**No gate, deliberately:** this is a model's opinion whose agreement with gold "
-       "is unmeasured, and gating on an uncalibrated judge refuses runs for a reason "
-       "nobody can defend. tools/score_reflector.py decides whether it earns one.\n"
-       "Tier is decision, not outcome: `outcome` is the stamped fact of how the turn "
-       "ended, and a guess about whether that fact is right is evidence for attribution "
-       "-- filing them together would make this field the answer key it must never be"),
 
     # ── cost ────────────────────────────────────────────────────────────────
     _f("usage", Tier.cost, Absence.never, Stage.stamp,

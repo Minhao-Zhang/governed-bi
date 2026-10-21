@@ -155,7 +155,7 @@ def test_every_layer_that_owns_an_attack_catches_all_of_them(report) -> None:
 
     Reported per layer rather than pooled, because a pooled 100% over a suite weighted towards
     one cheap layer says nothing about the expensive ones. ``COST`` owns none and its rate is
-    ``not measured`` rather than 1.0 — the layer ships disabled (``cost_budget`` is UNSET), and
+    ``not measured`` rather than 1.0 — the layer ships disabled (``the retired budget`` is UNSET), and
     a rate of 1.0 over an empty denominator is the shape that made v1's unmeasured quantities
     read as clean.
     """

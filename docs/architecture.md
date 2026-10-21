@@ -10,17 +10,17 @@ Wired in [`serve/graph.py`](../src/governed_bi/serve/graph.py). Nodes live under
 [`serve/nodes/`](../src/governed_bi/serve/nodes/).
 
 ```
-[accept] → guard → rewrite → negative_gate
+[accept] → guard → rewrite
   → fanout ─┬─ facet_schema
             ├─ facet_term
             ├─ facet_metric
             ├─ facet_entity
             └─ facet_example
   → route → resolve → connect → assemble → abstain
-  → agent_core → reflect → narrate → stamp → [record] → END
+  → agent_core → narrate → stamp → [record] → END
 
 guard blocked ───────────────────────────────→ refuse  ─┐
-negative hit / route / connect / abstain ────→ decline ─┼─→ stamp
+route / connect / abstain ───────────────────→ decline ─┼─→ stamp
 any node raising (wrap_node) ───────────────────────────┘
 ```
 
@@ -41,13 +41,11 @@ REST chat pair that was the second one is deleted.
 |---|---|
 | `guard` | Five deterministic rules (`govern/guard.py::GUARD_RULES`), then a model-backed BI-scope gate on the utility model. **Enabled per rule id, and `guard_rules_enabled` ships `UNSET`** — the served app (`api/graph_app.py`) turns on all six; the eval driver, the one-turn CLI and `tools/` all pass `{}`, so no guard rule fires on any measured arm. Until 2026-09-18 the served app turned on `g_bi_scope` *and nothing else*, which reads as "the guard is on" and means five of six are off: `g_bi_scope` is not a member of `GUARD_RULES`, and an id absent from the mapping is silently `False`. `GovernancePolicy.__post_init__` now refuses a key that dispatches nothing |
 | `rewrite` | Stub rail today; facet query rewriting lives inside `facet_*` |
-| `negative_gate` | Negative-example decline path. A stub unconditionally: `negative_node` (`serve/nodes/negative.py`) discards its state and returns `outcome: disabled` without reading `negative_tau` or the corpus, so the `decline` branch is unreachable whatever is configured and whatever is curated |
 | `facet_*` | Parallel retrieval channels (each may rewrite its query) |
 | `route` / `resolve` / `connect` | Schema pick, budgets, Steiner join |
 | `assemble` | Render retrieval context block |
 | `abstain` | The declared abstention policy — deterministic predicates over recorded state, no score. `abstention_policy_enabled` ships `False`, so it writes a `disabled` verdict and routes on ([ADR 0013](adr/0013-the-declared-abstention-policy.md)) |
 | `agent_core` | Nested `create_agent` loop (read-only tools) |
-| `reflect` | Post-hoc observer; never routes the turn |
 | `narrate` | Short answer over the result table (must not crash an answered turn) |
 | `stamp` | The turn record: `outcome`, `guardrail_errors`, the ledger, `latency_sec` |
 
@@ -98,18 +96,20 @@ Server entry: [`api/graph_app.py:make_graph`](../src/governed_bi/api/graph_app.p
 | `corpus` | Typed assets, load, validate |
 | `datasource` | Connectors |
 | `eval` | Measurement harness |
-| `govern` | The layer stack (six that run, `COST` declared and off), ledger, tool bounds |
+| `govern` | The layer stack (six layers), ledger, tool bounds |
 | `measure` | Population / stats helpers |
 | `model` | Chat and embedder adapters |
-| `register` | Knobs, prompts, turn records, citations |
+| `register` | Settings, prompts, turn records |
 | `retrieve` | BM25, semantic channel, join planner |
 | `serve` | Rails graph + agent loop |
 
 ## Configuration
 
-Live configuration is environment variables (`GOVERNED_BI_*`, secrets in `.env`)
-plus defaults in [`register/knobs.py`](../src/governed_bi/register/knobs.py).
-See [usage](usage.md).
+Every setting is a named default in
+[`register/knobs.py`](../src/governed_bi/register/knobs.py). A `GOVERNED_BI_*`
+variable in the process environment overrides one for a run and enters the
+config hash. Secrets are read apart, from the environment and then `.env`, and
+never enter that hash. See [usage](usage.md).
 
 ## Logging and health
 

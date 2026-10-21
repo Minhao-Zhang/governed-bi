@@ -29,7 +29,7 @@ from governed_bi.eval.provenance import (
     scope_identity,
     short_digest,
 )
-from governed_bi.register.knobs import Role, knob_names, resume_drift_keys
+from governed_bi.register.knobs import knob_names
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -52,7 +52,7 @@ def _knobs(**over):
 def test_every_key_the_harness_writes_is_a_declared_knob() -> None:
     """Every key the harness writes is a declared knob, asserted at the writer.
 
-    An undeclared key is outside ``comparability_keys()`` and therefore outside every
+    An undeclared key is outside ``knob_names()`` and therefore outside every
     comparison, so writing one would put a configuration into the artifact that no gate can
     see — which is exactly what ``knobs["llm_model"]`` did.
     """
@@ -79,10 +79,12 @@ def test_the_harness_writes_a_value_for_every_resume_drift_key_it_can_answer() -
     diff. A digest therefore implies dirty; dirty does not imply a digest.
     """
     knobs = _knobs()
-    operational = {
-        name for name in resume_drift_keys() if _role(name) is Role.operational
-    }
-    written = operational & set(knobs)
+    written = {
+        "git_sha",
+        "diff_sha256",
+        "working_tree_dirty",
+        "serve_workers",
+    } & set(knobs)
     assert {"git_sha", "diff_sha256", "working_tree_dirty", "serve_workers"} <= written
     assert "build_workers" not in knobs
 
@@ -95,12 +97,6 @@ def test_the_harness_writes_a_value_for_every_resume_drift_key_it_can_answer() -
             "A digest beside working_tree_dirty=False means the two are read from different "
             "states, which is the resume-drift blend this key exists to catch."
         )
-
-
-def _role(name: str):
-    from governed_bi.register.knobs import KNOB_REGISTER
-
-    return next(k.role for k in KNOB_REGISTER if k.name == name)
 
 
 # ── git provenance ───────────────────────────────────────────────────────────

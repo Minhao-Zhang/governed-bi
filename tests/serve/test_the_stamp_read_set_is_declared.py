@@ -136,7 +136,7 @@ def test_every_declared_channel_changes_a_verdict() -> None:
     # ``guard`` needs the pair one step over: on a refuse it is what separates the two fallback
     # reasons, and nothing else in the view can say which.
     refused = OutcomeInputs(path_kind="refuse")
-    assert classify_turn(refused).refused_by == "negative_example"
+    assert classify_turn(refused).refused_by == "guard"
     assert classify_turn(replace(refused, guard={"outcome": "blocked"})).refused_by == "guard"
 
 
@@ -288,7 +288,7 @@ def test_the_seam_normalises_before_it_projects() -> None:
         (
             "a refusal that named no reason and no blocked guard",
             OutcomeInputs(path_kind="refuse"),
-            Outcome.refused, "negative_example", "refused",
+            Outcome.refused, "guard", "refused",
         ),
         (
             "a decline that named no reason",

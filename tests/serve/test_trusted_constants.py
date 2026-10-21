@@ -184,7 +184,7 @@ def test_model_id_prefers_the_provider_id_over_the_langchain_class_label():
 
     The usage row asked ``_llm_type`` first and recorded ``"openai-chat"`` for every OpenAI
     model ever served, while the knob beside it held the real id. One turn reporting two
-    different models, on a ``Role.comparability`` field.
+    different models, on a ``a recorded setting`` field.
     """
     from governed_bi.serve.runtime import model_id
 

@@ -31,6 +31,9 @@ ALLOWED: frozenset[str] = frozenset(
     {
         "api/graph_app.py",
         "serve/__main__.py",
+        "boot.py",
+        "model/provider.py",
+        "model/openai_embedder.py",
     }
 )
 

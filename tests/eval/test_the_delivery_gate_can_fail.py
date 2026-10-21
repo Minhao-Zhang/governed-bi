@@ -173,7 +173,7 @@ def test_the_null_pair_is_still_a_null() -> None:
 # **The four controls above are green against a tree with the entire treatment half of
 # `knobs_comparable` deleted.** Independent review proved it by mutation: on the real null pair every
 # comparability knob check short-circuits at the missing-key branch — those artifacts do not record
-# `cost_budget`, `negative_tau`, `semantic_scale_ceiling` or `sqlglot_version` — so `cannot_evaluate`
+# `the retired budget`, `the retired threshold`, `semantic_scale_ceiling` or `sqlglot_version` — so `cannot_evaluate`
 # is returned for *absence* and the replicate check is never reached. That is the
 # `corpus_content_hash` masking defect of audit D7 repeated one gate over: a verdict that looks like
 # the right answer, arrived at without asking the question.
@@ -199,11 +199,10 @@ def _synthetic(label: str, knobs: dict):
 
 def _every_comparability_knob() -> dict:
     """A complete, well-formed `knobs_resolved`, so nothing short-circuits on absence."""
-    from governed_bi.eval.report import comparability_keys
-    from governed_bi.register.knobs import Unset, knob_default
+    from governed_bi.register.knobs import Unset, knob_default, knob_names
 
     out = {}
-    for key in comparability_keys():
+    for key in knob_names():
         value = knob_default(key)
         out[key] = None if isinstance(value, Unset) else value
     return out

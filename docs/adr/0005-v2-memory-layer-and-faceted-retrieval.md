@@ -2,6 +2,10 @@
 
 - **Status:** Accepted (2026-08-03). `register/`, `corpus/`, `measure/`, `retrieve/`,
   `serve/` and `eval/` are on `main`. The curator is still absent from `src/`.
+  The negative-example rail and the post-hoc reflector were removed on 2026-10-20. Both
+  shipped off, and a node that cannot change an answer was still a place a later change
+  could hide. The negative-example asset type remains so a corpus that carries one still
+  loads; nothing matches it.
 - **Deciders:** project owner + design session (2026-08-02)
 - **Scope:** the memory layer (asset schema, corpus) and the retrieval + serve
   graph. **Execution-time governance — the guardrail layers, the function

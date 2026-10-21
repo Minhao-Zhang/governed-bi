@@ -1,9 +1,8 @@
 """``GovernancePolicy``: the security configuration of one turn.
 
-Mostly a typed view of ADR 0006 knobs (defaults from ``register.knobs``). Defaults are
-read, never restated. ``UNSET`` knobs (``cost_budget``, ``guard_rules_enabled``) are
-carried — ``Unset.__bool__`` raises; use the explicit accessors. ``hard_block_suspect``
-differs between benchmark and production so the config hash can tell them apart.
+Mostly a typed view of the settings in ``register.knobs``. Defaults are read,
+never restated. ``guard_rules_enabled`` stays ``UNSET`` until a caller sets it.
+``Unset.__bool__`` raises; use the explicit accessor.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping
 
-from ..register.knobs import UNSET, Unset, knob_default
+from ..register.knobs import Unset, knob_default
 from .functions import PERMITTED_FUNCTIONS
 
 __all__ = ["GovernancePolicy", "DEFAULT_DIALECT"]
@@ -63,9 +62,6 @@ class GovernancePolicy:
     run_query_attempt_cap: int = field(default_factory=lambda: knob_default("run_query_attempt_cap"))
     max_rows: int = field(default_factory=lambda: knob_default("max_rows"))
     g_length_max_chars: int = field(default_factory=lambda: knob_default("g_length_max_chars"))
-    #: ``UNSET`` ⇒ the cost layer does not run, and says so by being absent from
-    #: ``layers_evaluated`` rather than by passing.
-    cost_budget: int | Unset = field(default_factory=lambda: knob_default("cost_budget"))
     #: ``UNSET`` ⇒ no rule has both of its numbers yet (ADR 0006 OQ3), so
     #: :func:`~governed_bi.govern.guard.guard` refuses to run rather than choosing
     #: between shipping uncalibrated rules and shipping no guard while claiming one.
@@ -106,17 +102,6 @@ class GovernancePolicy:
                 "deterministic rules while reading as though the guard was on."
             )
 
-    def cost_layer_enabled(self) -> bool:
-        """Whether the cost layer has a bound to compare against.
-
-        The gate for the cost layer's only caller: :func:`~governed_bi.govern.check._cost`
-        reads ``cost_budget`` behind this and asserts on it rather than writing ``or 0``.
-        Other readers exist and do not go through here — ``serve/session.py``'s
-        ``_resolved_knobs`` records the knob's value, which is a different question from
-        whether the layer runs.
-        """
-        return not isinstance(self.cost_budget, Unset)
-
     def guard_rule_enabled(self, rule_id: str) -> bool:
         """Whether ``rule_id`` is enabled. Raises while the knob is ``UNSET``."""
         if isinstance(self.guard_rules_enabled, Unset):
@@ -130,23 +115,10 @@ class GovernancePolicy:
 
 
 def _assert_policy_tracks_the_register() -> None:
-    """Import-time guard: the two knobs that must stay uncalibrated still are.
-
-    Asserted as an effect on a constructed policy, not against this module's own
-    constants: the failure being caught is a default that became a number, which
-    would read as an ordinary integer here.
-    """
+    """Import-time: ``guard_rules_enabled`` stays uncalibrated until a caller sets it."""
     policy = GovernancePolicy()
-    if policy.cost_layer_enabled():  # pragma: no cover - import-time guard
-        raise AssertionError(
-            "cost_budget has acquired a default. ADR 0006 §13 ships the cost layer "
-            "disabled rather than guessed, and a guessed bound is a gate whose "
-            "false-refusal rate nobody has measured."
-        )
     if not isinstance(policy.guard_rules_enabled, Unset):  # pragma: no cover
         raise AssertionError("guard_rules_enabled has acquired a default; see OQ3.")
-    if UNSET is not knob_default("cost_budget"):  # pragma: no cover - import-time guard
-        raise AssertionError("register.knobs no longer ships cost_budget as UNSET")
 
 
 _assert_policy_tracks_the_register()

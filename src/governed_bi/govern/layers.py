@@ -29,7 +29,7 @@ __all__ = [
 
 
 class Layer(IntEnum):
-    """The seven layers, in evaluation order. No fractional members, ever."""
+    """The six layers, in evaluation order. No fractional members, ever."""
 
     #: A single read statement that parses under the dialect.
     PARSE = 1
@@ -43,8 +43,6 @@ class Layer(IntEnum):
     COLUMNS = 5
     #: Every base table is in the licensed set.
     TABLES = 6
-    #: Cost / shape estimate. Ships disabled: ``cost_budget`` is UNSET.
-    COST = 7
 
 
 class CheckVerdict(TypedDict):
@@ -121,8 +119,6 @@ RULES: Mapping[str, Layer] = {
     # ── TABLES ──
     #: Retrieval did not license this table **this turn**.
     "r_table_not_licensed": Layer.TABLES,
-    # ── COST ──
-    "r_cost_budget_exceeded": Layer.COST,
 }
 
 

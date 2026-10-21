@@ -154,7 +154,7 @@ def test_the_resolved_knobs_name_the_model_that_answered(probe) -> None:  # noqa
     """`llm_model` becomes a knob here, and it does not exist yet.
 
     `knobs.py` declares `llm_temperature`, `llm_reasoning_effort` and `embedding_model` as
-    `Role.comparability`, and its own docstring condemns model identity going unrecorded —
+    `a recorded setting`, and its own docstring condemns model identity going unrecorded —
     yet the chat model itself is not a knob. So two runs on different models compare as one
     experiment: v1's incident with the variable changed, and that one moved a baseline arm
     **+2.5pp against a 2.3pp detection threshold**.

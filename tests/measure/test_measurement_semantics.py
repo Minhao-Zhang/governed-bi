@@ -382,12 +382,12 @@ def test_a_fully_instrumented_arm_can_actually_be_quotable() -> None:
 def test_one_arm_two_configurations_is_not_one_arm() -> None:
     """The gate that gives ``knobs.Role`` a production consumer (audit §10).
 
-    ``Role`` declared three values and derived ``comparability_keys``,
-    ``resume_drift_keys`` and ``config_hash_keys`` from them — and **none had a reader in**
+    ``Role`` declared three values and derived ``knob_names``,
+    ``knob_names`` and ``knob_names`` from them — and **none had a reader in**
     ``src/``: no config hash existed and no resume-drift check existed, so a knob's declared role
     decided nothing anywhere. A role that decides nothing is a comment.
 
-    ``resume_drift_keys()`` is the role's own definition of "fatal within one run directory",
+    ``knob_names()`` is the role's own definition of "fatal within one run directory",
     and an arm *is* one run directory. So a row that resolved ``route_top_n`` to 3 beside one
     that resolved it to 5 is not one arm, and every rate over the pair is a rate over a
     population that does not exist — L-R3's defect with the filter moved into the configuration.
@@ -395,7 +395,7 @@ def test_one_arm_two_configurations_is_not_one_arm() -> None:
     The failure names the differing knobs rather than only the count, because "2 distinct
     configurations" sends a reader to the code and ``route_top_n`` sends them to the driver.
     """
-    from governed_bi.register.knobs import resume_drift_keys
+    from governed_bi.register.knobs import knob_names
 
     def row(i: int, top_n: int) -> dict:
         return {
@@ -412,7 +412,7 @@ def test_one_arm_two_configurations_is_not_one_arm() -> None:
             "knobs_resolved": {"route_top_n": top_n, "candidate_depth": 50},
         }
 
-    assert "route_top_n" in resume_drift_keys(), (
+    assert "route_top_n" in knob_names(), (
         "the knob this fixture drifts is no longer a resume-drift key, so the test proves nothing"
     )
 

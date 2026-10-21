@@ -7,7 +7,7 @@
 # `treatment` is the load-bearing field. `eval/report.py::knobs_comparable` refuses a pair that
 # cannot name what changed, because "nobody said what changed" is not "nothing changed" — that
 # is audit D9's resolution, and this is where the caller says it. Every name must be a
-# `Role.comparability` knob in `register/knobs.py`; `register/arm_profiles.py` refuses the file
+# `a recorded setting` knob in `register/knobs.py`; `register/arm_profiles.py` refuses the file
 # otherwise rather than silently ignoring a typo.
 #
 # This file does NOT set knobs. It declares what an arm's treatment *was*, so a recorded run can
@@ -173,7 +173,7 @@ question_subset = "1351:423a3f4b65fb"
 # with the arms above is sound, any one of which would be enough.
 #
 # **It is also the first arm that can ever reach `knobs_comparable`.** All seven `proxy_*`
-# artifacts are missing `cost_budget`, `negative_tau`, `semantic_scale_ceiling` and
+# artifacts are missing `the retired budget`, `the retired threshold`, `semantic_scale_ceiling` and
 # `sqlglot_version`, so the gate returns `cannot_evaluate` at the absence branch and never
 # reaches its judgement (open-work §3.13). `session._resolved_knobs` omits no key now. The pair
 # this arm makes possible is with the arm *after* it, not with anything already on disk.

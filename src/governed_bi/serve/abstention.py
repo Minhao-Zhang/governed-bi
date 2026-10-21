@@ -311,10 +311,7 @@ def abstention_evidence(inputs: AbstentionInputs) -> dict[str, Any]:
     the question asked for that the context could not supply** (``question_terms_in_corpus``).
 
     That last one is ``lexical_coverage`` — the share of the question's terms the corpus
-    vocabulary has — and it is **evidence and never a rule**. No threshold reads it. A
-    thresholded refusal gate is precisely what ``negative_tau`` ships ``UNSET`` rather than
-    guess at ("an uncalibrated refusal gate is worse than none"), and putting one here under a
-    different name would be the same uncalibrated gate with a better story.
+    vocabulary has — and it is evidence, never a rule. No threshold reads it.
 
     ``licensed`` is capped: it is evidence, and a 40-table list on every row is an artifact
     cost. The count beside it is not capped, so the cap cannot hide the size.

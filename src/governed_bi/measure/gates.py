@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Callable, Mapping
 
-from ..register.knobs import resume_drift_keys
+from ..register.knobs import knob_names
 from ..register.quantity import Measured
 from ..register.record import GATE_CONDITIONS, RECORD_REGISTER, Absence
 from ..register.stages import Outcome, Stage
@@ -277,7 +277,7 @@ def _corpus_content_hash_gate(arm: Population) -> GateResult:
 
     **And nothing decides it.** ``eval/report.comparison_quotable`` runs two cross-arm gates,
     ``context_hashes_distinct`` (an existence check on ``context_hash``) and
-    ``knobs_comparable`` (over ``comparability_keys()``, which does not contain
+    ``knobs_comparable`` (over ``knob_names()``, which does not contain
     ``corpus_content_hash`` — it is a ``RecordField``, not a knob). So the second consequence
     named above, two arms measured over different corpora both passing, is still live for the
     cross-arm case; only the within-arm case is closed here. What exists instead is
@@ -355,21 +355,12 @@ def _corpus_content_hash_gate(arm: Population) -> GateResult:
 
 
 def _knobs_resolved_gate(arm: Population) -> GateResult:
-    """Every row in one arm ran under the same configuration.
+    """Every row in one arm ran under the same settings.
 
-    ``resume_drift_keys()`` is the set by its own definition — comparability plus operational
-    plus scope, i.e. everything whose change *within one run directory* is fatal, and an arm
-    is one run directory. A row resolving ``route_top_n`` to 3 beside one resolving it to 5
-    is not one arm, so any rate over the pair is a rate over a population that does not exist
-    (L-R3, with the filter moved into the configuration).
-
-    Declared keys only: an undeclared key is caught by ``undeclared_keys``, and failing here
-    too would refuse a run for a reason a reader would look for in the wrong place.
-
-    Absent ``knobs_resolved`` is unmeasured, not passing — ``Absence.never`` already reports
-    it as ``missing_required``, and passing here would be two gates disagreeing about one hole.
+    Absent ``knobs_resolved`` is unmeasured, not passing. A row resolving ``route_top_n``
+    to 3 beside one resolving it to 5 is not one arm.
     """
-    keys = resume_drift_keys()
+    keys = knob_names()
     seen: dict[tuple[tuple[str, str], ...], int] = {}
     absent = 0
     for row in arm.rows:
@@ -433,7 +424,6 @@ GATE_IMPLEMENTATIONS: Mapping[str, GateFn] = {
     "corpus_content_hash": _corpus_content_hash_gate,
     "knobs_resolved": _knobs_resolved_gate,
     "guardrail_errors": _zero_count_gate("guardrail_errors", "guardrail_error"),
-    "negative": _zero_count_gate("negative", "negative_failed_open"),
 }
 
 

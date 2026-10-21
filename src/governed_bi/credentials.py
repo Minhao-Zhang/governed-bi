@@ -1,23 +1,8 @@
-"""One reader for credentials: the entry points, the tools and the tests.
+"""Secrets: the environment, then ``.env``. Settings are not read here.
 
-On 2026-08-03 three copies of "read a secret from the environment or ``.env``" disagreed about
-which sources they read, and parcel I's contract skipped its OpenAI half over a key that was
-present in ``.env`` the whole time. The failure mode of a duplicated credential reader is a
-quiet reduction in what ran, not a crash.
-
-**Entry points only.** A library that reads ``.env`` decides its own configuration behind its
-caller's back, so nothing under ``src/`` may import this except the two processes that *are*
-the caller: ``api/graph_app.py`` and ``serve/__main__.py``. Everything else takes a DSN or a
-client. ``tests/conformance/test_only_entry_points_read_the_environment.py`` holds the list.
-
-This module lived in ``tools/`` to express that rule by geography, and the geography did not
-hold: both entry points imported it anyway, by putting ``tools/`` on ``sys.path`` first. That
-made a module named ``credentials`` importable from anywhere in the process, put an
-unpackaged directory on the runtime path of an installed package, and hid the rule-break
-rather than preventing it. The rule is the same; it is now written down and checked.
-
-:func:`secret` returns the value; :func:`have` answers yes/no without it, so a caller that only
-needs presence cannot interpolate a credential into a skip message.
+A ``.env`` key that is not a secret stops startup and names the key. Values are
+never printed. Entry points call :func:`load_into_environ` once; libraries take a
+DSN or a client.
 """
 
 from __future__ import annotations
@@ -83,20 +68,35 @@ def have(*names: str) -> bool:
     return bool(secret(*names))
 
 
-def load_into_environ() -> int:
-    """Fill **unset** environment variables from ``.env``. Returns how many were filled.
+def is_secret(name: str) -> bool:
+    """``OPENAI_API_KEY``, the DSN names, and ``LANGSMITH_*``. Nothing else."""
+    return name in {*PG_DSN_NAMES, *OPENAI_KEY_NAMES} or name.startswith("LANGSMITH_")
 
-    For process entry points, and the only thing that works for third-party libraries: they read
-    ``os.environ`` directly, so :func:`have` can report a key present and the library still not
-    see it. That happened twice on 2026-08-03.
 
-    Existing environment always wins, so ``OPENAI_API_KEY=... python -m ...`` overrides the file
-    for one run. Nothing is printed — a loader that echoes what it found logs credentials.
+def foreign_dotenv_keys() -> list[str]:
+    """``.env`` keys that are set and are not secrets. Startup names these and stops."""
+    return sorted(key for key, value in _dotenv().items() if value and not is_secret(key))
+
+
+def load_into_environ(*, refuse: bool = True) -> int:
+    """Copy unset secrets from ``.env`` into the environment. Returns how many were copied.
+
+    Existing environment wins. With ``refuse``, a non-secret key raises and names the key.
+    Third-party clients read the process environment, so the secret has to be there, not only in the file.
     """
+    foreign = foreign_dotenv_keys()
+    if refuse and foreign:
+        shown = ", ".join(foreign)
+        raise RuntimeError(
+            f".env sets {shown}, which is not a secret. Settings live in "
+            "register/knobs.py; a GOVERNED_BI_* override belongs in the environment."
+        )
+    filled = 0
     for key, value in _dotenv().items():
-        if value and not os.environ.get(key):
+        if value and is_secret(key) and not os.environ.get(key):
             os.environ[key] = value
-    return sum(1 for k, v in _dotenv().items() if v and os.environ.get(k) == v)
+            filled += 1
+    return filled
 
 
 #: The Postgres DSN's names, in precedence order. Declared once rather than at each call site:

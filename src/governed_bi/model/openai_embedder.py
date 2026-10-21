@@ -25,7 +25,6 @@ once published a schema-pick accuracy that rose sharply when re-measured with qu
 
 from __future__ import annotations
 
-import os
 from typing import Any, Sequence
 
 from governed_bi.ports import Vector
@@ -122,7 +121,9 @@ class OpenAIEmbedder(BaseEmbedder):
 
     def _openai_client(self) -> Any:
         if self._client is None:
-            if not os.environ.get(OPENAI_API_KEY_VAR):
+            from governed_bi.credentials import have
+
+            if not have(OPENAI_API_KEY_VAR):
                 raise RuntimeError(
                     f"{OPENAI_API_KEY_VAR} is not set, so the OpenAI embedder cannot "
                     "run. Use model.DeterministicEmbedder for a model-free path "

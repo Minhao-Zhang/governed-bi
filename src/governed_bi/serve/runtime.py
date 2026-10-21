@@ -45,7 +45,7 @@ class ChannelScale:
     ``w_lexical``, ``w_semantic`` and ``semantic_scale_ceiling`` were module constants built from
     ``knob_default`` when ``serve.runtime`` was first imported, so no request could move them
     (audit I10). That is worse than a missing feature: all three are declared
-    ``Role.comparability``, they enter ``config_hash_keys()`` and ``knobs_resolved``, so a run
+    ``a recorded setting``, they enter ``knob_names()`` and ``knobs_resolved``, so a run
     could publish ``w_semantic: 0.9``, move its config hash, and behave exactly like the default —
     which is the inverse of the defect ``register/knobs.py`` opens by describing.
 
@@ -246,7 +246,7 @@ def model_id(model: Any) -> str | None:
     ``model_id`` is in the tuple because ``ChatBedrockConverse`` spells it that way and spells
     none of the others, so every Bedrock turn fell through to ``_model_name``'s ``_llm_type``
     branch and recorded the **class** name ``amazon_bedrock_converse_chat`` as its model. That
-    is not a display bug: ``chat_model`` and ``llm_utility_model`` are ``Role.comparability``
+    is not a display bug: ``chat_model`` and ``llm_utility_model`` are ``a recorded setting``
     knobs, so two Bedrock arms serving *different* Anthropic models published the same value
     and ``measure/gates.py``'s drift gate compared them equal. Measured on
     ``runs/serve/2026-08-18.jsonl (an untracked local sink, deleted under ADR 0014)``: both turns recorded

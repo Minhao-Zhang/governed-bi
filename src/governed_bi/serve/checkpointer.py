@@ -72,7 +72,6 @@ either: every node here is ``async def``, so LangGraph calls ``aget_tuple``, and
 
 from __future__ import annotations
 
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -84,8 +83,6 @@ from typing import Any, AsyncIterator
 from governed_bi.paths import REPO_ROOT, assert_not_a_warehouse
 
 __all__ = [
-    "CONVERSATION_DB",
-    "HARNESS_DB",
     "assert_not_a_warehouse",
     "conversation_checkpointer",
     "open_harness_saver",
@@ -94,18 +91,34 @@ __all__ = [
 
 #: Markers of a *server* connection string. A checkpointer takes a filesystem path, so any of
 #: these means the operator handed us a warehouse DSN -- the one thing this must never be.
-def _db_path(env: str, default_name: str) -> Path:
-    raw = os.environ.get(env)
-    if raw:
-        return Path(assert_not_a_warehouse(raw, source=env))
-    return REPO_ROOT / "runs" / default_name
+def _db_path(setting: str) -> Path:
+    """Resolve one checkpoint path from the bound settings. Relative paths start at the repo."""
+    from governed_bi.register.knobs import effective_settings
+
+    raw = str(effective_settings()[setting])
+    path = Path(raw)
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return Path(assert_not_a_warehouse(str(path), source=setting))
 
 
-#: Served conversations. Overridable so a test never writes into the real store.
-CONVERSATION_DB = _db_path("GOVERNED_BI_CONVERSATION_DB", "conversations.sqlite")
+def conversation_db() -> Path:
+    """Served conversations. Overridable so a test never writes the real store."""
+    return _db_path("conversation_db")
 
-#: CLI + eval threads. Same saver, separate file, so a benchmark never lands in the transcript.
-HARNESS_DB = _db_path("GOVERNED_BI_HARNESS_DB", "harness-checkpoints.sqlite")
+
+def harness_db() -> Path:
+    """CLI and eval threads. Separate from the served store."""
+    return _db_path("harness_db")
+
+
+#: Names kept for callers that imported the constants. Resolved at use, not at import.
+def __getattr__(name: str) -> Path:
+    if name == "CONVERSATION_DB":
+        return conversation_db()
+    if name == "HARNESS_DB":
+        return harness_db()
+    raise AttributeError(name)
 
 
 async def _open(path: Path) -> Any:
@@ -151,7 +164,7 @@ async def conversation_checkpointer() -> AsyncIterator[Any]:
     pragma that :func:`_open` sets, while the harness path got both. One opener, so the two cannot
     diverge again.
     """
-    saver = await _open(CONVERSATION_DB)
+    saver = await _open(conversation_db())
     try:
         yield saver
     finally:
@@ -165,4 +178,4 @@ async def open_harness_saver(path: Path | None = None) -> Any:
     in, and the connection is closed by process exit. ``graph.compile_durable`` is the intended
     caller and pins the loop it was opened on.
     """
-    return await _open(path or HARNESS_DB)
+    return await _open(path or harness_db())

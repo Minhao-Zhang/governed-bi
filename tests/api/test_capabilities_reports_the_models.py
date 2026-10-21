@@ -1,7 +1,7 @@
 """`/capabilities` must report the model each surface actually resolved.
 
 The regression these guard is not cosmetic. ``chat_model`` and ``llm_utility_model`` are
-``Role.comparability`` knobs, and on Bedrock every turn recorded the LangChain *class* name
+``a recorded setting`` knobs, and on Bedrock every turn recorded the LangChain *class* name
 ``amazon_bedrock_converse_chat`` instead of the model id — so two arms serving different
 Anthropic models published the same value and the drift gate compared them equal (observed
 2026-08-18 on both turns of that day's served turn log, while actually running

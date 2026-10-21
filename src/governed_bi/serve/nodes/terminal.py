@@ -11,14 +11,10 @@ __all__ = ["refuse_node", "decline_node"]
 
 
 def refuse_node(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Guard / negative-example refusal. Public text never leaks rule detail."""
+    """Guard refusal. Public text never leaks rule detail."""
     reason = state.get("terminal_reason")
     if not reason:
-        guard = state.get("guard") or {}
-        if guard.get("outcome") == "blocked":
-            reason = "guard"
-        else:
-            reason = "negative_example"
+        reason = "guard"
     return {
         "path_kind": "refuse",
         "terminal_reason": reason,

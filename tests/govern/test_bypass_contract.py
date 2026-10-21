@@ -65,7 +65,7 @@ def test_layers_are_ordered_and_have_no_fractional_members(layer) -> None:
     represented in an ordered verdict — a block by it would have had to report
     ``None``, which is B3 through the front door.
     """
-    assert [m.value for m in layer] == [1, 2, 3, 4, 5, 6, 7]
+    assert [m.value for m in layer] == [1, 2, 3, 4, 5, 6]
     assert layer.FUNCTIONS < layer.BINDING < layer.COLUMNS < layer.TABLES
 
 

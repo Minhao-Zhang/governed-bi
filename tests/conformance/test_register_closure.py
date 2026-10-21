@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from governed_bi.register import assets, citations, facets, knobs, record, stages
+from governed_bi.register import assets, facets, knobs, record, stages
+from governed_bi.register.knobs import config_hash, resolve_settings
 
 # ── cross-table closure: the reason this package exists ────────────────────────
 
@@ -51,13 +52,14 @@ def test_every_asset_type_has_a_policy_row() -> None:
     assert set(assets.ASSET_REGISTER) == set(assets.AssetType)
 
 
-def test_resume_drift_is_a_strict_superset_of_comparability() -> None:
-    """Two runs at different commits are the normal comparison; the same difference
-    inside one run directory is corrupting. The sets therefore differ, and the
-    difference is where v1 lost 1025 rows and 326 rows into one arm score."""
-    comp, drift = knobs.comparability_keys(), knobs.resume_drift_keys()
-    assert comp < drift
-    assert "git_sha" in drift and "git_sha" not in comp
+def test_changing_one_setting_changes_the_config_hash(monkeypatch) -> None:
+    """The hash is what a turn records. One changed setting must move it."""
+    monkeypatch.delenv("GOVERNED_BI_ROUTE_TOP_N", raising=False)
+    first = resolve_settings()
+    second = dict(first)
+    second["route_top_n"] = 9
+    second.pop("config_hash", None)
+    assert config_hash(first) != config_hash(second)
 
 
 # ── the guards must actually fire ──────────────────────────────────────────────
@@ -95,7 +97,7 @@ def test_unset_knobs_refuse_truth_testing() -> None:
         bool(knobs.UNSET)
     unset = [k.name for k in knobs.KNOB_REGISTER if k.default is knobs.UNSET]
     assert "permitted_functions" in unset
-    assert "negative_tau" in unset
+    assert "guard_rules_enabled" in unset
 
 
 def test_expected_channel_state_refuses_a_non_facet() -> None:
@@ -194,20 +196,6 @@ def test_the_statement_less_outcome_is_the_ledger_s_own_word() -> None:
         )
         is stages.Outcome.no_sql
     )
-
-
-def test_every_retired_pattern_matches_its_observed_spelling() -> None:
-    """A pattern that matches nothing real is a gate that catches nothing — which
-    one of v1's retired-literal entries actually was."""
-    import re
-
-    for claim in citations.RETIRED_CLAIMS:
-        assert re.search(claim.pattern, claim.observed), claim.pattern
-
-
-def test_every_citation_has_an_artifact_and_a_date() -> None:
-    for c in citations.CITATIONS:
-        assert c.artifact and c.measured, c.claim[:60]
 
 
 # ── a real turn on every terminal path ─────────────────────────────────────────

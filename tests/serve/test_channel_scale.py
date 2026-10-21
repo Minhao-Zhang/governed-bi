@@ -260,8 +260,8 @@ def test_a_run_can_move_the_fusion_knobs_and_the_score_follows() -> None:
     """Audit I10. All three were read at **import** and no request could move them.
 
     That is not a missing feature, it is a false claim about a run: `w_lexical`, `w_semantic` and
-    `semantic_scale_ceiling` are declared ``Role.comparability``, so they enter
-    ``config_hash_keys()`` and ``knobs_resolved``. A run could publish ``w_semantic: 0.9``, move its
+    `semantic_scale_ceiling` are declared ``a recorded setting``, so they enter
+    ``knob_names()`` and ``knobs_resolved``. A run could publish ``w_semantic: 0.9``, move its
     config hash, and score exactly like the default — the inverse of the defect
     ``register/knobs.py`` opens by describing, and the same shape as the four knobs
     ``tests/serve/test_comparability_knobs.py`` was written for.

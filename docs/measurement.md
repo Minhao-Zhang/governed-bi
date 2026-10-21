@@ -168,13 +168,13 @@ A full arm takes hours. Expect to interrupt it and resume it.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--reflect` | off | Turn on the post-hoc reflector (`reflect_enabled`). It writes a verdict and changes no control flow, so EX should not move — that is the arm's own sanity check. Costs one call per turn on `reflect_model` if one is set and on the utility model otherwise, and it is a comparability knob, so a reflected arm and an unreflected one are two arms. Measured once, and the artifact is the part that survives: `runs/eval/proxy_v4_reflect_corpus30872d3.jsonl` (1,351 rows, 2026-08-10, `reflect_enabled: true` in `knobs_resolved`). The write-up of it is `git-history:docs/analysis/risk-coverage-v4.md` §6, deleted with the rest of `docs/analysis/` by `2396ca2`; `git show 2396ca2^:docs/analysis/risk-coverage-v4.md` |
+| `--reflect` | removed | The post-hoc reflector was deleted on 2026-10-20. The flag is gone. The measured artifact remains `runs/eval/proxy_v4_reflect_corpus30872d3.jsonl` (1,351 rows, 2026-08-10). |
 
 **Policy**
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--abstain` | off | Turn on the declared abstention policy (`abstention_policy_enabled`, ADR 0013). **Not an observer**, unlike `--reflect`: it decides, before the agent spends a `run_query` attempt, whether the turn should be answered, so EX *and* coverage both move and the arm is only readable against an unabstained pair. Costs no model call. A comparability knob, and it enters the artifact tag — a resume that merged an abstaining run into a committing one would report one arm's coverage with the other's accuracy |
+| `--abstain` | off | Turn on the declared abstention policy (`abstention_policy_enabled`, ADR 0013). It decides, before the agent spends a `run_query` attempt, whether the turn should be answered, so EX and coverage both move and the arm is only readable against an unabstained pair. Costs no model call. It enters the artifact tag — a resume that merged an abstaining run into a committing one would report one arm's coverage with the other's accuracy |
 
 **Concurrency and robustness**
 
@@ -192,7 +192,7 @@ A full arm takes hours. Expect to interrupt it and resume it.
 Unless you pass `--out`, the path is `runs/eval/live_full_<tag>.jsonl`, where
 the tag is built from the model, the effort, `--top-n`, the retrieval channel
 (`embed` or `lexical`), the provider when it is not `openai`, the prompt
-variants when there are any, and then one segment each for `--reflect`,
+variants when there are any, and then one segment for
 `--abstain` and `--replay-routing` when they are on (`_reflect`, `_abstain`,
 `_pinned`).
 

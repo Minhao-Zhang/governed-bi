@@ -328,7 +328,7 @@ def test_the_source_scan_covers_every_file_the_policy_lives_in() -> None:
 def test_no_rule_reads_a_threshold() -> None:
     """``lexical_coverage`` is evidence and must not become a gate.
 
-    ``negative_tau`` ships ``UNSET`` rather than guessed, on the argument that "an uncalibrated
+    ``the retired threshold`` ships ``UNSET`` rather than guessed, on the argument that "an uncalibrated
     refusal gate is worse than none" — a benchmark whose questions are answerable by
     construction cannot calibrate one. A coverage threshold here would be that same
     uncalibrated gate under a different name, so the rule is: the evidence may carry the
@@ -574,10 +574,10 @@ def test_the_knob_is_what_turns_it_on() -> None:
     """
     import asyncio
 
-    from governed_bi.register.knobs import comparability_keys, knob_default
+    from governed_bi.register.knobs import knob_default, knob_names
 
     assert knob_default("abstention_policy_enabled") is False
-    assert "abstention_policy_enabled" in comparability_keys(), (
+    assert "abstention_policy_enabled" in knob_names(), (
         "a knob that changes which turns are delivered must move the config hash, or two "
         "operating points compare as one treatment"
     )

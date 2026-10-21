@@ -55,7 +55,7 @@ _DEFAULT_READ_BODY_MAX_CHARS = 80_000
 #: model-supplied argument with no ceiling (ADR 0006 §8: a tool that grants privilege must have
 #: a bound the model cannot widen).
 #:
-#: A constant rather than a knob because nothing can set a knob on this surface: ``cost_budget``
+#: A constant rather than a knob because nothing can set a knob on this surface: ``the retired budget``
 #: ships UNSET and no env var, config key or ``int_knob`` entry can write it, so a knob here
 #: would be a declaration with no writer.
 SAMPLE_ROWS_MAX_VALUES = 20

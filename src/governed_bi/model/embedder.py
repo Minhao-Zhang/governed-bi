@@ -152,7 +152,7 @@ def embedding_knobs(embedder: Any) -> dict[str, Any]:
     """The three declared knobs an embedder contributes to ``knobs_resolved``.
 
     ``embedding_model``, ``embedding_dimensions`` and ``embedding_provider`` are all
-    ``Role.comparability``; without them two ladders differing only in embedder compare as
+    ``a recorded setting``; without them two ladders differing only in embedder compare as
     one experiment. Names are checked against
     :func:`~governed_bi.register.knobs.knob_names` because a typo'd name ships a literal no
     knob backs, so the config hash does not move when the real knob does.

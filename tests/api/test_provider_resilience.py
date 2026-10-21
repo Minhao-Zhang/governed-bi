@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from governed_bi.register.knobs import KNOB_REGISTER, Role, knob_default
+from governed_bi.register.knobs import KNOB_REGISTER, knob_default
 
 RESILIENCE_KNOBS = ("llm_max_retries", "llm_timeout_s", "llm_utility_timeout_s")
 
@@ -34,10 +34,7 @@ def test_the_three_knobs_are_declared_comparability() -> None:
     by_name = {k.name: k for k in KNOB_REGISTER}
     for name in RESILIENCE_KNOBS:
         assert name in by_name, f"{name} must be declared in register/knobs.py"
-        assert by_name[name].role is Role.comparability, (
-            f"{name} changes what a run measures about itself; scope would let two runs "
-            "differing in it compare as one"
-        )
+        assert by_name[name].env_var, f"{name} must name the variable that overrides it"
 
 
 def test_the_worst_case_for_one_call_is_bounded() -> None:
@@ -85,17 +82,19 @@ def test_the_settings_reach_the_openai_client_on_every_surface(monkeypatch) -> N
     of 2, and it runs on the same critical path — `accept` embeds the question before any facet.
     """
     pytest.importorskip("langchain_openai")
-    from governed_bi.api import graph_app
     from governed_bi.model.openai_embedder import OpenAIEmbedder
+    from governed_bi.register.knobs import reset_settings, resolve_settings
 
     monkeypatch.setenv("GOVERNED_BI_LLM_MAX_RETRIES", "5")
     monkeypatch.setenv("GOVERNED_BI_LLM_TIMEOUT_S", "111")
     monkeypatch.setenv("GOVERNED_BI_UTILITY_TIMEOUT_S", "7")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    reset_settings()
+    settings = resolve_settings()
 
-    assert graph_app._retries() == 5
-    assert graph_app._timeout(graph_app.TIMEOUT_VAR, "llm_timeout_s") == 111.0
-    assert graph_app._timeout(graph_app.UTILITY_TIMEOUT_VAR, "llm_utility_timeout_s") == 7.0
+    assert settings["llm_max_retries"] == 5
+    assert settings["llm_timeout_s"] == 111.0
+    assert settings["llm_utility_timeout_s"] == 7.0
 
     embedder = OpenAIEmbedder(model="text-embedding-3-large", max_retries=5, timeout=7.0)
     client = embedder._openai_client()

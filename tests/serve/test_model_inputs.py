@@ -165,7 +165,7 @@ def test_prompt_set_hash_digests_the_prompt_the_model_was_given(
 ):
     """The record's claim about the prompt must match what was delivered.
 
-    ``prompt_set_hash`` is a ``Role.comparability`` field: two runs agreeing on it are treated
+    ``prompt_set_hash`` is a ``a recorded setting`` field: two runs agreeing on it are treated
     as having asked the model the same way, and a quotability gate reads it. It is computed by
     ``Session``, which is one step removed from what ``create_agent`` handed the provider — and
     one step is where a v1 ladder's ``llm_reasoning_effort`` went missing and cleared a pair it

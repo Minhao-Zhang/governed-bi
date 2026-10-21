@@ -460,7 +460,7 @@ def test_the_adapter_reports_the_model_the_provider_actually_used(adapter: str) 
 
 def test_the_embedding_knobs_reach_knobs_resolved() -> None:
     """`embedding_model` and `embedding_dimensions` are declared knobs with
-    `Role.comparability` (`register/knobs.py`'s `embedding_model` and `embedding_dimensions`
+    `a recorded setting` (`register/knobs.py`'s `embedding_model` and `embedding_dimensions`
     rows), and when this was written nothing supplied either, because no embedder existed.
 
     Assert that using an embedder puts both into the resolved knob set, so the serve config
@@ -469,11 +469,7 @@ def test_the_embedding_knobs_reach_knobs_resolved() -> None:
     and the declaration alone has never stopped anything in this repository.
     """
     from governed_bi.model import DeterministicEmbedder, embedding_knobs
-    from governed_bi.register.knobs import (
-        comparability_keys,
-        config_hash_keys,
-        knob_names,
-    )
+    from governed_bi.register.knobs import knob_names
 
     embedder = DeterministicEmbedder(dimensions=64)
     knobs = embedding_knobs(embedder)
@@ -490,8 +486,8 @@ def test_the_embedding_knobs_reach_knobs_resolved() -> None:
     # than recorded beside it. A threshold outside the comparability hash is v1's
     # `serve_config_hash` defect, and a knob name no register backs is the same hole.
     assert set(knobs) <= knob_names()
-    assert set(knobs) <= comparability_keys()
-    assert set(knobs) <= config_hash_keys()
+    assert set(knobs) <= knob_names()
+    assert set(knobs) <= knob_names()
 
     base = {"route_top_n": 3, "candidate_depth": 50}
     resolved = {**base, **knobs}

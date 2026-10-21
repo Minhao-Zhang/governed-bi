@@ -40,7 +40,7 @@ def served(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_an_unset_flag_takes_the_served_model_and_effort(served) -> None:
     args = _args()
-    assert _driver().apply_served_utility_default(args) == UTILITY_MODEL_VAR
+    assert _driver().apply_served_utility_default(args) == "llm_utility_model"
     assert (args.utility_model, args.utility_effort) == ("gpt-6-luna", "medium")
 
 
@@ -56,9 +56,12 @@ def test_an_explicit_effort_is_kept_beside_the_served_model(served) -> None:
     assert (args.utility_model, args.utility_effort) == ("gpt-6-luna", "low")
 
 
-def test_no_served_utility_model_leaves_the_agent_model_in_place(monkeypatch) -> None:
+def test_no_env_override_still_uses_the_code_default(monkeypatch) -> None:
+    from governed_bi.register.knobs import reset_settings
+
     monkeypatch.delenv(UTILITY_MODEL_VAR, raising=False)
-    monkeypatch.setenv(UTILITY_MODEL_EFFORT_VAR, "medium")
+    monkeypatch.delenv(UTILITY_MODEL_EFFORT_VAR, raising=False)
+    reset_settings()
     args = _args()
-    assert _driver().apply_served_utility_default(args) is None
-    assert (args.utility_model, args.utility_effort) == (None, None)
+    assert _driver().apply_served_utility_default(args) == "llm_utility_model"
+    assert (args.utility_model, args.utility_effort) == ("gpt-6-luna", "medium")

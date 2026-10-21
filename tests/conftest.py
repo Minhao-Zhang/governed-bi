@@ -24,7 +24,6 @@ CI log that runs the suite.
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -32,15 +31,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 
 
 def _load_dotenv_into_environ() -> int:
-    """Fill unset environment variables from ``.env``. Returns how many were filled."""
-    from governed_bi.credentials import _dotenv  # noqa: PLC2701 -- one reader, shared
+    """Copy unset secrets from ``.env``. Settings in the file are not applied."""
+    from governed_bi.credentials import load_into_environ
 
-    filled = 0
-    for key, value in _dotenv().items():
-        if value and not os.environ.get(key):
-            os.environ[key] = value
-            filled += 1
-    return filled
+    return load_into_environ(refuse=False)
+
+
+def pytest_runtest_teardown(item, nextitem) -> None:  # noqa: ARG001
+    from governed_bi.register.knobs import reset_settings
+
+    reset_settings()
 
 
 #: Run at import, which pytest does before collecting any test — so a module-scoped fixture

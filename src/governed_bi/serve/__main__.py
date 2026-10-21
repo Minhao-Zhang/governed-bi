@@ -55,13 +55,13 @@ def _chat_model_var() -> str:
 def _credentials() -> Any:
     """The shared reader, with ``.env`` bridged into the environment for this process.
 
-    The bridge is for the libraries, not for us: `langchain_openai` and the `openai` client
-    read `os.environ` directly, so `have()` returning true is not the same as their being able
-    to use the value.
+    The bridge is for the libraries, not for us: the OpenAI client reads the process
+    environment itself, so a key that only this process can see is not a key the client can use.
     """
     from .. import credentials
+    from ..boot import resolve_settings
 
-    credentials.load_into_environ()
+    resolve_settings()
     return credentials
 
 
@@ -132,6 +132,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("one of --schema or --corpus-dir is required")
 
     creds = _credentials()
+    from ..register.knobs import effective_settings
+
+    settings = effective_settings()
     dsn = creds.secret(*creds.PG_DSN_NAMES)
     if not dsn:
         print(
@@ -153,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         from ..model import provider as provider_mod
         from ..retrieve.vector_cache import vector_cache_from_environment
 
-        embedder = provider_mod.embedder(provider_mod.default_embedding_model())
+        embedder = provider_mod.embedder(str(settings["embedding_model"]))
         # The same persisted cache the server uses. Without it every invocation re-embedded
         # all 13,968 summaries in the pooled corpus before answering one question, and nothing
         # here reports how many vectors were reused, so it went unnoticed.
@@ -161,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     # Resolved after `_credentials()` has bridged `.env` into the environment, so a model named
     # only in the file is found. `--model` wins, for one run, without editing anything.
     model_var = _chat_model_var()
-    model_name = args.model or creds.secret(model_var)
+    model_name = args.model or settings["chat_model"]
     if not args.no_model and not model_name:
         print(
             f"no model: pass --model, or set {model_var} in the environment or .env, "
@@ -169,7 +172,8 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    model = None if args.no_model else _model(model_name, creds, args.effort)
+    effort = args.effort or settings["llm_reasoning_effort"] or None
+    model = None if args.no_model else _model(model_name, creds, effort)
 
     kwargs: dict[str, Any] = {
         "connector": connector,

@@ -427,11 +427,6 @@ def project_turn(
     )
 
     facet_channels = record.get("facet_channels")
-    negative = state.get("negative") or record.get("negative") or {}
-    negative_failed_open = (
-        isinstance(negative, Mapping)
-        and negative.get("outcome") == "error_failed_open"
-    )
     # **Absent stays absent, for these two as well** (audit M2). They read
     # ``int(record.get(...) or 0)``, which turns a field the turn never wrote into a real zero —
     # and ``0`` is the *clean* value, so ``guardrail_error`` and ``re_served`` went from
@@ -599,13 +594,6 @@ def project_turn(
         # node; `{"outcome": "disabled", ...}` when the knob was off, which is the fact that
         # makes a control arm nameable rather than merely silent.
         "abstention": record.get("abstention"),
-        # The reflector's verdict, or None when it did not run (knob off, no model, no
-        # statement). `stamp` has projected it into the turn record since the node landed and
-        # nothing carried it out to the artifact, so an arm run with `--reflect` would have
-        # spent a model call per turn and produced nothing a scorer could read. The knob's own
-        # note says it stays off "until tools/score_reflector.py shows the verdict beats the
-        # base rate" -- which that tool cannot do from a row that does not carry the verdict.
-        "reflect_verdict": record.get("reflect_verdict"),
         # Carried so the run can be counted: `observed_tokens` reads it, and without it a
         # batch reports no calls at all, reading as a free run rather than an unmeasured one.
         # Tokens only — `measure/price.py` is deleted, so cost is the provider's number.
@@ -618,7 +606,6 @@ def project_turn(
         "latency_sec": _row_latency_sec(record),
         "guardrail_error": None if guardrail_errors is None else guardrail_errors > 0,
         "re_served": None if n_re_served is None else n_re_served > 0,
-        "negative_failed_open": bool(negative_failed_open),
         "refused_by": answer.get("refused_by") if isinstance(answer, Mapping) else None,
         "failed_stage": answer.get("failed_stage") if isinstance(answer, Mapping) else None,
     }

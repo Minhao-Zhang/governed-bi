@@ -272,21 +272,19 @@ def _agent_node_timeout(state: Mapping[str, Any]) -> float | None:
 
     **Resolved through :func:`~governed_bi.serve.runtime.float_knob`, like every other knob.**
     This previously took no state and read ``knob_default`` directly, which made
-    ``agent_node_timeout_s`` a ``Role.comparability`` knob that no arm could set: two arms
+    ``agent_node_timeout_s`` a ``a recorded setting`` knob that no arm could set: two arms
     declaring different values recorded two configurations that had behaved identically.
 
     ``<= 0`` means **no wall**, which is why the return type is optional. ``"0"`` used to parse as
     a zero-second deadline that failed every turn on its first frame — a plausible thing to type
     for "off".
     """
-    import os
+    from governed_bi.register.knobs import effective_settings
 
-    from governed_bi.serve.runtime import float_knob
-
-    raw = os.environ.get("GOVERNED_BI_AGENT_NODE_TIMEOUT_S")
-    if raw is not None and str(raw).strip() != "":
-        return _positive(float(raw))
-    return _positive(float_knob(state, "agent_node_timeout_s"))
+    knobs = state.get("knobs_resolved") or {}
+    if knobs.get("agent_node_timeout_s") is not None:
+        return _positive(float(knobs["agent_node_timeout_s"]))
+    return _positive(float(effective_settings()["agent_node_timeout_s"]))
 
 
 def _hang_grace(state: Mapping[str, Any]) -> float:
@@ -314,18 +312,13 @@ def _positive(seconds: float) -> float | None:
 
 
 def _recursion_limit(state: Mapping[str, Any]) -> int:
-    """Nested-agent superstep ceiling from env, then knobs_resolved, then the register default."""
-    import os
+    """Nested-agent superstep ceiling from the turn's settings, then the resolved default."""
+    from governed_bi.register.knobs import effective_settings
 
-    from governed_bi.register.knobs import knob_default
-
-    raw = os.environ.get("GOVERNED_BI_AGENT_RECURSION_LIMIT")
-    if raw is not None and str(raw).strip() != "":
-        return int(raw)
     knobs = state.get("knobs_resolved") or {}
     if knobs.get("agent_recursion_limit") is not None:
         return int(knobs["agent_recursion_limit"])
-    return int(knob_default("agent_recursion_limit"))
+    return int(effective_settings()["agent_recursion_limit"])
 
 
 def _question_message(state: dict, history: list[Any]) -> HumanMessage | None:
@@ -367,7 +360,7 @@ def _context_middleware(state: dict, model: Any = None) -> list[AgentMiddleware[
     it, and ``stream_subgraphs`` cannot be turned off (ADR 0010 M2).
 
     Not a ``SystemMessage`` and not appended to ``system_prompt``: ``prompt_set_hash`` is a
-    ``Role.comparability`` field digesting the prompt registry, and
+    ``a recorded setting`` field digesting the prompt registry, and
     ``tests/serve/test_model_inputs.py`` asserts every system prompt the model receives is one
     ``register/prompts.py`` declares. Per-turn text there makes the published hash describe
     something that was never sent.

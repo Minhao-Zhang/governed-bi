@@ -20,7 +20,6 @@ construction would go stale after an hour and every later request would 401 with
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from typing import Any, Callable, Mapping
@@ -102,7 +101,9 @@ def _require_requests():
 
 def _secret_name(explicit: str | None = None) -> str:
     """The secret's name, from the argument or :data:`PROXY_SECRET_NAME_VAR`. Fails closed."""
-    name = (explicit or os.environ.get(PROXY_SECRET_NAME_VAR) or "").strip()
+    from governed_bi.register.knobs import effective_settings
+
+    name = (explicit or str(effective_settings().get("proxy_secret") or "")).strip()
     if not name:
         raise RuntimeError(
             f"{PROXY_SECRET_NAME_VAR} is not set, so the internal proxy provider does not know which "
@@ -114,14 +115,18 @@ def _secret_name(explicit: str | None = None) -> str:
 
 def _region(explicit: str | None = None) -> str:
     """The AWS region, or ``""`` to let boto3 resolve it from its own config chain."""
-    return (explicit or os.environ.get(PROXY_REGION_VAR) or "").strip()
+    from governed_bi.register.knobs import effective_settings
+
+    return (explicit or str(effective_settings().get("proxy_region") or "")).strip()
 
 
 def _tls_verify(explicit: Any = None) -> Any:
     """A CA bundle path from :data:`PROXY_CA_BUNDLE_VAR`, else ``False`` (no verification)."""
     if explicit is not None:
         return explicit
-    return (os.environ.get(PROXY_CA_BUNDLE_VAR) or "").strip() or False
+    from governed_bi.register.knobs import effective_settings
+
+    return str(effective_settings().get("proxy_ca_bundle") or "").strip() or False
 
 
 # --------------------------------------------------------------------------- #

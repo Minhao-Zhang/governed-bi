@@ -46,7 +46,7 @@ __all__ = [
 #: Adding a name here is the deliberate act the guard exists to force. It is checked
 #: against :data:`_NEVER_READABLE` below, so the addition cannot be a grade field.
 READABLE_FIELDS: frozenset[str] = frozenset(
-    {"usage", "attempts", "licensed", "generated_sql", "reflect_verdict"}
+    {"usage", "attempts", "licensed", "generated_sql"}
 )
 
 #: Substrings no allowlisted field may contain. The second lock: it guards the
@@ -149,19 +149,6 @@ def _failed_attempts(row: TurnRow) -> float | None:
     return float(sum(1 for a in _mappings(row, "attempts") if not a.get("passed")))
 
 
-#: Ordinal encoding of the reflector's verdict, worst first, so ``higher_first`` means
-#: "deliver the ones it endorsed". Three values, so this signal offers three operating
-#: points and nothing between them.
-_VERDICT_RANK: Mapping[str, float] = {"wrong": 0.0, "unsure": 1.0, "answered": 2.0}
-
-
-def _reflect_verdict(row: TurnRow) -> float | None:
-    verdict = row.get("reflect_verdict")
-    if not isinstance(verdict, Mapping):
-        return None
-    return _VERDICT_RANK.get(str(verdict.get("verdict")))
-
-
 def _declare(
     name: str, direction: Direction, why: str, read: Callable[[TurnRow], float | None]
 ) -> Signal:
@@ -223,12 +210,6 @@ SIGNALS: Mapping[str, Signal] = {
             "sql_len", Direction.lower_first,
             "statement length as a proxy for the question's structural difficulty",
             _sql_length,
-        ),
-        _declare(
-            "reflect_verdict", Direction.higher_first,
-            "the only signal here that reads the statement against the question. Present "
-            "on the reflect arm only; every other arm ran with the observer off",
-            _reflect_verdict,
         ),
     )
 }
@@ -295,7 +276,6 @@ def assert_no_signal_reads_the_grade(signals: Mapping[str, Signal]) -> None:
         "attempts": [{"passed": True}, {"passed": False}],
         "licensed": ["a", "b"],
         "generated_sql": "SELECT 1",
-        "reflect_verdict": {"verdict": "unsure"},
         "correct": True,
         "computed_correct": True,
         "grade_detail": "match",

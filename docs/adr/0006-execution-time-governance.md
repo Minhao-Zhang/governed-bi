@@ -1,6 +1,9 @@
 # 0006: Execution-time governance
 
 - **Status:** Accepted in part (2026-08-03; state of the tree re-checked 2026-08-12).
+  The cost layer was removed on 2026-10-20: six layers remain, and graded delivery is never
+  eligible. What was learned is that a layer with no budget and no caller was a comment that
+  tests had to keep pretending was a decision.
   `govern/` is on `main` — the `v2` branch was merged and no longer exists. Two of §7's
   four executors are wired: `agent`
   (`serve/fetch.py::run_query`) and `sample` (`serve/fetch.py::sample_rows`). `graded`

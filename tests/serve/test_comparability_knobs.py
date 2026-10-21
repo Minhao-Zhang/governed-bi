@@ -1,7 +1,7 @@
 """A knob the record publishes must be a knob the turn can be made to use. ADR 0008 D7.
 
 ``route_top_n``, ``max_steiner_points`` and ``max_crossings`` are declared
-``Role.comparability`` — they go into ``knobs_resolved``, which is what a quotable run
+``a recorded setting`` — they go into ``knobs_resolved``, which is what a quotable run
 compares against another run. All three read per-turn ``state`` *only*, with a
 module-level constant beside them for the default, and **no production entry point writes
 those state keys**: only ``eval/harness.py`` and test fixtures do. So the record published
@@ -45,9 +45,6 @@ def test_a_knob_that_cannot_be_read_raises_rather_than_substituting_a_value() ->
 
     # A knob that ships uncalibrated must not become a threshold nobody chose -- the same
     # refusal `corpus/validate.py` makes for the summary-length bounds.
-    with pytest.raises(ValueError, match="UNSET"):
-        int_knob({}, "cost_budget")
-
     # And a typo'd knob name raises out of the register rather than resolving to a
     # plausible literal no knob backs, which would leave the value outside the
     # comparability hash entirely.
@@ -138,12 +135,12 @@ def test_route_top_n_from_knobs_resolved_changes_the_turn(
 
 
 def test_every_declared_ranking_knob_has_a_reader() -> None:
-    """A ``Role.comparability`` knob that cannot change a result is a false claim about a run.
+    """A ``a recorded setting`` knob that cannot change a result is a false claim about a run.
 
     Four of them shipped that way. ``facet_weight_schema`` and ``facet_weight_other`` were
     declared while ``retrieve/route.route`` took no weights at all; ``w_lexical`` and
     ``w_semantic`` were declared while ``serve/runtime.FUSE_WEIGHTS`` was a hardcoded literal.
-    All four entered ``config_hash_keys()`` and ``knobs_resolved``, so a run could publish
+    All four entered ``knob_names()`` and ``knobs_resolved``, so a run could publish
     ``w_lexical: 0.9``, move its config hash, and behave identically — the inverse of the
     defect ``register/knobs.py`` opens by describing.
     """
@@ -221,7 +218,7 @@ def test_the_saturation_constant_is_declared_where_it_is_read() -> None:
 def test_a_knob_describing_a_feature_that_does_not_exist_is_gone() -> None:
     """``max_queries_per_facet`` bounded a list built as ``[question]``.
 
-    So the limit could never fire, and it was ``Role.comparability`` — every run published a
+    So the limit could never fire, and it was ``a recorded setting`` — every run published a
     bound on a per-facet fan-out the code does not have. Deleted rather than wired: wiring it
     would hand a knob to a feature that does not exist.
     """

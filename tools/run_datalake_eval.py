@@ -57,19 +57,18 @@ def apply_served_utility_default(args: argparse.Namespace) -> str | None:
     measure the shipped config measured a different one. An explicit flag always wins. Returns
     the variable the model came from, or ``None`` when nothing was filled.
     """
-    import os
-
-    from governed_bi.api.graph_app import UTILITY_MODEL_EFFORT_VAR, UTILITY_MODEL_VAR
+    from governed_bi.register.knobs import effective_settings
 
     if args.utility_model:
         return None
-    served = os.environ.get(UTILITY_MODEL_VAR)
+    settings = effective_settings()
+    served = settings["llm_utility_model"] or None
     if not served:
         return None
     args.utility_model = served
     if not args.utility_effort:
-        args.utility_effort = os.environ.get(UTILITY_MODEL_EFFORT_VAR) or None
-    return UTILITY_MODEL_VAR
+        args.utility_effort = settings["llm_utility_reasoning_effort"] or None
+    return "llm_utility_model"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -128,19 +127,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--top-n", type=int, default=None, help="override route_top_n")
     parser.add_argument(
-        "--reflect",
-        action="store_true",
-        help="turn on the post-hoc reflector (reflect_enabled). It is an observer -- it writes "
-        "a verdict and changes no control flow -- so EX should not move, which is the arm's own "
-        "sanity check. Costs one utility-model call per turn. The judge is `reflect_model` if "
-        "set, otherwise --utility-model. It is a comparability knob and enters the artifact tag, "
-        "because a reflected arm and an unreflected one are two arms.",
-    )
-    parser.add_argument(
         "--abstain",
         action="store_true",
         help="turn on the declared abstention policy (abstention_policy_enabled, ADR 0013). "
-        "Unlike --reflect this is NOT an observer: it decides, before the agent spends a "
+        "This is not an observer: it decides, before the agent spends a "
         "run_query attempt, whether the turn should be answered, so EX and coverage both move "
         "and the arm is only readable against an unabstained pair. Costs no model call. It is a "
         "comparability knob and enters the artifact tag, because an abstaining arm and a "
@@ -239,8 +229,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(conflict)
 
     from governed_bi import credentials
+    from governed_bi.boot import resolve_settings
 
-    credentials.load_into_environ()
+    resolve_settings()
     source = apply_served_utility_default(args)
     if source:
         print(f"utility model {args.utility_model} (effort {args.utility_effort or 'none'}) from {source}")
@@ -440,12 +431,7 @@ def main(argv: list[str] | None = None) -> int:
     variant_tag = "".join(
         f"_{pair.replace('=', '')}" for pair in sorted(args.prompt_variant or ())
     )
-    # `reflect_enabled` is a comparability knob, so it moves the config hash -- but the resume
-    # guard compares the corpus and prompt hashes, not that one, so without a tag segment a
-    # reflected arm would resume into an unreflected artifact and the two would be reported as
-    # one. Same reason --prompt-variant is here.
-    reflect_tag = "_reflect" if args.reflect else ""
-    # Same argument as `reflect_tag`, and it bites harder: the abstention policy moves
+    # The abstention policy moves
     # *coverage*, so a resume that merged an abstaining run into a committing artifact would
     # report one arm's delivered set with the other's declines and every selective-accuracy
     # figure over the file would be a blend of two operating points.
@@ -458,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
     tag = (
         f"{args.model}_{args.effort or 'default'}_top{args.top_n or 'default'}"
         f"_{'embed' if args.embed else 'lexical'}"
-        f"{provider_tag}{variant_tag}{reflect_tag}{abstain_tag}{pinned_tag}"
+        f"{provider_tag}{variant_tag}{abstain_tag}{pinned_tag}"
     )
     out_path = args.out or pathlib.Path("runs/eval") / f"live_full_{tag}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -520,8 +506,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.top_n is not None:
         knob_overrides["route_top_n"] = args.top_n
-    if args.reflect:
-        knob_overrides["reflect_enabled"] = True
     if args.abstain:
         knob_overrides["abstention_policy_enabled"] = True
     run_knobs = {**session.knobs_resolved, **knob_overrides}
@@ -529,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
     done: set[str] = set()
     retrying = 0
     if args.resume and out_path.exists():
-        from governed_bi.register.knobs import comparability_keys
+        from governed_bi.register.knobs import knob_names
 
         kept_lines: list[str] = []
         kept_rows: list[dict] = []
@@ -552,7 +536,7 @@ def main(argv: list[str] | None = None) -> int:
             corpus_content_hash=session.corpus_content_hash,
             prompt_set_hash=session.prompt_set_hash,
             knobs_resolved=run_knobs,
-            comparability=comparability_keys(),
+            comparability=knob_names(),
             question_ids=covered_qids,
             replay_routing=args.replay_routing is not None,
         )
@@ -633,12 +617,6 @@ def main(argv: list[str] | None = None) -> int:
         + "\n"
         f"model={args.model} effort={args.effort or '(default)'} workers={args.workers} "
         f"top_n={args.top_n or '(register default)'}"
-        + (
-            f"\nreflect=ON, judged by {args.utility_model or args.model} "
-            "(observer: writes a verdict, changes no control flow -- EX must not move)"
-            if args.reflect
-            else ""
-        )
         + "\n"
         f"corpus={args.corpus_dir} ({len(session.assets_by_id)} assets, {len(schemas)} schemas, "
         f"{len(session.degradations)} degradations)\n"

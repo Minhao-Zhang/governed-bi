@@ -39,7 +39,6 @@ EMITTED_STEPS = (
     "accept",
     "guard",
     "rewrite",
-    "negative_gate",
     "facet_schema",
     "facet_term",
     "facet_metric",
@@ -56,10 +55,6 @@ EMITTED_STEPS = (
     # `declined` status is the one a timeline has to render.
     "abstain",
     "agent_core",
-    # Emitted only when the observer ran, which the shipped configuration never does. Listed
-    # anyway: the point of this table is that a step the engine *can* put on the wire is
-    # declared, and "off by default" is a configuration rather than an absence.
-    "reflect",
     "read_body",
     "inspect_schema",
     "sample_rows",
@@ -198,10 +193,6 @@ def test_the_event_carries_the_step_and_status_it_was_given(
     [
         ("guard", {"guard": {"outcome": "blocked", "rule_id": "r_pii"}}, "blocked"),
         ("guard", {"guard": {"outcome": "clear"}}, "ok"),
-        ("negative_gate", {"negative": {"outcome": "hit", "matched_id": "n1"}}, "hit"),
-        ("negative_gate", {"negative": {"outcome": "miss"}}, "miss"),
-        # The gate ships disabled. `miss` would claim it looked and found nothing.
-        ("negative_gate", {"negative": {"outcome": "disabled"}}, "ok"),
         ("route", {"schemas": [], "path_kind": "decline"}, "declined"),
         ("route", {"schemas": ["sales_a"]}, "ok"),
         ("refuse", {"path_kind": "refuse", "terminal_reason": "guard"}, "refused"),
@@ -227,10 +218,6 @@ def test_a_gate_that_errored_open_is_not_reported_as_clear() -> None:
     "nothing happened" is the dangerous reading.
     """
     status, detail = rail_observation("guard", {"guard": {"outcome": "error_failed_open"}})
-    assert status == "error"
-    assert detail == {"gate": "error_failed_open"}
-
-    status, detail = rail_observation("negative_gate", {"negative": {"outcome": "error_failed_open"}})
     assert status == "error"
     assert detail == {"gate": "error_failed_open"}
 

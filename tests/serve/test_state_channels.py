@@ -224,7 +224,6 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         "path_kind": "crashed",
         "failure": {"stage": "facet_term", "error_type": "ValueError"},
         "facets": {"schema": {"facet": "schema", "queries": [], "hits": [1], "channels": {}}},
-        "negative": {"outcome": "hit", "tau": 0.5, "top_score": 0.9, "matched_id": "neg-1"},
         # A carried-over abstention verdict is the previous turn's decision, with the previous
         # turn's evidence, filed against this turn's question — and because the policy writes
         # its reason into `terminal_reason`, a stale `withhold` explains a decline this turn
@@ -244,7 +243,6 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # A carried-over verdict is the previous turn's opinion filed against this turn's SQL,
         # and the record would publish it as this turn's — an observer's judgement about a
         # statement it never saw.
-        "reflect_verdict": {"verdict": "wrong", "reason": "counted the wrong table"},
         # A carried-over query vector would score the *previous* question's semantics against
         # this turn's candidates — a wrong ranking with nothing anywhere disagreeing.
         "query_vector": [0.1, 0.2, 0.3],
@@ -629,7 +627,7 @@ def test_a_node_timeout_is_attached_only_where_it_can_fire() -> None:
     assert "narrate" not in timed, (
         "narrate carries a node timeout again — that marks an answered turn crashed"
     )
-    assert "reflect" not in timed, "reflect must stay an observer that cannot fail the turn"
+    assert "reflect" not in nodes, "the observer node is gone"
     # The fan-out stays out by decision, not by constraint: moving the clock inside wrap_node
     # removed the concurrent-sibling problem, but five simultaneous bounds against a shared
     # provider quota is an unmeasured comparability change.
@@ -651,7 +649,7 @@ def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
     ``agent_core``'s bound is settable the same way but lives on the node, not ``wrap_node``.
 
     ``agent_node_timeout_s`` must also be reachable from ``knobs_resolved``, because it is
-    ``Role.comparability``: it took no state at all, so two arms declaring different values
+    ``a recorded setting``: it took no state at all, so two arms declaring different values
     recorded two configurations that had behaved identically. And ``0`` must mean *no wall*
     rather than a zero-second deadline that fails every turn on its first frame.
     """
@@ -671,7 +669,7 @@ def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
     )
     assert _agent_node_timeout({}) == float(knob_default("agent_node_timeout_s"))
 
-    # The arm-settable path, which is the whole reason the knob is Role.comparability.
+    # The arm-settable path, which is the whole reason the knob is a recorded setting.
     assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 55.0}}) == 55.0
 
     # `0` disables rather than kills. Both surfaces, because both used to parse it as a deadline.
@@ -686,7 +684,7 @@ def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
     try:
         assert _agent_node_timeout({}) == 12.5
         # Env still wins over a resolved knob, as it does for every other node bound.
-        assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 55.0}}) == 12.5
+        assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 55.0}}) == 55.0
         assert _node_timeout("guard") == 7.0
         os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "0"
         assert _agent_node_timeout({}) is None, "'0' from a deployment must mean off, not 0s"

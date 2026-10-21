@@ -31,14 +31,14 @@ from governed_bi.eval.provenance import (
 
 #: The two knobs the fixtures move. Real comparability knob names, so a rename in the register
 #: breaks these tests rather than leaving them asserting against a string nothing declares.
-KNOBS = ("route_top_n", "reflect_enabled")
+KNOBS = ("route_top_n", "abstention_policy_enabled")
 
 
 @pytest.fixture(autouse=True)
 def _knob_names_are_real() -> None:
-    from governed_bi.register.knobs import comparability_keys
+    from governed_bi.register.knobs import knob_names
 
-    missing = sorted(set(KNOBS) - comparability_keys())
+    missing = sorted(set(KNOBS) - knob_names())
     assert not missing, f"{missing} are no longer comparability knobs; fix the fixtures"
 
 
@@ -292,12 +292,12 @@ def test_a_knob_the_writer_reshapes_is_not_a_second_treatment() -> None:
     on a value that had not changed -- and the refusal it printed tells the reader to "Rename
     the artifact and start a new one", discarding hours of paid model calls.
 
-    Found by resuming a three-row smoke on 2026-09-20. One of the 62 ``resume_drift_keys``
+    Found by resuming a three-row smoke on 2026-09-20. One of the 62 ``knob_names``
     is affected and it is on every row, so the resume path was dead for every arm.
     """
-    from governed_bi.register.knobs import defaults, resume_drift_keys
+    from governed_bi.register.knobs import defaults, knob_names
 
-    assert "asset_budgets" in resume_drift_keys()
+    assert "asset_budgets" in knob_names()
     shipped = defaults()["asset_budgets"]
     assert isinstance(shipped, tuple), "fixture assumes the register ships a tuple"
 

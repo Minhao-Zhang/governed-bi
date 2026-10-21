@@ -100,7 +100,6 @@ NAMES_A_MODEL = re.compile(
 #: workflow calls, so it is its own change and not a rider on a bug fix.
 LITERAL_MODEL_DEFAULTS: frozenset[str] = frozenset(
     {
-        "tools/score_reflector.py",
         "tools/run_datalake_eval.py",
     }
 )
@@ -166,7 +165,6 @@ def test_the_literal_model_ratchet_still_describes_this_tree() -> None:
         "tools/run_datalake_eval.py",
         "tools/routing_recall.py",
         "tools/query_summary_alignment.py",
-        "tools/score_reflector.py",
     ],
 )
 def test_every_entry_point_reaches_the_provider_module(module: str) -> None:

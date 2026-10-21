@@ -20,7 +20,6 @@ from sqlglot import expressions as exp
 from sqlglot.errors import SqlglotError
 
 from ..corpus.analyst import AnalystCorpus
-from ..register.knobs import Unset
 from .binding import Bindings, LayerRefusal, bind
 from .functions import canonical_function_name
 from .identifiers import normalise_column_key, normalise_table_key
@@ -28,7 +27,7 @@ from .layers import CheckVerdict, Layer, allow, internal_error, refuse
 from .policy import DEFAULT_DIALECT, GovernancePolicy
 from .scopes import ScopeView, iter_scopes
 
-__all__ = ["check", "GovernanceUsageError", "graded_delivery_eligible", "shape_estimate"]
+__all__ = ["check", "GovernanceUsageError", "graded_delivery_eligible"]
 
 
 class GovernanceUsageError(TypeError):
@@ -142,13 +141,6 @@ def check(
         blocked = _tables(bound, licensed_keys, evaluated)
         if blocked is not None:
             return blocked
-
-        if policy.cost_layer_enabled():
-            layer = Layer.COST
-            evaluated.append(layer)
-            blocked = _cost(tree, policy, evaluated)
-            if blocked is not None:
-                return blocked
 
         return allow(evaluated=evaluated, bound=bound.as_bound())
     except Exception as err:  # noqa: BLE001 - the point is that nothing escapes
@@ -325,41 +317,10 @@ def _tables(
     return None
 
 
-def shape_estimate(tree: exp.Expr) -> int:
-    """Crude shape score: base tables + joins + set operations (not a cost model).
-
-    ``cost_budget`` ships ``UNSET`` (ADR 0006 OQ2); this runs only when set.
-    """
-    return (
-        len(list(tree.find_all(exp.Table)))
-        + len(list(tree.find_all(exp.Join)))
-        + len(list(tree.find_all(exp.SetOperation)))
-    )
-
-
-def _cost(tree: exp.Expr, policy: GovernancePolicy, evaluated: list[Layer]) -> CheckVerdict | None:
-    budget = policy.cost_budget
-    assert not isinstance(budget, Unset)  # cost_layer_enabled() is the only caller's gate
-    estimate = shape_estimate(tree)
-    if estimate > budget:
-        return refuse(
-            "r_cost_budget_exceeded",
-            f"shape estimate {estimate} exceeds the budget {budget}",
-            evaluated=evaluated,
-        )
-    return None
-
-
 def graded_delivery_eligible(verdict: CheckVerdict, policy: GovernancePolicy | None = None) -> bool:
-    """Whether graded delivery may retry (ADR 0006 §5).
-
-    Requires a positively established non-hard failure; never ``failed_layer=None``.
-    Only ``COST`` failures are eligible.
-    """
-    policy = policy or GovernancePolicy()
-    if not policy.graded_delivery_enabled:
-        return False
-    return verdict["failed_layer"] is Layer.COST
+    """Graded delivery went with the cost layer. No remaining failure is eligible."""
+    del verdict, policy
+    return False
 
 
 def _assert_no_write_frame_is_closed() -> None:

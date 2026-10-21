@@ -21,7 +21,7 @@ from governed_bi.register.arm_profiles import (
     load_arm_profiles,
     reconcile,
 )
-from governed_bi.register.knobs import comparability_keys
+from governed_bi.register.knobs import knob_names
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -45,7 +45,7 @@ def test_the_repositorys_own_file_parses_and_names_real_knobs() -> None:
 
     assert "v4" in profiles, "the arm every quoted figure comes from is undeclared"
     for name, profile in profiles.items():
-        assert profile.treatment <= comparability_keys(), (
+        assert profile.treatment <= knob_names(), (
             f"[arm.{name}] names a treatment that is not a comparability knob"
         )
 
@@ -78,15 +78,16 @@ def test_a_treatment_that_is_not_a_comparability_knob_is_refused(tmp_path: Path)
         load_arm_profiles(path)
 
 
-def test_an_operational_knob_is_not_a_valid_treatment(tmp_path: Path) -> None:
-    """``git_sha`` moves between almost any two arms and invalidates nothing, by its own role
-    definition. Declaring it as *the* treatment would make every pair look intentional."""
+def test_git_sha_is_a_declared_setting_and_a_legal_treatment(tmp_path: Path) -> None:
+    """Roles are gone. A difference in ``git_sha`` fails a comparison unless it is the treatment."""
     path = _write(tmp_path, '''
         [arm.wrong]
         treatment = ["git_sha"]
+        corpus_content_hash = "86ed1dbf"
+        question_subset = "1351:423a3f4b65fb"
     ''')
-    with pytest.raises(ValueError, match="git_sha"):
-        load_arm_profiles(path)
+    profiles = load_arm_profiles(path)
+    assert profiles["wrong"].treatment == frozenset({"git_sha"})
 
 
 def test_an_unknown_arm_raises_rather_than_returning_an_empty_treatment() -> None:

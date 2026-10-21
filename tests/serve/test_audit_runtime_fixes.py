@@ -28,7 +28,7 @@ def test_accept_soft_crash_routes_to_stamp_not_guard() -> None:
 
 def test_rewrite_crash_short_circuits_to_stamp() -> None:
     assert _after_rewrite({"path_kind": "crashed"}) == "stamp"
-    assert _after_rewrite({"path_kind": None}) == "negative_gate"
+    assert _after_rewrite({"path_kind": None}) == "fanout"
 
 
 def test_narrate_is_not_a_cancellable_rail() -> None:
@@ -99,7 +99,8 @@ def test_agent_recursion_limit_defaults_and_env(monkeypatch: pytest.MonkeyPatch)
     assert _recursion_limit({}) == int(knob_default("agent_recursion_limit"))
     assert _recursion_limit({"knobs_resolved": {"agent_recursion_limit": 17}}) == 17
     monkeypatch.setenv("GOVERNED_BI_AGENT_RECURSION_LIMIT", "9")
-    assert _recursion_limit({"knobs_resolved": {"agent_recursion_limit": 17}}) == 9
+    assert _recursion_limit({}) == 9
+    assert _recursion_limit({"knobs_resolved": {"agent_recursion_limit": 17}}) == 17
 
 
 def test_n_re_served_is_not_a_quotability_gate() -> None:
