@@ -70,17 +70,11 @@ def _corpus(root: pathlib.Path, *, table_body: str) -> pathlib.Path:
 
 
 def test_v12_fails_a_corpus_asset_quoting_a_held_out_question(tmp_path: pathlib.Path) -> None:
-    """The moved split rule, on a question taken from ``test_final.jsonl``."""
-    dataset = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset" / "test_final.jsonl"
-    question = ""
-    for line in dataset.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        text = str(json.loads(line).get("question") or "")
-        if len(" ".join(text.lower().split())) > 25:
-            question = text
-            break
-    assert question, f"{dataset} has no question long enough for V12"
+    """The moved split rule, on a held-out file written here so the test runs where CI runs."""
+    question = "How many households in Arecibo county earn more than the state median?"
+    dataset = tmp_path / "test_final.jsonl"
+    dataset.write_text(json.dumps({"question_id": "q1", "question": question}) + "
+", encoding="utf-8")
 
     tool = _tool()
     path = tmp_path / "t.yaml"
