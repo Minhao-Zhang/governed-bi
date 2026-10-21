@@ -31,6 +31,11 @@ def test_the_server_and_the_eval_driver_resolve_the_same_run(monkeypatch: pytest
     dotenv = tmp_path / ".env"
     dotenv.write_text('OPENAI_API_KEY=sk-same\nLANGSMITH_API_KEY=ls-same\n', encoding="utf-8")
     monkeypatch.setattr("governed_bi.credentials.DOTENV", dotenv)
+    # The loader writes the fake keys into os.environ; record their prior state so teardown
+    # restores it, or later tests see a key and call OpenAI with it.
+    for name in ("OPENAI_API_KEY", "LANGSMITH_API_KEY"):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
     monkeypatch.setenv("GOVERNED_BI_ROUTE_TOP_N", "4")
     reset_settings()
     server = server_resolve()
