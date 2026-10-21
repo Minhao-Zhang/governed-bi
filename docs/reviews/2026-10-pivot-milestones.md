@@ -624,8 +624,14 @@ and settings and secrets are read apart, once, at startup.
    the repository is how two runs drift apart.
 6. **Secrets live in `.env` and nowhere else.** The secrets are `OPENAI_API_KEY`,
    `GOVERNED_BI_PG_DSN` (the whole DSN, since a real one carries a password) and, for tracing,
-   the `LANGSMITH_*` variables, which LangSmith reads itself. `credentials.py` reads them from
-   the environment, then `.env`, and they never enter the config hash or the turn record.
+   the `LANGSMITH_*` variables, which LangSmith reads itself. `PG_RENAME_DECOY_DSN` is accepted
+   as a secret too until P7 deletes that alias, because it is the DSN the owner's `.env` uses
+   today. `credentials.py` reads them from the environment, then `.env`, and they never enter the
+   config hash or the turn record. `tests/conftest.py` loads only these names from `.env`;
+   loading every key would apply settings from `.env` through the back door.
+   Each default equals the value the owner's `.env` sets on 2026-10-20 where that value
+   describes the setup in use (the corpus path, the model ids and efforts, the three providers,
+   retries and timeouts), so cutting `.env` to its secrets changes nothing a run does.
 7. **One reader, called once.** Each entry point (`api/graph_app.py`, `serve/__main__.py` and
    the eval driver) builds the settings and the secrets once and passes them down. Delete the
    direct `os.environ` reads in `api/graph_app.py`, `model/provider.py`,
@@ -635,6 +641,9 @@ and settings and secrets are read apart, once, at startup.
    environment (`serve/__main__.py:58` says so), so the server and an eval run can resolve
    different settings from the same files.
 8. Delete the matching tests; update `docs/architecture.md` and `docs/usage.md#environment`.
+
+**Owner, at merge:** cut the local `.env` to its secrets (`PG_RENAME_DECOY_DSN` stays until P7),
+because startup refuses the settings it holds today.
 
 **Deliverables:** the PRs.
 
