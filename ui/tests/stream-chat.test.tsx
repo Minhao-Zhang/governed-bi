@@ -70,7 +70,7 @@ describe("StreamChat", () => {
     act(() => harness.setState!({ isLoading: true, messages: [HUMAN], values: {} }));
     act(() => MOCK_AGENT_EVENTS.forEach((ev) => harness.options!.onCustomEvent(ev)));
     expect(screen.getByText("How this answer is being built")).toBeTruthy();
-    expect(screen.getByText("Governance blocked: r_table_not_licensed (table)")).toBeTruthy();
+    expect(screen.getByText("Governance blocked: r_table_not_retrieved (table)")).toBeTruthy();
 
     finishWith(MOCK_AGENT_ANSWER);
 

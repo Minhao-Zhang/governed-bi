@@ -42,7 +42,7 @@ instead, per class, with the numbers.
 **A paused turn outlives the process.** When the engine needs to ask you something it stops
 mid-turn and checkpoints, so killing the server and starting a fresh one leaves the question where
 it was — answering it resumes that same turn rather than beginning the work again. Three bounds
-travel with that. What a test covers is the seam rather than the restart:
+travel with that. What a test covers is the boundary rather than the restart:
 `tests/serve/test_a_pause_survives_a_restart_on_disk.py` drives a real `ask_user` interrupt onto
 `AsyncSqliteSaver` and answers it through a second `compile_durable` on the same file — new loop,
 new connection, new saver, new graph, so the file is the only thing carrying the pause — but the
@@ -103,7 +103,7 @@ GOVERNED_BI_EMBEDDING_MODEL=text-embedding-3-large
 ```
 
 The last one sits among the optional overrides in `.env.example` and is not optional: unset, the
-semantic retrieval channel reports `not_configured` on every facet and routing runs on lexical
+semantic retrieval channel reports `not_configured` on every retrieval channel and routing runs on lexical
 matching alone, which surfaces as a wall of `no_schema_matched` refusals rather than as a
 configuration error.
 
@@ -147,9 +147,9 @@ named before a run so two of them can be compared; this one is `v4`, engine `3c0
 
 **That last identifier is here because the count is not one.** That test split has had four
 versions and only one of them holds 1,351 questions, so a rerun against a replaced dataset would
-report the same *n* over a different population — and pass every quotability gate, because the
-gates compare the corpus digest and the knobs and both would match. Every arm now declares its
-question set in [`arms.toml`](src/governed_bi/register/arms.toml) and the driver refuses a
+report the same *n* over a different population — and pass every quotability check, because the
+checks compare the corpus digest and the settings and both would match. Every configuration now declares its
+question set in [`configs.toml`](src/governed_bi/registry/configs.toml) and the driver refuses a
 mismatch before the first paid question.
 
 | | |

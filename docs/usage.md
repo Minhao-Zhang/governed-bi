@@ -52,8 +52,8 @@ declared claims the test suite holds the code to, not configuration you edit.
 | `GOVERNED_BI_CORPUS_DIR` | Corpus directory. Default `../BIRD-corpus`, resolved against the repo root |
 | `GOVERNED_BI_SCHEMA` | Optional: seed / pin schema from the live database |
 | `GOVERNED_BI_MODEL` | Main chat model. Default `gpt-6-luna`. The CLI still accepts `--model` and `--no-model` |
-| `GOVERNED_BI_UTILITY_MODEL` | Model for facet rewrite and the scope gate. Default `gpt-6-luna` |
-| `GOVERNED_BI_UTILITY_MODEL_EFFORT` | Effort knob for the utility model |
+| `GOVERNED_BI_UTILITY_MODEL` | Model for retrieval channel rewrite and the scope check. Default `gpt-6-luna` |
+| `GOVERNED_BI_UTILITY_MODEL_EFFORT` | Effort setting for the utility model |
 | `GOVERNED_BI_EMBEDDING_MODEL` | Embedder id |
 | `GOVERNED_BI_LLM_MAX_RETRIES` | Retries |
 | `GOVERNED_BI_LLM_TIMEOUT_S` | Main-model timeout |
@@ -63,17 +63,17 @@ declared claims the test suite holds the code to, not configuration you edit.
 | `GOVERNED_BI_CONVERSATION_DB` | Served conversations' checkpoint database; defaults to `runs/conversations.sqlite`. A **file path**: `serve/checkpointer.py::assert_not_a_warehouse` refuses a value carrying `host=`, `dbname=`, `password=` or a `postgres://`-style URL at configuration time, because a checkpointer pointed at the analytics warehouse writes conversation state into it on the first turn |
 | `GOVERNED_BI_HARNESS_DB` | The one-turn CLI's and the eval driver's checkpoint database; defaults to `runs/harness-checkpoints.sqlite`. Separate from the above so 131 benchmark questions do not become the conversation history. Same refusal applies |
 | `GOVERNED_BI_VECTOR_CACHE` | Persistent vector cache directory — one LanceDB database per model, one table per vector width. Defaults to `runs/vectors/`. The server, the one-turn CLI and the eval driver share it |
-| `GOVERNED_BI_CORPUS_RELEASE` | The corpus **tag** an arm is measured against — a name a human pinned, not a directory and not the content hash, which moves for reasons that are not a treatment. Overrides the `corpus_release` comparability knob, so it participates in the config hash and `registry/config_profiles.py::recorded_corpus_release` refuses a profile claiming a different one. Set it when the treatment *is* the corpus |
-| `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` | Wall clock for the whole `agent_core` loop, overriding the `agent_node_timeout_s` knob (default 1200.0). `0` means no wall; empty means unset |
-| `GOVERNED_BI_AGENT_RECURSION_LIMIT` | Superstep ceiling for the nested `create_agent` graph, overriding the `agent_recursion_limit` knob (default 40) |
-| `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | Wall clock for one cancellable utility rail — today only `guard` — overriding the `rail_node_timeout_s` knob (default 120.0) |
-| `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` | Tracing, off by default. **Read by LangChain itself — nothing in `src/` reads them and there is no callback to wire.** One trace per root invocation, so a whole agentic turn costs one and a 20-question debug run costs 20. When on, traces carry run inputs and outputs in full: tool messages, row previews, governed context. That is intended here and would need a masking layer at the tracer seam in production; there is none |
+| `GOVERNED_BI_CORPUS_RELEASE` | The corpus **tag** a configuration is measured against — a name a human pinned, not a directory and not the content hash, which moves for reasons that are not a setting under test. Overrides the `corpus_release` setting that decides whether two runs can be compared, so it participates in the config hash and `registry/config_profiles.py::recorded_corpus_release` refuses a profile claiming a different one. Set it when the setting under test *is* the corpus |
+| `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` | Wall clock for the whole `agent_core` loop, overriding the `agent_node_timeout_s` setting (default 1200.0). `0` means no wall; empty means unset |
+| `GOVERNED_BI_AGENT_RECURSION_LIMIT` | Superstep ceiling for the nested `create_agent` graph, overriding the `agent_recursion_limit` setting (default 40) |
+| `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | Wall clock for one cancellable utility rail — today only `guard` — overriding the `rail_node_timeout_s` setting (default 120.0) |
+| `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` | Tracing, off by default. **Read by LangChain itself — nothing in `src/` reads them and there is no callback to wire.** One trace per root invocation, so a whole agentic turn costs one and a 20-question debug run costs 20. When on, traces carry run inputs and outputs in full: tool messages, row previews, governed context. That is intended here and would need a masking layer at the tracer boundary in production; there is none |
 | `OPENAI_BASE_URL` | **Do not set.** Read by the OpenAI SDK, so it redirects the chat client and the embedder together |
 
 **Nothing in that table is a credential a caller presents.** `OPENAI_API_KEY` buys this process
 access to the model; nothing is asked of a caller of this server. `GOVERNED_BI_API_KEY` was a row
 here until 2026-08-13 and is now read by
-nothing — delete it from an old `.env` rather than assuming it still gates something. What its
+nothing — delete it from an old `.env` rather than assuming it still checks something. What its
 absence costs is in [Serve](#serve-langgraph-server).
 
 Entry points call `boot.resolve_settings` once. The names and defaults live in
@@ -84,7 +84,7 @@ Entry points call `boot.resolve_settings` once. The names and defaults live in
 
 Documentation only; M10 decides removals. Classes: **secret** (a credential or the name of one),
 **location** (where something is), **model selection**, **operational** (a bound or switch an
-operator tunes), **unmeasured** (a knob override no arm has ever varied). "Read in" is relative to
+operator tunes), **unmeasured** (a setting override no configuration has ever varied). "Read in" is relative to
 `src/governed_bi/`.
 
 | Variable | Read in | Class | Recommendation |
@@ -107,17 +107,17 @@ operator tunes), **unmeasured** (a knob override no arm has ever varied). "Read 
 | `GOVERNED_BI_UTILITY_TIMEOUT_S` | `api/graph_app.py` | operational | keep |
 | `GOVERNED_BI_CORPUS_RELEASE` | `registry/settings.py` | operational | keep for configs; consider moving to `registry/configs.toml` |
 | `GOVERNED_BI_AGENT_NODE_TIMEOUT_S` | `registry/settings.py`, `serve/nodes/agent_core.py` | unmeasured | keep as the one wall clock on a turn |
-| `GOVERNED_BI_AGENT_RECURSION_LIMIT` | `registry/settings.py`, `serve/nodes/agent_core.py` | unmeasured | remove: the knob default is the only value ever run |
-| `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | `registry/settings.py`, `serve/graph.py` | unmeasured | remove: the knob default is the only value ever run |
+| `GOVERNED_BI_AGENT_RECURSION_LIMIT` | `registry/settings.py`, `serve/nodes/agent_core.py` | unmeasured | remove: the setting default is the only value ever run |
+| `GOVERNED_BI_RAIL_NODE_TIMEOUT_S` | `registry/settings.py`, `serve/graph.py` | unmeasured | remove: the setting default is the only value ever run |
 
 ### Leak checks
 
-| Gate | Protects | Runs |
+| check | Protects | Runs |
 |---|---|---|
 | `check_no_benchmark_discriminators` | hand-written sibling discriminators staying out of the tree | per push |
 | `check_train_only` | held-out question text, including a quoted question, staying out of a corpus | manual: needs a corpus, the question file, and a train-only control |
 
-## A stack that will actually answer
+## A stack that will answer
 
 Every variable above can be set correctly and the engine still answer nothing, because three of the
 things it needs are not in the repository. This section is the shortest path to a running stack that
@@ -155,7 +155,7 @@ Then leave `GOVERNED_BI_CORPUS_DIR` unset and set `GOVERNED_BI_SCHEMA=gbi_demo_s
 seeds a corpus from the live schema at startup, so the two halves cannot disagree.
 
 Confirm the whole thing from one request, before opening a browser. `/capabilities` reports what the
-process resolved, so it names the model, the gateway and the database it is actually pointed at:
+process resolved, so it names the model, the gateway and the database it is pointed at:
 
 ```bash
 curl -s http://127.0.0.1:2024/capabilities
@@ -181,7 +181,7 @@ configure and nothing for a client to send:
 curl localhost:2024/capabilities
 ```
 
-**That re-opens two findings, and the honest thing is to say which.**
+**That re-opens two findings, and the accurate thing is to say which.**
 A1 and A7 — every route unauthenticated, and every thread's SQL and full records readable — were
 closed on 2026-08-12 by requiring a shared key. The key
 was removed on 2026-08-13 and both findings are live again, in exactly the terms they were written
@@ -201,8 +201,8 @@ is anything else.
 `api/auth.py` still exists and is still wired by `langgraph.json`'s `auth.path`, because it does a
 second job that has nothing to do with who is calling: `@auth.on.threads.update` and
 `@auth.on.threads.create_run` refuse a client-supplied state-writing `command`, which is what
-keeps audit findings A2, A3 and A4 closed. Thread state carries `licensed` — the bound the layer
-stack enforces against — and `corpus_content_hash`, the treatment identity every quotability gate
+keeps audit findings A2, A3 and A4 closed. Thread state carries `retrieved` — the bound the layer
+stack enforces against — and `corpus_content_hash`, the identity of what was measured every quotability check
 reads. `@auth.authenticate` remains and allows unconditionally, returning a constant identity that
 nothing reads.
 
@@ -236,7 +236,7 @@ with no "keep the summary, expire the trace" middle state.
 long-lived thread grows without bound. The setting takes effect on a deployed runtime only.
 
 And `checkpointer.path` replaces the *checkpoint* store only: under `langgraph dev` the thread, run and assistant index still lives in
-`.langgraph_api/.langgraph_ops.pckl`, which has no config knob. `/capabilities` reports
+`.langgraph_api/.langgraph_ops.pckl`, which has no config setting. `/capabilities` reports
 `checkpoint_durable` from that same `langgraph.json` reading; both durability flags are
 true on this deployment. They are a configuration reading, not a live handle
 ([`open-work.md`](open-work.md) §4.4).
@@ -255,7 +255,7 @@ itself — so without that Studio entry its preflight answers `400 Disallowed CO
 origin`, the browser blocks the call, and Studio reports only "Connection failed".
 The origin list is read at startup: restart the server after changing it.
 
-The 3100 pair is load-bearing too, and not obviously so: it is the only reason
+The 3100 pair is necessary too, and not obviously so: it is the only reason
 `.claude/launch.json`'s `ui-live-3100` can point a second `next dev` at an engine already
 running on 2024 (`_why_ui_live_3100` says exactly that), so pruning it as dead config
 breaks that entry with a CORS error rather than a missing-config one.
@@ -306,7 +306,7 @@ through `TypeAdapter(HttpConfig)`, and `CorsConfig`
 silently. Adding it to `langgraph.json` changes nothing — measured, not assumed.
 
 `langgraph dev` sets `ALLOW_PRIVATE_NETWORK=true` and mounts `PrivateNetworkMiddleware`,
-but that only stamps `Access-Control-Allow-Private-Network` onto a response that is
+but that only writes `Access-Control-Allow-Private-Network` onto a response that is
 already a 400. The *default* CORS branch has the same gap, so this is not something a
 `cors` block regressed.
 
@@ -347,7 +347,7 @@ without credentials, and a silent skip reads as a pass.
 
 ## Evaluation
 
-To run a measured arm over the BIRD data lake, see
+To run a measured configuration over the BIRD data lake, see
 [measurement](measurement.md). It covers the driver's flags, the prompt
 registry, the fields a measurement row carries, and what makes a number
 quotable.

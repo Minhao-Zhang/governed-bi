@@ -1,10 +1,10 @@
 """Audit D9's positive control: the cross-config check passes on a seed-only null pair.
 
-``run1`` and ``run2`` in ``runs/eval/`` differ **only by a random seed** — the same treatment, kept on
+``run1`` and ``run2`` in ``runs/eval/`` differ **only by a random seed** — the same setting under test, kept on
 disk for exactly this purpose. ``context_hashes_distinct`` required at least 95% of shared questions to
 have differing ``context_hash`` before a config-to-config delta could be quoted, on the reasoning that a
-changed treatment changes the context. On that pair it passes at **0.9993**, and it passes on every
-other pair on disk too (0.992, 0.992, 0.988). It believes it asks "did the treatment change" and
+changed setting under test changes the context. On that pair it passes at **0.9993**, and it passes on every
+other pair on disk too (0.992, 0.992, 0.988). It believes it asks "did the setting under test change" and
 measures "is there retrieval noise", to which the answer is always yes.
 
 **Three corrections to how this was first written, all from review, all narrowing the claim.**
@@ -21,11 +21,11 @@ measures "is there retrieval noise", to which the answer is always yes.
 3. **``context_hash`` differing is not merely ordering.** Measured across the pair: only 100 of 1351
    questions get the same schema shortlist and only 33 the same ``retrieved_tables`` set. Different tables are
    selected on 97.6% of questions. That is the strongest argument *for* the current check — two runs
-   whose realised context differs that much are arguably not one treatment — and it is why the fix is a
-   judgement about what "treatment" names, not a bug fix.
+   whose realised context differs that much are arguably not one setting under test — and it is why the fix is a
+   judgement about what "setting under test" names, not a bug fix.
 
 **What this control does and does not force.** It fires on the check keeping its name and its role. If
-the fix instead demotes ``context_hash`` to an existence check and asserts treatment difference from
+the fix instead demotes ``context_hash`` to an existence check and asserts setting under test difference from
 declared fields — which is what this audit's Phase 2 prescribes — then **this test stays XFAIL and
 stops meaning anything**. Whoever does that must repoint it at whatever makes the judgement, and the D9
 row says so. ``strict=True`` catches the narrower case; it is not clairvoyant, and the first version of
@@ -73,7 +73,7 @@ def _population(label: str, path: pathlib.Path):
                 "question_id": r["question_id"],
                 "context_hash": r.get("context_hash"),
                 "corpus_content_hash": r.get("corpus_content_hash"),
-                "knobs_resolved": r.get("knobs_resolved"),
+                "settings_resolved": r.get("settings_resolved"),
                 "correct": r.get("correct"),
                 "outcome": r.get("outcome"),
             }
@@ -94,13 +94,13 @@ def test_the_cross_config_judgement_refuses_a_seed_only_pair() -> None:
 
     **This was an ``xfail(strict=True)`` on ``context_hashes_distinct`` until 2026-08-11.** The
     docstring above anticipated exactly what happened: the fix demoted ``context_hash`` to an
-    existence check and moved the treatment judgement onto declared fields, so the old assertion
+    existence check and moved the setting under test judgement onto declared fields, so the old assertion
     would have stayed XFAIL and stopped meaning anything. Per the D9 row's instruction, it is
     repointed rather than deleted.
 
-    ``settings_comparable`` reads the treatment from ``knobs_resolved`` instead of inferring it
+    ``settings_comparable`` reads the setting under test from ``settings_resolved`` instead of inferring it
     from a hash. ``run1`` and ``run2`` differ only by a random seed, so no caller can name a
-    treatment for them and none of the 47 comparability settings separates them — whichever of
+    setting under test for them and none of the 47 settings that affect results separates them — whichever of
     those two facts these artifacts show, the result must not be ``passed``.
     """
     from governed_bi.eval.report import Result, settings_comparable
@@ -113,11 +113,11 @@ def test_the_cross_config_judgement_refuses_a_seed_only_pair() -> None:
 
 
 @_ARTIFACTS
-def test_context_hash_no_longer_claims_to_detect_a_treatment() -> None:
-    """The other half of D9, asserted so the demotion cannot be quietly reverted.
+def test_context_hash_no_longer_claims_to_detect_a_under_test() -> None:
+    """The other half of D9, asserted so the demotion cannot be reverted.
 
     The check is now an existence check and *does* pass on the null pair — that is correct and
-    is the point. What must not come back is the reading of that pass as "the treatment
+    is the point. What must not come back is the reading of that pass as "the setting under test
     changed", so the judgement is required to live elsewhere: this asserts the two checks
     disagree on this pair, which is only possible because they now ask different questions.
     """
@@ -133,7 +133,7 @@ def test_a_seed_only_pair_is_not_quotable_today_and_must_stay_that_way() -> None
     """The regression guard, which passes now — and for a reason that is not D9.
 
     ``comparison_quotable`` refuses this pair because these artifacts predate
-    ``corpus_content_hash``, not because anything noticed the treatment was identical. Asserted anyway:
+    ``corpus_content_hash``, not because anything noticed the setting under test was identical. Asserted anyway:
     whatever D9's fix does, it must not make a seed-only pair quotable, and this fails if some future
     change relaxes the corpus check while D9 is still open.
     """
@@ -160,7 +160,7 @@ def test_the_null_pair_is_still_a_null() -> None:
 
     by_a, by_b = a.by_unit(), b.by_unit()
     differing = [
-        qid for qid in sorted(shared) if by_a[qid].get("knobs_resolved") != by_b[qid].get("knobs_resolved")
+        qid for qid in sorted(shared) if by_a[qid].get("settings_resolved") != by_b[qid].get("settings_resolved")
     ]
     assert not differing, (
         f"{len(differing)} row(s) record different settings, so this is no longer a null replicate and "
@@ -168,11 +168,11 @@ def test_the_null_pair_is_still_a_null() -> None:
     )
 
 
-# ── the treatment judgement itself, on input that reaches it ──────────────────
+# ── the setting under test judgement itself, on input that reaches it ──────────────────
 #
-# **The four controls above are green against a tree with the entire treatment half of
+# **The four controls above are green against a tree with the entire setting under test half of
 # `settings_comparable` deleted.** Independent review proved it by mutation: on the real null pair every
-# comparability setting check short-circuits at the missing-key branch — those artifacts do not record
+# setting that affects results check short-circuits at the missing-key branch — those artifacts do not record
 # `the retired budget`, `the retired threshold`, `semantic_scale_ceiling` or `sqlglot_version` — so `cannot_evaluate`
 # is returned for *absence* and the replicate check is never reached. That is the
 # `corpus_content_hash` masking defect of audit D7 repeated one check over: a result that looks like
@@ -191,14 +191,14 @@ def _synthetic(label: str, settings: dict):
     return Population.of(
         label,
         [
-            {"question_id": f"q{i}", "outcome": "answered", "correct": True, "knobs_resolved": settings}
+            {"question_id": f"q{i}", "outcome": "answered", "correct": True, "settings_resolved": settings}
             for i in range(3)
         ],
     )
 
 
-def _every_comparability_setting() -> dict:
-    """A complete, well-formed `knobs_resolved`, so nothing short-circuits on absence."""
+def _every_affects_results_setting() -> dict:
+    """A complete, well-formed `settings_resolved`, so nothing short-circuits on absence."""
     from governed_bi.registry.settings import Unset, setting_default, setting_names
 
     out = {}
@@ -216,7 +216,7 @@ def test_two_configs_with_every_setting_identical_are_a_replicate_not_a_comparis
     """
     from governed_bi.eval.report import Result, settings_comparable
 
-    settings = _every_comparability_setting()
+    settings = _every_affects_results_setting()
     check = settings_comparable(_synthetic("a", settings), _synthetic("b", dict(settings)))
     assert check.result is not Result.passed, (
         f"two configs with every comparability setting identical were certified as a comparison: "
@@ -228,13 +228,13 @@ def test_two_configs_with_every_setting_identical_are_a_replicate_not_a_comparis
     )
 
     # **Both halves, because the first assertion alone was green with the replicate check deleted.**
-    # With no treatment declared the check exits at the "nothing was named" branch and never reaches
+    # With no setting under test declared the check exits at the "nothing was named" branch and never reaches
     # the replicate check, so `d9-replicate-check-deleted` survived until this was added — caught by
     # `tools/mutate.py` within a minute of the control being written, which is the argument for
     # declaring the mutation at the same time as the test.
     key = "route_top_n" if "route_top_n" in settings else sorted(settings)[0]
     declared = settings_comparable(
-        _synthetic("a", settings), _synthetic("b", dict(settings)), treatment=frozenset({key})
+        _synthetic("a", settings), _synthetic("b", dict(settings)), under_test=frozenset({key})
     )
     assert declared.result is Result.failed, (
         f"a declared treatment identical on both configs is a replicate, not a comparison: "
@@ -243,14 +243,14 @@ def test_two_configs_with_every_setting_identical_are_a_replicate_not_a_comparis
     assert "replicate" in declared.render()
 
 
-def test_one_moved_setting_outside_the_declared_treatment_is_a_confounder() -> None:
+def test_one_moved_setting_outside_the_declared_under_test_is_a_confounder() -> None:
     """The paired positive: the check must still be able to *pass*, and to refuse a confounder.
 
     Without this, a `settings_comparable` that refuses everything satisfies the test above.
     """
     from governed_bi.eval.report import Result, settings_comparable
 
-    settings = _every_comparability_setting()
+    settings = _every_affects_results_setting()
     moved = dict(settings)
     key = "route_top_n" if "route_top_n" in settings else sorted(settings)[0]
     moved[key] = (settings[key] or 0) + 7 if isinstance(settings[key], (int, float)) else "moved"
@@ -261,7 +261,7 @@ def test_one_moved_setting_outside_the_declared_treatment_is_a_confounder() -> N
         f"{undeclared.render()}"
     )
     declared = settings_comparable(
-        _synthetic("a", settings), _synthetic("b", moved), treatment=frozenset({key})
+        _synthetic("a", settings), _synthetic("b", moved), under_test=frozenset({key})
     )
     assert declared.result is Result.passed, (
         f"the check cannot pass at all, so refusing a replicate proves nothing: {declared.render()}"

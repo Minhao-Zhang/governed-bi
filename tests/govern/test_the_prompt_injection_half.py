@@ -117,7 +117,7 @@ def test_no_benign_question_is_refused(guard_report) -> None:
     """The controls, each one a recorded weakness of the rule it is aimed at.
 
     ``ignore`` and ``system`` are ordinary words in questions about data and
-    ``_INSTRUCTION_OVERRIDE``'s own comment says so; a column can genuinely be named
+    ``_INSTRUCTION_OVERRIDE``'s own comment says so; a column can be named
     ``system``; non-ASCII is not a control character. The hardest one contains ``override``,
     ``prior`` *and* ``instructions`` and passes only because the pattern requires them in
     order — a looser rule written later fails on that case first.

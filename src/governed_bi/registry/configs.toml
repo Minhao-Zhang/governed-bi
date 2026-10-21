@@ -4,13 +4,13 @@
 # "versioned is not rebuildable" problem wearing a different hat: `runs/eval/` names a config,
 # and nothing committed said what that name meant. This file is the committed half.
 #
-# `treatment` is the load-bearing field. `eval/report.py::settings_comparable` refuses a pair that
+# `under_test` is the field that names what changed. `eval/report.py::settings_comparable` refuses a pair that
 # cannot name what changed, because "nobody said what changed" is not "nothing changed" — that
 # is audit D9's resolution, and this is where the caller says it. Every name must be a
 # `a recorded setting` setting in `registry/settings.py`; `registry/config_profiles.py` refuses the file
 # otherwise rather than silently ignoring a typo.
 #
-# This file does NOT set settings. It declares what a config's treatment *was*, so a recorded run can
+# This file does NOT set settings. It declares what a config's under_test *was*, so a recorded run can
 # be checked against it. A second place that decides a setting's value is a defect; the setting
 # register stays the one home.
 #
@@ -86,7 +86,7 @@
 #                        read the smaller MDE as the better instrument. Naming the readout is what
 #                        makes that unit error visible to whoever reads the refusal.
 #   corpus_release       the corpus TAG the config was measured on, matching the `corpus_release`
-#                        comparability setting. Mandatory only for a config whose `treatment` names
+#                        setting that affects results. Mandatory only for a config whose `under_test` names
 #                        `corpus_release` — such a config otherwise leaves the one field it exists
 #                        to vary unchecked. A tag, not a ref and not a digest.
 #
@@ -107,7 +107,7 @@
 
 [config.v3_fold]
 description = "ANALYST v3 with the fold prompt, routing pinned."
-treatment = []
+under_test = []
 corpus = "30872d3"
 # Derived from the artifact, not from the corpus checkout: 1 345 of the 1 351 rows of
 # `runs/eval/proxy_v3_fold_opus_high_corpus30872d3.jsonl` carry this digest and the other 6 carry
@@ -130,11 +130,11 @@ corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0
 # `docs/failure-modes.md`). Two methods, one answer; the digest here is the one read off the rows.
 dataset = "22fe2a6"
 question_subset = "1351:423a3f4b65fb"
-notes = "The baseline v4 is measured against. Its own treatment is relative to v3, not recorded here."
+notes = "The baseline v4 is measured against. Its own setting under test is relative to v3, not recorded here."
 
 [config.v4]
 description = "ANALYST v4 prompt. The config every quoted figure in README.md comes from."
-treatment = ["prompt_set"]
+under_test = ["prompt_set"]
 compare_to = "v3_fold"
 corpus = "30872d3"
 corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
@@ -146,7 +146,7 @@ question_subset = "1351:423a3f4b65fb"
 
 [config.v5]
 description = "v4 plus the projection ablation, which priced ~4 points of EX as shape-matching."
-treatment = ["prompt_set"]
+under_test = ["prompt_set"]
 compare_to = "v4"
 corpus = "30872d3"
 corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
@@ -156,7 +156,7 @@ question_subset = "1351:423a3f4b65fb"
 
 [config.ask_first]
 description = "ANALYST ask_first prompt. Off-default until a measured config exists; serve stays v4."
-treatment = ["prompt_set"]
+under_test = ["prompt_set"]
 compare_to = "v4"
 corpus = "30872d3"
 corpus_content_hash = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
@@ -167,7 +167,7 @@ question_subset = "1351:423a3f4b65fb"
 #
 # Everything above was Claude-Opus-4.8 through `proxy`. This one is the configuration `.env`
 # ships and `tools/run_datalake_eval.py` defaults to, so it is a new baseline and not a
-# comparison: `treatment` is empty and there is no `compare_to`, for `v3_fold`'s reason. The
+# comparison: `under_test` is empty and there is no `compare_to`, for `v3_fold`'s reason. The
 # model moved, the gateway moved, and open-work §3.4 already records that the `run_query` tool
 # reply changed under an unchanged `prompt_set_hash` on 2026-08-20 — three reasons no pairing
 # with the configs above is sound, any one of which would be enough.
@@ -194,7 +194,7 @@ question_subset = "1351:423a3f4b65fb"
 # is not made on the way to a run.
 [config.luna_v4_embed]
 description = "ANALYST v4 on gpt-6-luna/openai, xhigh, semantic channel on. The first config on this engine."
-treatment = []
+under_test = []
 corpus = "74ff80c4"
 corpus_content_hash = "6e5c7b4be83d56828bab66183eec03bbdcf486d7454d34acd066530010ebed85"
 dataset = "dacf037"

@@ -25,7 +25,7 @@ __all__ = [
     "combine_channels",
     "configurable",
     "corpus_structure",
-    "facet_hits",
+    "channel_hits",
     "channel_weights",
     "vector_for_query",
     "float_setting",
@@ -45,7 +45,7 @@ class ChannelScale:
     ``w_lexical``, ``w_semantic`` and ``semantic_scale_ceiling`` were module constants built from
     ``setting_default`` when ``serve.runtime`` was first imported, so no request could move them
     (audit I10). That is worse than a missing feature: all three are declared
-    ``a recorded setting``, they enter ``setting_names()`` and ``knobs_resolved``, so a run
+    ``a recorded setting``, they enter ``setting_names()`` and ``settings_resolved``, so a run
     could publish ``w_semantic: 0.9``, move its config hash, and behave exactly like the default —
     which is the inverse of the defect ``registry/settings.py`` opens by describing.
 
@@ -68,7 +68,7 @@ def channel_scale(state: Mapping[str, Any]) -> ChannelScale:
     """Resolve the three fusion settings for this turn. **The one reader.**
 
     Through :func:`float_setting`, so the precedence is the same as every other setting — state, then
-    ``knobs_resolved``, then the register — and an ``UNSET`` raises rather than being guessed.
+    ``settings_resolved``, then the register — and an ``UNSET`` raises rather than being guessed.
     """
     return ChannelScale(
         lexical=float_setting(state, "w_lexical"),
@@ -152,7 +152,7 @@ def vector_for_query(
     fallback: Sequence[float] | None,
     embedder: Any | None,
 ) -> tuple[Sequence[float] | None, ChannelState]:
-    """The vector of the text that was **actually searched**, with the channel's own result.
+    """The vector of the text that was ** searched**, with the channel's own result.
 
     Shared by both retrieval passes because only one of them had it: pass one embedded each
     channel's rewritten query, while pass two took the raw question's call-level vector and
@@ -255,10 +255,10 @@ def model_id(model: Any) -> str | None:
 
 
 def int_setting(state: Mapping[str, Any], name: str) -> int:
-    """Integer setting: ``state`` → ``knobs_resolved`` → register. ``UNSET`` / bad values raise."""
+    """Integer setting: ``state`` → ``settings_resolved`` → register. ``UNSET`` / bad values raise."""
     raw = state.get(name)
     if raw is None:
-        settings = state.get("knobs_resolved") or {}
+        settings = state.get("settings_resolved") or {}
         if isinstance(settings, Mapping):
             raw = settings.get(name)
     if raw is None:
@@ -287,7 +287,7 @@ def bool_setting(state: Mapping[str, Any], name: str) -> bool:
     """
     raw = state.get(name)
     if raw is None:
-        settings = state.get("knobs_resolved") or {}
+        settings = state.get("settings_resolved") or {}
         if isinstance(settings, Mapping):
             raw = settings.get(name)
     if raw is None:
@@ -311,7 +311,7 @@ def float_setting(state: Mapping[str, Any], name: str) -> float:
     """Float setting with the same precedence as :func:`int_setting`."""
     raw = state.get(name)
     if raw is None:
-        settings = state.get("knobs_resolved") or {}
+        settings = state.get("settings_resolved") or {}
         if isinstance(settings, Mapping):
             raw = settings.get(name)
     if raw is None:
@@ -353,8 +353,8 @@ def candidate_depth(state: Mapping[str, Any]) -> int:
     return int_setting(state, "candidate_depth")
 
 
-def facet_hits(channel_result: Any) -> list[Any]:
-    """Hits list from a FacetResult dict or object."""
+def channel_hits(channel_result: Any) -> list[Any]:
+    """Hits list from a ChannelResult dict or object."""
     if channel_result is None:
         return []
     if isinstance(channel_result, Mapping):

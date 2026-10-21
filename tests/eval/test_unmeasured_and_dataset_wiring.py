@@ -72,7 +72,7 @@ def _funnel_rows(correct: object) -> list[dict]:
             "question_id": "q1",
             "db_id": "s",
             "retrieved_tables_schemas": ["s"],
-            "licensed": ["s.t"],
+            "retrieved_tables": ["s.t"],
             "outcome": "answered",
             "correct": correct,
         }

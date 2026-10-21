@@ -3,7 +3,7 @@
 **The defect this file exists to prevent has a measured precedent.** ``prompt_set_hash`` was
 ``_digest(SYSTEM_PROMPT)`` — one prompt — and the engine is gaining a guard check, five channel
 rewriters and a narrator. Two runs whose guard prompt differed would then have reported the same
-hash, and comparability would have cleared the pair the second run existed to isolate. That is
+hash, and the shared-settings check would have cleared the pair the second run existed to isolate. That is
 not hypothetical: ``registry/settings.py`` records two v1 ladders that differed **only** in
 ``llm_reasoning_effort``, which was recorded nowhere, and effort moved the baseline config +2.5pp
 against a 2.3pp detection threshold.
@@ -48,9 +48,9 @@ def test_every_prompt_states_why_it_exists() -> None:
 
 
 def test_the_hash_moves_when_any_prompt_moves(monkeypatch: pytest.MonkeyPatch) -> None:
-    """**The load-bearing test.** Every registered prompt, one at a time.
+    """**The test.** Every registered prompt, one at a time.
 
-    A prompt the hash does not reach is a treatment the run cannot report, which is the whole
+    A prompt the hash does not reach is a setting under test the run cannot report, which is the whole
     failure. Parametrising over the live registry rather than a hand-written list is deliberate
     here — unlike the stage vocabulary, where a hand-written list is what catches the *code*
     being wrong, this property is about coverage of whatever happens to be registered.
@@ -93,7 +93,7 @@ def test_the_hash_covers_the_variant_not_only_the_text(monkeypatch: pytest.Monke
 
 
 def test_the_hash_is_stable_and_order_independent() -> None:
-    """A comparability key that moved when somebody reordered a literal would be useless."""
+    """A key that affects results that moved when somebody reordered a literal would be useless."""
     assert prompt_set_hash() == prompt_set_hash()
     assert prompt_set_hash() == prompt_set_hash(dict(DEFAULT_VARIANTS))
 
@@ -133,12 +133,12 @@ def test_the_engine_sends_the_registered_text() -> None:
     assert analyst_prompt() == prompt_text("analyst")
 
 
-def test_a_selected_variant_actually_reaches_the_analyst() -> None:
+def test_a_selected_variant_reaches_the_analyst() -> None:
     """The whole point of the setting, and the way it would fail: silently.
 
     ``analyst_prompt`` was ``SYSTEM_PROMPT = prompt_text("analyst")``, bound at import. A run
     selecting ``v1`` would have recorded ``v1``'s ``prompt_set_hash`` and sent ``v2`` — an
-    artifact naming a treatment it never received, which is worse than having no setting, because
+    artifact naming a setting under test it never received, which is worse than having no setting, because
     a later reader has no way to tell.
 
     Uses ``v1`` because it is a real registered variant that differs from the default; the test
@@ -187,7 +187,7 @@ def test_the_session_hashes_the_variants_it_also_sends() -> None:
         index=None, structure=None, assets_by_id={}, corpus=None, connector=None,
         policy=GovernancePolicy(guard_rules_enabled={}),
         corpus_content_hash="c", prompt_set_hash=prompt_set_hash(variants),
-        knobs_resolved={}, db_id="d", run_id="r", prompt_variants=variants,
+        settings_resolved={}, db_id="d", run_id="r", prompt_variants=variants,
     )
 
     assert session.prompt_set_hash == prompt_set_hash(variants)
@@ -206,6 +206,6 @@ def test_a_session_selecting_nothing_carries_no_variant_key() -> None:
     session = Session(
         index=None, structure=None, assets_by_id={}, corpus=None, connector=None,
         policy=GovernancePolicy(guard_rules_enabled={}), corpus_content_hash="c",
-        prompt_set_hash=prompt_set_hash(), knobs_resolved={}, db_id="d", run_id="r",
+        prompt_set_hash=prompt_set_hash(), settings_resolved={}, db_id="d", run_id="r",
     )
     assert "prompt_variants" not in session.configurable()["configurable"]

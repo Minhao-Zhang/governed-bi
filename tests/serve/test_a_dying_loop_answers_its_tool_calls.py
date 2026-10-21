@@ -21,7 +21,7 @@ production setting) and any exception out of the nested agent with a call pendin
 ``tool_use`` *by design*; answering it would break resume, which is the feature the clarification
 surface exists for. Today that is structural — ``_run`` re-raises ``GraphInterrupt`` and the node
 calls it inside no ``try``, so a pause never reaches the write — and the last two tests are what
-would notice a refactor that catches ``GraphInterrupt`` in the node and quietly turns this fix
+would notice a refactor that catches ``GraphInterrupt`` in the node and turns this fix
 into a resume-breaker.
 """
 
@@ -94,7 +94,7 @@ def _state() -> dict[str, Any]:
         "attempt_id": "a",
         "corpus_content_hash": "c",
         "prompt_set_hash": "p",
-        "knobs_resolved": {},
+        "settings_resolved": {},
         "n_re_served": 0,
         # Routing has to succeed or the turn refuses before ``agent_core`` runs at all.
         "channel_route_hits": [("channel_schema", "beer_factory", 1.0)],

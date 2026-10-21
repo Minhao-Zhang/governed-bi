@@ -9,7 +9,7 @@ and nothing else, because they are the only ones the app declares:
 * `GET /livez` answers `{"ok": true}`.
 * `GET /readyz` answers 200 with `ready: true`: the session resolves with no fatal corpus problem.
 * `GET /capabilities` answers, and `can_clarify` is true only with `can_stream` and a live model.
-* `GET /clarifications/pending` answers with a whole envelope: `rows`, and `meta` carrying `n`,
+* `GET /clarifications/pending` answers with a whole wrapper: `rows`, and `meta` carrying `n`,
   `truncated`, `threads_scanned`, `limit`, `offset` and `columns`.
 * The app declares exactly those four custom routes.
 * The production pending reader, used outside the LangGraph server, refuses by name
@@ -118,9 +118,9 @@ def run_checks(client: Any, *, out: Callable[[str], None] = print) -> list[str]:
 
 
 class _EmptyThreadStore:
-    """The thread store this script can honestly offer the pending reader: an empty one.
+    """The thread store this script can offer the pending reader: an empty one.
 
-    Not seeded, so the checks stay about the route and its envelope rather than about this class.
+    Not seeded, so the checks stay about the route and its wrapper rather than about this class.
     """
 
     class _Threads:

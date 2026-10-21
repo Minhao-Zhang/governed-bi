@@ -1,6 +1,6 @@
 """A measurement row must say what produced it.
 
-Measured on the 2026-08-07 pooled run: ``knobs_resolved`` was absent — not empty, missing —
+Measured on the 2026-08-07 pooled run: ``settings_resolved`` was absent — not empty, missing —
 from 1351/1351 rows of both configs, so ``measure.checks`` returned ``cannot_evaluate`` and no
 figure could be joined to the configuration it ran under. ``Session.turn`` wrote the field and
 ``finish`` projected it; ``eval.harness.project_turn`` built the row from a fixed key list that
@@ -51,18 +51,18 @@ def _questions() -> list[dict]:
 def test_a_measured_row_carries_the_configuration_and_the_gold_schema(tmp_path: Path) -> None:
     """Driven through the real harness and judged by the real check, not by key presence.
 
-    The check is the thing that broke: asserting ``"knobs_resolved" in row`` would pass for a
-    row carrying ``{}``, which ``_knobs_resolved_check`` reads as a genuine one-configuration
+    The check is the thing that broke: asserting ``"settings_resolved" in row`` would pass for a
+    row carrying ``{}``, which ``_settings_resolved_check`` reads as a genuine one-configuration
     config whose every setting is None.
     """
     rows = run_config(_questions(), stub_config(connector=_connector(tmp_path)))
 
     for row in rows:
-        assert isinstance(row["knobs_resolved"], dict) and row["knobs_resolved"]
+        assert isinstance(row["settings_resolved"], dict) and row["settings_resolved"]
         assert row["db_id"] == "main", "the gold schema comes from the question, not the turn"
 
     settings_check = next(
-        g for g in evaluate_config(config_population(rows, label="stub")) if g.field == "knobs_resolved"
+        g for g in evaluate_config(config_population(rows, label="stub")) if g.field == "settings_resolved"
     )
     assert settings_check.result is Result.passed, settings_check.render()
 
@@ -82,7 +82,7 @@ def test_a_crashed_row_still_names_the_config_it_crashed_in(tmp_path: Path) -> N
             raise RuntimeError("provider went away")
 
     # `compile_durable`, not `compile_graph`: the concurrent path builds a durable graph
-    # per worker so each gets its own loop-bound saver, and that is the seam a crash
+    # per worker so each gets its own loop-bound saver, and that is the boundary a crash
     # rides in on.
     original = harness.compile_durable
     harness.compile_durable = lambda *a, **k: _Exploding()  # type: ignore[assignment]
@@ -100,13 +100,13 @@ def test_a_crashed_row_still_names_the_config_it_crashed_in(tmp_path: Path) -> N
     assert [r["outcome"] for r in rows] == ["crashed", "crashed"]
     for row in rows:
         assert row["db_id"] == "main"
-        assert "knobs_resolved" in row
+        assert "settings_resolved" in row
 
 
 class _FakeSession:
     """The parts of ``Session`` the harness touches, so the override path is testable offline."""
 
-    knobs_resolved = {"route_top_n": 3}
+    settings_resolved = {"route_top_n": 3}
 
     def turn(self, question: str, **_kwargs) -> dict:
         return {
@@ -120,7 +120,7 @@ class _FakeSession:
             "corpus_content_hash": "corpus-fake",
             "prompt_set_hash": "prompt-fake",
             # What the defect looks like: the session's value, unconditionally.
-            "knobs_resolved": dict(self.knobs_resolved),
+            "settings_resolved": dict(self.settings_resolved),
             "n_re_served": 0,
             "evidence": "",
             "messages": [],
@@ -132,35 +132,35 @@ class _FakeSession:
 def test_a_per_question_setting_override_is_not_silently_replaced(tmp_path: Path) -> None:
     """``--top-n`` was a no-op on every config that passed a session.
 
-    ``tools/run_datalake_eval.py`` writes ``question["knobs_resolved"]`` and prints the
+    ``tools/run_datalake_eval.py`` writes ``question["settings_resolved"]`` and prints the
     override in its header; ``Session.turn`` then overwrote it with the session's own settings, so
     the run served the register default while announcing something else. The no-session path
     (``_base_turn``) had always honoured the question, so the two paths disagreed about what a
-    turn's configuration is — and with ``knobs_resolved`` now on the row, whichever one is
+    turn's configuration is — and with ``settings_resolved`` now on the row, whichever one is
     wrong becomes a published lie rather than an invisible one.
     """
-    questions = [{**q, "knobs_resolved": {"route_top_n": 7}} for q in _questions()]
+    questions = [{**q, "settings_resolved": {"route_top_n": 7}} for q in _questions()]
     rows = run_config(
         questions,
         stub_config(connector=_connector(tmp_path)),
         session=_FakeSession(),
     )
-    assert all(r["knobs_resolved"]["route_top_n"] == 7 for r in rows)
+    assert all(r["settings_resolved"]["route_top_n"] == 7 for r in rows)
 
 
-def test_a_measured_row_names_both_treatment_identities(tmp_path: Path) -> None:
+def test_a_measured_row_names_both_under_test_identities(tmp_path: Path) -> None:
     """The corpus and the prompt wording that produced the row.
 
-    Same defect as ``knobs_resolved`` above, found the same way and later: ``Session`` mints
+    Same defect as ``settings_resolved`` above, found the same way and later: ``Session`` mints
     both, ``finish`` projects both, and ``project_turn``'s key list carried neither. The
     2026-08-09 artifacts therefore record which corpus produced them only in their *filename*
     — a human convention — and which prompt wording produced them not at all.
 
     That is fatal for the thing the prompt registry exists to enable. Two configs differing only
     in ``--prompt-variant`` would emit rows indistinguishable in every field, so a merged
-    analysis could not tell the treatment from the control, and neither could a later reader.
+    analysis could not tell the setting under test from the control, and neither could a later reader.
 
-    ``docs/measurement.md``: the corpus is the treatment identity of every measurement. An
+    ``docs/measurement.md``: the corpus is the setting under test identity of every measurement. An
     identity that lives in a filename is one ``mv`` away from being wrong.
 
     **Asserted on the value, and across two runs.** The predecessor asserted
@@ -171,11 +171,11 @@ def test_a_measured_row_names_both_treatment_identities(tmp_path: Path) -> None:
     emits two artifacts nothing can tell apart.
     """
     connector = _connector(tmp_path)
-    treatments = {
+    under_tests = {
         "alpha": ("corpus-alpha-0f1e", "prompt-alpha-9c8d"),
         "beta": ("corpus-beta-77aa", "prompt-beta-b31c"),
     }
-    rows_by_treatment = {
+    rows_by_under_test = {
         label: run_config(
             [
                 {**q, "corpus_content_hash": corpus, "prompt_set_hash": prompt}
@@ -183,11 +183,11 @@ def test_a_measured_row_names_both_treatment_identities(tmp_path: Path) -> None:
             ],
             stub_config(connector=connector),
         )
-        for label, (corpus, prompt) in treatments.items()
+        for label, (corpus, prompt) in under_tests.items()
     }
 
-    for label, (corpus, prompt) in treatments.items():
-        for row in rows_by_treatment[label]:
+    for label, (corpus, prompt) in under_tests.items():
+        for row in rows_by_under_test[label]:
             assert row["corpus_content_hash"] == corpus, (
                 f"the row does not say which corpus produced it: {row['corpus_content_hash']!r}"
             )
@@ -196,7 +196,7 @@ def test_a_measured_row_names_both_treatment_identities(tmp_path: Path) -> None:
                 f"{row['prompt_set_hash']!r}"
             )
 
-    alpha, beta = rows_by_treatment["alpha"], rows_by_treatment["beta"]
+    alpha, beta = rows_by_under_test["alpha"], rows_by_under_test["beta"]
     assert {r["corpus_content_hash"] for r in alpha}.isdisjoint(
         {r["corpus_content_hash"] for r in beta}
     ), "two corpora produced rows that name the same corpus"
@@ -209,7 +209,7 @@ def test_the_prompt_hash_on_the_row_moves_with_the_selected_variant() -> None:
     """Presence is not enough: the field has to *track* the selection.
 
     A row carrying a constant would satisfy the test above forever while reporting one
-    treatment for both configs — the failure that test exists to catch, reintroduced one layer
+    setting under test for both configs — the failure that test exists to catch, reintroduced one layer
     down. Asserted against the registry rather than against a literal, because a hardcoded
     digest here would pin the test to today's wording of every prompt in the tree.
     """

@@ -301,7 +301,7 @@ def test_the_served_record_carries_what_the_budget_evicted(
     is one name in one literal away from reaching the eval row and nothing else — and that is
     exactly the state it was found in. A served turn would then have no trace that the char
     budget dropped a retrieved table before the model ever saw it, on the only path a user's
-    question actually takes.
+    question takes.
 
     Same turn twice, differing only in the budget, so the field is asserted as a *response* to
     the budget rather than as a key that happens to be present.
@@ -317,7 +317,7 @@ def test_the_served_record_carries_what_the_budget_evicted(
             "question": "customer", "thread_id": thread, "turn_index": 1, "run_id": "r-evict",
             "turn_id": f"turn-{thread}", "question_id": "q-evict", "db_id": "sales_a",
             "attempt_id": "a-evict", "corpus_content_hash": "c", "prompt_set_hash": "p",
-            "knobs_resolved": settings, "n_re_served": 0, "messages": [], "usage": [],
+            "settings_resolved": settings, "n_re_served": 0, "messages": [], "usage": [],
             "route_top_n": 1, "candidate_depth": 50, "identity": {"token": "tok"},
         }
         config = {

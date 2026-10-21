@@ -15,12 +15,12 @@ import { cn } from "@/lib/utils";
  * (governance transparency — the user always sees why they're asked), and the
  * answer controls per the request shape:
  *
- *  - `choices` present  → option buttons; `allow_freeform` also offers a text box.
- *  - `choices` absent    → freeform textarea only.
+ * - `choices` present → option buttons; `allow_freeform` also offers a text box.
+ * - `choices` absent → freeform textarea only.
  *
  * Answering resumes the same turn; Decline fails the turn closed.
  *
- * The gate is the **arriving interrupt**, not `capabilities.can_clarify`. A server
+ * The check is the **arriving interrupt**, not `capabilities.can_clarify`. A server
  * that interrupts is by definition able to clarify, and an interrupt the user has
  * no control to answer deadlocks the turn — so a stale/false capability flag must
  * not be able to hide this prompt. The flag stays advisory (it says whether to

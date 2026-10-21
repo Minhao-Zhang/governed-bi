@@ -81,7 +81,7 @@ def test_two_writers_in_one_super_step_commit_instead_of_aborting() -> None:
                 name,
                 # One declines, one does not — the shape two answered `ask_user` calls
                 # produce when both resume into the same super-step. `attempts_by_call` is
-                # the witness: it is keyed per call, so a lost writer is a missing key.
+                # the evidence: it is keyed per call, so a lost writer is a missing key.
                 lambda s, n=name: {
                     "clarification_requested": n == "declines",
                     "attempts_by_call": {n: {"path": "ask_user"}},

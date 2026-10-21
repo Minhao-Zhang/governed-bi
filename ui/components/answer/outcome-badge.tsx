@@ -22,7 +22,7 @@ const OUTCOME_CLASSES: Record<string, string> = {
   no_sql: "bg-tier-fenced-raw text-tier-fenced-raw-foreground",
 };
 
-export function ReliabilityStamp({
+export function OutcomeBadge({
   outcome,
   attempts,
   sentence,

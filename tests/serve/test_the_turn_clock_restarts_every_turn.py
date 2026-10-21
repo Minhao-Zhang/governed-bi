@@ -91,7 +91,7 @@ def test_a_node_that_writes_a_real_timestamp_still_wins() -> None:
     """The wrapper's ownership is a default, not a seizure.
 
     No node does this today. The case exists so that "the wrapper owns the clock" stays a
-    statement about *defaults*, and so a future node that genuinely knows better than the
+    statement about *defaults*, and so a future node that knows better than the
     wrapper — a resume path re-establishing a suspended turn's original start, say — does not
     have to fight it.
     """

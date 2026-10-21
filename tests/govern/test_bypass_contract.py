@@ -55,7 +55,7 @@ def layer():
     return Layer
 
 
-# ── the enum's shape is load-bearing ─────────────────────────────────────────
+# ── the enum's shape is ─────────────────────────────────────────
 
 
 def test_layers_are_ordered_and_have_no_fractional_members(layer) -> None:

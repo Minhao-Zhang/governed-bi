@@ -6,7 +6,7 @@ into the register's 42-field record. The decision's seven channels are declared,
 never a state dict; the projection's 25 are the register's own, read by field name, and
 ``serve/outcome.py`` argues why declaring them a second time here would be worse than not.
 
-So the state dict is read in exactly two places in this file: :func:`finish` itself, at the seam,
+So the state dict is read in exactly two places in this file: :func:`finish` itself, at the boundary,
 and :func:`_extract_factory`'s ``extract``, which the register drives by field name.
 """
 
@@ -61,7 +61,7 @@ def _cache_total(usage: list[Mapping[str, Any]], field: str) -> int | Measured[i
 def _latency_sec(state: Mapping[str, Any]) -> float | Measured[float]:
     """Wall-clock seconds from the turn's first node to now, or *unmeasured*.
 
-    ``wrap_node`` stamps ``turn_started_at``, so unmeasured is the hand-built-state case (a unit
+    ``wrap_node`` finishes ``turn_started_at``, so unmeasured is the hand-built-state case (a unit
     test calling ``finish`` directly), and it says so rather than reporting 0.0. A clarified turn
     includes the human's thinking time deliberately — the field is how long the user waited.
 
@@ -78,8 +78,8 @@ def _latency_sec(state: Mapping[str, Any]) -> float | Measured[float]:
 def _recorded_channels(state: Mapping[str, Any]) -> dict[str, Any] | None:
     """``{channel: {channel: state}}`` as the record carries it, or ``None``.
 
-    One reader for two register fields: ``facet_degraded`` must be derived from exactly the
-    mapping ``facet_channels`` publishes, or the record could report a degradation the
+    One reader for two register fields: ``channel_degraded`` must be derived from exactly the
+    mapping ``channel_scoring`` publishes, or the record could report a degradation the
     channel states beside it do not show.
     """
     channels = state.get("channels")
@@ -223,10 +223,6 @@ def _extract_factory(
         if name == "n_re_served":
             n = state.get("n_re_served")
             return 0 if n is None else int(n)
-        if name == "licensed":
-            # The record and the HTTP field keep this key until P9. The state field is
-            # retrieved_tables.
-            return state.get("retrieved_tables")
         if name == "failed_stage":
             return failed_stage
         if name == "error_type":
@@ -242,7 +238,7 @@ def _extract_factory(
             "attempt_id",
             "corpus_content_hash",
             "prompt_set_hash",
-            "knobs_resolved",
+            "settings_resolved",
             "guard",
             "rewrite",
             "crossings",
@@ -251,7 +247,7 @@ def _extract_factory(
             # graph is disconnected" are the same recorded row.
             "terminal_reason",
             # The abstention policy's result and its evidence (ADR 0013). Copied and never
-            # interpreted, like `reflect_verdict` above and for the inverse reason: `abstain`
+            # interpreted, like `reflect_result` above and for the inverse reason: `abstain`
             # has *already* decided, and re-reading its result here to adjust `outcome` would
             # be two answers to "did this turn withhold". The one answer is `terminal_reason`,
             # which the node writes into the same channel `route` and `connect` write.
@@ -275,7 +271,7 @@ def _extract_factory(
             return None
 
         retrieved = state.get("retrieved")
-        if name == "facet_hits":
+        if name == "channel_hits":
             channels = state.get("channels")
             if not channels:
                 return None
@@ -288,16 +284,16 @@ def _extract_factory(
                 for key, fr in channels.items()
                 if isinstance(fr, Mapping)
             }
-        if name == "facet_channels":
+        if name == "channel_scoring":
             return _recorded_channels(state)
-        if name == "facet_degraded":
+        if name == "channel_degraded":
             # Null when the fan-out did not run, like the field it derives from: `False` there
             # is the degradation check reading absence as clean.
             channels = _recorded_channels(state)
             if channels is None:
                 return None
             return channels_degraded(channels)
-        # The keys the register reads straight off `retrieved`. Both budget witnesses are here
+        # The keys the register reads straight off `retrieved`. Both budget evidence are here
         # from 2026-08-12: `merge_delta` stopped `resolve` destroying them, but a key that
         # survives to `finish` and is not projected reaches no artifact, so "the cap discarded
         # the gold table" was still unanswerable from a record. They are `NotRequired` on
@@ -367,7 +363,7 @@ def classify_turn(inputs: OutcomeInputs) -> TurnOutcome:
 def finish(state: Mapping[str, Any]) -> dict[str, Any]:
     """Build the turn ``Answer`` and the register projection. Sole writer of ``answer``.
 
-    **The seam.** Two lines of it: :func:`~governed_bi.serve.outcome.normalised` turns the reset
+    **The boundary.** Two lines of it: :func:`~governed_bi.serve.outcome.normalised` turns the reset
     sentinels back into absence, and
     :meth:`~governed_bi.serve.outcome.OutcomeInputs.from_state` projects the seven channels the
     decision reads. :func:`classify_turn` then decides, taking the view and nothing else, and
@@ -405,12 +401,12 @@ def finish(state: Mapping[str, Any]) -> dict[str, Any]:
     projected_state["usage"] = usage
     if projected_state.get("n_re_served") is None:
         projected_state["n_re_served"] = 0
-    # ``knobs_resolved`` gets the same treatment as ``guard`` above, and for the same reason —
+    # ``settings_resolved`` gets the same setting under test as ``guard`` above, and for the same reason —
     # it used to be substituted with ``{}`` here, which is the one case ``measure.checks`` names
     # as the thing it must never see: ``{}`` is a ``Mapping``, so the drift check reads it as a
     # real configuration in which every setting resolved to ``None``, every row's signature is
-    # identical, and **a config of empties passes**. `measure/checks.py::_knobs_resolved_check` says
-    # so in as many words ("Absent ``knobs_resolved`` is unmeasured, not passing"), and
+    # identical, and **a config of empties passes**. `measure/checks.py::_settings_resolved_check` says
+    # so in as many words ("Absent ``settings_resolved`` is unmeasured, not passing"), and
     # `harness.py` carries the same "absent stays absent" comment, while this line defeated
     # both. Absent now reaches
     # ``project`` as absent, so ``Absence.never`` reports ``missing_required`` and the check
@@ -475,7 +471,7 @@ def _final_status(path_kind: Any, outcome: Outcome) -> str:
         # The rail's status vocabulary is closed and shared with the client
         # (``ui/lib/steps.ts``'s ``GovEvent["status"]``), and no member of it means "ended with
         # no statement" — ``refused`` and ``error`` would each claim something this turn did not
-        # do. ``ok`` with the outcome in ``detail`` is the honest pair: the client labels the row
+        # do. ``ok`` with the outcome in ``detail`` is the pair: the client labels the row
         # from ``detail.outcome`` (``outcomeLabel``), so the distinction survives without a wire
         # value being invented for it.
         Outcome.no_sql: "ok",

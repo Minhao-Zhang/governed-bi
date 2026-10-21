@@ -53,7 +53,7 @@ def render_context(
 ) -> tuple[str, str]:
     """Return ``(context_block, context_hash)`` — sha256 hex of UTF-8 block.
 
-    ``evicted`` is an **out-parameter**, filled only when the budget actually bit: the caller
+    ``evicted`` is an **out-parameter**, filled only when the budget bit: the caller
     needs a fact the return value has no room for. Without it, a table that was routed,
     retrieved, retrieved_tables and then evicted for space is indistinguishable in every artifact from
     one that was rendered — a blind spot sitting exactly between "table selection" and
@@ -221,7 +221,7 @@ def _fold_pulled_in_columns(
 def rendered_closure_chars(table: Any, columns: Sequence[Any]) -> tuple[int, int]:
     """``(the table's own cost, the cost of the roster its columns fold into)``, in characters.
 
-    **What one table actually costs this block**, asked of the renderer that does the delivering.
+    **What one table costs this block**, asked of the renderer that does the delivering.
     Conformance rule V16 bounds it (``conform/rules_tree.py::check_delivery_closure``) and reached
     through to ``_structural_line`` and ``_roster_entry`` to compute it, which is a rule holding a
     copy of an arithmetic it claims to bound: either function could change its output and the cap

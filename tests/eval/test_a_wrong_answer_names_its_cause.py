@@ -1,6 +1,6 @@
 """``error_type`` was ``None`` on all 78 answered-but-wrong rows of the config that motivated this.
 
-The engine recorded *that* an answer was wrong and nothing about *why*, so a treatment could be
+The engine recorded *that* an answer was wrong and nothing about *why*, so a setting under test could be
 aimed at a failure class holding 8 of 78 rows with no way to know it in advance. Those figures come
 from RyanChenJung/governed-bi-utkuai@12c3e15, the fork this module was taken from -- see
 ``eval/attribution.py``'s docstring, which says which numbers are theirs and why they are kept.
@@ -132,7 +132,7 @@ def test_a_filter_on_a_column_gold_does_not_filter_on() -> None:
 
 
 def test_shapes_agree_and_the_answer_is_still_wrong() -> None:
-    """The honest bucket. Same tables, same arity, same aggregates, same filter columns, and
+    """The bucket. Same tables, same arity, same aggregates, same filter columns, and
     the result still differs -- a literal, a join direction, a gold defect. Task 3's judge
     reads exactly this bucket, and its size decides whether Task 3 runs at all."""
     row = _row("SELECT a FROM t WHERE b = 1", "SELECT a FROM t WHERE b = 2")
@@ -149,7 +149,7 @@ def test_sql_that_does_not_parse_is_named_as_such() -> None:
 
 
 def test_no_predicted_sql_at_all_is_named_missing_prediction() -> None:
-    """All 8 baseline rows in ``unparseable`` actually had ``generated_sql: null`` -- the
+    """All 8 baseline rows in ``unparseable`` had ``generated_sql: null`` -- the
     engine answered with no statement, not with one that fails to parse. Conflating the two
     would hide the population that never queried anything at all."""
     row = _row(None, "SELECT a FROM t")

@@ -67,7 +67,7 @@ class Session:
     policy: Any
     corpus_content_hash: str
     prompt_set_hash: str
-    knobs_resolved: Mapping[str, Any]
+    settings_resolved: Mapping[str, Any]
     db_id: str
     run_id: str
     agent_model: Any | None = None
@@ -75,7 +75,7 @@ class Session:
     utility_model: Any | None = None
     #: ``{prompt name -> variant}`` this run selected; empty means every prompt at its default.
     #: Reaches the nodes through :meth:`configurable` and **must** be the same mapping
-    #: :attr:`prompt_set_hash` was computed from, or the run records a treatment it did not send.
+    #: :attr:`prompt_set_hash` was computed from, or the run records a setting under test it did not send.
     prompt_variants: Mapping[str, str] = field(default_factory=dict)
     embedder: Embedder | None = None
     problems: tuple[Any, ...] = ()
@@ -135,7 +135,7 @@ class Session:
             "db_id": self.db_id,
             "corpus_content_hash": self.corpus_content_hash,
             "prompt_set_hash": self.prompt_set_hash,
-            "knobs_resolved": dict(self.knobs_resolved),
+            "settings_resolved": dict(self.settings_resolved),
             "n_re_served": 0,
             "evidence": str(evidence or ""),
             "messages": [],
@@ -275,7 +275,7 @@ def visible_assets(assets: Sequence[Asset]) -> list[Asset]:
     **Dropping an asset is not enough on its own, and the first version of this shipped that
     way.** Removing an asset leaves every reference to it dangling, and a dangling *required*
     reference is a ``fatal`` problem — so ``serve/__main__.py`` refuses to serve and
-    ``/routes`` reports ``servable: false``. Measured on the two shapes the corpus actually
+    ``/routes`` reports ``servable: false``. Measured on the two shapes the corpus 
     has: excluding one column left its parent table still declaring the id in ``columns``
     (``TableAsset.columns`` holds derived ids), and excluding one table left every join on it
     unbindable. Withholding a decoy — the whole point of the flag — made the corpus unloadable.
@@ -356,7 +356,7 @@ def from_assets(
     # The variant of every prompt this run selected -- exactly the "resolved variant per
     # stage" the setting is declared to hold. `registry/prompts.select()` computed it all along
     # and no caller wrote it down, so `prompt_set` was null on v2, v3, v4 and v5, the four
-    # configs whose entire treatment is a prompt variant. They were still *distinguishable*,
+    # configs whose entire setting under test is a prompt variant. They were still *distinguishable*,
     # because `prompt_set_hash` is on the row and does differ; they were not *nameable* --
     # nothing in an artifact said which variant produced which digest.
     #
@@ -367,7 +367,7 @@ def from_assets(
     # same refusal `prompt_set_hash` already makes on the same input.
     settings["prompt_set"] = selected_variants(prompt_variants)
     if embedder is not None:
-        # One resolution of the embedder's comparability identity. It was duplicated here
+        # One resolution of the embedder's identity that affects results. It was duplicated here
         # (audit §10), and two copies is how one drifts from `setting_names()`.
         settings.update(embedding_settings(embedder))
     resolved_utility = utility_model or agent_model
@@ -376,7 +376,7 @@ def from_assets(
         # written here beside it and is gone: `SETTING_REGISTER` never declared it, so it sat
         # outside `setting_names()` -- and on run1, run2, v3-pinned and v3-fold it was the
         # ONLY field carrying the model, which meant the one value that could have told those
-        # configs apart was outside the comparability set. One spelling, and it is the declared
+        # configs apart was outside the set of settings that affect results. One spelling, and it is the declared
         # one.
         settings["chat_model"] = _model_name(agent_model)
         effort = reasoning_effort_of(agent_model)
@@ -390,7 +390,7 @@ def from_assets(
                 settings[setting] = cast(value)
     if resolved_utility is not None:
         # Written even when it falls back to the agent model, per the setting's note: "shared one
-        # model" and "split them" are two treatments.
+        # model" and "split them" are two settings under test.
         settings["llm_utility_model"] = _model_name(resolved_utility)
         utility_effort = reasoning_effort_of(resolved_utility)
         settings["llm_utility_reasoning_effort"] = str(utility_effort) if utility_effort else None
@@ -409,7 +409,7 @@ def from_assets(
         policy=policy,
         corpus_content_hash=corpus_content_hash_,
         prompt_set_hash=prompt_set_hash(prompt_variants),
-        knobs_resolved=settings,
+        settings_resolved=settings,
         db_id=db_id,
         run_id=run_id or uuid.uuid4().hex[:16],
         agent_model=agent_model,
@@ -425,7 +425,7 @@ def from_corpus_dir(root: Path | str, *, schemas: Sequence[str] | None = None, *
     """A session over a curated corpus on disk.
 
     ``schemas`` is the manifest, and passing one matters for more than scope: it restricts the
-    content hash to the subtrees actually served, so a leftover subtree from another attempt
+    content hash to the subtrees served, so a leftover subtree from another attempt
     enters neither the load nor the digest.
     """
     root = Path(root)

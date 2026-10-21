@@ -67,12 +67,12 @@ def test_a_secret_is_absent_from_the_config_hash_and_the_turn(monkeypatch: pytes
     recorded["config_hash"] = config_hash(recorded)
 
     def extract(state, name):
-        if name == "knobs_resolved":
-            return state.get("knobs_resolved")
+        if name == "settings_resolved":
+            return state.get("settings_resolved")
         return None
 
-    turn = project({"knobs_resolved": recorded}, extract=extract)
+    turn = project({"settings_resolved": recorded}, extract=extract)
     blob = json.dumps(turn, default=str)
     assert secret not in blob
-    assert secret not in turn["knobs_resolved"]["config_hash"]
+    assert secret not in turn["settings_resolved"]["config_hash"]
     reset_settings()

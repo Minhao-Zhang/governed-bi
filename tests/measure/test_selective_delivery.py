@@ -123,7 +123,7 @@ def test_a_tie_group_is_one_operating_point_and_a_policy_cannot_split_it() -> No
 
     Delivering two of four turns the signal cannot tell apart is a coin flip dressed as
     a policy, so the cut moves down to the boundary below -- which is the start of the
-    ranking. The empty policy is the honest answer and its accuracy is unmeasured, not
+    ranking. The empty policy is the answer and its accuracy is unmeasured, not
     zero: no answers were given, so there is no accuracy to report.
     """
     curve = risk_coverage(_config(_ALL_TIED), SIGNALS["agent_out_tok"])
@@ -582,7 +582,7 @@ def test_coverage_at_a_target_accuracy_is_the_largest_k_and_not_the_first() -> N
 
     Target 0.7 is cleared at k = 1 and again at k = 4. The first is a two-answer product;
     the second is the operating point a buyer is asking about. Reporting the first gives
-    coverage 0.2 where the honest answer is 0.8.
+    coverage 0.2 where the answer is 0.8.
     """
     curve = risk_coverage(
         _config(
@@ -662,12 +662,12 @@ def test_the_driver_runs_end_to_end_on_a_synthetic_artifact(tmp_path: Path) -> N
     """
     artifact = tmp_path / "synthetic_config.jsonl"
     rows = [
-        _row("a", correct=True, usage=_tokens(10), licensed=["t"], attempts=[{"passed": True}]),
-        _row("b", correct=True, usage=_tokens(20), licensed=["t"], attempts=[{"passed": True}]),
-        _row("c", correct=True, usage=_tokens(30), licensed=["t"], attempts=[{"passed": True}]),
-        _row("d", correct=False, usage=_tokens(40), licensed=["t"], attempts=[{"passed": False}]),
+        _row("a", correct=True, usage=_tokens(10), retrieved_tables=["t"], attempts=[{"passed": True}]),
+        _row("b", correct=True, usage=_tokens(20), retrieved_tables=["t"], attempts=[{"passed": True}]),
+        _row("c", correct=True, usage=_tokens(30), retrieved_tables=["t"], attempts=[{"passed": True}]),
+        _row("d", correct=False, usage=_tokens(40), retrieved_tables=["t"], attempts=[{"passed": False}]),
         _row("e", outcome="refused", correct=False, computed_correct=False,
-             usage=[], licensed=[], attempts=[{"passed": False}]),
+             usage=[], retrieved_tables=[], attempts=[{"passed": False}]),
     ]
     artifact.write_text(
         "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"

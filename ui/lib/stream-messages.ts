@@ -4,7 +4,7 @@
  * The serve agent streams its whole ReAct loop through `messages` (AI turns,
  * tool results, system frames). Those are node-local reasoning — the live
  * surface for them is the AgentTimeline (ADR 0001 / gotcha G2). This module is
- * the gate that keeps tool dumps like `{"columns":…,"rows":…}` out of the
+ * the check that keeps tool dumps like `{"columns":…,"rows":…}` out of the
  * bubble list once the turn settles.
  */
 
@@ -160,20 +160,20 @@ function statedQuestionNumber(record: Record<string, unknown>): number | null {
  *
  * Two rules place a row, in this order:
  *
- *  1. The number the record states ({@link statedQuestionNumber}). Load-bearing when a question
- *     left no row at all — a run killed before `record` — where arrival order would shift every
- *     later row onto the wrong turn.
- *  2. Otherwise the slot after the previous row's, i.e. arrival order. Sound here in a way it
- *     never was against the log, because these rows cannot come from another conversation.
+ * 1. The number the record states ({@link statedQuestionNumber}). when a question
+ * left no row at all — a run killed before `record` — where arrival order would shift every
+ * later row onto the wrong turn.
+ * 2. Otherwise the slot after the previous row's, i.e. arrival order. Sound here in a way it
+ * never was against the log, because these rows cannot come from another conversation.
  *
  * A row is then attached to the AI frame of *its* turn, from {@link turnFinalAiFrames} — which
  * counts turns in questions, so a `decline` (terminal, writes no message) keeps its own turn
  * number instead of shifting the ones after it. A row whose turn left no frame claims nothing;
  * a declined turn has no bubble to carry a card either way.
  *
- * @param turns  `stream.values.turns`, unvalidated: each row is `{asked_at, question,
- *   answer_text, outcome, record}` (`serve/state.TurnEntry`).
- * @param messages  `stream.messages`.
+ * @param turns `stream.values.turns`, unvalidated: each row is `{asked_at, question,
+ * answer_text, outcome, record}` (`serve/state.TurnEntry`).
+ * @param messages `stream.messages`.
  * @returns The record for each turn, by the id of the message that carries its answer.
  */
 export function turnAnswersByMessageId(
@@ -206,7 +206,7 @@ export function turnAnswersByMessageId(
     // Parsed, not cast: `outcome` is a closed vocabulary (`register/stages.Outcome`) and the
     // card reads it. A row that does not match is dropped rather than rendered with a made-up
     // outcome. `text` is null on purpose — it is *system* copy (refusal wording) and the turn
-    // envelope carries only `answer_text`, which is what the model said; see `answerViewSchema`.
+    // wrapper carries only `answer_text`, which is what the model said; see `answerViewSchema`.
     const answer = parseAnswer({
       outcome: entry?.outcome ?? "answered",
       text: null,
@@ -238,7 +238,7 @@ export function mapStreamToChatMessages(args: {
    *
    * Keyed on the message and not on a position, so it is an identity rather than a guess, and
    * therefore safe to ask about *any* frame — including the newest. That is what makes it
-   * load-bearing rather than a cache. `submit()` flips `isLoading` true and then awaits the SSE
+   * rather than a cache. `submit()` flips `isLoading` true and then awaits the SSE
    * pump before appending the optimistic human frame
    * (`SubmitCoordinator.#waitForRootPumpReady`), so for one network round-trip a run is live and
    * the last AI frame is still the *previous* turn's answer, with no new human frame yet to put
@@ -262,7 +262,7 @@ export function mapStreamToChatMessages(args: {
   //
   // That distinction is most of the fix for a follow-up question blanking the answer above it.
   // The new human frame is appended and `isLoading` flips, but the new turn has no AI frame yet —
-  // the engine runs guard, the facet fan-out, routing and context assembly before the agent emits
+  // the engine runs guard, the retrieval channel fan-out, routing and context assembly before the agent emits
   // a token, which is seconds of wall clock. For that whole window the last AI frame is still the
   // *previous* turn's answer, so treating "last AI frame" as "the newest turn" excluded it from
   // the settled-turn branch while `!idle` excluded it from the channel-answer branch, and it fell
@@ -270,7 +270,7 @@ export function mapStreamToChatMessages(args: {
   // new turn started streaming.
   //
   // Anything before the last human frame is settled history by construction, whatever the run is
-  // doing. `newestAiIndex` is the current turn's AI frame only when one has actually arrived, so
+  // doing. `newestAiIndex` is the current turn's AI frame only when one has arrived, so
   // nothing else can be mistaken for it.
   const lastHumanIndex = lastHumanIndexOf(messages);
   const lastAiIndex = lastAiIndexOf(messages);

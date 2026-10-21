@@ -1,4 +1,4 @@
-"""What each governed tool actually does — the bodies, with no LangGraph in them.
+"""What each governed tool does — the bodies, with no LangGraph in them.
 
 Each function is of ``(identifiers, bounds, corpus, connector, policy)`` and mentions
 ``runtime``, ``Command`` and ``_reply`` exactly zero times; ``serve/tools.py`` is the adapter
@@ -62,7 +62,7 @@ SAMPLE_ROWS_MAX_VALUES = 20
 
 
 def read_body_cap(state: Mapping[str, Any], cfg: Mapping[str, Any]) -> int:
-    for source in (state, state.get("knobs_resolved") or {}, cfg):
+    for source in (state, state.get("settings_resolved") or {}, cfg):
         if not isinstance(source, Mapping):
             continue
         raw = source.get("read_body_max_tokens")

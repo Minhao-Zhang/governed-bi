@@ -1,7 +1,7 @@
 """Turn projection — shape a served turn's final state into a measurement row (ADR 0005 §4.1).
 
 Split out of ``eval/harness.py`` by the 1,000-line cap (ADR 0005 §6), which forced the timing
-rather than the seam: that module is orchestration (drive a question through
+rather than the boundary: that module is orchestration (drive a question through
 ``serve.compile_durable``, serially or across ``workers``) plus this file's job, which is pure —
 given the state a turn ended in and the question it answered, shape the fixed-key row every check,
 grader and report reads. Nothing here calls the graph or touches a connector for anything but the
@@ -137,14 +137,14 @@ def _routing_was_pinned(question: Mapping[str, Any], record: Mapping[str, Any]) 
 #: Measured over the turn records in ``runs/serve/2026-08-09.jsonl`` -- an untracked local sink,
 #: deleted with ``api/trace_store.py`` under ADR 0014 and never committed, so it is not
 #: recoverable from git history either. They are the same shape
-#: a BIRD turn produces: ``facet_hits`` is **58 KB** per turn (five channels x fifty hits, each
+#: a BIRD turn produces: ``channel_hits`` is **58 KB** per turn (five channels x fifty hits, each
 #: hit carrying a score triple and a copy of the channel's query) and ``schema_ranking`` 2.0 KB,
 #: against a 6.4 KB measurement row. Carried verbatim they take a 1 351-question config from
 #: 8.6 MB to 89 MB and the seven configs in ``runs/eval/`` past half a gigabyte.
 #:
 #: The truncation is defensible because the *sampled* half of retrieval is the channel
 #: ``queries``, which the row keeps whole; below them everything is a pure function of those
-#: queries, ``corpus_content_hash`` and ``knobs_resolved``, so a replay reconstructs it with no
+#: queries, ``corpus_content_hash`` and ``settings_resolved``, so a replay reconstructs it with no
 #: model call. What each summary still gives up is stated at its own call site.
 _RANK_KEPT = 10
 
@@ -236,7 +236,7 @@ def _channel_hits(record: Mapping[str, Any]) -> dict[str, Any] | None:
     below rank ten. Together the summary is 1.8 KB, 97% smaller (measured over
     ``runs/serve/2026-08-09.jsonl``, the untracked sink ADR 0014 deleted).
 
-    ``queries`` is kept whole and is the load-bearing half: it is the only part of retrieval a
+    ``queries`` is kept whole and is the half: it is the only part of retrieval a
     model sampled, so it cannot be recovered by any replay, while the hits it produced are a
     pure function of it and the pinned corpus. ``n_hits`` is the count *before* truncation, so
     the row still says the fan-out returned fifty and not ten.
@@ -245,7 +245,7 @@ def _channel_hits(record: Mapping[str, Any]) -> dict[str, Any] | None:
     rule reads. That study is a no-model replay of these queries against the corpus commit the
     row names, so it does not need the paid config to carry it.
     """
-    channels = record.get("facet_hits")
+    channels = record.get("channel_hits")
     if not isinstance(channels, Mapping):
         return None
     out: dict[str, Any] = {}
@@ -265,7 +265,7 @@ def _pulled_in(record: Mapping[str, Any]) -> dict[str, Any] | None:
     """How many assets entered by reference closure, how many by the join walk, and which.
 
     The field's declared job is to answer what ``expand_hops`` is worth, and ``expand_hops``
-    today is a comparability setting with no reader at all: setting it changes no behaviour and
+    today is a setting that affects results with no reader at all: setting it changes no behaviour and
     does change the config hash. This is the half of that measurement that can be built here
     -- the setting's own question ("of the tables gold SQL uses, how many entered neither by
     channel hit nor by Steiner path?") is a join of ``connect_ids`` against ``retrieved_tables`` and the
@@ -273,7 +273,7 @@ def _pulled_in(record: Mapping[str, Any]) -> dict[str, Any] | None:
 
     Summarised because the field is dominated by the closure: measured over the 2026-08-09
     records it runs about 140 ``resolve`` entries to 20 ``connect`` ones, 7.0 KB against a
-    6.4 KB row. ``connect`` ids are kept in full because they are the small, load-bearing set
+    6.4 KB row. ``connect`` ids are kept in full because they are the small, set
     -- the Steiner points and completed joins the walk added. Given up: *which* columns the
     reference closure pulled in, which is the read-body bound in ``govern/bounds.py``; the
     count is what remains of it.
@@ -339,7 +339,7 @@ def project_turn(
     #
     # **This is the writer of the unwritten half of `Outcome.clarification`**, and the only one in
     # `eval/`. `no answer` is exactly "no node wrote this turn", so every field below that reads
-    # `record` comes out null on these rows -- both treatment identities included, which is what
+    # `record` comes out null on these rows -- both setting under test identities included, which is what
     # `measure/checks._paused_before_finish` reads to keep them out of a denominator they cannot
     # satisfy. The other half of the member is written by `finish` itself, on a turn whose reader
     # declined, and that row is fully populated: same `outcome`, opposite instrumentation state.
@@ -419,14 +419,14 @@ def project_turn(
     computed_fp = _abstained_fingerprint(
         outcome=outcome,
         # The proposal from the transcript, not `generated_sql` — that field carries only what
-        # the engine actually sent (audit C4), so on a refused turn it is null by design.
+        # the engine sent (audit C4), so on a refused turn it is null by design.
         proposed_sql=last_proposed_sql(state.get("messages") or ()),
         connector=connector,
         order_sensitive=order_sensitive,
         already_executed=pred_columns is not None,
     )
 
-    facet_channels = record.get("facet_channels")
+    channel_scoring = record.get("channel_scoring")
     # **Absent stays absent, for these two as well** (audit M2). They read
     # ``int(record.get(...) or 0)``, which turns a field the turn never wrote into a real zero —
     # and ``0`` is the *clean* value, so ``guardrail_error`` and ``re_served`` went from
@@ -445,9 +445,9 @@ def project_turn(
 
     # Absent stays absent. ``{}`` would read to ``measure.checks`` as a real configuration in
     # which every setting resolved to None, so one config of empties would *pass* the check.
-    settings = record.get("knobs_resolved")
+    settings = record.get("settings_resolved")
     if not isinstance(settings, Mapping):
-        settings = state.get("knobs_resolved")
+        settings = state.get("settings_resolved")
 
     projected: dict[str, Any] = {
         "question_id": str(question["question_id"]),
@@ -457,10 +457,10 @@ def project_turn(
         # the artifact — so a row could not be attributed to a routing failure on its own.
         "db_id": question.get("db_id"),
         # The configuration the turn ran under (register: Absence.never, "the corpus IS the
-        # treatment" applies to settings too). It reached ``finish`` and stopped there: 1351/1351
+        # setting under test" applies to settings too). It reached ``finish`` and stopped there: 1351/1351
         # rows of the 2026-08-07 run carry no such key, so the settings check reported
         # ``cannot_evaluate`` and no number could be joined to what produced it.
-        "knobs_resolved": dict(settings) if isinstance(settings, Mapping) else None,
+        "settings_resolved": dict(settings) if isinstance(settings, Mapping) else None,
         "outcome": outcome,
         # Propagated, never coerced: ``bool(grade["correct"])`` here turns every
         # ``missing_gold`` into a wrong answer (see ``grade.grade_turn``).
@@ -474,7 +474,7 @@ def project_turn(
         # True for both endings the member covers -- the pause written above and a reader's
         # fail-closed decline, which reaches `finish` (`registry/stages.Outcome`). That is the
         # intended reading: the rate answers "how often did this config need the reader", and both
-        # needed the reader. It is therefore *not* a witness that the row went unwritten; the
+        # needed the reader. It is therefore *not* a evidence that the row went unwritten; the
         # check that needs that distinction reads a written field instead
         # (`measure/checks._paused_before_finish`).
         "clarified": outcome == Outcome.clarification.value,
@@ -491,14 +491,14 @@ def project_turn(
         "pred_fingerprint": grade.get("pred_fingerprint"),
         "grade_detail": grade.get("detail"),
         "context_hash": context_hash,
-        "facet_channels": facet_channels,
+        "channel_scoring": channel_scoring,
         # `None` when the turn did not record it, not `False` (audit M2). `serve/nodes/finish.py`
         # returns a deliberate `None` here — its comment says "`False` there is the degradation
         # check reading absence as clean" — and `or False` turned that straight back into `False`,
         # one function later. The fix and its defeat shipped in the same repository.
-        "facet_degraded": (
-            None if record.get("facet_degraded") is None
-            else bool(record.get("facet_degraded"))
+        "channel_degraded": (
+            None if record.get("channel_degraded") is None
+            else bool(record.get("channel_degraded"))
         ),
         # Retrieval and crash attribution. Without `retrieved_tables`/`schemas` a row says EX=0 and
         # not *why*: a miss with the gold schema never retrieved_tables is a routing problem, a miss
@@ -509,7 +509,7 @@ def project_turn(
         "error_type": record.get("error_type") or state.get("failure", {}).get("error_type")
         if isinstance(state.get("failure"), Mapping)
         else record.get("error_type"),
-        # **The two treatment identities.** Both reached ``finish`` and stopped there, so no
+        # **The two setting under test identities.** Both reached ``finish`` and stopped there, so no
         # artifact this repository has produced says which corpus or which prompt wording made
         # it — the corpus was recoverable only from the filename, a human convention, and the
         # prompt not at all. A prompt A/B whose two artifacts cannot be told apart is not an
@@ -518,7 +518,7 @@ def project_turn(
         "prompt_set_hash": record.get("prompt_set_hash"),
         # What the char budget dropped before the model saw it. Absent when the block fit.
         # ``table_coverage`` is computed over ``retrieved_tables`` and is therefore a *licensing*
-        # figure; this is the only thing that says whether the model actually saw those tables.
+        # figure; this is the only thing that says whether the model saw those tables.
         # Measured for the first time on the 2026-08-09 v3-fold config: the budget bit on
         # **19 of 1 351 turns (1.4%)** and dropped only bodies -- no whole table, ever. An
         # offline reconstruction had put it at 16 of 25 by building the context from every
@@ -526,7 +526,7 @@ def project_turn(
         "context_evicted": (delivery.get("evicted") if isinstance(delivery, Mapping) else None),
         # **What was delivered, and whether it can be checked afterwards.** ``context_hash``
         # above is the deterministic half and is what `measure/checks.py` checks on;
-        # `delivery_hash` folds in every tool return the model actually asked for, so it is the
+        # `delivery_hash` folds in every tool return the model asked for, so it is the
         # only field that answers whether curated bodies reached the model. A digest is the
         # whole point of it, which makes carrying it 66 bytes.
         "delivery_hash": delivery_hash,
@@ -536,20 +536,20 @@ def project_turn(
         # from `{}`. The call ids are provider-minted and therefore do **not** join across
         # configs; what compares is the ordered digests.
         "tool_delivered": dict(tool_delivered) if isinstance(tool_delivered, Mapping) else None,
-        "licensed": list(record.get("licensed") or ()),
+        "retrieved_tables": list(record.get("retrieved_tables") or ()),
         "schemas": list(record.get("schemas") or ()),
         # **Retrieval evidence.** ``schemas`` above is the selected top-N and ``retrieved_tables`` what
         # the turn may reach; neither says what was scored and rejected, which is the
         # difference between a routing failure and a generation failure. Each is summarised
         # rather than copied -- see the helper for the size that forced it and what it costs.
         "schema_ranking": _schema_ranking(record, question),
-        "facet_hits": _channel_hits(record),
+        "channel_hits": _channel_hits(record),
         "pulled_in": _pulled_in(record),
         # A float or `None`, never `0.0` for "not measured": with an embedder every asset
         # scores above zero, so an out-of-corpus question still returns top_k tables and a
         # clean run writes confidence. This is the signal that says so.
         "lexical_coverage": _number(record.get("lexical_coverage")),
-        # The budget witness, carried verbatim from the record. `budget_dropped` is what each
+        # The budget evidence, carried verbatim from the record. `budget_dropped` is what each
         # asset budget cut and `budget_best_dropped_score` the best score it cut, so together
         # they say whether a licensing miss was a retrieval failure or a budget decision --
         # which is the difference between corpus work and a setting. `None` on a turn where no
@@ -576,7 +576,7 @@ def project_turn(
         #
         # A **partial** pin also reads false, and that is the intended reading: the turn's
         # shortlist is then the known subset, which is not the shortlist that was pinned, and a
-        # boolean that said otherwise would report a different treatment as the same one.
+        # boolean that said otherwise would report a different setting under test as the same one.
         "routing_pinned": _routing_was_pinned(question, record),
         # Which layer refused, per attempt. See `_attempt_trace`.
         "attempts": _attempt_trace(record.get("execution")),
@@ -611,7 +611,7 @@ def project_turn(
     }
 
     # Why a wrong answer was wrong -- `None` on all 78 answered-but-wrong rows of experiment
-    # 008, which is why that experiment could not say whether its treatment was aimed at
+    # 008, which is why that experiment could not say whether its setting under test was aimed at
     # anything.
     #
     # **Its own field, not `error_type`.** `registry/record.py` declares `error_type` as the

@@ -40,7 +40,7 @@ def _profile(
     return ConfigProfile(
         name=name,
         description="",
-        treatment=frozenset({"prompt_set"}),
+        under_test=frozenset({"prompt_set"}),
         corpus_content_hash=digest,
         question_subset=subset,
     )
@@ -88,10 +88,10 @@ def test_the_startup_check_refuses_an_config_that_cannot_be_reconciled() -> None
 
 def test_the_report_names_each_disagreement_once_with_a_count() -> None:
     """1 351 copies of one sentence is a wall, not a finding."""
-    # ``knobs_resolved`` carries the question set because a modern row does: the writer landed
+    # ``settings_resolved`` carries the question set because a modern row does: the writer landed
     # 2026-08-12 and every row a run produces now records it. A row without one exercises the
     # artifact-level fallback instead, which is a different test below.
-    settings = {"knobs_resolved": {"question_subset": SUBSET}}
+    settings = {"settings_resolved": {"question_subset": SUBSET}}
     rows = [{"corpus_content_hash": "deadbeef", **settings} for _ in range(3)]
     rows.append({"corpus_content_hash": DIGEST, **settings})
 
@@ -103,7 +103,7 @@ def test_the_report_names_each_disagreement_once_with_a_count() -> None:
 
 
 def test_an_artifact_that_agrees_is_reported_as_agreeing() -> None:
-    row = {"corpus_content_hash": DIGEST, "knobs_resolved": {"question_subset": SUBSET}}
+    row = {"corpus_content_hash": DIGEST, "settings_resolved": {"question_subset": SUBSET}}
 
     lines = reconciliation_lines([row] * 2, _profile())
 
@@ -126,7 +126,7 @@ def test_a_clarification_that_ended_before_routing_is_not_a_contradiction() -> N
         {
             "corpus_content_hash": None,
             "outcome": "clarification",
-            "knobs_resolved": {"question_subset": SUBSET},
+            "settings_resolved": {"question_subset": SUBSET},
         }
     ] * 4
 
@@ -157,7 +157,7 @@ def _legacy_rows(qids, subset_recorded=None):
     """Rows shaped like the seven ``proxy_*`` artifacts: a question id, no scope settings."""
     settings = {} if subset_recorded is None else {"question_subset": subset_recorded}
     return [
-        {"corpus_content_hash": DIGEST, "question_id": qid, "knobs_resolved": dict(settings)}
+        {"corpus_content_hash": DIGEST, "question_id": qid, "settings_resolved": dict(settings)}
         for qid in qids
     ]
 
@@ -225,7 +225,7 @@ def test_the_startup_check_refuses_an_config_that_declares_no_question_set() -> 
 
 
 def test_the_startup_check_refuses_a_session_on_the_wrong_question_set() -> None:
-    """The driver's pre-flight passes a bare identity mapping with no ``knobs_resolved``, which
+    """The driver's pre-flight passes a bare identity mapping with no ``settings_resolved``, which
     is why ``reconcile`` accepts a top-level ``question_subset`` as well.
 
     **This was a stated gap until 2026-08-20 and is now wired.** The driver's call site sat
@@ -275,7 +275,7 @@ def test_the_driver_supplies_both_locks_to_the_pre_flight() -> None:
         f"the pre-flight compares {sorted(keys)}; an identity it does not pass is an identity "
         "nothing checks until the artifact is finished"
     )
-    # No `knobs_resolved`, which is the shape `recorded_question_subset` falls through for. A
+    # No `settings_resolved`, which is the shape `recorded_question_subset` falls through for. A
     # nested mapping here would send it down the setting branch and read `None` -- the pre-flight
     # would pass on every dataset and say nothing about it.
     #
@@ -283,4 +283,4 @@ def test_the_driver_supplies_both_locks_to_the_pre_flight() -> None:
     # it inside the setting mapping, where `recorded_corpus_release` reads it from; this identity is
     # not a row, and nesting one key to be faithful to a row's shape would risk the defect above
     # for the sake of it.
-    assert "knobs_resolved" not in keys
+    assert "settings_resolved" not in keys

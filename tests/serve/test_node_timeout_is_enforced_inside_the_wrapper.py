@@ -77,7 +77,7 @@ def test_a_timeout_becomes_an_ordinary_crashed_update() -> None:
     assert update["path_kind"] == "crashed", update
     assert update["failure"]["stage"] == "guard", update
     # The real class, not a hard-coded name. `asyncio.wait_for` raises `TimeoutError`; the old
-    # handler asserted `"NodeTimeoutError"` without being told what actually failed.
+    # handler asserted `"NodeTimeoutError"` without being told what failed.
     assert update["failure"]["error_type"] == "TimeoutError", update
 
 
@@ -212,7 +212,7 @@ def test_a_raw_sync_invoke_fails_loudly_instead_of_fabricating_a_crashed_turn() 
     turn = {
         "question": "how many rows", "turn_index": 1, "thread_id": "t1", "run_id": "r",
         "turn_id": "t", "question_id": "q", "db_id": "d", "corpus_content_hash": "c",
-        "prompt_set_hash": "p", "knobs_resolved": {}, "identity": {}, "n_re_served": 0,
+        "prompt_set_hash": "p", "settings_resolved": {}, "identity": {}, "n_re_served": 0,
     }
 
     with pytest.raises(TypeError, match="No synchronous function provided"):

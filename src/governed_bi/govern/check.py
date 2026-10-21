@@ -327,7 +327,7 @@ def _assert_no_write_frame_is_closed() -> None:
     """Import-time guard: ``READ_ROOTS`` and ``WRITE_NODES`` must not overlap.
 
     An overlap is a root that is simultaneously a legal read and a write construct,
-    which makes the frame that keeps the denylist honest vacuous.
+    which makes the frame that keeps the denylist vacuous.
     """
     overlap = [cls for cls in READ_ROOTS if cls in WRITE_NODES]
     if overlap:  # pragma: no cover - import-time guard

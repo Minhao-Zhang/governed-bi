@@ -111,7 +111,7 @@ def _skip_if_terminal(state: ServeState) -> Literal["finish", "continue"]:
 #:
 #: The five channels are excluded by **decision, not constraint**: five concurrent bounds interact
 #: with the shared provider quota in a way nobody has measured, and turning them on is a
-#: comparability change that belongs to its own experiment. Adding them is a one-line edit here.
+#: change that affects results that belongs to its own experiment. Adding them is a one-line edit here.
 _CANCELLABLE = frozenset({"guard"})
 
 
@@ -370,7 +370,7 @@ def compile_graph(*, checkpointer: Any | None = None) -> _SyncApp:
 
     **The default saver grows for as long as it lives and nothing evicts it.** Measured on a
     two-schema corpus: 101 KB after one turn, 844 KB after six, because ``usage`` and ``answer``
-    accumulate and every superstep re-serialises them with ``knobs_resolved``. ``eval/harness.py``
+    accumulate and every superstep re-serialises them with ``settings_resolved``. ``eval/harness.py``
     holds one compiled graph per worker for a whole config, so a 1,351-question run retains on the
     order of 135 MB per worker unless something evicts per question.
 
@@ -378,7 +378,7 @@ def compile_graph(*, checkpointer: Any | None = None) -> _SyncApp:
     ``eval/harness.py::run_config`` compiles through :func:`compile_durable`, so its eviction
     goes through ``AsyncSqliteSaver.adelete_thread`` and never through
     ``InMemorySaver.delete_thread``. The bound still describes *this* function's saver, and
-    the caller that actually has it is ``eval/datalake.py``'s routing loop — which had no
+    the caller that has it is ``eval/datalake.py``'s routing loop — which had no
     eviction at all until 2026-08-20, for exactly the reason stated here.
     """
     if checkpointer is False:
@@ -398,7 +398,7 @@ def compile_durable(*, path: Any | None = None) -> _SyncApp:
     the same loop that will later use it -- see ``checkpointer.open_harness_saver``.
 
     **The caller must close it**, with ``with compile_durable() as graph:`` or ``graph.close()``.
-    :meth:`_SyncApp.close` says why that is load-bearing rather than polite.
+    :meth:`_SyncApp.close` says why that is rather than polite.
 
     Not the default for :func:`compile_graph`. Most of the test suite calls that with no
     arguments, and a file-backed default would make every test share one database *and* reuse the

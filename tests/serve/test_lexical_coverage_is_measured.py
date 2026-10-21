@@ -57,7 +57,7 @@ def test_pass_two_measures_lexical_coverage_from_the_live_index() -> None:
         return pass_two_retrieve(
             state={
                 "question": question,
-                "knobs_resolved": {},
+                "settings_resolved": {},
                 "channels": {
                     "channel_entity": {
                         "channel": "channel_entity",

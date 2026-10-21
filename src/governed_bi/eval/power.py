@@ -5,7 +5,7 @@ Taken from RyanChenJung/governed-bi-utkuai@12c3e15. The prior it is calibrated a
 these figures, and a number whose provenance has been rubbed out is a number the next reader
 quotes as ours.
 
-Their run measured a treatment that reached 9 of 131 questions, against an MDE of 9.6pp, and
+Their run measured a setting under test that reached 9 of 131 questions, against an MDE of 9.6pp, and
 reported the resulting null as a finding about the feature. It was a finding about the sample.
 This module makes that arithmetic a precondition of declaring a config.
 
@@ -24,7 +24,7 @@ the warning governs every caller and is deliberately not restated.
 
 **``discordant`` is an estimate, not a measurement, when used here.** It is the count of paired
 questions where the two configs disagreed, and that count is only known once a comparison has
-actually run -- so a pre-check has nothing but a comparable prior run to estimate it from. The
+ run -- so a pre-check has nothing but a comparable prior run to estimate it from. The
 only prior available is the fork's ``beer_factory`` pair: 20 discordant of 131 questions (15.3%),
 which is the 0.0956 this check is calibrated against. Presenting the MDE this produces as an exact
 figure, rather than as an estimate carried forward from one prior run in another tree, is the
@@ -36,15 +36,15 @@ from __future__ import annotations
 from governed_bi.measure.stats import mde
 from governed_bi.registry.quantity import Measured
 
-__all__ = ["UnderpoweredArm", "require_power"]
+__all__ = ["UnderpoweredConfiguration", "require_power"]
 
 
-class UnderpoweredArm(ValueError):
+class UnderpoweredConfiguration(ValueError):
     """An config hypothesising an effect smaller than it could detect."""
 
 
 def require_power(n: int, discordant: int, hypothesised_effect: float) -> None:
-    """Raise :class:`UnderpoweredArm` unless ``n`` at ``discordant`` could detect
+    """Raise :class:`UnderpoweredConfiguration` unless ``n`` at ``discordant`` could detect
     ``hypothesised_effect``. ``discordant`` is an estimate -- see the module docstring.
 
     ``discordant`` is a **count** of disagreeing pairs and must be an ``int``. A float is
@@ -67,12 +67,12 @@ def require_power(n: int, discordant: int, hypothesised_effect: float) -> None:
         )
     floor = mde(n, Measured.rate(discordant, n, what=f"discordance over {n} pairs"))
     if not floor.is_measured:
-        raise UnderpoweredArm(
+        raise UnderpoweredConfiguration(
             f"n={n} with an estimated {discordant} discordant pairs has no detection floor to "
             f"compare {hypothesised_effect} against: {floor.why}"
         )
     if abs(hypothesised_effect) < floor.value:
-        raise UnderpoweredArm(
+        raise UnderpoweredConfiguration(
             f"this config hypothesises an effect of {hypothesised_effect} but n={n} with an "
             f"estimated {discordant} of {n} discordant pairs can only detect "
             f"{floor.render(4)} as a minimum. Raise n at a comparable discordance rate, or "

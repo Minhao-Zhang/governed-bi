@@ -78,7 +78,7 @@ def test_an_override_naming_a_file_outside_the_corpus_is_refused(tmp_path: Path)
 
 def test_a_schema_filter_still_applies_to_an_override(tmp_path: Path) -> None:
     """``schemas`` restricts the digest to named subtrees, and an override must not smuggle a file
-    back in: a config's treatment identity covers exactly the schemas it served."""
+    back in: a config's setting under test identity covers exactly the schemas it served."""
     root = _corpus(tmp_path / "corpus")
     (root / "warehouse" / "tables").mkdir(parents=True)
     other = root / "warehouse" / "tables" / "tbl_warehouse_orders.yaml"

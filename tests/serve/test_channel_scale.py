@@ -1,7 +1,7 @@
 """What scale the two channels are compared on, in both retrieval passes.
 
 Split out of ``test_pass_two_and_context.py`` when that file crossed the 1,000-line cap, and it
-is the right seam: everything here turns on one question, which has now been answered three
+is the right boundary: everything here turns on one question, which has now been answered three
 different ways.
 
 1. ``max(lexical or 0.0, semantic or 0.0)``. Measured on corpus ``86ed1dbf``, a lexical top hit
@@ -87,13 +87,13 @@ def _assert_the_scale_is_fixed_not_relative(mid, only) -> None:
     assert only["lexical"] is None, "it shares no query term; BM25 must not score it"
     assert only["semantic"] is not None
 
-    # The premise, asserted so a change to BM25's constants cannot quietly void the test.
+    # The premise, asserted so a change to BM25's constants cannot void the test.
     assert mid["lexical"] > only["semantic"], (
         "the fixture no longer reproduces the scale gap it exists to demonstrate: "
         f"raw lexical {mid['lexical']} vs raw cosine {only['semantic']}"
     )
 
-    # 1. Attribution is raw: the record publishes what each channel actually said.
+    # 1. Attribution is raw: the record publishes what each channel said.
     assert only["semantic"] == pytest.approx(0.40, abs=1e-3)
     assert mid["lexical"] == pytest.approx(0.599, abs=5e-3)
 
@@ -195,7 +195,7 @@ def test_pass_two_uses_the_same_fixed_scale() -> None:
     retrieved = pass_two_retrieve(
         state={
             "question": QUERY,
-            "knobs_resolved": {},
+            "settings_resolved": {},
             "channels": {
                 "channel_entity": {"channel": "channel_entity", "queries": [QUERY], "hits": []}
             },
@@ -237,7 +237,7 @@ def test_the_two_passes_score_one_asset_identically() -> None:
     two = pass_two_retrieve(
         state={
             "question": QUERY,
-            "knobs_resolved": {},
+            "settings_resolved": {},
             "channels": {
                 "channel_entity": {"channel": "channel_entity", "queries": [QUERY], "hits": []}
             },
@@ -261,10 +261,10 @@ def test_a_run_can_move_the_fusion_settings_and_the_score_follows() -> None:
 
     That is not a missing feature, it is a false claim about a run: `w_lexical`, `w_semantic` and
     `semantic_scale_ceiling` are declared ``a recorded setting``, so they enter
-    ``setting_names()`` and ``knobs_resolved``. A run could publish ``w_semantic: 0.9``, move its
+    ``setting_names()`` and ``settings_resolved``. A run could publish ``w_semantic: 0.9``, move its
     config hash, and score exactly like the default — the inverse of the defect
     ``registry/settings.py`` opens by describing, and the same shape as the four settings
-    ``tests/serve/test_comparability_knobs.py`` was written for.
+    ``tests/serve/test_affects_results_settings.py`` was written for.
 
     Asserted through ``_pass_one_hits`` rather than on ``channel_scale``, because the resolver
     returning the right numbers says nothing about whether the scoring path uses them — which is

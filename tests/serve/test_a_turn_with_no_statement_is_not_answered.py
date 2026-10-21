@@ -5,14 +5,14 @@ you clarify what you mean by 'assets', 'actively maintained', and 'PM task'? The
 defined in the provided schemas, so I can't form a reliable governed query."* — and the record
 said::
 
-    outcome    answered      terminal_reason None      generated_sql None
-    execution  {"attempts": [], "terminal": "no_sql", "guardrail_errors": 0}
+    outcome answered terminal_reason None generated_sql None
+    execution {"attempts": [], "terminal": "no_sql", "guardrail_errors": 0}
 
 ``finish._path_signals``'s ``path_kind == "answered"`` branch fell through to
 ``return None, None, None, None, True`` — ``has_sql`` **hardcoded**, ``state["generated_sql"]``
 never read — and ``classify_outcome``'s ``if has_sql: return Outcome.answered`` did the rest.
 
-The ``True`` was load-bearing rather than a typo, which is why the fix is a new
+The ``True`` was rather than a typo, which is why the fix is a new
 :class:`~governed_bi.registry.stages.Outcome` member and not a deleted line: with ``has_sql=False``
 and no ``refused_by`` the classifier's last line returned ``crashed``, and a turn that produced
 prose is not a crash. So the four tests below are a *pair of pairs*. Two pin the outcome on either
@@ -131,7 +131,7 @@ def test_the_no_model_stub_records_no_statement_too() -> None:
     channel left to read, and the ledger it sees is the one the record carries.
 
     Driven through ``_stub``'s own update rather than a hand-written dict, so the shape under test
-    is the shape the node actually returns — the ``--no-model`` CLI path (``python -m
+    is the shape the node returns — the ``--no-model`` CLI path (``python -m
     governed_bi.serve --no-model``) reproduces it end to end.
     """
     from governed_bi.serve.nodes.agent_core import STUB_ANSWER, _stub

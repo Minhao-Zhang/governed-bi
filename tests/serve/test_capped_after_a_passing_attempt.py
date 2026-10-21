@@ -72,7 +72,7 @@ def test_the_record_of_a_capped_turn_says_capped_not_answered() -> None:
             "generated_sql": "SELECT 1",
             "turn_id": "turn-capped",
             "turn_index": 1,
-            "knobs_resolved": {},
+            "settings_resolved": {},
             "usage": [],
         }
     )
@@ -96,7 +96,7 @@ def test_a_turn_whose_every_attempt_was_blocked_is_still_a_guardrail_refusal() -
             "generated_sql": "SELECT 1",
             "turn_id": "turn-blocked",
             "turn_index": 1,
-            "knobs_resolved": {},
+            "settings_resolved": {},
             "usage": [],
         }
     )
@@ -117,7 +117,7 @@ def test_a_crashed_turn_does_not_keep_execution_terminal_answered() -> None:
             "generated_sql": "SELECT 1",
             "turn_id": "turn-crashed",
             "turn_index": 1,
-            "knobs_resolved": {},
+            "settings_resolved": {},
             "usage": [],
         }
     )

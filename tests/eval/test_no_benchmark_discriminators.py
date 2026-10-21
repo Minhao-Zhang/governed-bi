@@ -69,7 +69,7 @@ def test_rule_a_fires_on_a_retired_prefix_phrase(tmp_path: Path) -> None:
 
 
 def test_rule_a_fires_on_a_block_scalar_summary(tmp_path: Path) -> None:
-    """The form the corpus actually uses, which rule A could not see (audit D6).
+    """The form the corpus uses, which rule A could not see (audit D6).
 
     ``leads_with`` strips a ``<id>: `` lead-in and then matches the phrase at the head of the
     value. With ``summary: >-`` the joined value opens with the literal ``>-``, so nothing ever

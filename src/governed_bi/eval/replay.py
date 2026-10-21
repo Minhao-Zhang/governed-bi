@@ -13,7 +13,7 @@ also drive pass-two retrieval **within** the chosen schemas, and switching them 
 measure a system nobody serves. Only the shortlist is frozen.
 
 **It therefore does not freeze everything, and does not pretend to.** Pass two still re-searches
-inside the pinned schemas, so ``retrieved_tables`` can still move. :func:`licensed_drift` measures how
+inside the pinned schemas, so ``retrieved_tables`` can still move. :func:`retrieved_drift` measures how
 much it moved and the driver reports it, because an unquantified "mostly deterministic" is the
 claim this module exists to stop anyone from making.
 """
@@ -24,6 +24,8 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+from governed_bi.registry.stored_names import artifact_get
 
 __all__ = [
     "PINNED_SCHEMAS_KEY",
@@ -46,7 +48,7 @@ def routing_from_artifact(path: str | Path) -> dict[str, list[str]]:
 
     Rows whose ``schemas`` is absent or empty are **skipped rather than pinned to ``[]``**: an
     empty shortlist is the ``no_schema_matched`` decline, and replaying it would freeze a
-    retrieval failure into the treatment config as though it were a decision. Eight rows of the
+    retrieval failure into the setting under test config as though it were a decision. Eight rows of the
     2026-08-09 full run retrieved_tables nothing at all; pinning those would carry that defect forward
     and make the next config look like it reproduced a bug it never ran.
     """
@@ -92,7 +94,7 @@ def attach_pinned_routing(
 def retrieved_tables_baseline(path: str | Path) -> dict[str, list[str]]:
     """``{question_id -> retrieved_tables}`` for the rows :func:`routing_from_artifact` would pin.
 
-    The baseline :func:`licensed_drift` measures against must cover **the same rows the pin
+    The baseline :func:`retrieved_drift` measures against must cover **the same rows the pin
     covered** and no others. The driver built it from every row of the replayed artifact,
     including the ones ``routing_from_artifact`` deliberately skips for having an empty
     shortlist — turns that declined with ``no_schema_matched``. Those were never pinned, so
@@ -117,7 +119,7 @@ def retrieved_tables_baseline(path: str | Path) -> dict[str, list[str]]:
             schemas = row.get("schemas")
             if not qid or not isinstance(schemas, list) or not schemas:
                 continue
-            baseline[str(qid)] = [str(t) for t in (row.get("licensed") or ())]
+            baseline[str(qid)] = [str(t) for t in (artifact_get(row, "retrieved_tables") or ())]
     return baseline
 
 
@@ -142,7 +144,7 @@ def retrieved_tables_drift(
             missing += 1
             continue
         before = {str(x) for x in prior}
-        after = {str(x) for x in (row.get("licensed") or ())}
+        after = {str(x) for x in (artifact_get(row, "retrieved_tables") or ())}
         if before == after:
             same += 1
             continue
@@ -163,13 +165,13 @@ def retrieved_tables_drift(
 
 
 def drift_against(baseline_path: str | Path, rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
-    """:func:`licensed_drift` of ``rows`` against the artifact at ``baseline_path``.
+    """ :func:`retrieved_drift` of ``rows`` against the artifact at ``baseline_path``.
 
     **One function, so a contrast cannot difference two different statistics.** The published
     sentence "mean residual Jaccard is 0.7049 on v4 and 0.7029 on v5 against 0.579 for the
     unpinned run1/run2 pair" did exactly that. The two pinned figures are
     ``mean_jaccard_when_moved``; ``0.579`` is the mean over *every* compared row including the
-    33 identical ones — the quantity :func:`licensed_drift` deliberately does not compute,
+    33 identical ones — the quantity :func:`retrieved_drift` deliberately does not compute,
     because averaging in rows that scored 1.0 by definition reports a number near 1.0 and hides
     how far the movers went. The like-for-like value for run1/run2 is **0.5719** through this
     function, and 0.5689 if the baseline is widened to every row rather than the rows a pin
@@ -185,7 +187,7 @@ def drift_against(baseline_path: str | Path, rows: Iterable[Mapping[str, Any]]) 
 def pin_realised(
     rows: Iterable[Mapping[str, Any]], pinned: Mapping[str, Sequence[str]]
 ) -> dict[str, int]:
-    """How many turns actually ran on the pinned shortlist, readable on an old artifact.
+    """How many turns ran on the pinned shortlist, readable on an old artifact.
 
     ``routing_pinned`` has meant two things. Under the corrected semantics it is an *outcome* —
     the turn's shortlist **is** the pinned one — and a turn that ended before ``route_node``

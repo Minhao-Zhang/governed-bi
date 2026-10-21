@@ -6,7 +6,7 @@ hole that **the fix for the previous hole opened**, and that lineage is the poin
 Three appearances of one shape in this project:
 
 1. v1's ``corpus_content_hash == "unknown"`` compared equal to itself, so two runs
-   with no recorded treatment passed the comparability check.
+   with no recorded setting under test passed the check that the runs share their settings.
 2. ``missing_required`` checked key-presence only, and ``project`` writes every key —
    so a record of nulls passed. Fixed by treating ``None`` as absent.
 3. Introducing ``Measured`` reopened it: ``Measured.unmeasured(why)`` is not ``None``,

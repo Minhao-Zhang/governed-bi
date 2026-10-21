@@ -25,7 +25,7 @@ from governed_bi.eval import datalake
 class _FakeSession:
     """Only what ``routing_recall`` asks a session for."""
 
-    knobs_resolved: dict[str, Any] = {}
+    settings_resolved: dict[str, Any] = {}
 
     def turn(self, question: str, *, turn_index: int = 1, **_: Any) -> dict[str, Any]:
         return {"question": question, "turn_index": turn_index}

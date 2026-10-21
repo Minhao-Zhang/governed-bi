@@ -138,7 +138,7 @@ async def _open(path: Path) -> Any:
     # ("eval compiles one graph per worker thread against one saver") -- that is false, each worker
     # gets its own graph, loop and connection, and per the note above it must. Left in place only
     # because removing a defensive flag on the concurrent eval path, which no test exercises, is
-    # the worse trade; delete it once a config has actually run.
+    # the worse trade; delete it once a config has run.
     conn = await aiosqlite.connect(str(path), check_same_thread=False, timeout=30)
     saver = AsyncSqliteSaver(conn)
     await saver.setup()

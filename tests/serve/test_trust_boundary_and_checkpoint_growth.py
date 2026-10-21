@@ -24,7 +24,7 @@ from governed_bi.serve.graph import build_graph, compile_graph
 
 #: Channels a client must never be handed back. Not exhaustive — the schema is an allowlist and
 #: this is a tripwire on the specific keys that motivated it.
-_MUST_NOT_ESCAPE = ("delivery", "knobs_resolved", "query_vector", "retrieve_hooks")
+_MUST_NOT_ESCAPE = ("delivery", "settings_resolved", "query_vector", "retrieve_hooks")
 
 
 def test_the_served_graph_returns_only_what_the_interface_reads() -> None:

@@ -137,7 +137,7 @@ check(
  * **Asking a follow-up must not change how the turns above it render.**
  *
  * The defect: the mapper took "the last AI frame" to mean "the newest turn". `submit()` appends
- * the human frame and flips `isLoading` in one commit, and the engine then runs guard, the facet
+ * the human frame and flips `isLoading` in one commit, and the engine then runs guard, the retrieval channel
  * fan-out, routing and assembly before the agent emits a token — so for seconds the last AI
  * frame was still the *previous* turn's answer. It was excluded from the prior-turn branch (by
  * `index !== lastAiIndex`) and from the channel-answer branch (by `!idle`), and fell through to
@@ -215,7 +215,7 @@ check(
   cardsOf(submitWindow).join() === "a1,a2",
   `a live run with no new human frame yet keeps both cards (got ${cardsOf(submitWindow).join()})`,
 );
-// …and the turn actually in flight must not be given a card. Nothing is keyed to its message, so
+// …and the turn in flight must not be given a card. Nothing is keyed to its message, so
 // there is nothing for it to claim — which is why the log is joined onto ids while idle rather
 // than consulted per render: it can hold a row for the very question now being asked.
 const liveTurn = phase(

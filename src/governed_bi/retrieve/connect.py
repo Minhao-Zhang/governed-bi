@@ -99,7 +99,7 @@ def components[T: Hashable](
     """Partition ``nodes`` by which connected component of ``edges`` each one sits in.
 
     The same graph walk as :func:`connect`, reported as a partition instead of a result.
-    Needed because ``connect``'s single "no" cannot distinguish a genuinely missing path
+    Needed because ``connect``'s single "no" cannot distinguish a missing path
     from a terminal set that spans shortlisted schemas and is therefore disconnected *by
     construction* — which is why pooled turns declined ``missing_join_path``. A node with
     no incident edge is its own component, so a single-table turn is a component of one.

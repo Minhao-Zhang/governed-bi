@@ -1,4 +1,4 @@
-"""Risk-coverage curves and the operating points a caller can actually stand on.
+"""Risk-coverage curves and the operating points a caller can stand on.
 
 The engine already declines: v4 delivers 1,278 of 1,351 turns and withholds 73. That
 is *one point* on the coverage/accuracy plane, and a single point is all the README
@@ -9,7 +9,7 @@ alternatives instead of alone.
 It is deliberately not a confidence model. ``git-history:docs/analysis/risk-coverage-v4.md``
 (cited below by its bare name; it is not in this tree) §4
 measured every structural signal on this artifact and capped them at OOF AUC 0.721,
-and §6 measured an LLM critic reading the SQL at 0.597. The honest object is therefore
+and §6 measured an LLM critic reading the SQL at 0.597. The object is therefore
 a plane with several curves on it, one of which is the engine's -- not a score.
 
 Three rules the caller cannot opt out of, each from a defect already shipped here:
@@ -22,7 +22,7 @@ Three rules the caller cannot opt out of, each from a defect already shipped her
 * **Two things are only compared through** :func:`~.stats.mcnemar`. Subtracting two rates
   is not a result, and
   E1-E3 are three tools that did it anyway.
-* **Declines are priced in** :mod:`.abstention`, **not here.** The two questions --
+* **Declines are priced in**:mod:`.abstention`, **not here.** The two questions --
   how well a ranking separates right from wrong, and what the engine's own declines
   would have been worth -- have different denominators, and §4.1's is a subset the
   dataset selected rather than the config.
@@ -84,7 +84,7 @@ MIN_OPERATING_POINT = 50
 #: when the second one arrived: a turn that paused on ``ask_user`` and a turn whose reader
 #: declined fail-closed (``registry/stages.Outcome``) each delivered no answer, so each is
 #: withheld coverage. :func:`_split` is what would have caught a member added for the second —
-#: it raises on an outcome that is in neither set, so a coverage figure cannot quietly acquire a
+#: it raises on an outcome that is in neither set, so a coverage figure cannot acquire a
 #: third kind of ending.
 DECLINED: frozenset[str] = frozenset(
     {
@@ -145,7 +145,7 @@ class OperatingPoint:
     """One (coverage, accuracy) pair with both of its denominators on the object.
 
     ``correct`` is a float, not an int: inside a tie group the curve reports the
-    expectation under uniform tie-breaking, which is the only honest value when the
+    expectation under uniform tie-breaking, which is the only value when the
     signal cannot tell the tied turns apart.
     """
 
@@ -205,7 +205,7 @@ class DeliveryPolicy:
 
     @property
     def useful(self) -> int:
-        """Delivered *and* correct -- what a reader of the answers actually receives."""
+        """Delivered *and* correct -- what a reader of the answers receives."""
         by_unit = self.population.by_unit()
         return sum(1 for u in self.delivered if bool(by_unit[u].get("correct")))
 
@@ -230,7 +230,7 @@ class DeliveryPolicy:
 
         ``filtered_by`` is carried over from the source rather than reset, so two
         policies built off differently-filtered configs are refused by
-        :func:`~.stats.mcnemar` instead of quietly compared.
+        :func:`~.stats.mcnemar` instead of compared.
         """
         rows = [
             {
@@ -244,7 +244,7 @@ class DeliveryPolicy:
 
 
 def engine_policy(config: Population) -> DeliveryPolicy:
-    """What the engine actually did: answer the answered turns, withhold the rest."""
+    """What the engine did: answer the answered turns, withhold the rest."""
     delivered, _ = _split(config)
     return DeliveryPolicy(
         label="engine (governance + attempt cap)",
@@ -370,9 +370,9 @@ class RiskCoverage:
         )
 
     def realisable_coverages(self) -> tuple[float, ...]:
-        """Every coverage this signal can actually express, ascending.
+        """Every coverage this signal can express, ascending.
 
-        One entry per tie-group boundary. It is the honest measure of a signal's
+        One entry per tie-group boundary. It is the measure of a signal's
         resolution, and it is why ``cuts`` belongs beside every AURC in a report: an
         AURC computed by averaging through tie groups describes a curve whose interior
         points no policy can stand on. Five boundaries over 1,278 turns is a signal that
@@ -499,7 +499,7 @@ def no_ranking(config: Population) -> RiskCoverage:
 
     Not the same as "accuracy = EX". The engine's abstentions still sit below every
     delivered turn, so this curve holds at the delivered base rate until coverage
-    exceeds what the engine answered. That is the honest null for a *ranking*, and
+    exceeds what the engine answered. That is the null for a *ranking*, and
     ``risk-coverage-v4.md`` §1 makes the same correction in prose.
     """
     return _curve_from_scores(config, "no ranking", Direction.lower_first, lambda _row: 0.0)

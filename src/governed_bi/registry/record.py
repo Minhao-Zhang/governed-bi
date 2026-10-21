@@ -41,8 +41,8 @@ class Tier(str, Enum):
 
     #: Identifies the turn or the run. A comparison joins on these.
     identity = "identity"
-    #: The treatment. The delivery check reads these.
-    treatment = "treatment"
+    #: The setting under test. The delivery check reads these.
+    under_test = "treatment"
     #: Retrieval and governance decisions. Attribution reads these.
     decision = "decision"
     #: How the turn ended. ``stages.classify_outcome`` decides it.
@@ -119,8 +119,8 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "different worker counts into one file, and worker count saturates the shared "
        "quota the crash and degradation checks read"),
 
-    # ── treatment ───────────────────────────────────────────────────────────
-    _f("evicted", Tier.treatment, Absence.not_applicable, Stage.assemble,
+    # ── setting under test ───────────────────────────────────────────────────────────
+    _f("evicted", Tier.under_test, Absence.not_applicable, Stage.assemble,
        "what the char budget dropped before the model saw it: bodies, whole tables, and by "
        "how much the block still overran. Null means the block fit, which the assemble node "
        "distinguishes from an empty mapping. Treatment, not outcome, because it changes what "
@@ -133,7 +133,7 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "budgets pass two applies. `DeliveryTracker.merge_into` destroyed this field mid-turn "
        "for its whole life before it was carried, which is why no earlier config can report it"),
 
-    _f("context_hash", Tier.treatment, Absence.not_applicable, Stage.assemble,
+    _f("context_hash", Tier.under_test, Absence.not_applicable, Stage.assemble,
        "the delivery check. Deterministic: a pure function of corpus content and "
        "pipeline decisions. Null on paths that skip assemble, and NEVER the string "
        "'unknown' — v1's sentinel compared equal to itself and let two runs with no "
@@ -141,27 +141,27 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        check="both configs recorded a context_hash on every shared question. Distinctness was "
             "the condition until audit D9: it measured retrieval nondeterminism rather than "
             "treatment change and passed at 0.9993 on a seed-only pair, so the treatment "
-            "judgement moved to knobs_resolved"),
-    _f("delivery_hash", Tier.treatment, Absence.not_applicable, Stage.finish,
+            "judgement moved to settings_resolved"),
+    _f("delivery_hash", Tier.under_test, Absence.not_applicable, Stage.finish,
        "context plus every tool-delivered body. NOT deterministic -- it depends on "
        "which read_body calls the model chose -- so it is a diagnostic, never a check. "
        "The only field that answers whether curated bodies reached the model"),
-    _f("tool_delivered", Tier.treatment, Absence.not_applicable, Stage.agent_core,
+    _f("tool_delivered", Tier.under_test, Absence.not_applicable, Stage.agent_core,
        "call_id -> sha256 of every corpus- or database-derived tool return. Not just "
        "read_body: real database values are the largest source of config-to-config variation "
        "in what the model sees. Null when the agent loop did not run"),
-    _f("corpus_content_hash", Tier.treatment, Absence.never, Stage.finish,
+    _f("corpus_content_hash", Tier.under_test, Absence.never, Stage.finish,
        "the corpus IS the treatment. Gated from 2026-08-10 (audit D7): the sentence above was "
        "written and nothing enforced it, so two configs measured over two different corpora passed "
        "all six checks and compared as one treatment. The two runs the power analysis designates "
        "as its null replicate carry this field as null on all 1351 rows, which is how a corpus "
        "identity of `unknown` passing a comparability check happened a second time",
        check="every row in one config carries the same non-null corpus_content_hash"),
-    _f("prompt_set_hash", Tier.treatment, Absence.never, Stage.finish,
+    _f("prompt_set_hash", Tier.under_test, Absence.never, Stage.finish,
        "hashes the prompt TEXT, not the variant id — editing a variant in place "
        "must change the digest, or an edited prompt is indistinguishable from the "
        "one it replaced"),
-    _f("knobs_resolved", Tier.treatment, Absence.never, Stage.finish,
+    _f("settings_resolved", Tier.under_test, Absence.never, Stage.finish,
        "the resolved value of every comparability setting. Without it a turn cannot be "
        "joined against the configuration it ran under, and a manifest-only record lets "
        "two runs over different corpora on different splits compare as one",
@@ -170,11 +170,11 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
             "recorded on both and equal"),
 
     # ── decision ────────────────────────────────────────────────────────────
-    _f("facet_hits", Tier.decision, Absence.not_applicable, Stage.route,
+    _f("channel_hits", Tier.decision, Absence.not_applicable, Stage.route,
        "per retrieval channel: asset_id, asset_type, queries, lexical, semantic. Counts alone "
        "cannot attribute a finding to an asset, so no feedback loop is possible. Null "
        "when the fan-out did not run"),
-    _f("facet_channels", Tier.health, Absence.not_applicable, Stage.route,
+    _f("channel_scoring", Tier.health, Absence.not_applicable, Stage.route,
        "per retrieval channel, per scoring channel: ran / not_configured / failed, as explicit values never "
        "inferred from scores. If the extractor is rate-limited every retrieval channel falls back "
        "to the raw question, the run completes and grades normally, and the config quietly "
@@ -182,14 +182,14 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "must not read as clean",
        check="on turns where the fan-out ran, no channel state differs from its "
             "declared expectation; the observed count is published beside the rate"),
-    _f("facet_degraded", Tier.decision, Absence.not_applicable, Stage.route,
+    _f("channel_degraded", Tier.decision, Absence.not_applicable, Stage.route,
        "true when some retrieval channel ran on fewer scoring channels than it declares -- "
        "`registry.channels.is_degraded` over the field above, computed once and written "
        "rather than re-derived by each reader. Unregistered, `project()` cannot write "
-       "it and the degradation check published `[pass] facet_channels 0.0000` on a config "
+       "it and the degradation check published `[pass] channel_scoring 0.0000` on a config "
        "with no index. Null when the fan-out did not run. Tier is `decision`, not "
        "`health`: the quotability condition over this evidence is declared on "
-       "`facet_channels`, and a second check here would be two results on one comparison",
+       "`channel_scoring`, and a second check here would be two results on one comparison",
        reconstructable=True),
     _f("schema_ranking", Tier.decision, Absence.not_applicable, Stage.route,
        "ALL scored schemas pre-truncation. Without it, 'the gold schema was not a "
@@ -218,7 +218,7 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "conditions as `budget_dropped`, and always null or non-null together with it"),
     _f("pulled_in", Tier.decision, Absence.not_applicable, Stage.connect,
        "asset_id -> resolve|connect. Answers what expand_hops is worth"),
-    _f("licensed", Tier.decision, Absence.not_applicable, Stage.connect,
+    _f("retrieved_tables", Tier.decision, Absence.not_applicable, Stage.connect,
        "what the turn may reach. Deliberately not the post-budget table list: "
        "budgets shape what is rendered, licensing what is reachable"),
     _f("crossings", Tier.decision, Absence.not_applicable, Stage.connect,
@@ -329,7 +329,7 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "billed at 1.25x, so it cannot be folded into the input count"),
     _f("latency_sec", Tier.cost, Absence.not_measured, Stage.finish, "wall clock"),
 
-    # ── frozen witness (not health: health fields must check quotability) ────
+    # ── frozen evidence (not health: health fields must check quotability) ────
     _f("n_re_served", Tier.decision, Absence.never, Stage.finish,
        "always 0 on every production path: Session.turn seeds it and nothing increments. "
        "Retained so historical rows and the schema stay comparable. It was meant to catch "

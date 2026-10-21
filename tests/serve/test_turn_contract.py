@@ -52,7 +52,7 @@ from turn_contract_fixtures import (  # noqa: E402
 #: Two reasons for the marker rather than a red suite or a deletion. A red suite gets
 #: ignored, and this repository already has evidence of what happens next. And
 #: ``strict=True`` means the moment someone writes a real body that passes, the suite
-#: **fails** until they remove the marker -- so a spec cannot quietly become a test that
+#: **fails** until they remove the marker -- so a spec cannot become a test that
 #: nobody checked, and it cannot be forgotten either. The same device carried the
 #: original "a real turn writes every required field" assertion; what went wrong there
 #: was that the marker was removed and the body replaced with a stub, which is the
@@ -252,7 +252,7 @@ def test_execution_terminal_agrees_with_the_attempts_it_carries(
         )
         records[label] = out["answer"]["record"]
 
-    # Preconditions. The two ledgers must genuinely differ: one turn lets a fix satisfy the
+    # Preconditions. The two ledgers must differ: one turn lets a fix satisfy the
     # invariant by hard-coding whichever terminal that turn produces.
     passing: dict[str, bool] = {}
     for label, record in records.items():
@@ -302,10 +302,10 @@ def test_a_channel_with_no_index_reports_its_channel_as_failed() -> None:
     # under test: nothing could have consulted anything.
     #
     # Note the key. The node returns `{"channels": {stage: {..., "channels": {...}}}}`
-    # (`channels.py`); `facet_channels` is a *record* field that `finish.py`'s `_facet_channels` projects
+    # (`channels.py`); `channel_scoring` is a *record* field that `finish.py`'s `_channel_scoring` projects
     # from `state["channels"][key]["channels"]`. An earlier draft of this test read
-    # `facet_channels` off the node and so convicted on the wrong thing -- if you assert
-    # this end-to-end instead, read `answer["record"]["facet_channels"]`.
+    # `channel_scoring` off the node and so convicted on the wrong thing -- if you assert
+    # this end-to-end instead, read `answer["record"]["channel_scoring"]`.
     #
     # `DECLARED_CHANNELS[Stage.channel_entity]` is `{lexical, semantic}` (`channels.py`), so
     # `expected_channel_state` is `ran` and `_channels_for` reports it verbatim.
@@ -321,8 +321,8 @@ def test_a_channel_with_no_index_reports_its_channel_as_failed() -> None:
 
 def test_a_degraded_channel_writes_channel_degraded() -> None:
     """`channel_anomaly` and `is_degraded` had **zero call sites outside tests**, and
-    nothing anywhere wrote `facet_degraded` — so `measure/checks.py` passed vacuously:
-    `[pass] facet_channels 0.0000 over 'stub' n=3 (fan-out ran)` on a config with no index.
+    nothing anywhere wrote `channel_degraded` — so `measure/checks.py` passed vacuously:
+    `[pass] channel_scoring 0.0000 over 'stub' n=3 (fan-out ran)` on a config with no index.
 
     A check whose input nobody produces is worse than an absent check, because the summary
     says the run was checked.
@@ -330,7 +330,7 @@ def test_a_degraded_channel_writes_channel_degraded() -> None:
     **Fixture shape.** Two assertions, and both are needed.
 
     *Behavioural.* Drive the same no-index config as the channel test above through
-    `compile_graph()` and read `answer["record"]["facet_degraded"]`. `harness.py`'s
+    `compile_graph()` and read `answer["record"]["channel_degraded"]`. `harness.py`'s
     `project_turn` reads it off the record, so that is where it has to appear — it is not a
     state key. With no index every channel's lexical channel failed, so a truthful record says
     degraded.
@@ -352,12 +352,12 @@ def test_a_degraded_channel_writes_channel_degraded() -> None:
     record = compile_graph().invoke(
         _base_turn(turn_id="turn-degraded"), {"configurable": configurable}
     )["answer"]["record"]
-    assert record.get("facet_channels"), (
+    assert record.get("channel_scoring"), (
         "precondition: the fan-out ran and reported channel states, so the check has an input at all"
     )
-    assert record.get("facet_degraded") is True, (
+    assert record.get("channel_degraded") is True, (
         "no index was available, so every retrieval channel's lexical channel failed, yet the record reports "
-        f"facet_degraded={record.get('facet_degraded')!r} (harness.py's project_turn reads it off "
+        f"channel_degraded={record.get('channel_degraded')!r} (harness.py's project_turn reads it off "
         "the record). A "
         "check whose input nobody produces is worse than an absent check."
     )
@@ -565,7 +565,7 @@ def test_the_three_cost_fields_are_measured_and_absence_is_not_zero() -> None:
         {
             "question": "q", "turn_id": "t", "turn_index": 1, "run_id": "r",
             "path_kind": "answered", "generated_sql": "SELECT 1",
-            "knobs_resolved": {}, "guard": {"outcome": "clear"},
+            "settings_resolved": {}, "guard": {"outcome": "clear"},
             "turn_started_at": began["turn_started_at"],
             "usage": [
                 {"turn_index": 1, "stage": "guard", "cache_read_tokens": 100},
@@ -583,7 +583,7 @@ def test_the_three_cost_fields_are_measured_and_absence_is_not_zero() -> None:
     assert record["cache_write_tokens"] == 7
 
     bare = finish(
-        {"question": "q", "turn_id": "t", "turn_index": 1, "knobs_resolved": {},
+        {"question": "q", "turn_id": "t", "turn_index": 1, "settings_resolved": {},
          "guard": {"outcome": "clear"}}
     )["answer"]["record"]
     for field in ("latency_sec", "cache_read_tokens", "cache_write_tokens"):

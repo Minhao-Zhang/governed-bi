@@ -14,7 +14,7 @@ Specification: ADR 0005 §1. The two invariants everything here turns on:
   seed produces assets with no body at all; a validator that requires one makes
   ADR 0005's "steps 6-9 are measurable with no model" false.
 
-Hence ``(assets, problems)``, with both halves load-bearing: a raise on the first
+Hence ``(assets, problems)``, with both halves: a raise on the first
 bad file loses the rest of the build; a silent skip hides how much was lost.
 
 **Three tests were removed from this file on 2026-08-03, deliberately.** They asserted
@@ -23,7 +23,7 @@ then deleted, because the corpus is trusted and the incoming question is not: in
 is checked once at the analyst's input by ``govern.guard``. Sanitizing on ``load`` also
 changed what reached the model while ``corpus_content_hash``, taken over the files on
 disk, did not move. See **ADR 0005 §1.6**. Recorded here because an acceptance file
-that quietly loses three tests cannot be told from one that was weakened to pass.
+that loses three tests cannot be told from one that was weakened to pass.
 """
 
 from __future__ import annotations
@@ -150,7 +150,7 @@ def test_a_column_summary_may_drop_the_table_qualifier(store, tmp_path) -> None:
 
 def test_the_content_hash_has_no_unknown_sentinel(tmp_path, valid_asset_yaml) -> None:
     """v1's ``corpus_content_hash == "unknown"`` compared equal to itself, so two runs
-    with **no recorded treatment** passed the comparability check. There must be no
+    with **no recorded setting under test** passed the check that the runs share their settings. There must be no
     in-band value meaning "I do not know"."""
     from governed_bi.corpus.hash import corpus_content_hash  # type: ignore[import-not-found]
 
@@ -160,7 +160,7 @@ def test_the_content_hash_has_no_unknown_sentinel(tmp_path, valid_asset_yaml) ->
 
 
 def test_the_content_hash_changes_when_content_changes(tmp_path, valid_asset_yaml) -> None:
-    """The hash IS the treatment identity: ADR 0005's delivery check reads it to prove
+    """The hash IS the setting under test identity: ADR 0005's delivery check reads it to prove
     two configs received different corpora. A hash insensitive to content would let the
     v1 ladder that compared two byte-identical configs pass again."""
     from governed_bi.corpus.hash import corpus_content_hash  # type: ignore[import-not-found]
@@ -174,7 +174,7 @@ def test_the_content_hash_changes_when_content_changes(tmp_path, valid_asset_yam
 
 def test_the_content_hash_is_stable_across_calls(tmp_path, valid_asset_yaml) -> None:
     """The complement. A hash that changes every call also satisfies the test above and
-    would make every comparison incomparable — which reads as "the treatment differed"
+    would make every comparison incomparable — which reads as "the setting under test differed"
     and passes the delivery check for the wrong reason."""
     from governed_bi.corpus.hash import corpus_content_hash  # type: ignore[import-not-found]
 

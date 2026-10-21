@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ClarificationPrompt } from "@/components/chat/clarification-prompt";
 import { MOCK_CLARIFICATION } from "@/lib/mock/fixtures";
 
-/** What the engine actually sends: no `choices`, so the prompt is freeform-only. */
+/** What the engine sends: no `choices`, so the prompt is freeform-only. */
 const FREEFORM = {
   kind: "clarification" as const,
   clarification_id: "clar_live01",

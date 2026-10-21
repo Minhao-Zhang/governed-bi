@@ -64,7 +64,7 @@ def analyst_prompt(config: Mapping[str, Any] | None = None) -> str:
 
     **A function, not the module constant it was.** ``SYSTEM_PROMPT = prompt_text("analyst")``
     bound at import, so a run selecting a non-default variant sent the default and recorded the
-    override's ``prompt_set_hash`` — an artifact naming a treatment it did not receive, which is
+    override's ``prompt_set_hash`` — an artifact naming a setting under test it did not receive, which is
     strictly worse than not having the setting. The registry has carried ``variants`` since it was
     written; nothing in ``src/`` ever passed one, so nothing exercised the gap.
     """
@@ -409,7 +409,7 @@ def build_tools(
         _emit_attempt(runtime, attempt, number=attempt_number, payload=payload)
         table = _result_table(payload)
         # **What was executed, not what the model asked for.** `sql` is the tool argument;
-        # `executed_sql` is the statement `govern.prepare` actually ran, and the two differ
+        # `executed_sql` is the statement `govern.prepare` ran, and the two differ
         # whenever a layer rewrote or refused one -- checking the argument would hint about a
         # statement no database saw. The hint rides the reply text only: it is computed after
         # `_emit_attempt` and `_result_table` on purpose, so neither the stream event's status

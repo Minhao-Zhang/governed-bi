@@ -2,28 +2,28 @@
  * The step model: wire stage events → UI timeline rows.
  *
  * The serve graph emits one custom event per governed boundary — every rail from
- * `serve/wrap.py`, every tool and every governance verdict from `serve/tools.py`,
+ * `serve/wrap.py`, every tool and every governance result from `serve/tools.py`,
  * and the terminal from `serve/nodes/finish.py`. ADR 0010 is the spec for that
  * event; this module owns the client half of it:
  *
- *  - `reduceSteps` folds the ordered stream into append-only rows, merging a
- *    step's `start` and its resolution into one row on the shared `id`.
- *  - `buildStepsFromLedger` maps a completed recorded ledger to the SAME rows, so
- *    the post-answer audit reuses the live renderer over one data shape.
+ * - `reduceSteps` folds the ordered stream into append-only rows, merging a
+ * step's `start` and its resolution into one row on the shared `id`.
+ * - `buildStepsFromLedger` maps a completed recorded ledger to the SAME rows, so
+ * the post-answer audit reuses the live renderer over one data shape.
  *
  * **The vocabulary is `register/stages.py`, not this file** (ADR 0010 §2). Two
  * consequences that look like omissions and are not:
  *
- *  - There is no `run_query`. A SQL call emits `check` (the governance verdict)
- *    and then `execute` (what actually reached the database); a third row would
- *    double-count an action the ledger and every rate already agree on. So a
- *    *repair* is a `check` row that did not pass — see `countRepairs` — and a
- *    *query* is an `execute` row.
- *  - `execute` and `cap` never emit `start`, because their status is read off a
- *    completed record rather than declared on entry (ADR 0010 §3). Nothing here
- *    may assume a row passes through `running`.
+ * - There is no `run_query`. A SQL call emits `check` (the governance result)
+ * and then `execute` (what reached the database); a third row would
+ * double-count an action the ledger and every rate already agree on. So a
+ * *repair* is a `check` row that did not pass — see `countRepairs` — and a
+ * *query* is an `execute` row.
+ * - `execute` and `cap` never emit `start`, because their status is read off a
+ * completed record rather than declared on entry (ADR 0010 §3). Nothing here
+ * may assume a row passes through `running`.
  *
- * v1's `refuse_gate`, `cache`, `schema_route`, `finalize`, `search_corpus`,
+ * v1's `refuse_check`, `cache`, `schema_route`, `finalize`, `search_corpus`,
  * `read_notes`, `grep_notes` and `run_query` name concepts this engine does not
  * have, so they are gone rather than kept as fallbacks: a name this module still
  * answers to is a name a reader will believe the engine can produce.
@@ -71,7 +71,7 @@ export interface GovEvent {
   kind: "rail" | "tool" | "final";
   /**
    * A `register/stages.py` Stage value: rails
-   * accept|guard|rewrite|negative_gate|facet_{schema,term,metric,entity,example}|
+   * accept|guard|rewrite|negative_check|channel_{schema,term,metric,entity,example}|
    * route|resolve|connect|assemble|agent_core|refuse|decline, tools
    * read_body|inspect_schema|sample_rows|check|execute|cap|ask_user, final finish.
    */
@@ -79,9 +79,9 @@ export interface GovEvent {
   status: "start" | "ok" | "blocked" | "error" | "refused" | "cap" | "hit" | "miss" | "declined";
   label?: string;
   /**
-   * Per-step and closed-vocabulary only (ADR 0010 §4): turn_index, rule_id, gate,
+   * Per-step and closed-vocabulary only (ADR 0010 §4): turn_index, rule_id, check,
    * rewritten, asset_id, n_hits, failed_channels, schemas, n_candidates,
-   * n_pulled_in, n_licensed, n_crossings, `reason` and `terminal_reason` (the same
+   * n_pulled_in, n_retrieved_tables, n_crossings, `reason` and `terminal_reason` (the same
    * string under both names, deliberately), n_chars, n_attempts, n_asset_ids,
    * table_id, column_id, limit, attempt, layer, reason_code, sql, sql_sha256,
    * row_count, truncated, n_columns, cap, clarification_id, outcome, failed_stage,
@@ -150,7 +150,7 @@ const FINAL_STEP = "finish";
  * object literal: `step` is an unvalidated wire string, and an object lookup
  * answers for `constructor` and every other `Object.prototype` key.
  */
-const FACET_NOUNS = new Map<string, string>([
+const CHANNEL_NOUNS = new Map<string, string>([
   ["channel_schema", "Schema"],
   ["channel_term", "Terms"],
   ["channel_metric", "Metrics"],
@@ -172,7 +172,7 @@ export function isRail(step: string): boolean {
 
 /** Icon per step, so rails and each tool read distinctly at a glance. */
 export function stepIcon(step: string): LucideIcon {
-  if (FACET_NOUNS.has(step)) return Search; // the five channels are one gesture
+  if (CHANNEL_NOUNS.has(step)) return Search; // the five channels are one gesture
   switch (step) {
     case "accept":
       return Inbox;
@@ -239,19 +239,19 @@ function plural(n: number, one: string, many = `${one}s`): string {
 }
 
 /**
- * "Metrics: 3 hits" — one wording for all five facets, which arrive interleaved.
+ * "Metrics: 3 hits" — one wording for all five retrieval channels, which arrive interleaved.
  *
  * The `error` status here is **not** "something broke". It means a declared
  * retrieval channel never ran, which on a deployment with no embedder configured
- * is every facet on every turn: `semantic` is declared and never consulted. So the
+ * is every retrieval channel on every turn: `semantic` is declared and never consulted. So the
  * copy names the missing channel and keeps the hits, because both facts are real —
- * a facet can find 17 things through the channel that did work while two others
+ * a retrieval channel can find 17 things through the channel that did work while two others
  * never ran. Two things this must not do: report it as `0 hits` (the old
  * behaviour — "the corpus has nothing to say" instead of "we never looked"), or
  * read like a fault, which on a row that fires 100% of the time would teach the
  * reader to ignore every red row including the ones that are faults.
  */
-function facetLabel(
+function channelLabel(
   noun: string,
   running: boolean,
   status: string,
@@ -295,7 +295,7 @@ function outcomeLabel(outcome: string, failedStage: string | null): string {
 /**
  * A short human label when the backend omits `label` — which is always, since
  * the wire deliberately leaves copy to the client (ADR 0010). Status-dependent
- * by design: "Input gate: refused" and "Input gate: cleared" are the same row.
+ * by design: "Input check: refused" and "Input check: cleared" are the same row.
  */
 export function defaultLabel(ev: {
   step: string;
@@ -305,8 +305,8 @@ export function defaultLabel(ev: {
   const d = ev.detail;
   const s = ev.status;
   const running = s === "start" || s === "running";
-  const facet = FACET_NOUNS.get(ev.step);
-  if (facet !== undefined) return facetLabel(facet, running, s, d);
+  const channel = CHANNEL_NOUNS.get(ev.step);
+  if (channel !== undefined) return channelLabel(channel, running, s, d);
 
   switch (ev.step) {
     /* ── rails ─────────────────────────────────────────────────────────────── */
@@ -351,11 +351,11 @@ export function defaultLabel(ev: {
           ? `Matched a known-bad question (${asset})`
           : "Matched a known-bad question";
       }
-      // `ok` with `gate: "disabled"` is the only status this step emits today:
+      // `ok` with `check: "disabled"` is the only status this step emits today:
       // `negative_tau` is unset until a negative corpus exists, and the emitter
-      // will not report a disabled gate as `miss` — that would claim it looked
+      // will not report a disabled check as `miss` — that would claim it looked
       // and found nothing. So "No negative match" is reserved for a `miss`, when
-      // the gate really did run. Getting these two the same way round is the
+      // the check really did run. Getting these two the same way round is the
       // difference between a screen that says what happened and one that lies on
       // every turn.
       if (str(d, "check") === "disabled") return "Negative-example gate: disabled";
@@ -385,14 +385,14 @@ export function defaultLabel(ev: {
       if (running) return "Resolving references";
       if (s === "error") return "Reference resolution failed";
       const pulled = num(d, "n_pulled_in");
-      const licensed = num(d, "n_licensed");
+      const retrieved_tables = num(d, "n_retrieved_tables");
       const head =
         pulled === null
           ? "Resolved references"
           : pulled === 0
             ? "No references to pull in"
             : `Pulled in ${plural(pulled, "referenced asset")}`;
-      return licensed === null ? head : `${head}, ${licensed} licensed`;
+      return retrieved_tables === null ? head : `${head}, ${retrieved_tables} retrieved`;
     }
     case "connect": {
       if (running) return "Finding a join path";
@@ -401,9 +401,9 @@ export function defaultLabel(ev: {
       if (s === "declined") {
         const why = reasonOf(d);
         const head = why ? (CONNECT_DECLINES.get(why) ?? `Cannot connect: ${why}`) : "Cannot connect";
-        const licensed = num(d, "n_licensed");
+        const retrieved_tables = num(d, "n_retrieved_tables");
         const bits: string[] = [];
-        if (licensed !== null) bits.push(plural(licensed, "table licensed", "tables licensed"));
+        if (retrieved_tables !== null) bits.push(plural(retrieved_tables, "retrieved table", "retrieved tables"));
         if (crossings !== null) bits.push(plural(crossings, "crossing"));
         return bits.length > 0 ? `${head} (${bits.join(", ")})` : head;
       }
@@ -565,13 +565,13 @@ function outOfScope(subject: string | null, plural = false): string {
 }
 
 /**
- * A gate ran, one of its rules threw, and the question went through **unchecked**.
- * The record counts this as a security event and gates a run on it, so this row
+ * A check ran, one of its rules threw, and the question went through **unchecked**.
+ * The record counts this as a security event and checks a run on it, so this row
  * must not read like a clean pass — it is the one row where alarming the reader is
  * the correct behaviour.
  */
-function failedOpen(gate: string): string {
-  return `${gate} failed open: the question went through unchecked`;
+function failedOpen(check: string): string {
+  return `${check} failed open: the question went through unchecked`;
 }
 
 /**
@@ -663,7 +663,7 @@ export function countRepairs(steps: TimelineStep[]): number {
 
 /** One-line summary shown when the completed trace collapses. */
 export function summarizeSteps(steps: TimelineStep[]): string {
-  // Actions the agent took. `check` and `cap` are verdicts *about* an action, and
+  // Actions the agent took. `check` and `cap` are results *about* an action, and
   // counting them here would report one SQL call as two steps.
   const actions = steps.filter((s) => s.kind === "tool" && s.step !== "check" && s.step !== "cap");
   const queries = actions.filter((s) => s.step === "execute").length;
@@ -685,7 +685,7 @@ export interface LedgerEntry {
   step?: string;
   kind?: GovEvent["kind"];
   status?: string;
-  verdict?: string;
+  result?: string;
   allowed?: boolean;
   attempt?: number;
   layer?: string;
@@ -713,10 +713,10 @@ function ledgerStatus(entry: LedgerEntry): StepStatus {
     return explicit as StepStatus;
   }
   if (entry.allowed === false) return "blocked";
-  const verdict = String(entry.verdict ?? "").toLowerCase();
-  if (verdict.includes("block")) return "blocked";
-  if (verdict.includes("error")) return "error";
-  if (verdict.includes("refus")) return "refused";
+  const result = String(entry.result ?? "").toLowerCase();
+  if (result.includes("block")) return "blocked";
+  if (result.includes("error")) return "error";
+  if (result.includes("refus")) return "refused";
   return "ok";
 }
 

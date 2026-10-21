@@ -109,7 +109,7 @@ def test_the_bound_is_a_setting_and_not_a_constant() -> None:
     structure = _fan_out(10)
 
     assert _run(structure, _state()).get("path_kind") != "decline"
-    tightened = _run(structure, _state(knobs_resolved={"max_resolve_additions": 5}))
+    tightened = _run(structure, _state(settings_resolved={"max_resolve_additions": 5}))
     assert tightened["path_kind"] == "decline"
     assert tightened["terminal_reason"] == "over_resolve_bounds"
 

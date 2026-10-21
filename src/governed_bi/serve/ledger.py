@@ -67,7 +67,7 @@ def execution_from_attempts(attempts: Sequence[Any]) -> ExecutionRecord:
     ``attempts`` keeps every row; ``terminal`` reads only :func:`answering_attempts`, so a turn
     that sampled a column and then answered from context is ``no_sql`` with a non-empty ledger.
 
-    **The cap is tested before the pass, and the order is load-bearing.** Reversed, ``"capped"``
+    **The cap is tested before the pass, and the order is.** Reversed, ``"capped"``
     is unreachable on any turn where a statement ever succeeded, and that turn exists: measured
     live, an agent with two passing and two blocked attempts hit the cap, told the user it could
     not answer, and was written ``terminal: "answered"``. ADR 0006 §5 — the cap **terminates the
@@ -124,8 +124,8 @@ def pipeline_error_attempt(path: ExecutorPath, detail: str) -> AttemptRecord:
 
     ``result_layer`` is ``None`` for the same reason :func:`cap_attempt` gives: no layer ran, and
     a rule id or a layer here would attribute our own failure to a governance layer that never
-    executed. ``check()``'s *internal* ``except`` still uses ``internal_error(layer, ...)``,
-    because there a layer genuinely was running.
+    executed. ``check()``'s *internal* ``except`` still uses ``internal_error(layer,...)``,
+    because there a layer was running.
     """
     return AttemptRecord(
         result_layer=None,

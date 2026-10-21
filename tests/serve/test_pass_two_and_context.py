@@ -65,7 +65,7 @@ def _base_turn(**overrides: Any) -> dict[str, Any]:
         "attempt_id": "attempt-f2",
         "corpus_content_hash": "corpus-hash",
         "prompt_set_hash": "prompt-hash",
-        "knobs_resolved": {"route_top_n": 1, "candidate_depth": 50},
+        "settings_resolved": {"route_top_n": 1, "candidate_depth": 50},
         "n_re_served": 0,
         "messages": [],
         "usage": [],
@@ -389,7 +389,7 @@ def test_pass_two_scores_against_the_turns_query_vector_from_state(monkeypatch) 
         "question": "how many customers",
         "query_vector": [0.5, 0.5],
         "channel_route_hits": [("channel_schema", "sales", 0.9)],
-        "knobs_resolved": {},
+        "settings_resolved": {},
     }
     config = {
         "configurable": {
@@ -479,7 +479,7 @@ def test_a_few_shot_reaches_retrieved_and_the_prompt() -> None:
     question = "How many customers are there?"
     state = {
         "question": question,
-        "knobs_resolved": {},
+        "settings_resolved": {},
         "channels": {
             "channel_entity": {"channel": "channel_entity", "queries": [question], "hits": []},
             "channel_example": {"channel": "channel_example", "queries": [question], "hits": []},
@@ -571,7 +571,7 @@ def test_a_semantic_only_candidate_can_enter_pass_two() -> None:
     )
     state = {
         "question": question,
-        "knobs_resolved": {},
+        "settings_resolved": {},
         "channels": {"channel_entity": {"channel": "channel_entity", "queries": [question], "hits": []}},
     }
     retrieved = pass_two_retrieve(
@@ -595,7 +595,7 @@ def test_pass_two_scores_both_channels_over_the_same_text() -> None:
     ``accept`` embeds the **raw last human message** into ``state["query_vector"]`` — it is the
     only writer of that key repo-wide — and ``route_node`` passed it straight through as one
     call-level vector for the whole of pass two. The lexical channel meanwhile searched the
-    per-channel ``queries``, which ``_run_facet`` set to the utility-model rewrite. So the two
+    per-channel ``queries``, which ``_run_channel`` set to the utility-model rewrite. So the two
     channels were scored over two different texts and then blended at 0.5/0.5.
 
     ``channels.py`` documents the fix in the pass that already had it — *"The rewrite happens
@@ -646,7 +646,7 @@ def test_pass_two_scores_both_channels_over_the_same_text() -> None:
     retrieved = pass_two_retrieve(
         state={
             "question": QUESTION,
-            "knobs_resolved": {},
+            "settings_resolved": {},
             "channels": {
                 "channel_entity": {"channel": "channel_entity", "queries": [REWRITE], "hits": []}
             },
@@ -684,7 +684,7 @@ def test_pass_two_scores_a_rewrite_against_its_own_vector_or_against_nothing() -
     recorded one ``semantic`` score. This test asserted that as correct, on the reasoning that no
     embedder is a legitimate configuration and going dark would make it unusable. The
     configuration is legitimate; the substitution is not, and it is not needed to keep it usable:
-    "this call has no embedder" is honestly *not configured*, and production never reaches it,
+    "this call has no embedder" is *not configured*, and production never reaches it,
     because ``route_retrieve`` passes the embedder from the same config the index was built from.
     """
     from governed_bi.retrieve.index import IndexEntry, build_index
@@ -711,7 +711,7 @@ def test_pass_two_scores_a_rewrite_against_its_own_vector_or_against_nothing() -
         return pass_two_retrieve(
             state={
                 "question": "how many buyers",
-                "knobs_resolved": {},
+                "settings_resolved": {},
                 "channels": {
                     "channel_entity": {
                         "channel": "channel_entity",
@@ -823,7 +823,7 @@ def test_carry_forward_scores_an_unscored_pass_one_hit(semantic_state, expected)
         }],
     }
     retrieved = pass_two_retrieve(
-        state={"question": question, "knobs_resolved": {}, "channels": {"channel_entity": channel}},
+        state={"question": question, "settings_resolved": {}, "channels": {"channel_entity": channel}},
         index=index,
         schemas=["sales"],
         ranking=[("sales", 1.0)],

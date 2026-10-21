@@ -59,7 +59,7 @@ def apply_budgets(
     ``pulled_in`` is returned unchanged in membership and does not consume budget.
 
     Caps report what they discarded in :attr:`BudgetResult.dropped` and
-    :attr:`BudgetResult.best_dropped_score`: a cap with no witness is indistinguishable
+    :attr:`BudgetResult.best_dropped_score`: a cap with no evidence is indistinguishable
     from a retrieval that never found the asset.
 
     **Ties break on the asset id**, matching every other ordering in the retrieval path

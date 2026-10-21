@@ -3,7 +3,7 @@
 The semantic channel scored an in-memory ``dict[str, list[float]]`` by
 ``retrieve/semantic.py::cosine`` until 2026-08-04. It now scores a LanceDB table, and the
 storage change is invisible from every existing test: the old ones assert *rankings*, and a
-store that quietly returned a different number for the same pair of vectors would still
+store that returned a different number for the same pair of vectors would still
 produce a plausible ranking. So this file asserts the two things the swap could break and
 nothing else was watching:
 
@@ -93,7 +93,7 @@ def test_the_store_scores_and_orders_exactly_as_cosine() -> None:
        ``distance_type("cosine")`` yields *squared L2*, which is a plausible-looking ranking
        and is not this;
     2. the store's order equals the order that same ``cosine`` produces — the property every
-       downstream assertion actually depends on;
+       downstream assertion depends on;
     3. the order is unchanged by float32 storage, i.e. it also matches the order computed
        from the embedder's own float64 output. Storage precision costs ~6.6e-08 on a 3072-dim
        cosine, and this is the check that says the cost is precision and not rank.
@@ -139,7 +139,7 @@ def test_the_store_scores_and_orders_exactly_as_cosine() -> None:
 
     # Controls: the fixture must discriminate, or every assertion above is satisfied by a
     # store that returns one constant. Seven distinct values over ten rows -- with three
-    # genuine ties, which is what makes the id tiebreak load-bearing here too.
+    # genuine ties, which is what makes the id tiebreak here too.
     assert len({round(score, 6) for _, score in ranked}) >= 7
     assert theirs[0][1] > theirs[1][1]
 
@@ -262,7 +262,7 @@ def test_an_empty_candidate_set_ran_and_an_unconfigured_channel_did_not() -> Non
 def test_keys_does_not_read_the_vector_column() -> None:
     """``keys()`` said "without reading a single vector" while calling ``to_arrow()``.
 
-    Asserted by **removing** the full read and by inspecting the projection actually asked for, not
+    Asserted by **removing** the full read and by inspecting the projection asked for, not
     by timing: a benchmark in a test suite is a flake, and the claim is not "this is fast", it is
     "this does not touch the vectors". Measured on the real 14,613-row store, the projected scan
     returns the same keys in 1.77 MB against 181.3 MB for the whole table, and a 2 ms sampler
@@ -369,7 +369,7 @@ def test_replace_reconnects_rather_than_reusing_the_connection() -> None:
     # single `load_from` — and a retained store is the only scenario the line is kept for.
     # **The objects, not their ids.** `seen = {id(...)}` was the first version and it flaked once in
     # four full-suite runs: CPython recycles `id()` once the old connection is collected, so a
-    # genuinely new object can report an id already in the set. Holding the objects both prevents the
+    # new object can report an id already in the set. Holding the objects both prevents the
     # recycling and makes the comparison exact.
     seen = [target._db]
     for attempt in range(3):

@@ -221,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     # A split utility model is wired on every provider since `model/provider.py` landed, so
     # the old "proxy only" refusal is gone. What remains refused is a *silent* one: an effort
     # with no model to apply it to would be accepted and dropped, putting an unrecorded
-    # treatment in the artifact — the shape of the incident `llm_utility_model` was declared
+    # setting under test in the artifact — the shape of the incident `llm_utility_model` was declared
     # to prevent.
     # "Keep what was measured" and "throw it away" are opposite instructions, and the file is
     # the same one. Refused rather than resolved in either direction. The decision itself lives
@@ -255,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # The profile is loaded *before* the models are built, so a typo in --config or a malformed
     # configs.toml costs nothing. `config_profile` raises on an unknown name rather than returning an
-    # empty treatment, which is the whole point of the file.
+    # empty setting under test, which is the whole point of the file.
     profile = None
     if args.config:
         from governed_bi.registry.config_profiles import config_profile
@@ -295,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     # One connector for the session and the graph; each worker gets its own below.
     # `utility_model` is passed only when there is one: `session` writes `llm_utility_model`
     # from the agent model when it is absent, and "shared one model" and "split them" are two
-    # treatments that must not resolve to the same setting set.
+    # settings under test that must not resolve to the same setting set.
     session_kwargs: dict = {
         "connector": PostgresConnector(dsn),
         "policy": GovernancePolicy(guard_rules_enabled={}),
@@ -332,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     # now its only caller was its own tests -- declared machinery with no wire, which is the
     # defect open-work 3.10 is about, entered deliberately. A run labelled `v4` against a
     # corpus that is not v4's is a mislabelled artifact, and mislabelled artifacts are how a
-    # number ends up quoted against the wrong treatment.
+    # number ends up quoted against the wrong setting under test.
     if profile is not None:
         print(f"config {profile.name}: {profile.description}", flush=True)
         if profile.compare_to:
@@ -364,10 +364,10 @@ def main(argv: list[str] | None = None) -> int:
     # Until this line existed the pre-flight passed the corpus alone, so `--config v4` against a
     # different `--dataset` agreed with the profile on everything compared and was caught at
     # *report* time, over the finished artifact, which is after the money is spent. The two keys
-    # go in one mapping with no `knobs_resolved`, which is the shape `recorded_question_subset`
+    # go in one mapping with no `settings_resolved`, which is the shape `recorded_question_subset`
     # falls through for.
     #
-    # `scope_identity` is called here and again inside `harness_knobs` below. That is the same
+    # `scope_identity` is called here and again inside `harness_settings` below. That is the same
     # producer twice, deliberately, not a second copy of the rule: the pre-flight must compare
     # exactly the value the rows will carry, and the only way to guarantee that is to derive it
     # from the same function on the same three arguments.
@@ -381,11 +381,11 @@ def main(argv: list[str] | None = None) -> int:
                     question_ids=covered_qids,
                     dataset_file=dataset_file,
                 )["question_subset"],
-                # The one comparability setting that names the *treatment*: measured 2026-08-23, not
-                # one of the other 50 contains "corpus", so a config whose treatment is the corpus
+                # The one setting that affects results that names the *setting under test*: measured 2026-08-23, not
+                # one of the other 50 contains "corpus", so a config whose setting under test is the corpus
                 # could not declare it and `config_profiles.reconcile` returned agreement.
                 #
-                # **Flat, not nested under `knobs_resolved`.** A real row carries it in the setting
+                # **Flat, not nested under `settings_resolved`.** A real row carries it in the setting
                 # mapping and `recorded_corpus_release` reads it from there; this identity is not a
                 # row, and putting a nested mapping here is how the question-set check went vacuous
                 # once already -- `recorded_question_subset` looks in the setting mapping first. The
@@ -415,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
     # The prompt selection belongs in the tag for exactly the reason the retrieval channel
     # does, and more sharply: an A/B differing *only* in --prompt-variant would otherwise
     # auto-name both configs to one path, and --resume would read the first config's rows as this
-    # one's and skip the questions. Two treatments, one artifact, no error anywhere.
+    # one's and skip the questions. Two settings under test, one artifact, no error anywhere.
     variant_tag = "".join(
         f"_{pair.replace('=', '')}" for pair in sorted(args.prompt_variant or ())
     )
@@ -424,9 +424,9 @@ def main(argv: list[str] | None = None) -> int:
     # report one config's delivered set with the other's declines and every selective-accuracy
     # figure over the file would be a blend of two operating points.
     abstain_tag = "_abstain" if args.abstain else ""
-    # A pinned config and an unpinned one are two treatments: v3-fold vs v4 is discordant on 9.3%
+    # A pinned config and an unpinned one are two settings under test: v3-fold vs v4 is discordant on 9.3%
     # of questions with the pin and 12.7% without it, which is the difference between an MDE of
-    # 2.3pp and 2.7pp (`measure.stats.mde`, n=1351). It was the one treatment input with no tag
+    # 2.3pp and 2.7pp (`measure.stats.mde`, n=1351). It was the one setting under test input with no tag
     # segment and no readable row, so `--resume` could merge a pinned run into an unpinned one.
     pinned_tag = "_pinned" if args.replay_routing is not None else ""
     tag = (
@@ -480,11 +480,11 @@ def main(argv: list[str] | None = None) -> int:
             return 4
 
     # Per-question setting overrides, composed into one dict. Two separate blocks each writing
-    # `knobs_resolved` would mean the second silently dropped the first's override, which is the
+    # `settings_resolved` would mean the second silently dropped the first's override, which is the
     # defect `Session.turn` already caused once for `--top-n`.
     #
     # Built here rather than after the resume block, because the resume guard compares the
-    # artifact's recorded comparability settings against the ones this run is about to write.
+    # artifact's recorded settings that affect results against the ones this run is about to write.
     setting_overrides: dict[str, Any] = harness_settings(
         repo=REPO,
         schemas=schemas,
@@ -496,7 +496,7 @@ def main(argv: list[str] | None = None) -> int:
         setting_overrides["route_top_n"] = args.top_n
     if args.abstain:
         setting_overrides["abstention_policy_enabled"] = True
-    run_settings = {**session.knobs_resolved, **setting_overrides}
+    run_settings = {**session.settings_resolved, **setting_overrides}
 
     done: set[str] = set()
     retrying = 0
@@ -523,8 +523,8 @@ def main(argv: list[str] | None = None) -> int:
             kept_rows,
             corpus_content_hash=session.corpus_content_hash,
             prompt_set_hash=session.prompt_set_hash,
-            knobs_resolved=run_settings,
-            comparability=setting_names(),
+            settings_resolved=run_settings,
+            affects_results=setting_names(),
             question_ids=covered_qids,
             replay_routing=args.replay_routing is not None,
         )
@@ -583,10 +583,10 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     # Composed above, applied here: `Session.turn` writes the session's own settings over the
-    # turn, and `harness._turn_knobs` prefers the question's mapping, so this is where the
+    # turn, and `harness._turn_settings` prefers the question's mapping, so this is where the
     # harness half of the identity reaches the row.
     for question in questions:
-        question["knobs_resolved"] = dict(run_settings)
+        question["settings_resolved"] = dict(run_settings)
 
     total = len(questions)
     print(

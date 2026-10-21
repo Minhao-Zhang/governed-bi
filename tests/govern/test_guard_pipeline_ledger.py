@@ -46,7 +46,7 @@ def all_rules_on(policy_cls):
 def test_guard_refuses_to_run_while_its_rules_are_uncalibrated(policy) -> None:
     """``guard_rules_enabled`` is ``UNSET`` and reading it raises (ADR 0006 OQ3).
 
-    Raising is the honest option: "all on" ships rules whose false-positive rate nobody
+    Raising is the option: "all on" ships rules whose false-positive rate nobody
     has measured, and "all off" ships no guard while the graph claims one.
     """
     from governed_bi.govern.check import GovernanceUsageError
@@ -366,7 +366,7 @@ def test_the_encoding_check_runs_on_the_raw_statement_not_the_normalised_one(pre
 # ── the ledger ────────────────────────────────────────────────────────────────
 
 
-def test_the_row_that_is_actually_written_carries_the_statement_verbatim(prepare) -> None:
+def test_the_row_that_is_written_carries_the_statement_verbatim(prepare) -> None:
     """The two tests here used to exercise ``ledger_entry``, which nothing called.
 
     It was the only implementation of ADR 0006 §11's retention table — ``executed`` /
@@ -695,7 +695,7 @@ def test_spellings_for_omits_a_table_whose_own_columns_collide() -> None:
 
 
 #: ``s.people`` declares ``Name`` and ``s.places`` declares ``name``, so the flat fold is
-#: genuinely ambiguous and every assertion below is about which *table* a handle resolved to.
+#: ambiguous and every assertion below is about which *table* a handle resolved to.
 _COLLIDING_BY_TABLE = {
     "people": {"name": "Name"}, "s.people": {"name": "Name"},
     "places": {"name": "name"}, "s.places": {"name": "name"},

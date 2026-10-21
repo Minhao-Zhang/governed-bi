@@ -185,7 +185,7 @@ def test_pulled_in_and_hit_lines_are_visibly_different() -> None:
 
     Asserting only "the body is absent" would still pass if someone made *hits* terse, or
     made pulled-in assets carry every descriptive field again. Both directions are checked
-    against fields the two assets genuinely both have.
+    against fields the two assets both have.
     """
     block = _render()
 

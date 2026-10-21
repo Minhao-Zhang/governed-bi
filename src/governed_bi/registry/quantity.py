@@ -1,6 +1,6 @@
 """``Measured[T]``: a quantity that may be absent, with an explicit reason.
 
-Lives in ``registry/`` so :mod:`.record` can recognise unmeasured values in the
+Lives in ``registry/`` so:mod:`.record` can recognise unmeasured values in the
 presence test without importing upward. Three states: measured, not_measured,
 not_applicable. Truthiness and arithmetic are refused; format only via
 :meth:`Measured.render`.
@@ -8,7 +8,7 @@ not_applicable. Truthiness and arithmetic are refused; format only via
 **Before renaming anything in here, read :data:`CHECKPOINT_PICKLED_NAMES` at the bottom.** The
 three class names in this module are written into ``.langgraph_api/.langgraph_ops.pckl`` on every
 served turn, and a rename deletes the whole thread registry on the next boot. The guard below
-refuses to import rather than let that happen quietly.
+refuses to import rather than let that happen.
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ class Measured(Generic[T]):
         Erasure is what registers the class with LangGraph's msgpack serde. Under
         strict mode (langgraph 1.2.11) ``StateGraph.compile`` derives the allowlist by
         walking the state schema (``_internal._serde.build_serde_allowlist`` →
-        ``BaseCheckpointSaver.with_allowlist``) — the only seam that reaches the
+        ``BaseCheckpointSaver.with_allowlist``) — the only boundary that reaches the
         deployed server's saver, which this repository never builds. That walk
         recognises real classes only. Without this method
         ``dataclasses.is_dataclass(Measured[int])`` would be ``False``, because a
@@ -94,7 +94,7 @@ class Measured(Generic[T]):
         tokens:`` read "we measured something". Unmeasured collapsing into zero is the
         defect this module exists to prevent.
 
-        The parameter is not load-bearing at runtime (nothing reads ``get_args`` of a
+        The parameter is not at runtime (nothing reads ``get_args`` of a
         ``Measured``), and a type checker resolves ``Measured[int]`` against
         ``Generic[T]`` rather than this method, so annotations still check.
         """
@@ -257,7 +257,7 @@ _assert_absence_cannot_carry_a_value()
 #: refuse / decline / no-statement turns finds exactly these 3 and nothing else. ``State`` and
 #: ``Relation`` are not extras: they are :class:`Measured`'s field types, so a pickled absence
 #: names all three. Every other declared channel type (``GuardResult``, ``ExecutionRecord``,
-#: ``RetrievalResult``, ``FacetResult`` …) is a ``TypedDict`` — a plain ``dict`` at runtime, with
+#: ``RetrievalResult``, ``ChannelResult`` …) is a ``TypedDict`` — a plain ``dict`` at runtime, with
 #: no class name in the pickle — and the ``Any``-typed holes carry plain JSON today
 #: (``channels[*]["hits"]`` and ``retrieved["selected"]`` are dicts built with ``asset_type.value``,
 #: never :class:`~governed_bi.retrieve.result.Hit` objects).

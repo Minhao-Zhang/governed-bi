@@ -1,7 +1,7 @@
-"""Facet fan-out nodes (ADR 0005 §2–3).
+"""Channel fan-out nodes (ADR 0005 §2–3).
 
 Five nodes, one per :data:`~governed_bi.registry.stages.CHANNEL_STAGES` member.
-Each writes only ``{"channels": {stage_value: FacetResult}}`` so the graph's
+Each writes only ``{"channels": {stage_value: ChannelResult}}`` so the graph's
 ``merge_channels`` reducer can replace by key under concurrent fan-out.
 
 With a :class:`~governed_bi.retrieve.index.UnifiedIndex` on ``config["configurable"]["index"]``,
@@ -212,7 +212,7 @@ def _pass_one_hits(
     # `nodes/pass_two.py`: untagged pass-one hits are carried into pass two verbatim and then
     # compete against pass-two hits in `apply_budgets`' single global sort, so two combiners means
     # one asset carrying two different scores in one turn. Each pass min-maxing its channels over
-    # its own scored population was that, quietly: the two passes score different candidate sets,
+    # its own scored population was that,: the two passes score different candidate sets,
     # so the same raw pair scaled to two different numbers (audit I1).
 
     # `fuse` needs this to tell "this channel has no semantic channel" from "the semantic channel
@@ -272,7 +272,7 @@ def _channel_result(
     ran: frozenset[Channel],
     observed: Mapping[Channel, ChannelState],
 ) -> dict[str, Any]:
-    # One query per channel, always. There is no `max_queries_per_facet` bound because there is
+    # One query per channel, always. There is no `max_queries_per_channel` bound because there is
     # no per-channel fan-out; a real multi-query channel brings its own.
     queries = [question] if question else []
     return {
@@ -303,9 +303,9 @@ async def _rewritten_query(
     and returns early above), and a call the ledger does not know about is a turn priced below
     what it spent.
 
-    ``Channel.extraction`` is added to ``ran`` **only when a rewrite actually came back**. A
+    ``Channel.extraction`` is added to ``ran`` **only when a rewrite came back**. A
     model that errors or returns nothing falls back to the raw question and the channel reports
-    ``failed``: a fallback that reports as a run is how a config quietly becomes v1's single-pass
+    ``failed``: a fallback that reports as a run is how a config becomes v1's single-pass
     retrieval while every channel claims to be working (ADR 0005 §2.3). Every failure returns
     the question rather than raising.
     """
@@ -384,7 +384,7 @@ async def _run_channel(
     # the channel's shape and `operator.add` merges the five concurrent channels for free.
     spent: list[dict] = []
     # `queries` is what the record publishes as "what this channel searched for", so it must be
-    # the text that actually went to the index.
+    # the text that went to the index.
     query = question
 
     if index is not None:

@@ -3,11 +3,11 @@
 open-work.md 3.11 recorded the gap this closes — until this suite existed it read "the layer
 stack, the allowlist and the scope check have no adversarial evaluation, so what governance buys
 has no number", and it now reports the first number instead. This module loads the cases and resolves
-the fictional world they read against; :mod:`.adversarial_run` runs them and reports the
+the fictional world they read against;:mod:`.adversarial_run` runs them and reports the
 numbers. Both are deliberately model-free, network-free and credential-free — the whole layer
 stack is deterministic, so measuring it must be too.
 
-Loading is where the suite is kept honest. A case with no ``why`` and no ``origin`` fails to
+Loading is where the suite is kept. A case with no ``why`` and no ``origin`` fails to
 load, an attack that does not name the layer *and* the rule it expects fails to load, and a
 layer that disagrees with ``layers.RULES`` about who owns that rule fails to load. Each of
 those is a way a suite rots into a list nobody can tell a deliberate probe from a leftover in.
@@ -16,7 +16,7 @@ those is a way a suite rots into a list nobody can tell a deliberate probe from 
 field failed to load on a typo while ``B4`` mistyped as ``B44`` loaded, ran, and counted towards
 nothing. It is checked against :data:`BYPASSES`, and the *coverage* claim — which of ADR 0006's
 ten bypasses this file can aim a statement at — is the ``[bypass.*]`` tables rather than a
-sentence, so :func:`_assert_bypass_coverage_is_honest` can hold it to the cases that exist.
+sentence, so :func:`_assert_bypass_coverage_is` can hold it to the cases that exist.
 """
 
 from __future__ import annotations
@@ -95,9 +95,9 @@ class BypassClaim:
 
     The claim used to live in a sentence at the top of ``adversarial.toml`` and in a report:
     *"B1/B2/B4/B5/B6 are statement-shaped and are here; B3/B7/B8/B9/B10 have no SQL surface."*
-    Prose cannot be checked, and a suite that quietly covered five of ten while being called
+    Prose cannot be checked, and a suite that covered five of ten while being called
     "the bypass suite" is the failure ADR 0006's own bypass list was written to stop. As data,
-    :func:`_assert_bypass_coverage_is_honest` can hold it to the cases actually present.
+    :func:`_assert_bypass_coverage_is` can hold it to the cases present.
     """
 
     id: str
@@ -203,7 +203,7 @@ class AdversarialSuite:
 
 @dataclass(frozen=True, slots=True)
 class WorldFixture:
-    """:class:`AdversarialWorld` resolved into the arguments the two entry points take."""
+    """ :class:`AdversarialWorld` resolved into the arguments the two entry points take."""
 
     corpus: AnalystCorpus
     retrieved_tables: frozenset[str]
@@ -239,10 +239,12 @@ def _parse_world(body: Mapping[str, Any]) -> AdversarialWorld:
             raise ValueError(f"[world.tables] {table_id!r} must be a list of column names")
         resolved[table_id] = tuple(columns)
 
-    retrieved_tables = frozenset(str(x) for x in body.get("licensed", ()))
+    retrieved_tables = frozenset(str(x) for x in body.get("retrieved_tables", ()))
     unknown = sorted(retrieved_tables - set(resolved))
     if unknown:
-        raise ValueError(f"[world].licensed names {unknown}, which no [world.tables] entry declares")
+        raise ValueError(
+            f"[world].retrieved_tables names {unknown}, which no [world.tables] entry declares"
+        )
     if retrieved_tables == set(resolved):
         raise ValueError(
             "[world] lists every table it declares as retrieved, so the TABLES layer has nothing to "
@@ -411,7 +413,7 @@ def _parse_bypasses(body: Any) -> dict[str, BypassClaim]:
     return out
 
 
-def _assert_bypass_coverage_is_honest(
+def _assert_bypass_coverage_is(
     cases: Sequence[AdversarialCase], bypasses: Mapping[str, BypassClaim]
 ) -> None:
     """The declaration and the cases must agree, in both directions.
@@ -460,7 +462,7 @@ def _parse_suite(data: Mapping[str, Any]) -> AdversarialSuite:
     if not isinstance(world, Mapping):
         raise ValueError(f"{SUITE_FILE.name}: no [world] table")
     bypasses = _parse_bypasses(data.get("bypass"))
-    _assert_bypass_coverage_is_honest(cases, bypasses)
+    _assert_bypass_coverage_is(cases, bypasses)
 
     raw_guard = data.get("guard_case")
     if not isinstance(raw_guard, list) or not raw_guard:
@@ -581,7 +583,7 @@ def _assert_the_guard_half_has_both_halves_and_covers_every_rule(
 
     The benign requirement is :func:`_assert_the_suite_has_both_halves`'s argument verbatim —
     a guard that refuses everything scores a perfect block rate. The ratio is **not** copied:
-    these controls are questions, and the honest denominator for "does an enabled rule refuse
+    these controls are questions, and the denominator for "does an enabled rule refuse
     ordinary analytics" is the benchmark's own 1,351 questions, which
     ``tests/conformance/test_the_guard_does_not_refuse_the_benchmark.py`` runs and this file
     cannot (it needs the dataset repo). The handful here are the shapes that most look like

@@ -2,7 +2,7 @@
 
 ``git_sha``, ``git_main_sha``, ``working_tree_dirty`` and ``diff_sha256`` are ``Role.operational``
 — which is to say resume-drift keys — and were ``None`` on all 8 106 rows of all six configs in
-``runs/eval/``. ``measure/checks.py::_knobs_resolved_check`` looks for *disagreement* across an
+``runs/eval/``. ``measure/checks.py::_settings_resolved_check`` looks for *disagreement* across an
 config's rows, and four constants cannot disagree, so the check that exists to stop a resume
 blending two harness versions into one config's score was comparing each key against itself.
 ``diff_sha256``'s own register note says exactly what the absence would cost.
@@ -204,7 +204,7 @@ def test_the_harness_settings_reach_the_measurement_row(tmp_path: Path) -> None:
     stops one function short of the artifact is the same as no wire.
 
     Driven through ``run_config`` rather than ``project_turn``, because the path the driver uses
-    goes through ``_turn_knobs``, and it is that function's precedence — the question's mapping
+    goes through ``_turn_settings``, and it is that function's precedence — the question's mapping
     over the session's — that decides whether these survive.
     """
     from governed_bi.datasource.sqlite import SqliteConnector
@@ -225,13 +225,13 @@ def test_the_harness_settings_reach_the_measurement_row(tmp_path: Path) -> None:
                 "question_id": "q1",
                 "question": "how many customers",
                 "db_id": "main",
-                "knobs_resolved": settings,
+                "settings_resolved": settings,
             }
         ],
         stub_config(connector=connector),
     )
 
-    recorded = rows[0]["knobs_resolved"]
+    recorded = rows[0]["settings_resolved"]
     assert recorded["serve_workers"] == 10
     assert recorded["git_sha"] == settings["git_sha"]
     assert recorded["question_subset"] == "3:" + short_digest(

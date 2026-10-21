@@ -28,7 +28,7 @@ from governed_bi.serve.runtime import (
     combine_channels,
     vector_for_query,
 )
-from governed_bi.serve.runtime import facet_hits as hits_of
+from governed_bi.serve.runtime import channel_hits as hits_of
 from governed_bi.serve.runtime import lexical_coverage as _lexical_coverage
 
 __all__ = ["pass_two_retrieve"]
@@ -271,14 +271,14 @@ def _vector_for(
     embedder: Any | None,
     memo: dict[str, Sequence[float] | None],
 ) -> Sequence[float] | None:
-    """:func:`~governed_bi.serve.runtime.vector_for_query`, memoised over this call.
+    """ :func:`~governed_bi.serve.runtime.vector_for_query`, memoised over this call.
 
     The five channels frequently rewrite a question into overlapping phrases, and a channel whose
     query *is* the question resolves to ``fallback`` with no embedding call at all.
 
     **The state is dropped here and the vector is not substituted** (audit I7). Pass two derives
     ``consulted`` from ``registry/channels.py``'s *declared* channels rather than from what ran, so
-    it has nowhere to record an observed ``failed`` — that seam is pass one's. What it must not
+    it has nowhere to record an observed ``failed`` — that boundary is pass one's. What it must not
     do is what it used to: score a rewrite's BM25 against the raw question's cosine. With
     ``None`` the semantic channel contributes 0.0 to every asset, which is a channel that found
     nothing rather than a channel that searched something else.
@@ -410,7 +410,7 @@ def _pass_one_payload(
 
 
 def _build_retrieved(
-    facet_hits: Mapping[str, list[dict[str, Any]]],
+    channel_hits: Mapping[str, list[dict[str, Any]]],
     ranking: list[tuple[Any, float]],
     state: Mapping[str, Any],
     index: UnifiedIndex | None = None,
@@ -420,7 +420,7 @@ def _build_retrieved(
     best_score: dict[str, float] = {}
     by_id: dict[str, tuple[str, AssetType, float]] = {}
 
-    for _channel_name, hits in facet_hits.items():
+    for _channel_name, hits in channel_hits.items():
         for payload in hits:
             asset_id = str(payload["asset_id"])
             asset_type_raw = payload["asset_type"]

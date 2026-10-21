@@ -1,4 +1,4 @@
-"""``docs/openapi.json`` against the bodies the server actually sends.
+"""``docs/openapi.json`` against the bodies the server sends.
 
 **Nothing generated the spec's response shapes and nothing checked them.** Every handler under
 ``api/`` is annotated ``-> dict[str, Any]``, so FastAPI infers no response model and
@@ -344,7 +344,7 @@ def test_the_spec_declares_every_field_the_server_sends(
 def test_the_pending_queue_carries_interrupt_ids_and_a_null_question(wire: dict[str, Any]) -> None:
     """interrupt_id and task_id are on the wire, and a payload can omit question.
 
-    A nullability declaration is unfalsifiable unless some row actually carries the null.
+    A nullability declaration is unfalsifiable unless some row carries the null.
     The degenerate thread in the fixture is that row.
     """
     rows = wire["client"].get("/clarifications/pending").json()["rows"]

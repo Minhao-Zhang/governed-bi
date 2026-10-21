@@ -70,11 +70,11 @@ const REFUSED_BY_SENTENCE: Record<string, string> = {
   no_schema_matched:
     "Nothing in your data looked related to this question, so no query was written.",
   // Stage.abstain — the four declared abstentions (ADR 0013).
-  nothing_licensed:
+  nothing_retrieved:
     "We found nothing in your data that could answer this, so nothing was queried.",
   empty_context:
     "We had no description of your data to work from, so any answer would have been guessed.",
-  licensed_table_evicted:
+  retrieved_table_dropped:
     "The right table was found but did not fit in this turn, so the question was not answered from it.",
   retrieval_channel_failed:
     "One of the steps that finds relevant data failed, so this turn was not answered rather than answered from the wrong tables.",

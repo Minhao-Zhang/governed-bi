@@ -8,7 +8,7 @@ table.
 
 This matters for a specific measurement. On BIRD-Obfuscation the corpus documents 422 planted
 decoy columns; the config that answers "is it better to warn about a decoy or to withhold it?"
-needs withholding to actually withhold. Implemented as a flag rather than a file deletion so
+needs withholding to withhold. Implemented as a flag rather than a file deletion so
 both configs load the same tree and differ in one field.
 
 **Why the fixture is verbose.** The first version of these tests built tables without

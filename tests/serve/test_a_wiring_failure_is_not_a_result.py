@@ -8,7 +8,7 @@ broke it for a missing ``connector`` four lines away, manufacturing
 unconfigured connector produced was therefore indistinguishable from a real governance refusal,
 and the turn recorded ``outcome: refused`` for a deployment fault. 2026-08-10 audit (C2).
 
-The fabricated row was also load-bearing in the suite, which is the part worth remembering: three
+The fabricated row was also in the suite, which is remembering: three
 tests in ``test_agent_core_partial_ledger.py`` and one in ``test_agent_tools_hitl.py`` asserted on
 "a governed statement" that was this refusal, with no connector anywhere and nothing having reached
 ``check()``. One of them said so in its own failure message. They pass a stub connector now.

@@ -3,11 +3,11 @@
 Measured on ``../BIRD-corpus`` on 2026-08-23: with an untracked ``.conformance-pins.txt`` at the
 root the tree hashed ``8bb37531cff9155a…``; with that one file not counted it hashed
 ``6e5c7b4be83d5682…``, the value ``docs/corpus-format.md`` records for the checked-out
-tip. A lint's bookkeeping file had already moved the treatment identity every measured number is
+tip. A lint's bookkeeping file had already moved the setting under test identity every measured number is
 pinned to, merely by sitting in the directory.
 
 The same mechanism says a corpus repository cannot be given CI: adding ``.github/workflows/*.yml``
-would change the hash, so the treatment identity would move when a workflow is edited. That is not
+would change the hash, so the setting under test identity would move when a workflow is edited. That is not
 reproducible, and it is why ``.github`` is excluded rather than argued about.
 
 Directory-based and not filename-based. ``_is_tooling`` already checks path *parts*, so a tool that
@@ -36,14 +36,14 @@ _TABLE = (
 
 
 def _corpus(root: Path) -> Path:
-    """A corpus with one asset and one prose file, which is the whole treatment here."""
+    """A corpus with one asset and one prose file, which is the whole setting under test here."""
     (root / "beer_factory").mkdir(parents=True)
     (root / "beer_factory" / "t.yaml").write_text(_TABLE, encoding="utf-8")
     (root / "README.md").write_text("# corpus\n", encoding="utf-8")
     return root
 
 
-def test_a_workflow_file_does_not_move_the_treatment_identity(tmp_path: Path) -> None:
+def test_a_workflow_file_does_not_move_the_under_test_identity(tmp_path: Path) -> None:
     """CI configuration is not corpus content. A corpus whose identity changes when you edit a
     workflow cannot be given CI at all, which is the concrete thing this unblocks."""
     root = _corpus(tmp_path / "corpus")
@@ -62,9 +62,9 @@ def test_a_workflow_file_does_not_move_the_treatment_identity(tmp_path: Path) ->
     assert corpus_content_hash(root) == before
 
 
-def test_a_lints_state_directory_does_not_move_the_treatment_identity(tmp_path: Path) -> None:
+def test_a_lints_state_directory_does_not_move_the_under_test_identity(tmp_path: Path) -> None:
     """A pins file beside the corpus is a record *about* the tree, not an asset. Counting
-    it would make every pin edit a new treatment."""
+    it would make every pin edit a new setting under test."""
     root = _corpus(tmp_path / "corpus")
     before = corpus_content_hash(root)
 

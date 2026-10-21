@@ -8,7 +8,7 @@
 pass neither, and they are what ``eval/harness.py`` and ``eval/datalake.py`` use.
 
 **This file does not close that gap.** Closing it means the harness loses the four state keys
-it injects — ``evidence``, ``knobs_resolved``, ``channel_route_hits``, ``pinned_schemas`` — and
+it injects — ``evidence``, ``settings_resolved``, ``channel_route_hits``, ``pinned_schemas`` — and
 ``ServeOutput``'s two keys are not what ``project_turn`` reads, so the harness would have to
 read the checkpoint instead of the return value. That is a redesign of the path every number
 comes from, and it buys nothing until someone re-runs. What this file does is make the
@@ -123,7 +123,7 @@ def test_an_config_that_replayed_a_shortlist_says_so_on_its_provenance_line() ->
     row = {
         "question_id": "q1",
         "corpus_content_hash": profile.corpus_content_hash,
-        "knobs_resolved": {"question_subset": profile.question_subset},
+        "settings_resolved": {"question_subset": profile.question_subset},
     }
 
     live = reconciliation_lines([row], profile)

@@ -1,6 +1,6 @@
 # Measurement
 
-Run an evaluation arm over the BIRD data lake, read what the run wrote, and
+Run an evaluation configuration over the BIRD data lake, read what the run wrote, and
 decide whether the number may be quoted.
 
 The entry point is
@@ -11,9 +11,9 @@ over the whole artifact.
 
 That is the same `build_graph` topology the server runs, and it is **not** the
 server's graph: `api/graph_app.build_serve_graph` wraps the same nodes with
-`accept` in front of `guard` and `record` after `stamp`, which is the trust
+`accept` in front of `guard` and `record` after `finish`, which is the trust
 boundary a client crosses and an eval question does not. Every stage from
-`guard` to `stamp` is shared — *the stages*, which is a narrower claim than this
+`guard` to `finish` is shared — *the stages*, which is a narrower claim than this
 paragraph used to make.
 
 **The same stages do not run the same policy.** The driver builds
@@ -21,24 +21,24 @@ paragraph used to make.
 all six rules on, so `guard` is a node both graphs have and only one of them
 asks anything. `hard_block_suspect` runs the other way — `True` here, `False`
 served, deliberately and argued in `graph_app.py`, and worth one turn on the
-whole v4 arm (`COLUMNS/r_column_suspect`: 1 attempt).
+whole v4 configuration (`COLUMNS/r_column_suspect`: 1 attempt).
 
 That gap is not closed by turning the guard on, and closing it that way would
 cost more than it buys: a turn the guard refuses is a turn whose answer nobody
-ever sees, so an enforced arm can report what governance cost in **coverage**
-and never what it cost in **right answers**. The arm stays permissive and the
-gates are replayed over the finished artifact — see
+ever sees, so an enforced configuration can report what governance cost in **coverage**
+and never what it cost in **right answers**. The configuration stays permissive and the
+checks are replayed over the finished artifact — see
 [the prod projection](#the-prod-projection) below.
 
 Findings produced this way live in [failure modes](failure-modes.md); what they
 imply is in [open work](open-work.md).
 
-> **Nothing measured is measured on the defaults this page documents.** Every arm in
+> **Nothing measured is measured on the defaults this page documents.** Every configuration in
 > `runs/eval/` was served by Claude-Opus-4.8 with Claude-Sonnet-5 on the utility surface,
 > through the `proxy` gateway. The flags below default to `--model gpt-6-luna` and
 > `--provider openai`, and `model/provider.py` hard-codes no chat model at all —
 > `default_embedding_model` is the only model default in it, so the driver's flag *is* the
-> selection. The newest full 1,351-question arm on disk is
+> selection. The newest full 1,351-question configuration on disk is
 > `runs/eval/proxy_v4_reflect_corpus30872d3.jsonl` (2026-08-10); the newest artifact of any
 > kind is a two-row aborted probe on gpt-5.6-luna, the previous default,
 > `runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl` (2026-08-12). Also: there
@@ -56,42 +56,42 @@ imply is in [open work](open-work.md).
 - The dataset. The default is `../BIRD-Data-Obfuscation/eval_dataset`, and the
   driver reads `test_final.jsonl` from it.
 
-The corpus is the treatment identity of every number: `corpus_content_hash`
+The corpus is the identity of what was measured of every number: `corpus_content_hash`
 digests the tree, so quote the corpus commit alongside any figure.
 
 Four things that decide whether the run you are about to pay for is quotable.
 Each was measured on a smoke on 2026-09-20 rather than reasoned about:
 
-- **`--embed`, or the arm cannot pass its own gates.** `expected_channel_state`
-  declares `ran` for every facet's semantic channel and takes no account of
+- **`--embed`, or the configuration cannot pass its own checks.** `expected_channel_state`
+  declares `ran` for every retrieval channel's semantic channel and takes no account of
   whether a deployment has an embedder, so a lexical run reports five
-  `unconfigured` anomalies and `facet_channels` fails. Three-row smokes both
-  ways: lexical → 2 gates fail; `--embed` → `ALL GATES PASS`. The lexical arm is
+  `unconfigured` anomalies and `channel_scoring` fails. Three-row smokes both
+  ways: lexical → 2 checks fail; `--embed` → `ALL checks PASS`. The lexical configuration is
   the reproducible baseline, as the flag table below says; it is not a quotable
   one.
 - **Commit first, and do not touch the tree while it runs.** `git_sha`,
   `diff_sha256` and `working_tree_dirty` are resume-drift keys, so an edit
-  between a run and its resume puts two configurations in one arm and
-  `knobs_resolved` fails. A docs edit is enough.
+  between a run and its resume puts two configurations in one configuration and
+  `settings_resolved` fails. A docs edit is enough.
 - **Do not change `--limit`, `--timeout` or `--max-retries` across a resume.**
-  They are comparability knobs and the guard refuses, correctly. `--limit` moves
+  They are settings that decide whether two runs can be compared and the guard refuses, correctly. `--limit` moves
   `question_subset`, which is the same refusal one field over.
 Two more things exist for this step and are **not** called by the driver — you
 invoke them, or they do nothing:
 
 - [`eval/power.py`](../src/governed_bi/eval/power.py)'s `require_power(n,
   discordant, hypothesised_effect)` raises unless the sample could detect the
-  effect the arm hypothesises. `discordant` is an estimate carried from a
+  effect the configuration hypothesises. `discordant` is an estimate carried from a
   comparable prior run, not a measurement of this one, and it must be an `int`
   count — a rate passed as a count understates the floor by about `sqrt(n)` and
-  approves the arm the gate exists to refuse. `ArmSpec` carries no hypothesised
+  approves the configuration the check exists to refuse. `ConfigSpec` carries no hypothesised
   effect, so nothing enforces this yet.
 - [`corpus/snapshot.py`](../src/governed_bi/corpus/snapshot.py)'s `snapshot` /
   `restore` / `drifted` put a corpus back. `corpus_content_hash` detects that the
   tree moved; it cannot say what it was. `restore` deletes as well as overwrites,
-  because a file one arm wrote is a file the snapshot never had.
+  because a file one configuration wrote is a file the snapshot never had.
 
-## Run an arm
+## Run a configuration
 
 ```bash
 uv run --frozen python tools/run_datalake_eval.py \
@@ -108,7 +108,7 @@ That run writes
 one JSON object per line, flushed as each question finishes. It prints progress
 every ten rows with a rate and an ETA, then prints the report described below.
 
-A full arm takes hours. Expect to interrupt it and resume it.
+A full configuration takes hours. Expect to interrupt it and resume it.
 
 ### Flags
 
@@ -126,7 +126,7 @@ A full arm takes hours. Expect to interrupt it and resume it.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--arm` | unnamed | The arm this run is, by name, from [`register/arms.toml`](../src/governed_bi/register/arms.toml). **Two identities are reconciled, not one**: the profile's declared `corpus_content_hash` *and* its `question_subset` are both compared against the session's **before the first paid question**, and every row is reconciled again in the report. Both fields are mandatory in `arms.toml` — `register/arm_profiles.py` refuses the file without either — and all four declared arms carry `dataset` + `question_subset`. The second one is there because the pre-flight passed the corpus alone until 2026-08-20, so `--arm v4` against a *different* `--dataset` agreed with the profile on everything compared and was caught at report time, over the finished artifact, after the money was spent. An unknown name or a malformed file exits 2; a mismatch on **either** identity exits 5. Unnamed runs are allowed and are simply unreconciled — but a comparison against an arm with no profile is `cannot_evaluate`, because the profile is also where the arm's `treatment` is declared |
+| `--config` | unnamed | The configuration this run is, by name, from [`registry/configs.toml`](../src/governed_bi/registry/configs.toml). **Two identities are reconciled, not one**: the profile's declared `corpus_content_hash` *and* its `question_subset` are both compared against the session's **before the first paid question**, and every row is reconciled again in the report. Both fields are mandatory in `configs.toml` — `registry/config_profiles.py` refuses the file without either — and all four declared configurations carry `dataset` + `question_subset`. The second one is there because the pre-flight passed the corpus alone until 2026-08-20, so `--config v4` against a *different* `--dataset` agreed with the profile on everything compared and was caught at report time, over the finished artifact, after the money was spent. An unknown name or a malformed file exits 2; a mismatch on **either** identity exits 5. Unnamed runs are allowed and are simply unreconciled — but a comparison against a configuration with no profile is `cannot_evaluate`, because the profile is also where the configuration's `setting under test` is declared |
 
 **Models**
 
@@ -135,7 +135,7 @@ A full arm takes hours. Expect to interrupt it and resume it.
 | `--model` | `gpt-6-luna` | The agent model id |
 | `--effort` | `xhigh` | Reasoning effort for the agent model. Pass `--effort ''` to send none |
 | `--provider` | `openai` | Gateway for every surface: `openai`, `bedrock`, or `proxy`. `bedrock` needs `uv sync --extra bedrock` and a region; `proxy` reads its credentials from AWS Secrets Manager |
-| `--utility-model` | `GOVERNED_BI_UTILITY_MODEL`, else `--model` | Separate model for the guard's scope gate and the facet rewriters. Unset, it follows the served config, as `api/graph_app.py` does, and the driver prints what it took |
+| `--utility-model` | `GOVERNED_BI_UTILITY_MODEL`, else `--model` | Separate model for the guard's scope check and the retrieval channel rewriters. Unset, it follows the served config, as `api/graph_app.py` does, and the driver prints what it took |
 | `--utility-effort` | `GOVERNED_BI_UTILITY_MODEL_EFFORT` when the model came from it, else none | Reasoning effort for the utility model, recorded as `llm_utility_reasoning_effort`. Requires a utility model; alone it would be accepted and dropped, so the driver refuses it |
 | `--utility-provider` | `--provider` | Put the utility surface on a different gateway. Recorded as `llm_utility_provider` |
 | `--embedding-provider` | `--provider` | Put the embedder on a different gateway. Recorded as `embedding_provider` |
@@ -145,7 +145,7 @@ A full arm takes hours. Expect to interrupt it and resume it.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--embed` | off | Build the index with an embedder, turning the semantic channel on. Off by default, so the lexical arm is the reproducible baseline |
+| `--embed` | off | Build the index with an embedder, turning the semantic channel on. Off by default, so the lexical configuration is the reproducible baseline |
 | `--top-n` | the register default | Override `route_top_n`, the number of schemas the router shortlists |
 | `--replay-routing` | none | Reuse a prior run's schema shortlist instead of routing. See [Pin the routing](#pin-the-routing) |
 
@@ -165,14 +165,14 @@ A full arm takes hours. Expect to interrupt it and resume it.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--abstain` | off | Turn on the declared abstention policy (`abstention_policy_enabled`, ADR 0013). It decides, before the agent spends a `run_query` attempt, whether the turn should be answered, so EX and coverage both move and the arm is only readable against an unabstained pair. Costs no model call. It enters the artifact tag — a resume that merged an abstaining run into a committing one would report one arm's coverage with the other's accuracy |
+| `--abstain` | off | Turn on the declared abstention policy (`abstention_policy_enabled`, ADR 0013). It decides, before the agent spends a `run_query` attempt, whether the turn should be answered, so EX and coverage both move and the configuration is only readable against an unabstained pair. Costs no model call. It enters the artifact tag — a resume that merged an abstaining run into a committing one would report one configuration's coverage with the other's accuracy |
 
 **Concurrency and robustness**
 
 | Flag | Default | What it does |
 |---|---|---|
 | `--workers` | `2` | Threads, each with its own graph and connector. Higher counts trade throughput against rate limits, and a 429 raised inside a node is marked `crashed` — a lost measurement, not a slow one |
-| `--max-retries` | `8` | Provider SDK retries per call. Recorded as the `llm_max_retries` comparability knob, so keep it identical across arms you intend to compare |
+| `--max-retries` | `8` | Provider SDK retries per call. Recorded as the `llm_max_retries` setting that decides whether two runs can be compared, so keep it identical across configurations you intend to compare |
 | `--timeout` | `240.0` | Per-request timeout in seconds. Without one a worker can block indefinitely |
 | `--resume` | off | Keep measured rows, requeue crashed ones. See [Resume](#resume) |
 | `--force-fresh` | off | Relax the abort when `--resume` finds no artifact but sibling artifacts exist. Non-destructive: it removes nothing |
@@ -187,9 +187,9 @@ variants when there are any, and then one segment for
 `--abstain` and `--replay-routing` when they are on (`_reflect`, `_abstain`,
 `_pinned`).
 
-Each of those is in the name because each is an arm rather than a detail. Two
-runs that differ in one of them are two treatments, and a shared filename would
-let `--resume` read one arm's rows as the other's.
+Each of those is in the name because each is a configuration rather than a detail. Two
+runs that differ in one of them are two settings under test, and a shared filename would
+let `--resume` read one configuration's rows as the other's.
 
 ### Resume
 
@@ -201,7 +201,7 @@ it.
 
 Until 2026-09-20 it refused every artifact ever written, on `asset_budgets`
 alone, and told the reader to start a new one. See
-[open work §6.11](open-work.md#611---resume-was-refused-on-every-arm-that-has-ever-been-written--fixed-2026-09-20)
+[open work §6.11](open-work.md#611---resume-was-refused-on-every-configuration-that-has-ever-been-written--fixed-2026-09-20)
 — the guard is sound and was comparing an in-memory value against a JSON
 round-trip of itself.
 
@@ -217,11 +217,11 @@ many it is discarding first.
 
 | Code | Meaning |
 |---|---|
-| `0` | The arm finished, or there was nothing left to do |
-| `2` | No credential for one of the model surfaces, no database credential, or `--arm` names a profile that cannot be loaded |
+| `0` | The configuration finished, or there was nothing left to do |
+| `2` | No credential for one of the model surfaces, no database credential, or `--config` names a profile that cannot be loaded |
 | `3` | The corpus has fatal problems; each one is printed |
 | `4` | `--resume` found no artifact but sibling artifacts exist and `--force-fresh` was not passed; or an artifact already exists at `--out`, `--resume` was not passed, and `--truncate` was not passed; or `--resume` found an artifact whose recorded identity contradicts this run's |
-| `5` | `--arm` was passed and the profile's declared identity is not this session's — **either** `corpus_content_hash` (not the corpus this session loaded) **or** `question_subset` (not the question set this session covers). Raised before the first paid question, and the message names which of the two mismatched, because a question-set mismatch reported as a corpus mismatch sends the reader to `--corpus-dir` |
+| `5` | `--config` was passed and the profile's declared identity is not this session's — **either** `corpus_content_hash` (not the corpus this session loaded) **or** `question_subset` (not the question set this session covers). Raised before the first paid question, and the message names which of the two mismatched, because a question-set mismatch reported as a corpus mismatch sends the reader to `--corpus-dir` |
 
 ## Select a prompt variant
 
@@ -237,18 +237,18 @@ silently receives the default.
 Two consequences follow, and both are the point of the flag:
 
 - **The selection moves `prompt_set_hash`.** The digest covers the active
-  variant names *and* their text, so an arm records which wording produced it.
+  variant names *and* their text, so a configuration records which wording produced it.
   Editing a variant in place also moves the digest.
 - **The artifact filename carries the variant.** An A/B differing only in
-  `--prompt-variant` would otherwise auto-name both arms to one path, and
-  `--resume` would read the first arm's rows as the second's — two treatments,
+  `--prompt-variant` would otherwise auto-name both configurations to one path, and
+  `--resume` would read the first configuration's rows as the second's — two settings under test,
   one artifact, and no error anywhere.
 
 The driver prints the resolved selection and the resulting hash before the run
 starts.
 
 `ask_first` is an off-default ANALYST variant. Serve stays on `v4` until a measured
-arm exists. Do not run the 1,351-question lake from this change; the command to
+configuration exists. Do not run the 1,351-question lake from this change; the command to
 measure it later is:
 
 ```bash
@@ -258,47 +258,47 @@ uv run --frozen python tools/run_datalake_eval.py \
   --workers 2 \
   --max-retries 8 \
   --prompt-variant analyst=ask_first \
-  --arm ask_first \
+  --config ask_first \
   --resume
 ```
 
 ## Pin the routing
 
 ```bash
---replay-routing runs/eval/live_full_<prior-arm>.jsonl
+--replay-routing runs/eval/live_full_<prior-configuration>.jsonl
 ```
 
 This reads the `schemas` field of each row in a prior run's artifact and pins
 that shortlist onto the matching question. It reads only the prior run's own
 routing decisions. It never reads gold.
 
-It exists because `route` is deterministic but the five facet rewriters above
+It exists because `route` is deterministic but the five retrieval channel rewriters above
 it are model calls, so two runs of the same question can hand `route`
-different hits. The shortlist then differs, `licensed` differs, and the agent
+different hits. The shortlist then differs, `retrieved` differs, and the agent
 is asked a different question. Pinning removes that source of variance, so a
-single-knob A/B measures the knob.
+single-setting A/B measures the setting.
 
 Three things to know before you quote a pinned run:
 
 - **An absolute EX from a pinned run is not the engine's unaided number.** The
-  arm was handed a shortlist it did not produce. Use a pinned run for the
-  paired comparison it was built for, and quote an unpinned arm for the
+  configuration was handed a shortlist it did not produce. Use a pinned run for the
+  side-by-side comparison it was built for, and quote an unpinned configuration for the
   engine's own score.
 - **Pinning does not freeze everything.** Pass two still re-searches inside the
-  pinned schemas, so `licensed` can still move. The driver measures that
+  pinned schemas, so `retrieved` can still move. The driver measures that
   residual and prints it as an identical rate plus a mean Jaccard over the rows
   that moved.
-- **Some fraction of a pinned arm is not pinned.** A question the prior
+- **Some fraction of a pinned configuration is not pinned.** A question the prior
   artifact does not cover routes for itself, and a row whose prior `schemas`
   was empty is skipped rather than pinned to an empty shortlist — replaying an
-  empty shortlist would freeze a retrieval failure into the treatment arm as
+  empty shortlist would freeze a retrieval failure into the setting under test configuration as
   though it were a decision. The driver prints the pinned and unpinned counts,
   and each row carries `routing_pinned`.
 
 ## The prompt registry
 
 Every prompt the engine sends is declared in
-[`src/governed_bi/register/prompts.py`](../src/governed_bi/register/prompts.py),
+[`src/governed_bi/registry/prompts.py`](../src/governed_bi/registry/prompts.py),
 so that `prompt_set_hash` covers the whole set.
 
 | Prompt | Stage | Variants | Default |
@@ -307,13 +307,13 @@ so that `prompt_set_hash` covers the whole set.
 | `bi_scope` | `guard` | `v1` | `v1` |
 | `narrate` | `narrate` | `v1` | `v1` |
 | `reflect` | `reflect` | `v1` | `v1` |
-| `facet_schema_query` | `facet_schema` | `v1`, `v2` | `v2` |
-| `facet_term_query` | `facet_term` | `v1` | `v1` |
-| `facet_metric_query` | `facet_metric` | `v1` | `v1` |
-| `facet_entity_query` | `facet_entity` | `v1` | `v1` |
-| `facet_example_query` | `facet_example` | `v1` | `v1` |
+| `facet_schema_query` | `channel_schema` | `v1`, `v2` | `v2` |
+| `facet_term_query` | `channel_term` | `v1` | `v1` |
+| `facet_metric_query` | `channel_metric` | `v1` | `v1` |
+| `facet_entity_query` | `channel_entity` | `v1` | `v1` |
+| `facet_example_query` | `channel_example` | `v1` | `v1` |
 
-`facet_schema_query` is registered and hashed but not sent: the schema facet
+`facet_schema_query` is registered and hashed but not sent: the schema retrieval channel
 searches the raw question, and the prompt stays in the registry as an unsent
 baseline.
 
@@ -322,22 +322,22 @@ baseline.
 It covers the registry, and the registry holds *system* prompts. It does not cover
 **tool replies** — the text a tool returns into the message list, which the model reads
 as instruction the same way it reads a system prompt. `prompt_text` raises on an unknown
-name precisely because "a prompt sent from outside this registry is a treatment the run's
+name precisely because "a prompt sent from outside this registry is a setting under test the run's
 own `prompt_set_hash` does not cover", and a tool reply is outside it by construction.
 
-**One such treatment is live on the default arm, and was taken deliberately.** Every
+**One such setting under test is live on the default configuration, and was taken deliberately.** Every
 `run_query` reply now ends with `attempt N of M` (`serve/tools.py::_attempt_budget`) —
 the capped reply, the error reply and the successful reply alike. Until 2026-08-20 the
 agent was told the cap existed only once it had already hit it, so it spent attempts on
 single-table probes against a budget it could not see. Telling it costs nothing and it is
-applied unconditionally rather than behind an arm.
+applied unconditionally rather than behind a configuration.
 
 The consequence, stated because nothing in the artifact states it: **`v4` before this
-change and `v4` after it are not the same arm**, and no recorded field distinguishes
-them. `prompt_set_hash` is identical across the boundary. Paired comparisons that mix
+change and `v4` after it are not the same configuration**, and no recorded field distinguishes
+them. `prompt_set_hash` is identical across the boundary. side by side comparisons that mix
 `v4` rows measured before 2026-08-20 with `v4` rows measured after are comparing two
-treatments, and the cheapest honest reading is to treat the earlier `v4` artifacts as a
-different arm rather than as the control. See
+settings under test, and the cheapest reading is to treat the earlier `v4` artifacts as a
+different configuration rather than as the control. See
 [open work §3.4](open-work.md#34-held-back-on-purpose).
 
 ### The ANALYST variants
@@ -352,7 +352,7 @@ more than two variants. **`v4` is the default.**
 | `v3` | `v2` byte-for-byte, plus two paragraphs on the shape of the result: select exactly what the question asks for and nothing else, and choose `DISTINCT` on what the question means rather than as a precaution |
 | `v4` | `v3` plus the star rule: name your columns, because a bare `SELECT *` or `t.*` is refused at the `BINDING` layer, with `COUNT(*)` and `COUNT(DISTINCT col)` as the carve-out |
 | `v5` | `v4` minus the projection paragraph, and nothing else. It was written to lose, so that the paragraph's contribution could be priced; it costs 4.07pp. See [failure modes](failure-modes.md#11-the-projection-rule-how-much-of-this-ex-is-shape-matching) |
-| `ask_first` | Off-default. Prefer `ask_user` when the block is which reading, not a missing join; set `basis=data_definition` or `basis=ranking_ambiguity`. Use `sample_rows` for literals, not `run_query LIMIT n`. Serve stays `v4` until a measured arm exists. |
+| `ask_first` | Off-default. Prefer `ask_user` when the block is which reading, not a missing join; set `basis=data_definition` or `basis=ranking_ambiguity`. Use `sample_rows` for literals, not `run_query LIMIT n`. Serve stays `v4` until a measured configuration exists. |
 
 ## The measurement row
 
@@ -367,19 +367,19 @@ field it writes:
 | Field | Meaning |
 |---|---|
 | `question_id` | The dataset's question id |
-| `arm` | The arm name the driver built from the tag |
+| `configuration` | The configuration name the driver built from the tag |
 | `db_id` | The gold schema, taken from the question. Every funnel stage below routing is conditional on it |
 
-**Treatment**
+**setting under test**
 
 | Field | Meaning |
 |---|---|
 | `corpus_content_hash` | Digest of the corpus tree the turn was served from |
 | `prompt_set_hash` | Digest of the active prompt variant names and their text |
-| `knobs_resolved` | The resolved value of every comparability knob, or `null` when the turn recorded none. Absent stays absent: `{}` would read as a configuration in which every knob resolved to `null` |
+| `settings_resolved` | The resolved value of every setting that decides whether two runs can be compared, or `null` when the turn recorded none. Absent stays absent: `{}` would read as a configuration in which every setting resolved to `null` |
 | `context_hash` | Digest of the assembled context block. `null` on paths that skip `assemble` |
 | `context_evicted` | What the character budget dropped before the model saw it. Absent when the block fit |
-| `delivery_hash` | The context plus every tool-delivered body. **Not** deterministic — it depends on which `read_body` calls the model chose — so it is a diagnostic and never a gate |
+| `delivery_hash` | The context plus every tool-delivered body. **Not** deterministic — it depends on which `read_body` calls the model chose — so it is a diagnostic and never a check |
 | `tool_delivered` | `call_id` → sha256 of every corpus- or database-derived tool return. `null` when the agent loop did not run, which is a different fact from `{}` |
 
 **Outcome and grade**
@@ -400,9 +400,8 @@ field it writes:
 | `failed_stage` | Which stage failed |
 | `error_type` | The exception class on a crashed turn |
 | `failure_cause` | Why an answered-but-**wrong** turn was wrong, as an `eval.attribution.FailureCause` member: one of nine named causes, first-match-wins. `null` for every correct answer, every refusal, and every row whose gold is missing — `correct: null` means the instrument had nothing to compare against and is not a failure to explain. **Not** `error_type`, which is declared as an exception class; writing a taxonomy label there makes `error_type is not None` stop meaning "this turn raised" |
-| `guard` | The guard's `outcome` and `rule_id`, written on every turn including `clear`. A gate that leaves a trace only when it fires cannot afterwards be told from one never wired up. The free-text `detail` is dropped |
-| `abstention` | What the declared abstention policy decided and the evidence behind it: `{policy, outcome, reason, rules_evaluated, evidence}`. `null` when the turn ended before the node; `{"outcome": "disabled", …}` when `--abstain` was off, which is what makes a control arm nameable rather than merely silent |
-| `reflect_verdict` | The post-hoc observer's `{verdict, reason, model, prompt_sha256, signals}`. `null` means reflection did not run — never "the turn looked fine" |
+| `guard` | The guard's `outcome` and `rule_id`, written on every turn including `clear`. A check that leaves a trace only when it fires cannot afterwards be told from one never wired up. The free-text `detail` is dropped |
+| `abstention` | What the declared abstention policy decided and the evidence behind it: `{policy, outcome, reason, rules_evaluated, evidence}`. `null` when the turn ended before the node; `{"outcome": "disabled", …}` when `--abstain` was off, which is what makes a baseline configuration nameable rather than merely silent |
 
 **SQL**
 
@@ -410,7 +409,7 @@ field it writes:
 |---|---|
 | `generated_sql` | The statement the engine executed |
 | `gold_sql` | The gold statement for this question |
-| `attempts` | Per attempt: `layer`, `reason_code`, `passed`, `path`. This is what tells a `r_table_not_licensed` retrieval failure apart from a guardrail working as designed |
+| `attempts` | Per attempt: `layer`, `reason_code`, `passed`, `path`. This is what tells a `r_table_not_retrieved` retrieval failure apart from a guardrail working as designed |
 
 **Abstention pricing**
 
@@ -424,12 +423,12 @@ field it writes:
 | Field | Meaning |
 |---|---|
 | `schemas` | The schema shortlist the router chose |
-| `licensed` | The tables the turn was licensed to query |
+| `retrieved` | The tables the turn was retrieved to query |
 | `routing_pinned` | Whether this row's shortlist **was** replayed — the pin was attached *and* the turn ran on it. A turn that ended before `route_node` reads `false`, and so does a partial pin |
-| `facet_channels` | Per facet per channel: `ran`, `not_configured`, or `failed` |
-| `facet_degraded` | Whether some facet ran on fewer channels than declared |
+| `channel_scoring` | Per retrieval channel per channel: `ran`, `not_configured`, or `failed` |
+| `channel_degraded` | Whether some retrieval channel ran on fewer channels than declared |
 | `schema_ranking` | Where the gold schema placed among **all** scored schemas: `n_scored`, `gold_rank`, `gold_score`, and the top ten with their scores. Without it, "the gold schema was not a candidate" and "it ranked 4th" are the same observation |
-| `facet_hits` | Per facet: the `queries` it searched (kept whole — the only part of retrieval a model sampled), `n_hits` before truncation, and the top ten asset ids |
+| `channel_hits` | Per retrieval channel: the `queries` it searched (kept whole — the only part of retrieval a model sampled), `n_hits` before truncation, and the top ten asset ids |
 | `pulled_in` | `n_resolve`, `n_connect`, and the `connect_ids` the join walk added |
 | `lexical_coverage` | How much of the question the corpus vocabulary covers. A float or `null`, never `0.0` for "not measured" |
 | `budget_dropped` | `asset_type` → how many hits a per-type cap discarded before anything downstream saw them. Without it a cap and a retrieval miss are the same row |
@@ -441,8 +440,8 @@ field it writes:
 | Field | Meaning |
 |---|---|
 | `guardrail_error` | Whether `check()` swallowed any exception on this turn. `null`, not `false`, when the turn never recorded the counter — absent is not clean |
-| `re_served` | Whether the turn was re-served. `false` on every production path: `n_re_served` is a frozen zero and is not a quotability gate |
-| `negative_failed_open` | Whether the negative gate errored and failed open |
+| `re_served` | Whether the turn was re-served. `false` on every production path: `n_re_served` is a frozen zero and is not a quotability check |
+| `negative_failed_open` | Whether the negative check errored and failed open |
 
 **Cost**
 
@@ -454,11 +453,11 @@ field it writes:
 
 The harness adds `run_id` to the row after projection.
 
-The seven `proxy_*` arms in `runs/eval/` predate many of these fields and do not
-carry the full set — 27 keys on `run1` and `run2`, 33 to 35 on the five arms
+The seven `proxy_*` configurations in `runs/eval/` predate many of these fields and do not
+carry the full set — 27 keys on `run1` and `run2`, 33 to 35 on the five configurations
 after them. A field absent from an old artifact is **absent**, not a measured
-zero; that distinction is what the gates read, and collapsing it is how an
-uninstrumented arm once passed every one of them.
+zero; that distinction is what the checks read, and collapsing it is how an
+uninstrumented configuration once passed every one of them.
 
 ### Two things people get wrong
 
@@ -470,9 +469,9 @@ is inside the entry because `agent_core` aggregates a whole tool loop into one
 entry: counting rows there reports one call for a turn that made several, which
 understates the repeated share of the input by an order of magnitude.
 
-**The row carries two treatment identities, not one.**
+**The row carries two setting under test identities, not one.**
 `corpus_content_hash` and `prompt_set_hash` are both on every row. A comparison
-needs both: the corpus is the treatment, and so is the prompt wording. An A/B
+needs both: the corpus is the setting under test, and so is the prompt wording. An A/B
 whose two artifacts cannot be told apart on both is not an A/B.
 
 ## What the driver prints
@@ -480,19 +479,19 @@ whose two artifacts cannot be told apart on both is not an A/B.
 After the last row, the driver reads the **whole artifact** back — a resumed
 run is one run — and prints:
 
-- The row count, and — when `--arm` named a profile — the reconciliation of
+- The row count, and — when `--config` named a profile — the reconciliation of
   every row against the corpus digest that profile declares.
 - How many rows the grader could not judge. Those are excluded from every EX
   below rather than counted as wrong.
 - `EX`, `EX over attempted` (excluding clarifications), and `EX over clean`
   (excluding the three lists the dataset itself warns about: order-sensitive
-  golds, `exec_failed` golds, and split leakage — 29 questions on the v4 arm).
+  golds, `exec_failed` golds, and split leakage — 29 questions on the v4 configuration).
   The exclusions are printed with their counts, never applied silently.
   Frozen-literal golds are **not** excluded: they are flagged `degenerate` on
   the row, and the flag is derived here rather than published by the dataset.
 - The outcome counts, and the exception classes behind any crashes.
-- `all gold tables licensed` — the EX ceiling. A question whose gold tables
-  were never licensed could not have been answered by any model.
+- `all gold tables retrieved` — the EX ceiling. A question whose gold tables
+  were never retrieved could not have been answered by any model.
 - The abstention block: how accurate the committed answers are, and how
   accurate the abstained ones would have been if forced to commit.
 - Refused turns by declared reason, and by the stage that owns each reason,
@@ -502,125 +501,125 @@ run is one run — and prints:
   writes no ledger row at all.
 - Failed attempts by layer and rule, counted over answering attempts in the
   ledger — a refused `sample_rows` probe is not governance declining to answer.
-- The residual licensed drift, when the run was pinned.
+- The residual retrieved drift, when the run was pinned.
 - The retrieval funnel, each stage conditional on the one above it.
-- The quotability gates.
+- The quotability checks.
 - Gold-schema reachability, EX among reachable rows, the clarification split,
   and the token totals.
 
 ## What makes a number quotable
 
-The gates are declared on turn-record fields in
-[`register/record.py`](../src/governed_bi/register/record.py) and implemented in
-[`measure/gates.py`](../src/governed_bi/measure/gates.py). The driver evaluates
-every declared gate over the arm and prints each verdict.
+The checks are declared on turn-record fields in
+[`registry/record.py`](../src/governed_bi/registry/record.py) and implemented in
+[`measure/checks.py`](../src/governed_bi/measure/checks.py). The driver evaluates
+every declared check over the configuration and prints each result.
 
-| Gate | Condition |
+| check | Condition |
 |---|---|
 | `outcome` | No turn is classified `crashed` |
 | `guardrail_errors` | No turn recorded a swallowed `check()` exception |
-| `negative` | No turn's negative gate errored and failed open |
-| `facet_channels` | On turns where the fan-out ran, no channel state differs from its declared expectation. Stage-conditional: zero such turns is `cannot_evaluate`, never a pass |
-| `knobs_resolved` | Every row in the arm agrees on `knobs.resume_drift_keys()` — one arm is one configuration |
-| `context_hash` | Every turn carries a `context_hash`. The cross-arm half of the condition needs two arms |
-| `corpus_content_hash` | Every turn that reached `stamp` carries the same non-null corpus digest. Stage-conditional for the same reason as `facet_channels`: a turn paused on `ask_user` never reaches `stamp`, so a clarification legitimately carries none. The **cross**-arm half — that two arms did not silently run on two corpora — is still evaluated by nothing, because `corpus_content_hash` is a record field and not a comparability knob. `--arm` and `arms.toml` are what close that within one arm |
+| `negative` | No turn's negative check errored and failed open |
+| `channel_scoring` | On turns where the fan-out ran, no channel state differs from its declared expectation. Stage-conditional: zero such turns is `cannot_evaluate`, never a pass |
+| `settings_resolved` | Every row in the configuration agrees on `settings.resume_drift_keys()` — one configuration is one configuration |
+| `context_hash` | Every turn carries a `context_hash`. The cross-configuration half of the condition needs two configurations |
+| `corpus_content_hash` | Every turn that reached `finish` carries the same non-null corpus digest. Stage-conditional for the same reason as `channel_scoring`: a turn paused on `ask_user` never reaches `finish`, so a clarification legitimately carries none. The **cross**-configuration half — that two configurations did not silently run on two corpora — is still evaluated by nothing, because `corpus_content_hash` is a record field and not a setting that decides whether two runs can be compared. `--config` and `configs.toml` are what close that within one configuration |
 
-A gate returns one of three verdicts, and only the first is a pass:
+A check returns one of three results, and only the first is a pass:
 
 - **`pass`** — the condition held over a population large enough to have failed.
 - **`fail`** — the condition was violated.
 - **`cannot_evaluate`** — the inputs were not there. **This blocks quotation.**
   A check that did not happen is not a check that passed.
 
-The driver prints `ALL GATES PASS -- these numbers are quotable as a single
-arm` only when every gate passed. It prints the gates rather than enforcing
+The driver prints `ALL checks PASS -- these numbers are quotable as a single
+configuration` only when every check passed. It prints the checks rather than enforcing
 them: a driver that refused to report a run would lose the run.
 
-Further conditions apply to a comparison rather than to one arm, and live in
+Further conditions apply to a comparison rather than to one configuration, and live in
 [`eval/report.py`](../src/governed_bi/eval/report.py):
 
-- `context_hash` existence: both arms must have assembled a context on every
+- `context_hash` existence: both configurations must have assembled a context on every
   shared question, or those questions cannot be compared at all.
-  `comparison_quotable` substitutes this for the single-arm coverage check.
-- `knobs_comparable`: the arms differ in the **declared treatment** and in
-  nothing else in `comparability_keys()`. The treatment is read from the arm's
-  profile in `arms.toml`, or named by the caller; a pair that cannot name one is
+  `comparison_quotable` substitutes this for the single-configuration coverage check.
+- `settings_comparable`: the configurations differ in the **declared setting under test** and in
+  nothing else in `setting_names()`. The setting under test is read from the configuration's
+  profile in `configs.toml`, or named by the caller; a pair that cannot name one is
   `cannot_evaluate`, because "nobody said what changed" is not "nothing
-  changed". A declared treatment that is *identical* on both arms is a `fail` —
-  that is a replicate wearing an arm's name. A treatment naming something that
-  is not a comparability knob refuses rather than being ignored. A knob absent
-  from either arm is `cannot_evaluate` — absent is not a value, and `dict.get`
-  collapsing it into a recorded `None` is how a gate certifies a configuration
+  changed". A declared setting under test that is *identical* on both configurations is a `fail` —
+  that is a replicate wearing a configuration's name. A setting under test that
+  `setting_names()` does not declare refuses rather than being ignored. A setting absent
+  from either configuration is `cannot_evaluate` — absent is not a value, and `dict.get`
+  collapsing it into a recorded `None` is how a check certifies a configuration
   it never saw.
 - Populations must share units and filters before `paired_ex` runs McNemar
   over them.
-- `outcome_rates(arm)` reports `correct / clarified / refused` as three rates
+- `outcome_rates(configuration)` reports `correct / clarified / refused` as three rates
   over the same population `headline_ex` reads, so they share a denominator and
   are directly comparable. Each is independently `unmeasured` when its own field
   is absent from any row — a run whose instrumentation dropped `clarified` must
   not read as "nothing was clarified".
 
-`context_hash` distinctness used to be the treatment test: at least 95% of shared
+`context_hash` distinctness used to be the setting under test test: at least 95% of shared
 questions had to have differing hashes. It was retired by audit D9. Retrieval is
-nondeterministic, so hashes differ whether or not the treatment did — the gate
+nondeterministic, so hashes differ whether or not the setting under test did — the check
 passed at **0.9993** on `run1`/`run2`, which differ only by a random seed, and
-across all 21 pairs of the seven `proxy_*` arms on disk it never falls below
+across all 21 pairs of the seven `proxy_*` configurations on disk it never falls below
 **0.9882**, hitting exactly 1.0000 on 11 of them (corpus `30872d3`, recomputed
-2026-08-12). It believed it asked "did the treatment change" and measured "is
+2026-08-12). It believed it asked "did the setting under test change" and measured "is
 there retrieval noise", to which the answer is always yes. The judgement now
-reads declared knobs instead of inferring from a hash.
+reads declared settings instead of inferring from a hash.
 
 ## Development and held-out halves
 
 `docs/data/db-split.csv` assigns each of the 57 databases to `dev` (28 databases, 609 questions)
 or `holdout` (29, 742). It is `random.Random(20260925).shuffle` of the sorted ids, first 28 to
 `dev`, and `tests/eval/test_the_db_split_is_the_seeded_shuffle.py` fails if a row moves. The split
-is by database so a treatment cannot learn a schema on one half and be scored on it on the other.
-Anything designed from failures (the M3 taxonomy, M4 treatments) reads `dev` only; a keep decision
+is by database so a setting under test cannot learn a schema on one half and be scored on it on the other.
+Anything designed from failures (the M3 taxonomy, M4 settings under test) reads `dev` only; a keep decision
 reads `holdout` only.
 
 ## BIRD dev
 
 Not built now. A corpus for BIRD dev's 11 databases would make EX comparable with published work,
 and costs a curation pass this repository cannot do in-tree (the curated corpus was built outside
-it) plus a full arm. Until the shipped configuration has a measured baseline and the grader change
-has been regraded across the existing arms, a BIRD dev figure would be a second unreconciled
+it) plus a full configuration. Until the shipped configuration has a measured baseline and the grader change
+has been regraded across the existing configurations, a BIRD dev figure would be a second unreconciled
 number. Revisit at the 2026-11-20 retrospective.
 
 ## The prod projection
 
-The arm measures an engine with the input guard off. Replaying the served gates over a
+The configuration measures an engine with the input guard off. Replaying the served checks over a
 finished artifact used to be a separate pass. That pass is deleted. What remains in the
 artifact is `computed_fingerprint` / `computed_correct`, which reconstruct what enforcing
 abstention would have hidden. The tiers that pass reported:
 
-| Tier | Gates | What the number is |
+| Tier | checks | What the number is |
 |---|---|---|
 | `replay` | the five deterministic guard rules; the ADR 0013 abstention policy | **Exact.** Inputs are fixed before the model acts and are on the row |
 | `probe` | `g_bi_scope` | Exact, from a separate pass that read only the question |
-| `bound` | none declared | The refusals are countable; the cost in right answers is **not** projectable, because the gate changes what the model sees |
+| `bound` | none declared | The refusals are countable; the cost in right answers is **not** projectable, because the check changes what the model sees |
 
-A gate whose inputs are missing makes the tool **refuse** rather than report zero
-refusals. A gate the arm actually enforced is refused too — there is nothing left to
+A check whose inputs are missing makes the tool **refuse** rather than report zero
+refusals. A check the configuration enforced is refused too — there is nothing left to
 shadow.
 
 The trade is reported as a count of right answers lost and never as a p-value:
 `measure/selective.py::NestedPolicies` explains why a projection cannot be tested
 (it only removes turns, so the discordant cell one way is zero by construction).
 
-### `g_bi_scope` needs its own pass, and needs it *before* the arm
+### `g_bi_scope` needs its own pass, and needs it *before* the configuration
 
 Five of the six rules replayed from the row. The sixth asked a model, so it was not
 recoverable from a row. That probe is deleted. **Measured
 2026-09-20 on `gpt-5.6-luna` over all 1,351 questions: 180 refused, 1,171
-cleared, none failed open.** Projected onto the v4 arm's own rows that is 128
+cleared, none failed open.** Projected onto the v4 configuration's own rows that is 128
 right answers lost — 913 against 785. See
-[open work §6.10](open-work.md#610-the-scope-gate-refuses-about-one-benign-question-in-ten-and-prod-has-it-on).
+[open work §6.10](open-work.md#610-the-scope-check-refuses-about-one-benign-question-in-ten-and-prod-has-it-on).
 
 ### What the projection cannot tell you
 
 It measures what governance **costs**, never what it **buys**. BIRD carries no attack
-traffic, so a gate that fires zero times here is cheap and not thereby useless — its
+traffic, so a check that fires zero times here is cheap and not thereby useless — its
 value is measured against the 16 `[[guard_case]]` tables that
 `govern/adversarial_run.py` drives. Two instruments; a report that prints them in one
 table will be read as one.

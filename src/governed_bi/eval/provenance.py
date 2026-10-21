@@ -1,6 +1,6 @@
 """What identifies one measurement run, and whether an artifact on disk shares that identity.
 
-Two halves of one question, kept together because they have to agree: the driver *stamps*
+Two halves of one question, kept together because they have to agree: the driver *finishes*
 the harness-side identity onto every row here, and *reads it back* here when ``--resume``
 opens an artifact somebody else's run may have written.
 
@@ -9,7 +9,8 @@ opens an artifact somebody else's run may have written.
 and ``--prompt-variant``; it carries no corpus, no dataset and no worker count, and an
 explicit ``--out`` bypasses it entirely. So ``git pull`` in ``../BIRD-corpus``, resume, and one
 artifact holds two corpora — with every quotability check passing and the driver printing that
-the numbers are quotable as a single config. The corpus is the treatment identity (ADR 0007 on ``corpus_content_hash``),
+the numbers are quotable as a single config. The corpus is the identity under test
+(ADR 0007 on ``corpus_content_hash``),
 which makes that the worst sentence the driver can print.
 
 Both config hash were already on every row. The half that was missing is a reader, and
@@ -29,6 +30,8 @@ import subprocess
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+from governed_bi.registry.stored_names import artifact_get
 
 from ..registry.config_profiles import reconcile, recorded_question_subset
 
@@ -81,7 +84,7 @@ def _git(repo: Path, *args: str) -> str | None:
     byte anywhere in a diff is enough — therefore killed the reader thread, left
     ``proc.stdout`` as ``None``, and
     made this function raise ``AttributeError`` on the next line. Found 2026-08-12 by editing one
-    of those documents: four tests went red and, on a real run, ``harness_knobs()`` would have
+    of those documents: four tests went red and, on a real run, ``harness_settings()`` would have
     died before the first paid question. ``errors="replace"`` because the caller digests this
     string rather than reading it, so a mangled character is a fact about the diff and a crash is
     the loss of a run. With ``errors="replace"`` the reader thread cannot die, so the ``or ""``
@@ -107,7 +110,7 @@ def git_provenance(repo: Path) -> dict[str, Any]:
 
     All four are ``Role.operational``: two runs at different commits are the *normal*
     comparison, and the same difference inside one artifact is corrupting.
-    ``measure/checks.py::_knobs_resolved_check`` looks for disagreement across a config's rows —
+    ``measure/checks.py::_settings_resolved_check`` looks for disagreement across a config's rows —
     and until this existed all four were ``None`` on every row of every config, so the check that
     exists to stop a resume blending two harness versions into one score was comparing four
     constants against themselves. That is exactly what ``diff_sha256``'s own register note says
@@ -262,7 +265,7 @@ def truncation_notice(out_path: Path, *, resume: bool, truncate: bool) -> str | 
 
     **The destructive branch, extracted so it has a name, a test and a sentence on stdout.**
     ``--force-fresh`` used to be non-destructive: it relaxed the *sibling-artifact* abort, a
-    path on which the output file does not exist. It then quietly acquired
+    path on which the output file does not exist. It then acquired
     ``out_path.write_text("")`` as well, so a flag whose documented job was "yes, I know there
     are other artifacts, start anyway" began deleting a completed run. On this dataset a config is
     hours of paid model calls, and the irony is recorded three functions up:
@@ -290,7 +293,7 @@ def truncation_notice(out_path: Path, *, resume: bool, truncate: bool) -> str | 
 
 
 def _is_pre_routing_abstention(row: Mapping[str, Any]) -> bool:
-    """A turn that ended before anything wrote the treatment onto it.
+    """A turn that ended before anything wrote the setting under test onto it.
 
     Every row in the 2026-08-09 artifacts whose ``corpus_content_hash`` is ``None`` is a
     zero-retrieved_tables turn that ended in a clarifying question — 6 of 6 in v3-fold, 8 of 8 in
@@ -306,14 +309,14 @@ def _is_pre_routing_abstention(row: Mapping[str, Any]) -> bool:
     written ``clarification`` (``registry/stages.Outcome``), and it may hold no licence — the
     abstention policy is a setting and need not have run. Such a row carrying a null identity is
     unwritten, the thing this function must not launder into a counted number, so both
-    treatment identities have to be absent as well. Its caller has already established that the
+    setting under test identities have to be absent as well. Its caller has already established that the
     field it is examining is null, so the added test is the *other* one; on the artifacts on disk
     the two are null together on every one of the rows counted above, which is why the number
     does not move.
     """
     return (
         str(row.get("outcome")) == "clarification"
-        and not (row.get("licensed") or ())
+        and not (artifact_get(row, "retrieved_tables") or ())
         and row.get("corpus_content_hash") is None
         and row.get("prompt_set_hash") is None
     )
@@ -322,7 +325,7 @@ def _is_pre_routing_abstention(row: Mapping[str, Any]) -> bool:
 def _identity_problem(
     rows: Sequence[Mapping[str, Any]], field: str, want: Any
 ) -> tuple[str | None, str | None, int]:
-    """``(refusal, warning, n_pre_routing)`` for one treatment-identity field."""
+    """``(refusal, warning, n_pre_routing)`` for one setting under test-identity field."""
     foreign: dict[Any, int] = {}
     unwritten = 0
     pre_routing = 0
@@ -358,8 +361,8 @@ def _identity_problem(
 def _setting_problem(
     rows: Sequence[Mapping[str, Any]],
     *,
-    knobs_resolved: Mapping[str, Any],
-    comparability: Collection[str],
+    settings_resolved: Mapping[str, Any],
+    affects_results: Collection[str],
 ) -> tuple[list[str], list[str]]:
     """Where the artifact's recorded configuration disagrees with this run's.
 
@@ -367,7 +370,7 @@ def _setting_problem(
     separated a ``--top-n 3`` artifact from a ``--top-n 8`` one, and ``--out`` bypasses the tag.
     Neither ``corpus_content_hash`` nor ``prompt_set_hash`` moves with ``--top-n``, ``--embed``,
     ``--reflect`` or the model id, so a resume under a renamed output file could merge two
-    treatments with both hashes agreeing. These are the same keys
+    settings under test with both hashes agreeing. These are the same keys
     ``eval/report.py::settings_comparable`` compares across two configs; here they are compared
     across one artifact and the run about to extend it.
 
@@ -382,7 +385,7 @@ def _setting_problem(
     and omits no key, so this run always records every key the register declares. Present on one
     side only is a **warning**: the likeliest cause is an
     artifact older than the setting, and refusing on it would strand every artifact on disk. That
-    is the branch every artifact on disk hits — five comparability settings are absent from all
+    is the branch every artifact on disk hits — five settings that affect results are absent from all
     seven ``proxy_*`` artifacts in ``runs/eval/`` (``abstention_policy_enabled``,
     ``the retired budget``, ``the retired threshold``, ``semantic_scale_ceiling``,
     ``sqlglot_version``) and recorded by any run that would resume one.
@@ -394,16 +397,16 @@ def _setting_problem(
     """
     refusals: list[str] = []
     warnings: list[str] = []
-    for key in sorted(comparability):
+    for key in sorted(affects_results):
         seen: set[str] = set()
         absent = 0
         for row in rows:
-            recorded = row.get("knobs_resolved")
+            recorded = artifact_get(row, "settings_resolved")
             if not isinstance(recorded, Mapping) or key not in recorded:
                 absent += 1
                 continue
             seen.add(_as_recorded(recorded[key]))
-        declared = key in knobs_resolved
+        declared = key in settings_resolved
         if not seen and not declared:
             continue
         if not seen or not declared:
@@ -414,7 +417,7 @@ def _setting_problem(
                 "share it"
             )
             continue
-        want = knobs_resolved[key]
+        want = settings_resolved[key]
         if absent:
             warnings.append(
                 f"{absent} resumed row(s) carry no {key!r}, so they cannot be shown to have "
@@ -437,7 +440,7 @@ def _as_recorded(value: Any) -> str:
     configurations. ``asset_budgets`` ships as a ``tuple`` of ``tuple``\\ s and comes back from
     the artifact as a ``list`` of ``list``\\ s, so ``repr`` disagreed with itself on **every
     resume of every config that has ever been written** — 1 of the 62 ``setting_names``, and
-    the one on every row. The refusal that produced said "Two treatments in one artifact is not
+    the one on every row. The refusal that produced said "Two settings under test in one artifact is not
     a config. Rename the artifact and start a new one", over hours of paid model calls, for a
     value that had not changed. It was found by resuming a 3-row smoke; a full config takes hours
     and ``docs/measurement.md`` tells the reader to expect to interrupt and resume it, so this
@@ -445,7 +448,7 @@ def _as_recorded(value: Any) -> str:
 
     Round-tripping through the writer's own encoding rather than special-casing ``tuple``:
     the question this comparison asks is "would this run record what the artifact recorded",
-    and the only honest way to answer it is to encode the way the writer encodes. ``default=str``
+    and the only way to answer it is to encode the way the writer encodes. ``default=str``
     matches the drivers' ``json.dump(..., default=str)``.
 
     **It does not weaken the distinction the docstring above defends.** ``3`` encodes to ``3``
@@ -465,12 +468,12 @@ def resume_identity_problem(
     *,
     corpus_content_hash: str | None,
     prompt_set_hash: str | None,
-    knobs_resolved: Mapping[str, Any],
-    comparability: Collection[str],
+    settings_resolved: Mapping[str, Any],
+    affects_results: Collection[str],
     question_ids: Collection[str],
     replay_routing: bool,
 ) -> tuple[str, list[str]]:
-    """``(refusal, warnings)`` — is the artifact on disk the same treatment as this run?
+    """``(refusal, warnings)`` — is the artifact on disk the same setting under test as this run?
 
     Pure, so it can be driven from a list of dicts; ``main`` owns only the printing and the
     exit code.
@@ -509,7 +512,7 @@ def resume_identity_problem(
             )
 
     setting_refusals, setting_warnings = _setting_problem(
-        rows, knobs_resolved=knobs_resolved, comparability=comparability
+        rows, settings_resolved=settings_resolved, affects_results=affects_results
     )
     problems.extend(setting_refusals)
     warnings.extend(setting_warnings)
@@ -580,7 +583,7 @@ def config_power_refusal(profile: Any, n: int) -> str | None:
     only point where refusing is free.
 
     **Silent when the profile declares no hypothesis**, and that is not a loophole — it is the
-    honest reading. Every config on disk predates the field, and inventing an effect size for them so
+     reading. Every config on disk predates the field, and inventing an effect size for them so
     the check has something to check would be worse than not checking: the number would be this
     function's, quoted later as the config's.
 
@@ -603,7 +606,7 @@ def config_power_refusal(profile: Any, n: int) -> str | None:
             "orders of magnitude. Name the readout in configs.toml."
         )
 
-    from governed_bi.eval.power import UnderpoweredArm, require_power
+    from governed_bi.eval.power import UnderpoweredConfiguration, require_power
 
     # Integer arithmetic all the way: `require_power` takes a COUNT and refuses a float. `max(1,
     # ...)` because it also refuses zero discordance as unmeasurable rather than as infinite
@@ -611,7 +614,7 @@ def config_power_refusal(profile: Any, n: int) -> str | None:
     estimated = max(1, int(n) * PRIOR_DISCORDANT // PRIOR_OF)
     try:
         require_power(n=int(n), discordant=estimated, hypothesised_effect=float(effect))
-    except UnderpoweredArm as err:
+    except UnderpoweredConfiguration as err:
         return (
             f"--config {profile.name} cannot detect its own hypothesis on {readout}:\n"
             f"  {err}\n"
@@ -629,10 +632,10 @@ def config_startup_refusal(profile: Any, session_identity: Mapping[str, Any]) ->
 
     Asked **before the first paid question**, which is the only place the check is worth
     anything: a run labelled ``v4`` against a corpus that is not v4's is a mislabelled artifact,
-    and mislabelled artifacts are how a number is quoted against the wrong treatment.
+    and mislabelled artifacts are how a number is quoted against the wrong setting under test.
 
     ``session_identity`` is anything shaped like a measurement row — the driver passes both
-    reconcilable fields, ``{"corpus_content_hash": ..., "question_subset": ...}``
+    reconcilable fields, ``{"corpus_content_hash":..., "question_subset":...}``
     (``tools/run_datalake_eval.py``, before the first paid question), which is why ``reconcile``
     was written to read a row rather than a session. It said ``corpus_content_hash`` alone until
     2026-08-22; the second field has been mandatory since the profile gained it, as the comment

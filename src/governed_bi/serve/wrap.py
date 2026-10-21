@@ -176,7 +176,7 @@ def wrap_node(
             call = fn(state, config) if accepts_config else fn(state)
             if timeout is not None:
                 # `wait_for` cancels the inner coroutine — the reason the sync case is refused
-                # above — and raises an ordinary `TimeoutError`, which the `except` below stamps
+                # above — and raises an ordinary `TimeoutError`, which the `except` below finishes
                 # `crashed` like any other.
                 update = await asyncio.wait_for(call, timeout)
             else:

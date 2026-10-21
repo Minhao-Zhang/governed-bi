@@ -34,7 +34,7 @@ def _base_turn(**overrides: Any) -> dict[str, Any]:
         "run_id": "run-f2", "turn_id": "turn-f2", "question_id": "q-f2",
         "db_id": "sales_a", "attempt_id": "attempt-f2", "n_re_served": 0,
         "corpus_content_hash": "corpus-hash", "prompt_set_hash": "prompt-hash",
-        "knobs_resolved": {"route_top_n": 1, "candidate_depth": 50},
+        "settings_resolved": {"route_top_n": 1, "candidate_depth": 50},
         "messages": [], "usage": [], "route_top_n": 1,
     }
     payload.update(overrides)

@@ -13,15 +13,15 @@ import { cn } from "@/lib/utils";
  *
  * **Why this is grouped now.** v1 emitted a handful of rows per turn and a flat
  * list was the right shape for them. v2 emits twenty to thirty — thirteen rails,
- * five of which (the facets) arrive *concurrently*, plus a tool row per governed
+ * five of which (the retrieval channels) arrive *concurrently*, plus a tool row per governed
  * action and a `check`/`execute` pair per SQL attempt. Flat, that is a wall that
  * scrolls the interesting row off the screen while the reader is still parsing the
- * boring ones. So the rails fold into the three phases a turn actually has, each
+ * boring ones. So the rails fold into the three phases a turn has, each
  * collapsing once it settles, and the five channels fold into one row because they
  * are one gesture and finish in a jumble.
  *
  * **What grouping is not allowed to do is hide a decision.** A phase holding a
- * blocked `check`, a refusal, a decline, an attempt cap or a `negative_gate` hit
+ * blocked `check`, a refusal, a decline, an attempt cap or a `negative_check` hit
  * opens itself; only clean phases collapse, and a collapsed header still carries
  * the worst status inside it, so closing one by hand loses the detail and never
  * the fact. The terminals — `refuse`, `decline`, `finish` — are not groupable at
@@ -166,7 +166,7 @@ type Entry =
 /**
  * Fold the ordered rows into phase groups, preserving order. Consecutive rows of
  * one phase merge; anything unphased passes through as its own entry. A phase
- * interrupted by an unphased row therefore appears twice, which is the honest
+ * interrupted by an unphased row therefore appears twice, which is the 
  * rendering of an order this file did not expect.
  */
 function groupSteps(steps: TimelineStep[]): Entry[] {
@@ -233,7 +233,7 @@ function Phase({
   const health = healthOf(steps);
   const auto = health !== "done";
   const open = pinned ?? auto;
-  const rows = mergeFacets(steps, preferOpenDetails);
+  const rows = mergeChannels(steps, preferOpenDetails);
 
   return (
     <li>
@@ -267,7 +267,7 @@ function Phase({
  * A clean phase says how many steps it holds, because there is nothing else to
  * report. A phase that decided something says **the decision**, borrowing the
  * worst row's own label — so "Reading the question · 4 steps" becomes "Reading the
- * question · Input gate failed open: the question went through unchecked". The
+ * question · Input check failed open: the question went through unchecked". The
  * requirement is that grouping never hides a decision; a step count is exactly the
  * summary that would have hidden one, and this is a phase a user may legitimately
  * have clicked shut.
@@ -298,19 +298,19 @@ function CollapsedNote({ steps, health }: { steps: TimelineStep[]; health: Healt
  * them, so as five rows they read as flicker. As one row they read as what they
  * are: one retrieval pass with a hit count.
  */
-function mergeFacets(steps: TimelineStep[], preferOpenDetails: boolean): ReactNode[] {
-  const facets = steps.filter((s) => s.step.startsWith("facet_"));
+function mergeChannels(steps: TimelineStep[], preferOpenDetails: boolean): ReactNode[] {
+  const channels = steps.filter((s) => s.step.startsWith("facet_"));
   const out: ReactNode[] = [];
-  let placedFacets = false;
+  let placedChannels = false;
 
   for (const step of steps) {
     if (step.step.startsWith("facet_")) {
-      // In the position the first facet took, so the group keeps its place in the
+      // In the position the first retrieval channel took, so the group keeps its place in the
       // order rather than jumping to the top or bottom of the phase.
-      if (placedFacets) continue;
-      placedFacets = true;
+      if (placedChannels) continue;
+      placedChannels = true;
       out.push(
-        <FacetGroup key="facets" facets={facets} preferOpenDetails={preferOpenDetails} />,
+        <ChannelGroup key="facets" channels={channels} preferOpenDetails={preferOpenDetails} />,
       );
       continue;
     }
@@ -326,37 +326,37 @@ function mergeFacets(steps: TimelineStep[], preferOpenDetails: boolean): ReactNo
   return out;
 }
 
-function FacetGroup({
-  facets,
+function ChannelGroup({
+  channels,
   preferOpenDetails,
 }: {
-  facets: TimelineStep[];
+  channels: TimelineStep[];
   preferOpenDetails: boolean;
 }) {
-  const health = healthOf(facets);
+  const health = healthOf(channels);
   const [pinned, setPinned] = useState<boolean | null>(null);
-  // Only trouble opens this one automatically. A facet fan-out that is merely
+  // Only trouble opens this one automatically. A retrieval channel fan-out that is merely
   // still running is exactly the case the merge exists for.
   const open = pinned ?? (health === "failed" || health === "warn");
 
-  const settled = facets.filter((s) => s.status !== "running").length;
-  const hits = facets.reduce((sum, s) => {
+  const settled = channels.filter((s) => s.status !== "running").length;
+  const hits = channels.reduce((sum, s) => {
     const n = s.detail?.n_hits;
     return typeof n === "number" ? sum + n : sum;
   }, 0);
-  // A facet resolves `error` when a retrieval channel was not wired up: retrieval
-  // was *degraded*, not empty. Summing hits across five facets and reporting the
+  // A retrieval channel resolves `error` when a retrieval channel was not wired up: retrieval
+  // was *degraded*, not empty. Summing hits across five retrieval channels and reporting the
   // total is precisely how that disappears — the four that worked carry the number
   // and the one that never looked contributes a silent zero, which is
   // `_channels_for`'s own defect (ADR 0010, adversarial finding 4) reproduced in a
-  // summary line. So the count of degraded facets rides beside the total, and this
+  // summary line. So the count of degraded retrieval channels rides beside the total, and this
   // is also why an errored fan-out opens itself: the channel names are on the rows.
-  const degraded = facets.filter((s) => s.status === "error").length;
+  const degraded = channels.filter((s) => s.status === "error").length;
 
   const summary =
     health === "running"
-      ? `${settled} of ${facets.length} done`
-      : `${facets.length} facets · ${hits} hit${hits === 1 ? "" : "s"}`;
+      ? `${settled} of ${channels.length} done`
+      : `${channels.length} facets · ${hits} hit${hits === 1 ? "" : "s"}`;
 
   return (
     <li className="ml-6 text-sm">
@@ -394,12 +394,12 @@ function FacetGroup({
       </button>
       {open && (
         <ol className="mt-0.5 flex flex-col gap-0.5">
-          {facets.map((facet) => (
+          {channels.map((channel) => (
             <StepRow
-              key={facet.key}
-              step={facet}
+              key={channel.key}
+              step={channel}
               indent
-              defaultOpen={preferOpenDetails && prefersOpenDetail(facet)}
+              defaultOpen={preferOpenDetails && prefersOpenDetail(channel)}
             />
           ))}
         </ol>

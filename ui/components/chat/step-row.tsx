@@ -109,8 +109,8 @@ export function StepRow({
  * Anything that is not clean keeps a status glyph, because that is the one thing
  * a step icon cannot say.
  *
- * `miss` counts as clean: a gate that ran and matched nothing is the good case.
- * `hit` does not: the only gate that reports one is `negative_gate`, and a hit
+ * `miss` counts as clean: a check that ran and matched nothing is the good case.
+ * `hit` does not: the only check that reports one is `negative_check`, and a hit
  * declines the turn.
  */
 function StepGlyph({ step }: { step: TimelineStep }) {
@@ -188,9 +188,9 @@ function statusLabel(status: StepStatus): string {
  */
 const FACT_KEYS = new Map<string, readonly string[]>([
   // On `ok`, `connect`'s label spends its words on the crossings; the declined one
-  // already names the licensed count, so this is additive exactly where the row is
+  // already names the retrieved count, so this is additive exactly where the row is
   // clean, which is the common case.
-  ["connect", ["n_licensed"]],
+  ["connect", ["n_retrieved_tables"]],
   ["check", ["layer", "reason_code"]],
   // The digest is the point: it is what the audit ledger stores for this
   // statement, so an expanded `execute` row is where a reader confirms that the
@@ -203,9 +203,9 @@ const FACT_KEYS = new Map<string, readonly string[]>([
  * Four steps were dropped from this table when `lib/steps.ts` was rewritten
  * against ADR 0010's corrected contract, and the reason is worth keeping: their
  * labels grew to carry the fact. `resolve` now reads "Pulled in 4 referenced
- * assets, 3 licensed"; `agent_core` "Finished reasoning, 2 attempts"; a degraded
- * facet "Terms: 2 hits (embedding channel not wired)"; a gate that failed open
- * "Input gate failed open: the question went through unchecked". A disclosure
+ * assets, 3 retrieved"; `agent_core` "Finished reasoning, 2 attempts"; a degraded
+ * retrieval channel "Terms: 2 hits (embedding channel not wired)"; a check that failed open
+ * "Input check failed open: the question went through unchecked". A disclosure
  * repeating any of those would be a chevron promising more and delivering the
  * sentence above it — and the failed-open row in particular must be readable
  * *without* a click, which a label is and a disclosure is not.
@@ -222,7 +222,7 @@ const CRASH_KEYS: readonly string[] = ["error_type"];
 /** How each key reads. A key with no entry here falls back to itself, so a detail
  * key the engine adds tomorrow shows up under its wire name rather than vanishing. */
 const FACT_LABELS = new Map<string, string>([
-  ["n_licensed", "licensed tables"],
+  ["n_retrieved_tables", "retrieved tables"],
   ["layer", "layer"],
   ["reason_code", "reason"],
   ["n_columns", "columns"],
@@ -298,7 +298,7 @@ export function hasDetail(step: TimelineStep): boolean {
 
 /**
  * The statuses that mean *something was decided or something broke* — a governance
- * block, an attempt cap, a refusal, a decline, a crash, or the `negative_gate`
+ * block, an attempt cap, a refusal, a decline, a crash, or the `negative_check`
  * matching a known-bad question.
  *
  * Exported because <AgentTimeline/> needs the same answer to decide which phase

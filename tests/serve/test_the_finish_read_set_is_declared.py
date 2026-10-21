@@ -3,7 +3,7 @@
 **The defect this closes.** ``finish`` is the node that decides what happened to a turn, and
 ``(state, config) -> dict`` says nothing about which of ``ServeState``'s 47 channels it reads,
 which it writes, or what clears them. That is not an abstract complaint: ``measure/checks.py``
-read ``Outcome.clarification`` as a witness of "reached ``finish``" and silently dropped every row
+read ``Outcome.clarification`` as a evidence of "reached ``finish``" and silently dropped every row
 carrying the corpus hash out of a check's denominator. A second reader of a channel, disagreeing
 with the first, in a place nothing pointed at.
 
@@ -16,14 +16,14 @@ is always null. Method: delete one key at a time from each of 30 turn shapes and
 **Seven of the 32 are the decision's, and only those are declared.** The other 25 are the
 register's: ``project`` walks ``RECORD_REGISTER`` and asks ``finish`` for each field by name, so
 that read set already exists in ``registry/record.py`` and a dataclass restating it would be a
-second copy of one declaration. The seam is worth drawing where a *decision* can have two
+second copy of one declaration. The boundary is worth drawing where a *decision* can have two
 readers who disagree. So this file asserts the seven, and asserts that the derivation cannot
 reach anything else — not that the whole node reads seven things, which would be false.
 
 **What it costs, stated rather than hidden.** Eight functions across the two files still take a
-state mapping: three are the decision's projection, one is the node's own seam, and four are the
+state mapping: three are the decision's projection, one is the node's own boundary, and four are the
 register's readers. :func:`test_the_derivation_reads_no_state_dict` names all eight, so a ninth
-forces a decision here instead of appearing quietly.
+forces a decision here instead of appearing.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def test_the_projection_names_every_channel_the_decision_reads() -> None:
         "path_kind": "answered",
         "failure": {"stage": "check", "error_type": "RuntimeError"},
         "generated_sql": "select 1",
-        "terminal_reason": "nothing_licensed",
+        "terminal_reason": "nothing_retrieved",
         "guard": {"outcome": "blocked"},
         "clarification_requested": True,
         "execution": PASSED,
@@ -83,7 +83,7 @@ def test_the_projection_names_every_channel_the_decision_reads() -> None:
         failed_stage="check",
         error_type="RuntimeError",
         has_sql=True,
-        terminal_reason="nothing_licensed",
+        terminal_reason="nothing_retrieved",
         guard={"outcome": "blocked"},
         clarification_requested=True,
         execution=PASSED,
@@ -111,7 +111,7 @@ def test_an_absent_channel_projects_to_the_field_default() -> None:
 def test_every_declared_channel_changes_a_result() -> None:
     """The declaration is not padded: each of the seven moves an outcome on its own.
 
-    A read set is only worth writing down if every name in it is load-bearing, and the cheapest
+    A read set is only worth writing down if every name in it is, and the cheapest
     way for this file to become decoration is for someone to add a field the decision ignores.
     So one pair per channel, differing in that channel alone, whose results differ.
     """
@@ -122,7 +122,7 @@ def test_every_declared_channel_changes_a_result() -> None:
         "path_kind": {"path_kind": "refuse"},
         "failure": {"failed": True},
         "generated_sql": {"has_sql": False, "execution": {"attempts": [], "terminal": "no_sql"}},
-        "terminal_reason": {"path_kind": "decline", "terminal_reason": "nothing_licensed"},
+        "terminal_reason": {"path_kind": "decline", "terminal_reason": "nothing_retrieved"},
         "guard": {"path_kind": "refuse", "guard": {"outcome": "blocked"}},
         "clarification_requested": {"clarification_requested": True},
         "execution": {"execution": {**PASSED, "terminal": "capped"}},
@@ -153,7 +153,7 @@ STATE_READERS: dict[str, str] = {
     "finish": "the seam itself, and the two answer-only channels the register does not carry",
     "_usage_for_turn": "the register's: this turn's rows out of an accumulating channel",
     "_latency_sec": "the register's: a derived cost field, from turn_started_at",
-    "_recorded_channels": "the register's: one reader for facet_channels and facet_degraded",
+    "_recorded_channels": "the register's: one reader for channel_scoring and channel_degraded",
     "extract": "the register's own reader, driven by RECORD_REGISTER field name",
 }
 
@@ -183,7 +183,7 @@ def test_the_derivation_reads_no_state_dict() -> None:
     ``state.get("path_kind")`` cannot creep back in under a local alias. And the functions that
     *do* take a state mapping are exactly :data:`STATE_READERS`, each with a stated job.
 
-    The second half is the honest one. ``abstain``'s equivalent check can say "one projection and
+    The second half is the one. ``abstain``'s equivalent check can say "one projection and
     the adapter"; this one cannot, because four of the readers are the register's and the
     register is entitled to read the state it declares fields over. What the check buys is that
     the list is a list: a new reader has to be added here, with a reason, and adding one is
@@ -245,7 +245,7 @@ def _channels_looked_up(fn: ast.AST) -> set[str]:
     return out & DECISION_CHANNELS
 
 
-def test_the_seam_normalises_before_it_projects() -> None:
+def test_the_boundary_normalises_before_it_projects() -> None:
     """The reset sentinels, which are the reason ``normalised`` exists at all.
 
     ``Session.turn`` writes ``RESET`` to ``path_kind`` and ``failure``; both annotations are
@@ -329,11 +329,11 @@ def test_the_result_for_each_path(
 ) -> None:
     """One case per path, each stated as the two or three facts it is about.
 
-    That is the whole return on this seam, and it is worth being concrete about how small the
+    That is the whole return on this boundary, and it is worth being concrete about how small the
     cases got: a decline used to need a turn dict with identity keys, a ledger and a channel map to
     be projectable at all, and is now ``OutcomeInputs(path_kind="decline")``. What did **not**
     get smaller is the total, because the projection became worth testing directly — the three
-    tests above build state dicts, and the register projection still needs a whole turn. The seam
+    tests above build state dicts, and the register projection still needs a whole turn. The boundary
     relocated the setup; it did not delete it.
 
     ``rail_status`` is asserted here rather than in a stream test because it is carried on the
@@ -380,7 +380,7 @@ def test_a_malformed_guard_is_only_read_on_the_path_that_asks() -> None:
 
 
 def test_the_node_still_writes_one_channel_and_one_event() -> None:
-    """The seam changed no interface. ``finish`` returns ``{"answer": ...}`` and nothing else.
+    """The boundary changed no interface. ``finish`` returns ``{"answer":...}`` and nothing else.
 
     Asserted on the update rather than inferred from a green turn, and paired with the result
     the derivation reaches for the same state, so "the adapter translates and adds nothing" is a

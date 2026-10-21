@@ -45,7 +45,7 @@ def _finish(reason_code: str) -> dict[str, Any]:
             "generated_sql": "SELECT 1",
             "turn_id": f"turn-{reason_code}",
             "turn_index": 1,
-            "knobs_resolved": {},
+            "settings_resolved": {},
             "usage": [],
         }
     )
@@ -74,7 +74,7 @@ def test_a_layer_refusal_is_still_a_refusal() -> None:
     assert answer["failed_stage"] is None
 
 
-def test_the_two_outcomes_are_actually_different() -> None:
+def test_the_two_outcomes_are_different() -> None:
     """Guards the pair above against a future change that collapses them again — including one
     that collapses them the *other* way, by making a plain refusal crash too."""
     assert _finish(GUARDRAIL_ERROR)["outcome"] != _finish("r_table_not_retrieved")["outcome"]

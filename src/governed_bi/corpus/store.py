@@ -139,7 +139,7 @@ def _one(raw: Any, *, where: str) -> tuple[list[Asset], list[str]]:
 
     **Construct, then validate — two steps, no sanitize step** (ADR 0005 §1.6). The corpus
     is trusted and the question is not, so injection is checked at the analyst's input by
-    ``govern.guard``. Re-adding a sanitizer here would also break treatment identity:
+    ``govern.guard``. Re-adding a sanitizer here would also break setting under test identity:
     it changes what reaches the model while ``corpus_content_hash``, taken over the files
     on disk, does not move. Validation therefore bounds exactly the text that is indexed.
     """
@@ -235,7 +235,7 @@ def write(root: Path | str, asset: Asset, *, namespace: str | None = None) -> Pa
     ``namespace`` is required for the three types with no ``schema`` field (``join``,
     ``metric``, ``term``): ADR 0005 does not say where such a file lives, so this refuses to
     guess rather than inventing a default that must then be reconciled with the tag rule.
-    Pass :data:`~governed_bi.corpus.identity.SHARED_NAMESPACE` for a genuinely global asset.
+    Pass :data:`~governed_bi.corpus.identity.SHARED_NAMESPACE` for a global asset.
     """
     reasons = problems_with(asset)
     if reasons:

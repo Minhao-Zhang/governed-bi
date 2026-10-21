@@ -27,7 +27,7 @@ WIDTH = 32
 
 
 class _Counted:
-    """An embedder reporting a **fixed** id, whatever it is actually computing.
+    """An embedder reporting a **fixed** id, whatever it is computing.
 
     ``DeterministicEmbedder``'s own ``model`` carries a fingerprint of its salt, so two salts
     produce two cache keys and can never collide. That is the correct behaviour and it is also
@@ -50,7 +50,7 @@ class _Counted:
 def _reopen(uri) -> VectorCache:
     """A **new** cache over rows already on disk, which is what a second process sees.
 
-    File-backed and not ``memory://``, and that is load-bearing rather than incidental: the check is
+    File-backed and not ``memory://``, and that is rather than incidental: the check is
     gated on ``VectorStore.opened_with``, i.e. rows that were there before this process. A second
     ``lancedb.connect("memory://")`` sees no tables at all, so an in-memory store can never model
     "someone else wrote these rows" — clearing a memo would fake the symptom while skipping the
@@ -110,7 +110,7 @@ def test_whitespace_only_curation_does_not_re_embed() -> None:
 def test_a_store_written_by_another_model_behind_the_same_id_is_refused(tmp_path) -> None:
     """The mixing case: hits from the old space, misses embedded into the new one.
 
-    ``_reopen`` is load-bearing and says something about the check's reach: the memo is keyed on
+    ``_reopen`` is and says something about the check's reach: the memo is keyed on
     ``(model, dimensions)``, and a repointed gateway reports the **same** model id — that is the
     whole incident — so within one process the check is paid once and a repoint after that is not
     seen. A gateway moves between processes, so this is a stated limit rather than a hole; what it
@@ -298,7 +298,7 @@ def test_the_same_embedder_adding_rows_is_not_refused() -> None:
     It costs one probe, and the docstring here used to claim otherwise — "the canary was minted by
     the first build and verified by this one from the memo" — which was true of no path at all: the
     cache is in-memory, so ``opened_with`` is 0, so there is no canary and the memo is empty. Caught
-    in review. What actually runs is the cold-store probe of a reused row, which is the only thing
+    in review. What runs is the cold-store probe of a reused row, which is the only thing
     that can catch a repoint behind an unchanged model id.
     """
     embedder = _Counted()

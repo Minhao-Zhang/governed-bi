@@ -2,7 +2,7 @@
 
 The ADR's first draft had only the narrowness test. A developer widening the list to
 make a gold query pass would have satisfied it — including by adding ``json_agg``,
-which is B2. So the disjointness test is the load-bearing half, and it is written to
+which is B2. So the disjointness test is the half, and it is written to
 survive the specific way this could go wrong:
 
 **Both tests parse their inputs and canonicalise them through the real
@@ -56,7 +56,7 @@ def test_the_inventory_fixture_is_not_empty() -> None:
 def test_not_too_narrow_every_gold_function_is_permitted_or_recorded(govern) -> None:
     """Direction one: permitted, **or** on the intentionally-absent list with a reason.
 
-    "Or recorded" is not a loophole — it is the only honest way to ship a positive
+    "Or recorded" is not a loophole — it is the only way to ship a positive
     allowlist. ``array_agg`` appears in gold and is refused on purpose (B2), and the
     reason has to be written down next to the refusal or the next person deletes it to
     make a query pass.
@@ -141,7 +141,7 @@ def test_the_canonical_name_of_a_whole_row_emitter_is_not_its_spelling(govern, s
     assert canonical not in govern.PERMITTED_FUNCTIONS
 
 
-def test_every_adversarial_spelling_is_actually_refused_by_check(govern, check) -> None:
+def test_every_adversarial_spelling_is_refused_by_check(govern, check) -> None:
     """The effect, not the set. A name absent from a set it is never compared against
     is not a refusal."""
     survivors = []

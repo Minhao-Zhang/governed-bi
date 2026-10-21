@@ -1,4 +1,4 @@
-"""`/capabilities` must report the model each surface actually resolved.
+"""`/capabilities` must report the model each surface resolved.
 
 ``chat_model`` and ``llm_utility_model`` are recorded settings. A client that spells
 its id only as ``model_id`` used to fall through to the class name, so two models
@@ -53,7 +53,7 @@ class _Session:
     connector = type("C", (), {"dialect": "postgres"})()
     agent_model = object()
     utility_model = None
-    knobs_resolved: dict[str, Any] = {
+    settings_resolved: dict[str, Any] = {
         "chat_model": "gpt-6-luna",
         "llm_provider": "openai",
         "llm_reasoning_effort": "xhigh",
@@ -110,7 +110,7 @@ def test_models_reports_none_rather_than_omitting_a_surface() -> None:
 
     class _Offline(_Session):
         agent_model = None
-        knobs_resolved: dict[str, Any] = {}
+        settings_resolved: dict[str, Any] = {}
 
     models = models_for(_Offline())
     assert set(models) == {"agent", "utility", "embedding"}
@@ -130,7 +130,7 @@ def test_postgres_endpoint_identifies_the_database() -> None:
 
 
 def test_postgres_endpoint_never_carries_the_credential() -> None:
-    """The load-bearing assertion. `user` and `password` are not parsed out at all.
+    """The assertion. `user` and `password` are not parsed out at all.
 
     Asserted over the serialized form, not key-by-key: a future field that happened to embed the
     DSN would pass an `assert "password" not in endpoint` and fail this.

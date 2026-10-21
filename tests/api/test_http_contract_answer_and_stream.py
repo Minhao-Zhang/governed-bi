@@ -13,7 +13,7 @@ a database, a model or a key); it is not repeated here.
 itself -- no reliability result anywhere under ``src/``, and the wire's ``record`` is exactly
 ``project()``'s output. The three stream-event tests extend the same rule to the *custom event
 stream* ADR 0007 §5 describes: every emitted ``step`` is a declared ``Stage``, an event's
-``status`` reports what the node actually did, and a clarification interrupt carries the id and
+``status`` reports what the node did, and a clarification interrupt carries the id and
 reason a client needs to answer it. Same rule, two surfaces (the response body and the event
 stream), so they stay together rather than splitting a third way.
 
@@ -137,7 +137,7 @@ def test_the_answer_on_the_wire_is_the_engine_s_answer() -> None:
     **What "the wire" is changed under this test** (2026-08-18, ADR 0014). It used to run over
     `POST /chat` on the ground that ADR 0007 Amendment 2 records a defect that existed *only* at
     that boundary: `routes._shape` set `answer_text` at the REST edge, so the route passed and the
-    transport the UI actually uses did not. The REST pair is deleted, and with it the edge that
+    transport the UI uses did not. The REST pair is deleted, and with it the edge that
     could disagree — `narrate` writes `answer_text` inside the graph, and the client reads
     `answer` off a `values` frame the platform streams verbatim. So the served graph's `answer`
     **is** the wire, and asserting on it is the same claim rather than a weaker one. The defect
@@ -215,7 +215,7 @@ def test_every_emitted_step_name_is_a_declared_stage() -> None:
     silently never appears — indistinguishable from a stage that did not run.
 
     Assert every `step` in a turn's events is a member of `registry/stages.py`'s `Stage`, and
-    that the stages a turn actually ran all appear. The second half is the one that catches a
+    that the stages a turn ran all appear. The second half is the one that catches a
     missing emitter; the first catches a hand-written label drifting from the register.
 
     Assert `seq` is strictly increasing: the UI orders by it, so a duplicate reorders the
@@ -225,7 +225,7 @@ def test_every_emitted_step_name_is_a_declared_stage() -> None:
     construct before `build_serve_graph`. `tests/serve/test_stream_events_end_to_end.py` drives
     `compile_graph()` — a different topology, with no `accept` — so `accept` was the one stage
     in the register that no test had ever observed emitting, on the transport the interface
-    actually uses.
+     uses.
     """
     from langchain_core.messages import HumanMessage
 
@@ -245,7 +245,7 @@ def test_every_emitted_step_name_is_a_declared_stage() -> None:
         "a row it cannot label and `registry/stages.py` is no longer the authority"
     )
 
-    # The stages this turn actually ran. Named rather than derived, because the claim is that a
+    # The stages this turn ran. Named rather than derived, because the claim is that a
     # stage which ran did not silently fail to emit — and a set derived from the events cannot
     # make it.
     ran = {(e["step"], e["status"]) for e in events}

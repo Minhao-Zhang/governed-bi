@@ -24,12 +24,12 @@ RESULT = {"columns": ["restaurant_count"], "rows": [[9590]], "row_count": 1, "tr
 #: The synthetic message ``_CapEndsTheTurn.after_model`` appends at ``cap=5``.
 #:
 #: **A duplicate of the f-string in ``agent_core.py``, not a read of it.** The middleware builds
-#: the line inline and exposes no seam to ask for it, and driving ``after_model`` to obtain one
+#: the line inline and exposes no boundary to ask for it, and driving ``after_model`` to obtain one
 #: would mean constructing middleware state and letting ``emit`` fire for a string. So if that
 #: wording changes, ``test_a_capped_turn_generates_instead_of_adopting_the_cap_exit_line`` keeps
 #: passing while testing nothing — the assertion would compare the generated text against a
 #: sentence no longer in the transcript. Stated because an unrecorded weak assertion is worse
-#: than a recorded one; the paired ``len(model.calls) == 1`` check is what actually pins the
+#: than a recorded one; the paired ``len(model.calls) == 1`` check is what pins the
 #: generate-don't-adopt behaviour, and it does not depend on this constant.
 _CAP_EXIT_LINE = "Stopped: run_query reached its attempt limit of 5."
 
@@ -143,7 +143,7 @@ def _capped_state(result: Any = RESULT, last_ai: str = _CAP_EXIT_LINE) -> dict[s
     """A turn whose statements ran and whose budget then ended it.
 
     ``last_ai`` defaults to the real synthetic message ``_CapEndsTheTurn`` appends, because that
-    is what is actually sitting there to be adopted.
+    is what is sitting there to be adopted.
     """
     return {
         "path_kind": "answered",

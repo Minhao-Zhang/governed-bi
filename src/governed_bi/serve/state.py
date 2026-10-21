@@ -132,10 +132,10 @@ class AbstentionResult(TypedDict):
     ``confidence`` was measured and failed (open-work.md §3.11: the reflector's "unsure" bucket
     is as likely to be right as its "correct" one), and ADR 0007 forbids a trust field on the
     answer card. Reporting *why the engine withheld* is the ledger; scoring *how sure it is* is
-    theatre.
+    .
     """
 
-    #: The policy that ran, by name and version. Two runs under two policies are two treatments.
+    #: The policy that ran, by name and version. Two runs under two policies are two settings under test.
     policy: str
     outcome: Literal["answer", "withhold", "disabled"]
     #: A member of :data:`~governed_bi.registry.stages.ABSTENTION_REASONS`, or ``None``.
@@ -192,7 +192,7 @@ class Answer(TypedDict):
 
 
 class TurnEntry(TypedDict, total=False):
-    """One finished turn's envelope, built only by ``api/graph_app.record_node``.
+    """One finished turn's wrapper, built only by ``api/graph_app.record_node``.
 
     ``question`` / ``answer_text`` sit beside ``record`` rather than inside it because merged
     in, every record read back out fails ``undeclared_keys``. Three fields are ``| None`` because
@@ -209,7 +209,7 @@ class TurnEntry(TypedDict, total=False):
 
     #: What :func:`compact_turn_record` replaced on this row, ``{"dropped": [...], "was_bytes": n}``.
     #: Present on **every** archived row and absent only on the newest, so ``{"dropped": []}`` is a
-    #: statement ("archived, nothing trimmed") and not a missing field. Lives on the envelope and
+    #: statement ("archived, nothing trimmed") and not a missing field. Lives on the wrapper and
     #: not inside ``record`` for the reason ``question`` does: a key the register does not declare
     #: makes every read of that record fail ``undeclared_keys``.
     compacted: dict[str, Any]
@@ -221,10 +221,10 @@ class TurnEntry(TypedDict, total=False):
 
 #: Bytes an **archived** turn's ``record`` is trimmed toward — a target, not a guarantee: the
 #: protected keys of :func:`protected_record_keys` are never compacted and set a floor of ~6 KB
-#: on a real record (``knobs_resolved`` alone is 3.0 KB of it).
+#: on a real record (``settings_resolved`` alone is 3.0 KB of it).
 #:
 #: 8 192 is measured, not chosen: on the real 103.8 KB records in ``runs/conversations.sqlite``
-#: (2026-08-18) exactly two keys are above the line — ``facet_hits`` at 49.8 KB and ``pulled_in``
+#: (2026-08-18) exactly two keys are above the line — ``channel_hits`` at 49.8 KB and ``pulled_in``
 #: at 46.2 KB, together 92% of the record — and trimming those two lands at 7.5 KB. So this value
 #: compacts the two bulk diagnostics and nothing else. A lower budget would start replacing
 #: sub-kilobyte fields for no measurable gain.
@@ -261,7 +261,7 @@ MAX_TURNS_RETAINED = 25
 #: Record keys a one-line summary of a past turn needs that the register does **not** require,
 #: so an archived row can still be listed without its checkpoint.
 _LIST_VIEW_KEYS: frozenset[str] = frozenset({
-    "terminal_reason", "schemas", "generated_sql", "latency_sec", "licensed",
+    "terminal_reason", "schemas", "generated_sql", "latency_sec", "retrieved_tables",
 })
 
 
@@ -277,7 +277,7 @@ def protected_record_keys() -> frozenset[str]:
 
     What it does **not** buy: a field that is ``not_applicable`` today and is re-declared
     ``never`` tomorrow may have been compacted on old rows, and would then read as absent. That
-    is why the trim is named on the envelope (:attr:`TurnEntry.compacted`) instead of being done
+    is why the trim is named on the wrapper (:attr:`TurnEntry.compacted`) instead of being done
     silently — the alternative reading, "the stage never produced it", is a different and false
     fact about the turn.
     """
@@ -359,7 +359,7 @@ def keep_turns(left: Any, right: Any) -> list[dict[str, Any]]:
       :func:`compact_turn_record` shrinks the row ~14× and :data:`MAX_TURNS_RETAINED` bounds how
       many there are; together they replace an unbounded term with a fixed one.
     * **Duplicate rows.** ``operator.add`` cannot deduplicate, so a turn resumed after an
-      ``ask_user`` interrupt could append its envelope twice. ``record["turn_id"]`` is the upsert
+      ``ask_user`` interrupt could append its wrapper twice. ``record["turn_id"]`` is the upsert
       key the register already declares for exactly this, so a repeat write **replaces**.
 
     Oldest first.
@@ -445,7 +445,7 @@ def merge_channels(
 
     The ``cleared()`` below is belt over braces: this annotation strips to ``dict``, so the
     channel seeds ``{}`` and this reducer runs from the first write — ``left`` is never the
-    sentinel. See :func:`cleared` for where the call really is load-bearing.
+    sentinel. See :func:`cleared` for where the call really is.
     """
     if right == RESET:
         return {}
@@ -495,7 +495,7 @@ class ServeInput(TypedDict, total=False):
     ``trust()`` forces run constants over a caller's ``configurable``, but the graph's own
     ``input`` is a second write channel: ``langgraph_api`` forwards the client's dict unfiltered,
     ``PER_TURN_RESET`` does not clear :data:`TEST_HOOKS`, and ``int_setting`` reads state *before*
-    ``knobs_resolved`` — so a request could set ``route_top_n`` while the record published the
+    ``settings_resolved`` — so a request could set ``route_top_n`` while the record published the
     default. ``input_schema`` drops undeclared keys at the entry; measured on langgraph 1.2.10,
     ``route_top_n=99`` reaches the first node as absent, not as 99.
 
@@ -550,7 +550,7 @@ class ServeState(TypedDict, total=False):
     attempt_id: str
     corpus_content_hash: str
     prompt_set_hash: str
-    knobs_resolved: dict[str, Any]
+    settings_resolved: dict[str, Any]
 
     guard: GuardResult
     rewrite: RewriteResult | None
@@ -672,7 +672,7 @@ ACCUMULATING: frozenset[str] = frozenset(
 TURN_IDENTITY: frozenset[str] = frozenset({
     "question", "evidence", "turn_index", "thread_id", "run_id", "turn_id",
     "question_id", "db_id", "attempt_id", "corpus_content_hash", "prompt_set_hash",
-    "knobs_resolved", "n_re_served",
+    "settings_resolved", "n_re_served",
 })
 
 #: Per-turn settings and F1 hooks. Caller sets these over ``turn()``'s output.

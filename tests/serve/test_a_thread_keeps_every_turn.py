@@ -11,7 +11,7 @@ filesystem beside the process rather than on the store the conversation already 
 that this channel has to survive is written by ``accept``, the node in front of ``guard`` on that
 same graph. Asserting the reducer over a hand-built two-node graph would prove that
 ``keep_turns`` appends, which ``tests/serve/test_the_turn_history_is_bounded.py`` does directly.
-The pair that can actually break is ``accept``-resets-then-``record``-appends, so both nodes are
+The pair that can break is ``accept``-resets-then-``record``-appends, so both nodes are
 here, mounted the way production mounts them.
 
 The one deviation from production is the checkpointer: ``build_serve_graph`` compiles without one
@@ -144,12 +144,12 @@ def _turns(graph: Any, *, thread: str) -> list[dict[str, Any]]:
 
 
 def test_two_turns_on_one_thread_both_survive_in_state() -> None:
-    """The load-bearing property: turn one is still there after turn two reset everything else.
+    """The property: turn one is still there after turn two reset everything else.
 
     The ``answer`` assertion is not decoration — it is what makes the ``turns`` assertion mean
     something. If ``PER_TURN_RESET`` had not run, ``turns`` holding two rows would prove nothing
     about surviving a reset, because there would have been no reset to survive. So the same state
-    is asserted to have forgotten turn one's ``answer`` and remembered turn one's envelope.
+    is asserted to have forgotten turn one's ``answer`` and remembered turn one's wrapper.
     """
     log = _TurnLog()
     graph = _served(log)

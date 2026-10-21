@@ -1,0 +1,74 @@
+# Coined names and the ordinary words that replace them. tools/check_plain_names.py
+# reads this file. Guidance words are printed and do not fail the run.
+
+[plain]
+facet = "retrieval channel"
+facets = "retrieval channels"
+licensed = "retrieved"
+arm = "configuration"
+arms = "configurations"
+treatment = "the setting being tested"
+treatments = "the settings being tested"
+knob = "setting"
+knobs = "settings"
+comparability = "whether two runs can be compared"
+gate = "check"
+gates = "checks"
+stamp = "finish"
+stamps = "finishes"
+verdict = "result"
+verdicts = "results"
+seam = "boundary"
+seams = "boundaries"
+envelope = "wrapper"
+envelopes = "wrappers"
+witness = "evidence"
+witnesses = "evidence"
+
+# Prose that leaves, with nothing put in its place (memo 6.1).
+[banned]
+actually = ""
+genuinely = ""
+quietly = ""
+honest = ""
+honestly = ""
+theatre = ""
+spine = ""
+
+[phrases]
+"load-bearing" = ""
+"load bearing" = ""
+"worth naming" = ""
+"the part worth" = ""
+
+# Generic or skipped by P8. Printed, never failed.
+[guidance]
+shape = "structure, format, or pattern"
+surface = "API, page, or screen"
+control = "baseline, when it means the comparison's control"
+population = "the questions counted"
+register = "registry, when it means the old package"
+fold = "normalize"
+ladder = "sweep"
+evict = "drop"
+evicted = "dropped"
+bodies = "descriptions"
+priced = "scorable"
+priceable = "scorable"
+paired = "side by side. The paired test, a paired comparison, and a matching case keep the ordinary word"
+
+[[allow]]
+pattern = "facet_(schema|term|metric|entity|example)_query"
+reason = "Prompt registry ids. Renaming them changes the prompt-set hash."
+
+[[allow]]
+pattern = "^paired_ex$"
+reason = "McNemar helper. The paired test keeps its statistical name."
+
+[[allow]]
+pattern = "^Stamp$"
+reason = "lucide-react icon export. The library names it; our code only imports it."
+
+[[allow]]
+path = "AGENTS.md"
+reason = "P9 task 5 leaves this file for the owner. It still says load-bearing."

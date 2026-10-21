@@ -17,7 +17,7 @@
  * (live == audit). The terminal AnswerView prefers `stream.values.answer`
  * (ADR 0007 §4: `answer` is the system-copy channel and the model's prose lives in
  * `messages`); per-message `additional_kwargs.governed_bi` remains a fallback
- * for older stamps.
+ * for older finishes.
  *
  * Everything that makes the stream arrive at all is in `SUBMIT_OPTIONS` below —
  * read it before changing a `submit` call.
@@ -57,7 +57,7 @@ import type { AnswerView } from "@/lib/types";
 /**
  * The options every run on this transport is submitted with.
  *
- * **`streamSubgraphs: true` is load-bearing, not a tuning knob.** The serve graph runs the
+ * **`streamSubgraphs: true` is, not a tuning setting.** The serve graph runs the
  * model and all five governed tools inside a nested `create_agent` graph invoked from its
  * `agent_core` node, so every token and every tool event is emitted under a subgraph
  * namespace. Measured against `langgraph-api` 0.11.0 on one identical question: omitted →
@@ -83,7 +83,7 @@ const SUBMIT_OPTIONS: { streamMode: StreamMode[]; streamSubgraphs: boolean } = {
  * `submit` payload below (a bare human turn) type-checks; the rendered messages
  * come from `stream.messages`, which the SDK types on its own.
  *
- * `turns` is **every finished turn's audit envelope**, accumulated on the thread
+ * `turns` is **every finished turn's audit wrapper**, accumulated on the thread
  * (`serve/state.ServeState.turns`, `operator.add`, never in `PER_TURN_RESET`) — which is what
  * makes `answer` being per-turn survivable: `answer` describes the newest turn only, and this
  * channel holds the rest. Typed `unknown[]` because it is wire data with no parse step of its
@@ -299,7 +299,7 @@ export function useStreamChat(
       }
     },
     onError: () => {
-      // **There is no second transport to fall back to, and the honest thing is to say so.**
+      // **There is no second transport to fall back to, and the thing is to say so.**
       //
       // This used to switch the whole hook over to a `POST /chat` replay of the pending
       // question. That route is gone from the engine, and it was never a good failure mode: it
@@ -430,7 +430,7 @@ export function useStreamChat(
    *
    * Live first, rebuilt second — the precedence the old merge-never-replace map enforced, now
    * expressed where it is read. A record captured by `onFinish` is first-hand: it is the `answer`
-   * channel of the run this client watched, complete before `record`'s envelope was even built.
+   * channel of the run this client watched, complete before `record`'s wrapper was even built.
    */
   const answerFor = (id: string): AnswerView | undefined =>
     completedAnswers.get(id) ?? rebuiltAnswers.get(id);

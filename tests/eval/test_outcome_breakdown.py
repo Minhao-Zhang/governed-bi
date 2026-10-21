@@ -54,7 +54,7 @@ def test_a_clean_answer_is_neither() -> None:
 
 
 def test_outcome_rates_reports_all_three_buckets_summing_to_the_population() -> None:
-    """The report-level aggregate the plan actually asks for."""
+    """The report-level aggregate the plan asks for."""
     rows = [
         {"question_id": "q1", "correct": True, "refused": False, "clarified": False},
         {"question_id": "q2", "correct": True, "refused": False, "clarified": False},

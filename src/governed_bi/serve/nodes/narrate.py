@@ -85,7 +85,7 @@ async def narrate_node(state: dict, config: RunnableConfig) -> dict:
     Two things keep that from becoming the decoration the old grouping feared. It **generates
     rather than adopts** (above), and ``_brief`` tells the narrator the turn stopped at its
     budget and that the table is the last statement that *succeeded* — on a capped turn usually
-    an intermediate probe, not the answer. Saying "here is how far it got" is honest; letting
+    an intermediate probe, not the answer. Saying "here is how far it got" is; letting
     the last probe's rows read as a conclusion is not.
     """
     # A terminal turn already has its wording, and it is not the model's: `refuse` and `decline`

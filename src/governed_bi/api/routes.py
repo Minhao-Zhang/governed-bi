@@ -25,7 +25,7 @@ from governed_bi.paths import REPO_ROOT
 __all__ = ["make_app", "app_from_environment", "app"]
 
 
-# ── the seam ─────────────────────────────────────────────────────────────────
+# ── the boundary ─────────────────────────────────────────────────────────────────
 
 
 def make_app(session: Any, pending: Any) -> FastAPI:
@@ -84,7 +84,7 @@ def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
 
     @app.get("/capabilities")
     def capabilities() -> dict[str, Any]:
-        """What this server can actually do. The UI blocks on this response."""
+        """What this server can do. The UI blocks on this response."""
         return capabilities_for(get_session())
 
     @app.get("/clarifications/pending")
@@ -117,13 +117,13 @@ def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
 
 
 def models_for(session: Any) -> dict[str, Any]:
-    """The three model surfaces this run resolved, read from ``knobs_resolved``.
+    """The three model surfaces this run resolved, read from ``settings_resolved``.
 
     That mapping is what every measurement row publishes, so the screen and the artifact cannot
     disagree. ``embedding.id`` is reported verbatim: it is provider-qualified and may contain a
     colon. ``utility.effort`` is observed off the live client because no setting records it.
     """
-    settings = session.knobs_resolved
+    settings = session.settings_resolved
     utility = getattr(session, "utility_model", None)
     return {
         "agent": {
@@ -212,7 +212,7 @@ def capabilities_for(session: Any) -> dict[str, Any]:
         "edit_mode": "none",
         "can_stream": can_stream,
         "has_live_model": session.agent_model is not None,
-        "model": session.knobs_resolved.get("chat_model"),
+        "model": session.settings_resolved.get("chat_model"),
         "models": models_for(session),
         "connection": connection_for(session),
         # The flag mounts the interrupt prompt, so it must not be true without a model.

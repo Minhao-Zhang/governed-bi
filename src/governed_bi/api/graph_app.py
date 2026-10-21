@@ -83,7 +83,7 @@ TIMEOUT_VAR = "GOVERNED_BI_LLM_TIMEOUT_S"
 #: Wall clock for guard, rewriters, and the embedder.
 UTILITY_TIMEOUT_VAR = "GOVERNED_BI_UTILITY_TIMEOUT_S"
 
-#: Reasoning effort for the agent model (comparability setting).
+#: Reasoning effort for the agent model (setting that affects results).
 MODEL_EFFORT_VAR = "GOVERNED_BI_MODEL_EFFORT"
 
 #: Where a seeded corpus is written when no curated one is given.
@@ -326,7 +326,7 @@ def record_node() -> Any:
                 return {}
             entry: TurnEntry = {
                 # This node is the only place ``asked_at`` is set -- nothing else writes a turn
-                # envelope.
+                # wrapper.
                 "asked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "question": str(state.get("question") or "") or None,
                 "answer_text": surface_answer_text(answer, state),

@@ -1,6 +1,6 @@
 """A two-config run was spent to learn its MDE was 9.6pp -- afterwards.
 
-The treatment moved a population of 9 questions out of 131. No effect that population could
+The setting under test moved a population of 9 questions out of 131. No effect that population could
 produce was detectable, and the run reported "no change" as though that were a measurement of the
 feature rather than of the sample size. This refuses that run up front. The run is
 RyanChenJung/governed-bi-utkuai@12c3e15's, not this repository's; ``eval/power.py``'s docstring
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from governed_bi.eval.power import UnderpoweredArm, require_power
+from governed_bi.eval.power import UnderpoweredConfiguration, require_power
 from governed_bi.measure.stats import mde
 from governed_bi.registry.quantity import Measured
 
@@ -47,9 +47,9 @@ def test_more_questions_lower_the_bar() -> None:
 
 
 def test_an_config_hypothesising_less_than_its_mde_is_refused() -> None:
-    """That run's shape: a treatment reaching 9 of 131 questions cannot produce 9.6pp even if it
+    """That run's shape: a setting under test reaching 9 of 131 questions cannot produce 9.6pp even if it
     fixes every one of them."""
-    with pytest.raises(UnderpoweredArm, match="9.6pp|0.09"):
+    with pytest.raises(UnderpoweredConfiguration, match="9.6pp|0.09"):
         require_power(n=131, discordant=20, hypothesised_effect=0.03)
 
 
@@ -76,7 +76,7 @@ def test_an_config_with_no_pairs_is_refused_rather_than_passed() -> None:
     anything, since there would be no run to be underpowered against. ``stats.mde`` answers
     "not measured" here rather than raising, so the check has to read an absent floor as a
     refusal -- reading it as a pass is the direction that costs a run."""
-    with pytest.raises(UnderpoweredArm, match="no detection floor"):
+    with pytest.raises(UnderpoweredConfiguration, match="no detection floor"):
         require_power(n=0, discordant=0, hypothesised_effect=0.03)
 
 
@@ -84,5 +84,5 @@ def test_an_config_whose_prior_never_disagreed_is_refused() -> None:
     """Zero discordant pairs is not a measurement -- McNemar has nothing to test -- and
     ``stats.mde`` says so as an unmeasured quantity rather than as a number. The check must
     refuse on it: two configs that never disagree have no resolution to spend."""
-    with pytest.raises(UnderpoweredArm, match="no detection floor"):
+    with pytest.raises(UnderpoweredConfiguration, match="no detection floor"):
         require_power(n=131, discordant=0, hypothesised_effect=0.03)

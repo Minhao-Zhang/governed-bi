@@ -12,7 +12,7 @@ Not named ``check_*``: it reports a curve, it does not check a tree.
 
 The two comparisons at the bottom are the point of the exercise:
 
-* **engine vs. the best signal at a lower coverage** -- what the trade actually costs,
+* **engine vs. the best signal at a lower coverage** -- what the trade costs,
   priced in answers the reader does not get rather than in precision alone;
 * **the token count vs. the governance ledger** -- whether the layer stack's own record
   ranks turns as well as a byte counter does.

@@ -1,15 +1,15 @@
 """A setting the record publishes must be a setting the turn can be made to use. ADR 0008 D7.
 
 ``route_top_n``, ``max_steiner_points`` and ``max_crossings`` are declared
-``a recorded setting`` — they go into ``knobs_resolved``, which is what a quotable run
+``a recorded setting`` — they go into ``settings_resolved``, which is what a quotable run
 compares against another run. All three read per-turn ``state`` *only*, with a
 module-level constant beside them for the default, and **no production entry point writes
 those state keys**: only ``eval/harness.py`` and test fixtures do. So the record published
-``route_top_n: 3`` and routing genuinely used 3, but only because
+``route_top_n: 3`` and routing used 3, but only because
 ``_DEFAULT_TOP_N = 3`` happened to equal the register's default. Move either one and the
 record reports a value the turn did not use.
 
-That is why the test below is about ``knobs_resolved`` rather than about ``state``: the
+That is why the test below is about ``settings_resolved`` rather than about ``state``: the
 state path already worked, and testing it is what let the gap survive.
 """
 
@@ -22,10 +22,10 @@ import pytest
 from governed_bi.serve.runtime import int_setting
 
 
-def test_state_wins_then_knobs_resolved_then_the_register() -> None:
-    """The precedence, in one place. ``knobs_resolved`` is the rung that was missing."""
-    assert int_setting({"route_top_n": 7, "knobs_resolved": {"route_top_n": 2}}, "route_top_n") == 7
-    assert int_setting({"knobs_resolved": {"route_top_n": 2}}, "route_top_n") == 2
+def test_state_wins_then_settings_resolved_then_the_register() -> None:
+    """The precedence, in one place. ``settings_resolved`` is the rung that was missing."""
+    assert int_setting({"route_top_n": 7, "settings_resolved": {"route_top_n": 2}}, "route_top_n") == 7
+    assert int_setting({"settings_resolved": {"route_top_n": 2}}, "route_top_n") == 2
     # The register's declared value, and *only* the register's -- there is no second copy
     # of it in `serve/` any more, so this cannot silently agree with a stale constant.
     from governed_bi.registry.settings import setting_default
@@ -35,7 +35,7 @@ def test_state_wins_then_knobs_resolved_then_the_register() -> None:
 
 def test_a_setting_that_cannot_be_read_raises_rather_than_substituting_a_value() -> None:
     """Substituting the register default for a setting the caller set to something unusable
-    is the comparability lie in a smaller costume: the turn runs at 3, the record says 3,
+    is the lie about which settings affect results in a smaller costume: the turn runs at 3, the record says 3,
     and the caller asked for something else entirely.
 
     ``candidate_depth`` used to swallow exactly this and return its local constant.
@@ -47,12 +47,12 @@ def test_a_setting_that_cannot_be_read_raises_rather_than_substituting_a_value()
     # refusal `corpus/validate.py` makes for the summary-length bounds.
     # And a typo'd setting name raises out of the register rather than resolving to a
     # plausible literal no setting backs, which would leave the value outside the
-    # comparability hash entirely.
+    # hash of settings that affect results entirely.
     with pytest.raises(KeyError):
         int_setting({}, "route_top_nn")
 
 
-def test_route_top_n_from_knobs_resolved_changes_the_turn(
+def test_route_top_n_from_settings_resolved_changes_the_turn(
     two_schema_assets, guard_off_policy
 ) -> None:
     """The reachability claim, asserted on what the setting controls: how many schemas are
@@ -62,7 +62,7 @@ def test_route_top_n_from_knobs_resolved_changes_the_turn(
     share no join edge, so at the default of 3 ``connect`` declined and at 1 it answered.
     That stopped being true the same day, because ``connect_node`` now keeps one
     :func:`~governed_bi.retrieve.connect.components` group and both settings answer. The
-    surviving assertion is the honest one: the setting decides the shortlist, and a shortlist
+    surviving assertion is the one: the setting decides the shortlist, and a shortlist
     of two is observable in ``schemas`` whether or not it changes the result.
     """
     from langchain_core.messages import AIMessage
@@ -109,7 +109,7 @@ def test_route_top_n_from_knobs_resolved_changes_the_turn(
 
     # The setting set the way `Session` publishes it, and *not* in `state` -- which is the
     # only path that was ever wired.
-    narrow = run(knobs_resolved={**wide["knobs_resolved"], "route_top_n": 1})
+    narrow = run(settings_resolved={**wide["settings_resolved"], "route_top_n": 1})
 
     # **Length, not identity.** This asserted `== ["ops_b"]`, and which of the two wins is not
     # a property anyone designed: the question ("customer account voltage reading device") is
@@ -118,7 +118,7 @@ def test_route_top_n_from_knobs_resolved_changes_the_turn(
     # whose own docstring says it gave up asserting the outcome. The claim is that the setting
     # reaches routing, which is a count.
     assert len(narrow.get("schemas") or []) == 1, (
-        f"knobs_resolved['route_top_n'] did not reach routing: {narrow.get('schemas')}. "
+        f"settings_resolved['route_top_n'] did not reach routing: {narrow.get('schemas')}. "
         "The record would still publish 1 while the turn routed on 3."
     )
     assert set(narrow.get("schemas") or ()) <= set(wide.get("schemas") or ()), (
@@ -140,7 +140,7 @@ def test_every_declared_ranking_setting_has_a_reader() -> None:
     Four of them shipped that way. ``channel_weight_schema`` and ``channel_weight_other`` were
     declared while ``retrieve/route.route`` took no weights at all; ``w_lexical`` and
     ``w_semantic`` were declared while ``serve/runtime.FUSE_WEIGHTS`` was a hardcoded literal.
-    All four entered ``setting_names()`` and ``knobs_resolved``, so a run could publish
+    All four entered ``setting_names()`` and ``settings_resolved``, so a run could publish
     ``w_lexical: 0.9``, move its config hash, and behave identically — the inverse of the
     defect ``registry/settings.py`` opens by describing.
     """
@@ -167,12 +167,12 @@ def test_every_declared_ranking_setting_has_a_reader() -> None:
     assert channel_scale({}).semantic == float(setting_default("w_semantic"))
     moved = channel_scale({"w_lexical": 0.9, "w_semantic": 0.1, "semantic_scale_ceiling": 0.4})
     assert (moved.lexical, moved.semantic, moved.semantic_ceiling) == (0.9, 0.1, 0.4), (
-        "a request cannot move the fusion settings, so publishing them in `knobs_resolved` is a "
+        "a request cannot move the fusion settings, so publishing them in `settings_resolved` is a "
         "claim about a run that the run did not honour"
     )
 
 
-def test_a_channel_weight_actually_moves_the_ranking() -> None:
+def test_a_channel_weight_moves_the_ranking() -> None:
     """Behaviour-preserving at 1.0, and *effective* off it. Both halves matter."""
     from governed_bi.retrieve.route import route
 
@@ -216,7 +216,7 @@ def test_the_saturation_constant_is_declared_where_it_is_read() -> None:
 
 
 def test_a_setting_describing_a_feature_that_does_not_exist_is_gone() -> None:
-    """``max_queries_per_facet`` bounded a list built as ``[question]``.
+    """``max_queries_per_channel`` bounded a list built as ``[question]``.
 
     So the limit could never fire, and it was ``a recorded setting`` — every run published a
     bound on a per-channel fan-out the code does not have. Deleted rather than wired: wiring it

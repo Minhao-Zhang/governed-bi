@@ -1,4 +1,4 @@
-"""``--resume`` refuses an artifact that was measured under a different treatment.
+"""``--resume`` refuses an artifact that was measured under a different setting under test.
 
 The artifact filename carries ``--model``, ``--effort``, ``--top-n``, ``--embed``, the provider,
 ``--prompt-variant`` and (since 2026-08-11) ``--replay-routing``, so a renamed tag already
@@ -6,8 +6,8 @@ aborts. It carries **no** corpus and no dataset, and an explicit ``--out`` bypas
 entirely. Pull ``../BIRD-corpus``, resume, and one artifact holds two corpora: every check passes
 and the driver prints ``ALL CHECKS PASS -- these numbers are quotable as a single config``.
 
-The guard reads three things back off the rows the resume intends to keep — the two treatment
-hashes and every comparability setting — because the hashes alone do not move with ``--top-n``,
+The guard reads three things back off the rows the resume intends to keep — the two setting under test
+hashes and every setting that affects results — because the hashes alone do not move with ``--top-n``,
 ``--embed``, ``--reflect`` or the model id, and those are the settings an ``--out`` run can change
 with no tag to stop it.
 
@@ -29,7 +29,7 @@ from governed_bi.eval.provenance import (
     truncation_notice,
 )
 
-#: The two settings the fixtures move. Real comparability setting names, so a rename in the register
+#: The two settings the fixtures move. Real setting that affects results names, so a rename in the register
 #: breaks these tests rather than leaving them asserting against a string nothing declares.
 SETTINGS = ("route_top_n", "abstention_policy_enabled")
 
@@ -58,9 +58,9 @@ def _rows(
             "question_id": f"q{i}",
             "corpus_content_hash": corpus,
             "prompt_set_hash": prompt,
-            "knobs_resolved": dict(settings if settings is not None else {"route_top_n": 3}),
+            "settings_resolved": dict(settings if settings is not None else {"route_top_n": 3}),
             "outcome": outcome,
-            "licensed": list(retrieved_tables),
+            "retrieved_tables": list(retrieved_tables),
             "routing_pinned": routing_pinned,
         }
         for i in range(first_qid, first_qid + n)
@@ -71,8 +71,8 @@ def check(rows, **over):
     kwargs: dict[str, Any] = {
         "corpus_content_hash": "corpus-a",
         "prompt_set_hash": "prompt-p",
-        "knobs_resolved": {"route_top_n": 3},
-        "comparability": frozenset({"route_top_n"}),
+        "settings_resolved": {"route_top_n": 3},
+            "affects_results": frozenset({"route_top_n"}),
         "question_ids": {f"q{i}" for i in range(1, 9)},
         "replay_routing": False,
     }
@@ -80,7 +80,7 @@ def check(rows, **over):
     return resume_identity_problem(rows, **kwargs)
 
 
-def test_an_artifact_from_the_same_treatment_resumes() -> None:
+def test_an_artifact_from_the_same_under_test_resumes() -> None:
     refusal, warnings = check(_rows(5))
     assert refusal == ""
     assert warnings == []
@@ -116,11 +116,11 @@ def test_a_row_predating_the_field_warns_but_does_not_refuse() -> None:
 
 
 def test_a_clarification_that_never_routed_is_counted_and_not_warned_about() -> None:
-    """open-work 3.6a: a turn that abstains before routing carries no treatment identity.
+    """open-work 3.6a: a turn that abstains before routing carries no setting under test identity.
 
     Every ``corpus_content_hash: None`` row in the 2026-08-09 artifacts is one of these — 6 of
     6 in v3-fold, 4 of 4 in v4, 5 of 5 in v5 — so the old guard's "cannot prove they are the
-    same treatment" fired on **every legitimate resume**, which is the shape that teaches a
+    same setting under test" fired on **every legitimate resume**, which is the shape that teaches a
     reader to ignore a warning. Reported as a count instead, in words that are not a caution.
     """
     rows = _rows(5) + _rows(
@@ -142,25 +142,25 @@ def test_a_clarification_that_did_license_tables_still_warns() -> None:
     assert any("cannot prove" in w for w in warnings)
 
 
-def test_a_comparability_setting_that_moved_refuses_even_though_both_hashes_agree() -> None:
+def test_a_affects_results_setting_that_moved_refuses_even_though_both_hashes_agree() -> None:
     """The ``--out`` hole. ``--top-n`` moves no hash and is only in the filename tag, which an
     explicit ``--out`` bypasses — so two shortlist budgets could land in one artifact with the
     corpus and prompt guards both satisfied."""
     refusal, _ = check(
-        _rows(4, settings={"route_top_n": 8}), knobs_resolved={"route_top_n": 3}
+        _rows(4, settings={"route_top_n": 8}), settings_resolved={"route_top_n": 3}
     )
     assert "route_top_n" in refusal
     assert "8" in refusal and "3" in refusal
 
 
 def test_a_setting_recorded_on_one_side_only_warns_rather_than_refusing() -> None:
-    """All seven ``proxy_*`` artifacts in ``runs/eval/`` are missing six comparability settings.
+    """All seven ``proxy_*`` artifacts in ``runs/eval/`` are missing six settings that affect results.
     Refusing on that would make every artifact on disk unresumable, which is not what a
-    treatment guard is for."""
+    setting under test guard is for."""
     refusal, warnings = check(
         _rows(3, settings={}),
-        knobs_resolved={"route_top_n": 3},
-        comparability=frozenset({"route_top_n"}),
+        settings_resolved={"route_top_n": 3},
+        affects_results=frozenset({"route_top_n"}),
     )
     assert refusal == ""
     assert any("route_top_n" in w and "cannot be shown to share it" in w for w in warnings)
@@ -170,7 +170,7 @@ def test_a_setting_absent_from_both_sides_is_silent() -> None:
     """Both declined to say. A warning here would fire four times on every real resume."""
     refusal, warnings = check(
         _rows(3, settings={"route_top_n": 3}),
-        comparability=frozenset({"route_top_n", "sqlglot_version"}),
+        affects_results=frozenset({"route_top_n", "sqlglot_version"}),
     )
     assert refusal == ""
     assert warnings == []
@@ -223,7 +223,7 @@ def test_only_truncate_destroys_an_artifact_and_it_says_how_much(tmp_path) -> No
     """``--force-fresh`` must not delete a paid run, and ``--truncate`` must say what it takes.
 
     ``--force-fresh`` was documented as relaxing the *sibling-artifact* abort -- a path where
-    the output file does not exist -- and then quietly acquired ``out_path.write_text("")`` in
+    the output file does not exist -- and then acquired ``out_path.write_text("")`` in
     ``main``, where no test could reach it. An config on this dataset is hours of paid model calls.
 
     The regression this pins: a driver in which ``--force-fresh`` truncates makes the first
@@ -269,7 +269,7 @@ def test_keeping_the_artifact_and_discarding_it_are_refused_together() -> None:
 
 
 def test_an_unpinned_run_refuses_an_artifact_whose_routing_was_replayed() -> None:
-    """``--replay-routing`` is a treatment and had neither a tag segment nor a readable row.
+    """``--replay-routing`` is a setting under test and had neither a tag segment nor a readable row.
 
     Only the reliable direction is asserted, and the docstring on the guard says why the other
     one is not: a pinned run whose kept rows all abstained before routing carries no ``True``
@@ -283,12 +283,12 @@ def test_an_unpinned_run_refuses_an_artifact_whose_routing_was_replayed() -> Non
     assert ok == ""
 
 
-def test_a_setting_the_writer_reshapes_is_not_a_second_treatment() -> None:
+def test_a_setting_the_writer_reshapes_is_not_a_second_under_test() -> None:
     r"""The defect that refused **every** resume of every config ever written.
 
     ``asset_budgets`` is a ``tuple`` of ``tuple``\ s in the register and a ``list`` of
     ``list``\ s once it has been through ``json.dump``. The guard compared ``repr`` of the
-    in-memory value against ``repr`` of the read-back one, so it reported a treatment change
+    in-memory value against ``repr`` of the read-back one, so it reported a setting under test change
     on a value that had not changed -- and the refusal it printed tells the reader to "Rename
     the artifact and start a new one", discarding hours of paid model calls.
 
@@ -306,14 +306,14 @@ def test_a_setting_the_writer_reshapes_is_not_a_second_treatment() -> None:
 
     refusal, warnings = check(
         _rows(3, settings={"asset_budgets": as_written}),
-        knobs_resolved={"asset_budgets": shipped},
-        comparability=frozenset({"asset_budgets"}),
+        settings_resolved={"asset_budgets": shipped},
+        affects_results=frozenset({"asset_budgets"}),
     )
     assert refusal == "", refusal
     assert warnings == []
 
 
-def test_a_string_and_the_number_it_spells_are_still_two_treatments() -> None:
+def test_a_string_and_the_number_it_spells_are_still_two_under_tests() -> None:
     """The distinction :func:`_as_recorded` must not collapse while fixing the one above.
 
     ``3`` and ``"3"`` survive the writer's encoding as an ``int`` and a ``str``, so they still
@@ -322,7 +322,7 @@ def test_a_string_and_the_number_it_spells_are_still_two_treatments() -> None:
     """
     refusal, _ = check(
         _rows(3, settings={"route_top_n": "3"}),
-        knobs_resolved={"route_top_n": 3},
-        comparability=frozenset({"route_top_n"}),
+        settings_resolved={"route_top_n": 3},
+        affects_results=frozenset({"route_top_n"}),
     )
     assert "route_top_n" in refusal

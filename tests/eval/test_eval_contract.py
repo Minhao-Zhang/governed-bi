@@ -67,8 +67,8 @@ def _clean_row(qid: str, **overrides) -> dict:
         "correct": True,
         "crashed": False,
         "context_hash": f"hash-{qid}-a",
-        "facet_channels": {"schema": "ran"},
-        "facet_degraded": False,
+        "channel_scoring": {"schema": "ran"},
+        "channel_degraded": False,
         "guardrail_error": False,
         "re_served": False,
         "negative_failed_open": False,
@@ -178,12 +178,12 @@ def test_one_unexecutable_gold_statement_does_not_end_the_oracle_config(tmp_path
     assert bad["error_type"]
 
 
-def test_context_hash_is_an_existence_check_not_a_treatment_test() -> None:
+def test_context_hash_is_an_existence_check_not_a_under_test_test() -> None:
     """Rewritten 2026-08-11 for audit D9. It used to assert the opposite of the second case.
 
     Identical hashes on every shared question no longer fail: distinctness measured retrieval
-    nondeterminism, not treatment change, and passed at 0.9993 on a seed-only null pair. The
-    treatment judgement moved to ``report.settings_comparable``, which reads declared settings.
+    nondeterminism, not setting under test change, and passed at 0.9993 on a seed-only null pair. The
+    setting under test judgement moved to ``report.settings_comparable``, which reads declared settings.
 
     What this check still owes a caller is coverage — a shared question where either config
     assembled no context cannot be compared on that question.
@@ -485,7 +485,7 @@ def test_a_numeric_cell_is_compared_as_a_number() -> None:
     ``isinstance(value, (int, float))``. ``Decimal`` is neither, so **every Postgres
     ``numeric`` cell was compared as a string** — and the artifact recorded
     ``correct=False`` with ``detail="result_mismatch"``, which is indistinguishable from a
-    genuinely wrong answer.
+     wrong answer.
 
     Every EX number this repository produced before the fix is therefore an underestimate,
     and because the size of the underestimate is a function of the schema's numeric-column

@@ -1,4 +1,4 @@
-"""``corpus_content_hash`` — treatment identity (one implementation, no sentinel).
+"""``corpus_content_hash`` — setting under test identity (one implementation, no sentinel).
 
 Raises on a missing root. Sensitive to content, stable, relative sorted paths.
 Unreadable files are named in the digest without their bytes.
@@ -27,15 +27,15 @@ def corpus_content_hash(
 ) -> str:
     """A hex digest over the corpus stored under ``root``.
 
-    ``schemas`` restricts the digest to those subtrees, so a config's treatment identity
+    ``schemas`` restricts the digest to those subtrees, so a config's setting under test identity
     covers exactly the schemas it served and a leftover subtree enters neither.
 
     Raises ``FileNotFoundError`` on a missing ``root`` rather than returning a sentinel:
-    two absences would compare equal and pass a comparability check.
+    two absences would compare equal and pass a check that the runs share their settings.
 
     Hashes **every** file in the selected subtrees, not just ``.yaml`` — the markdown D9
     keeps beside the assets is corpus content, and ignoring it reports two different
-    corpora as the same treatment.
+    corpora as the same setting under test.
 
     ``overrides`` substitutes bytes for a file already in the walk, giving **the digest the tree
     would have after those writes**. That is what makes ``DerivedState.landed_verified`` mean

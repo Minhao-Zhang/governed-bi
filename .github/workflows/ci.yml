@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v7
 
       # A pull_request checkout has no `main`. Provenance needs one commit of it;
-      # faking the sha would hide the knob the test exists for.
+      # faking the sha would hide the setting the test exists for.
       - name: Fetch main for provenance
         run: git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
 
@@ -39,8 +39,11 @@ jobs:
 
       # Needs no corpus and no dataset. `tools/check_train_only.py` is the other half
       # and is not here: it needs a corpus, the held-out question file, and a control.
-      - name: Gate — no benchmark discriminators in the tree
+      - name: Check — no benchmark discriminators in the tree
         run: uv run --frozen python tools/check_no_benchmark_discriminators.py
+
+      - name: Plain names
+        run: uv run --frozen python tools/check_plain_names.py
 
       # `-rs` prints every skip with its reason. Postgres and OpenAI tests skip without
       # credentials, and a silent skip would hide which adapter ran.
@@ -48,7 +51,7 @@ jobs:
         run: uv run --frozen pytest -q -rs
 
   # The frontend. Added when the UI stopped being a sibling repository and became `ui/`: while it
-  # was separate it had CI of its own, and folding it in without this job would have quietly
+  # was separate it had CI of its own, and folding it in without this job would have
   # deleted that — the merge would have *removed* checks while appearing to consolidate them.
   ui:
     runs-on: ubuntu-latest

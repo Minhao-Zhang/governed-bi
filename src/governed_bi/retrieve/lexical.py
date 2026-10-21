@@ -192,7 +192,7 @@ class BM25:
         # and its phrasing is a model's, not a person's.
         #
         # Dropped rather than saturated with a `k3`, which is what Lucene does. A first attempt
-        # used `k3 = 8` and the numbers said it was theatre: `qf = 2` still scored 1.8x and the
+        # used `k3 = 8` and the numbers said it was: `qf = 2` still scored 1.8x and the
         # triple-repeat case moved only 0.6833 -> 0.6384. Evidence strength is the *document*
         # side's job and `_K1` already saturates it; the query side was only ever a long-query
         # weighting. What stays sensitive to phrasing is which terms appear at all, which is the
@@ -217,7 +217,7 @@ class BM25:
 
         This is the out-of-corpus signal cosine cannot give — with an embedder every asset
         scores above zero, so an unanswerable question still returns ``top_k`` tables and
-        stamps confidence. Distinct terms, not occurrences. Measured against ``_idf``, the
+        finishes confidence. Distinct terms, not occurrences. Measured against ``_idf``, the
         full corpus vocabulary, not this restricted view: the question is whether *the
         corpus* has the vocabulary, not whether this channel's candidates do.
 
@@ -228,12 +228,12 @@ class BM25:
         Measured on corpus ``86ed1dbf``, 1,351 in-corpus questions against a 20-question
         hand-written out-of-corpus probe, against a criterion fixed before the run:
 
-        =================  ==========  ==========
-        config                in-corpus   probe
-        =================  ==========  ==========
-        counting them        0.9488      0.5989
-        this                 0.9135      0.3247
-        =================  ==========  ==========
+        ================= ========== ==========
+        config in-corpus probe
+        ================= ========== ==========
+        counting them 0.9488 0.5989
+        this 0.9135 0.3247
+        ================= ========== ==========
 
         Separation 0.3499 → 0.5888. In-corpus coverage falls 3.5pp, which is the cost of the
         list and is the number to watch: a larger fall would mean it is eating content words.

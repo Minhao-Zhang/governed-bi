@@ -1,7 +1,7 @@
 """The eval/datalake.py post-hoc measurement layer never lets its denominator shrink silently.
 
 Split out of ``test_eval_contract.py`` by the 1000-line cap (ADR 0005 §6), which was forcing the
-timing rather than the seam: that file's tests split cleanly into "run a config and grade what it
+timing rather than the boundary: that file's tests split cleanly into "run a config and grade what it
 did" (kept there) and this file's concern -- the functions that measure a *finished* run's
 population after the fact (``table_coverage``, ``routing_recall``, ``retrieval_funnel``,
 ``dataset_qid_lists``), plus the one ``retrieve.connect`` determinism test that exists because its
@@ -23,10 +23,10 @@ import pytest
 def test_table_coverage_refuses_rows_that_do_not_carry_retrieved_tables() -> None:
     """The EX ceiling must not read 0.000 because the producer named the field differently.
 
-    ``routing_recall`` published ``licensed_schemas`` and not ``retrieved_tables``, and
+    ``routing_recall`` published ``retrieved_schemas`` and not ``retrieved_tables``, and
     ``table_coverage`` reads exactly ``retrieved_tables`` — so the free harness fed to the function
-    this module documents as *"the EX ceiling"* reported ``all_gold_tables_licensed: 0.0`` for
-    two configs whose schema recall was 0.851 and 0.877, with ``reached_gold`` in the very same  [retired]
+    this module documents as *"the EX ceiling"* reported ``all_gold_tables_retrieved: 0.0`` for
+    two configs whose schema recall was 0.851 and 0.877, with ``reached_gold`` in the very same [retired]
     rows proving the tables had been retrieved_tables. A zero is a publishable number; a ``KeyError``
     is not, and that asymmetry is the whole point.
 
@@ -37,15 +37,15 @@ def test_table_coverage_refuses_rows_that_do_not_carry_retrieved_tables() -> Non
 
     gold = {"q1": "SELECT * FROM restaurant.generalinfo"}
 
-    with pytest.raises(KeyError, match="licensed"):
+    with pytest.raises(KeyError, match="retrieved_tables"):
         table_coverage([{"question_id": "q1", "retrieved_tables_schemas": ["restaurant"]}], gold)
 
-    empty = table_coverage([{"question_id": "q1", "licensed": []}], gold)
+    empty = table_coverage([{"question_id": "q1", "retrieved_tables": []}], gold)
     assert empty["all_gold_tables_retrieved_tables"] == 0.0, "an empty retrieved-table list is a real zero"
     assert empty["n"] == 1
 
     covered = table_coverage(
-        [{"question_id": "q1", "licensed": ["restaurant.generalinfo"]}], gold
+        [{"question_id": "q1", "retrieved_tables": ["restaurant.generalinfo"]}], gold
     )
     assert covered["all_gold_tables_retrieved_tables"] == 1.0
 
@@ -61,8 +61,8 @@ def test_routing_recall_rows_carry_what_table_coverage_reads() -> None:
     from governed_bi.eval import datalake
 
     source = inspect.getsource(datalake.routing_recall)
-    assert '"licensed": retrieved_tables' in source, (
-        "routing_recall must publish the table ids under `licensed`; table_coverage reads "
+    assert '"retrieved_tables": retrieved_tables' in source, (
+        "routing_recall must publish the table ids under `retrieved_tables`; table_coverage reads "
         "that key and nothing else"
     )
 
@@ -83,8 +83,8 @@ def test_a_gold_statement_that_reads_no_table_is_not_a_coverage_miss() -> None:
 
     folded = 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")'
     rows = [
-        {"question_id": "folded", "licensed": ["restaurant.generalinfo"]},
-        {"question_id": "real", "licensed": ["restaurant.generalinfo"]},
+        {"question_id": "folded", "retrieved_tables": ["restaurant.generalinfo"]},
+        {"question_id": "real", "retrieved_tables": ["restaurant.generalinfo"]},
     ]
     out = table_coverage(
         rows, {"folded": folded, "real": "SELECT * FROM restaurant.generalinfo"}
@@ -209,7 +209,7 @@ def _funnel_rows():
             "question_id": "1",
             "db_id": "sales",
             "retrieved_tables_schemas": ["ops"],
-            "licensed": ["ops.things"],
+            "retrieved_tables": ["ops.things"],
             "outcome": "answered",
             "correct": False,
         },
@@ -218,7 +218,7 @@ def _funnel_rows():
             "question_id": "2",
             "db_id": "sales",
             "retrieved_tables_schemas": ["sales"],
-            "licensed": ["sales.other"],
+            "retrieved_tables": ["sales.other"],
             "outcome": "answered",
             "correct": False,
         },
@@ -227,7 +227,7 @@ def _funnel_rows():
             "question_id": "3",
             "db_id": "sales",
             "retrieved_tables_schemas": ["sales"],
-            "licensed": ["sales.customers"],
+            "retrieved_tables": ["sales.customers"],
             "outcome": "answered",
             "correct": False,
         },
@@ -236,7 +236,7 @@ def _funnel_rows():
             "question_id": "4",
             "db_id": "sales",
             "retrieved_tables_schemas": ["sales"],
-            "licensed": ["sales.customers"],
+            "retrieved_tables": ["sales.customers"],
             "outcome": "answered",
             "correct": True,
         },
@@ -288,7 +288,7 @@ def test_an_empty_stage_is_unmeasured_and_not_a_rate_of_zero() -> None:
             "question_id": "1",
             "db_id": "sales",
             "retrieved_tables_schemas": ["ops"],
-            "licensed": [],
+            "retrieved_tables": [],
             "outcome": "answered",
             "correct": False,
         }
@@ -305,7 +305,7 @@ def test_a_row_with_no_gold_sql_is_counted_rather_than_dropped() -> None:
     shrink, which is the same defect as counting the row wrongly but quieter."""
     from governed_bi.eval.datalake import retrieval_funnel
 
-    rows = _funnel_rows() + [{"question_id": "99", "db_id": "sales", "licensed": []}]
+    rows = _funnel_rows() + [{"question_id": "99", "db_id": "sales", "retrieved_tables": []}]
     out = retrieval_funnel(rows, {str(i): "SELECT 1 FROM sales.customers" for i in range(1, 5)})
     assert out["counts"]["no_gold_sql"] == 1
     assert out["counts"]["rows"] == 5
@@ -320,7 +320,7 @@ def test_table_less_gold_leaves_the_funnel_denominator() -> None:
     """
     from governed_bi.eval.datalake import retrieval_funnel
 
-    rows = [{"question_id": "1", "db_id": "sales", "licensed": [], "outcome": "answered"}]
+    rows = [{"question_id": "1", "db_id": "sales", "retrieved_tables": [], "outcome": "answered"}]
     out = retrieval_funnel(rows, {"1": 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")'})
     assert out["counts"]["gold_reads_no_table"] == 1
     assert out["counts"]["scorable"] == 0
@@ -340,14 +340,14 @@ def test_the_table_less_population_is_published_with_its_own_ex() -> None:
 
     folded = 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")'
     rows = [
-        {"question_id": "a", "db_id": "sales", "licensed": [], "outcome": "answered",
+        {"question_id": "a", "db_id": "sales", "retrieved_tables": [], "outcome": "answered",
          "correct": True},
-        {"question_id": "b", "db_id": "sales", "licensed": [], "outcome": "answered",
+        {"question_id": "b", "db_id": "sales", "retrieved_tables": [], "outcome": "answered",
          "correct": False},
-        {"question_id": "c", "db_id": "sales", "licensed": [], "outcome": "answered",
+        {"question_id": "c", "db_id": "sales", "retrieved_tables": [], "outcome": "answered",
          "correct": False},
         # Answered but ungradeable: it must not count as a wrong answer here either.
-        {"question_id": "d", "db_id": "sales", "licensed": [], "outcome": "answered",
+        {"question_id": "d", "db_id": "sales", "retrieved_tables": [], "outcome": "answered",
          "correct": None},
     ]
     out = retrieval_funnel(rows, dict.fromkeys("abcd", folded))
@@ -359,7 +359,7 @@ def test_the_table_less_population_is_published_with_its_own_ex() -> None:
     }
     # And with nothing in the set, an absence rather than an EX of zero.
     empty = retrieval_funnel(
-        [{"question_id": "1", "db_id": "sales", "licensed": ["sales.customers"],
+        [{"question_id": "1", "db_id": "sales", "retrieved_tables": ["sales.customers"],
           "outcome": "answered", "correct": True}],
         {"1": "SELECT 1 FROM sales.customers"},
     )
@@ -370,7 +370,7 @@ def test_the_table_less_population_is_published_with_its_own_ex() -> None:
 def test_an_unparseable_gold_is_not_a_gold_that_reads_no_table() -> None:
     """One counter carried both, so the funnel disagreed with ``table_coverage``.
 
-    "the metric cannot read this statement" and "this statement genuinely reads nothing" want
+    "the metric cannot read this statement" and "this statement reads nothing" want
     different follow-ups — a parser fix versus a dataset fact — and pooling them makes the
     tableless count the funnel publishes unusable as the size of that population.
     """
@@ -378,8 +378,8 @@ def test_an_unparseable_gold_is_not_a_gold_that_reads_no_table() -> None:
 
     out = retrieval_funnel(
         [
-            {"question_id": "junk", "db_id": "sales", "licensed": [], "outcome": "answered"},
-            {"question_id": "folded", "db_id": "sales", "licensed": [], "outcome": "answered"},
+            {"question_id": "junk", "db_id": "sales", "retrieved_tables": [], "outcome": "answered"},
+            {"question_id": "folded", "db_id": "sales", "retrieved_tables": [], "outcome": "answered"},
         ],
         {
             "junk": "NOT SQL AT ALL ((( ;",

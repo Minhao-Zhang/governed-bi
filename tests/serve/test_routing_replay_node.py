@@ -77,7 +77,7 @@ def test_a_pin_naming_an_unknown_schema_is_ignored_rather_than_obeyed(
 
     Obeying such a pin licenses nothing, and the run reads as a routing collapse caused by the
     replay rather than by anything under test — a confound introduced by the tool whose whole
-    purpose is to remove one. Falling back to live routing is the honest failure: the row still
+    purpose is to remove one. Falling back to live routing is the failure: the row still
     carries ``routing_pinned`` so the fraction stays recoverable.
     """
     state, config = _case(two_schema_index, two_schema_assets)

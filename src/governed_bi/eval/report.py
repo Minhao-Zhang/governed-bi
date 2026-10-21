@@ -15,7 +15,7 @@ module already read that table. Measured on 2026-08-12, all three were false:
 Three named consumers, none of them real: the declared-machinery-with-no-reader shape the
 argument itself was invoking. The histogram is built here rather than the sentence weakened, and
 :func:`refusal_histogram`'s ``unattributed`` bucket is the part that makes the vocabulary
-load-bearing instead of decorative.
+ instead of decorative.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from governed_bi.registry.quantity import Measured
 from governed_bi.registry.record import CHECK_CONDITIONS as _CHECK_TEXT
 from governed_bi.registry.settings import setting_names
 from governed_bi.registry.stages import REFUSED_BY_TO_STAGE, Outcome
+from governed_bi.registry.stored_names import artifact_get, current_reason
 
 __all__ = [
     "CONTEXT_HASH_THRESHOLD",
@@ -150,6 +151,7 @@ def refusal_histogram(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if not reason:
             no_reason += 1
             continue
+        reason = current_reason(reason)
         by_reason[reason] = by_reason.get(reason, 0) + 1
         stage = REFUSED_BY_TO_STAGE.get(reason)
         if stage is None:
@@ -167,7 +169,7 @@ def refusal_histogram(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def refusal_report_lines(hist: Mapping[str, Any]) -> list[str]:
-    """:func:`refusal_histogram` as printable lines, or **nothing** when nothing refused.
+    """ :func:`refusal_histogram` as printable lines, or **nothing** when nothing refused.
 
     Beside the histogram rather than in the driver, for ``adversarial_run.py``'s reason: a
     driver and a test both need the rendering while only the reader needs the counts, and the
@@ -212,20 +214,20 @@ def context_hashes_distinct(
 ) -> CheckResult:
     """Both configs recorded a ``context_hash`` on the questions they share.
 
-    **An existence check, not a treatment test — that is audit D9's resolution.** It used to
+    **An existence check, not a setting under test test — that is audit D9's resolution.** It used to
     require ``threshold`` (0.95) of shared questions to have *differing* hashes, on the
-    reasoning that a changed treatment changes the context. The inference does not hold in
+    reasoning that a changed setting under test changes the context. The inference does not hold in
     that direction: retrieval is nondeterministic, so the hashes differ whether or not the
-    treatment did. Measured on ``run1``/``run2``, which differ only by a random seed, it passed
+    setting under test did. Measured on ``run1``/``run2``, which differ only by a random seed, it passed
     at **0.9993** (1,350 of 1,351 hashes differ) — and on the 20 other pairs of the seven
     ``proxy_*`` configs in ``runs/eval/`` it never falls below **0.9882**, hitting exactly 1.0000
     on 11 of them (corpus ``30872d3``, recomputed 2026-08-12). It believed it asked "did the
-    treatment change" and measured "is there retrieval noise", to which the answer is always
+    setting under test change" and measured "is there retrieval noise", to which the answer is always
     yes.
 
-    What replaces it is :func:`settings_comparable`, which reads the declared treatment out of the
+    What replaces it is :func:`settings_comparable`, which reads the declared setting under test out of the
     settings rather than inferring it from a hash. This function keeps the narrower job it can
-    actually do: a turn with no ``context_hash`` assembled no context, and a pair of configs where
+     do: a turn with no ``context_hash`` assembled no context, and a pair of configs where
     that is true of some shared questions cannot be compared on those questions at all.
 
     ``threshold`` is retained in the signature and deliberately unused by the result, because
@@ -298,7 +300,7 @@ def _config_setting_values(config: Population, keys: frozenset[str]) -> dict[str
     """One value per key for this config, or :data:`_ABSENT`.
 
     A key carrying two values across a config's rows is *not* one configuration, but that is
-    ``_knobs_resolved_check``'s finding and it runs on both configs already. Here the whole set is
+    ``_settings_resolved_check``'s finding and it runs on both configs already. Here the whole set is
     kept so the comparison sees the disagreement rather than picking a row and calling it the
     config — reporting ``3`` for a config that also ran ``5`` would be the same silent-equality
     defect wearing a different hat.
@@ -307,13 +309,13 @@ def _config_setting_values(config: Population, keys: frozenset[str]) -> dict[str
     for key in keys:
         seen: list[Any] = []
         for row in config.rows:
-            settings = row.get("knobs_resolved")
+            settings = artifact_get(row, "settings_resolved")
             if not isinstance(settings, Mapping) or key not in settings:
                 seen.append(_ABSENT)
                 continue
             value = settings[key]
             seen.append(value)
-        # `repr` for the same reason `_knobs_resolved_check` uses it: 3 and "3" are two
+        # `repr` for the same reason `_settings_resolved_check` uses it: 3 and "3" are two
         # configurations, and a comparison that coerced them would report drift as agreement.
         distinct = {repr(v) for v in seen}
         if len(distinct) == 1 and seen and seen[0] is _ABSENT:
@@ -327,26 +329,26 @@ def settings_comparable(
     a: Population,
     b: Population,
     *,
-    treatment: frozenset[str] = frozenset(),
+    under_test: frozenset[str] = frozenset(),
 ) -> CheckResult:
-    """The configs differ in the declared treatment, and in nothing else that matters.
+    """The configs differ in the declared setting under test, and in nothing else that matters.
 
     Both halves are necessary and the second one is audit D9's fix.
 
-    **Confounders.** Every comparability setting *except* the declared treatment must be recorded
+    **Confounders.** Every setting that affects results *except* the declared setting under test must be recorded
     on both configs and equal. Until 2026-08-11 nothing checked this: ``setting_names()``
     and ``setting_names()` had no production caller, so a pair differing in ``chat_model``
     was published as a delta because each config was internally homogeneous.
 
-    **The treatment itself must have moved.** A comparison whose declared treatment is
+    **The setting under test itself must have moved.** A comparison whose declared setting under test is
     identical on both configs is a replicate wearing a config's name. This is what D9 asked for:
-    treatment difference asserted from *declared fields* rather than inferred from
+    setting under test difference asserted from *declared fields* rather than inferred from
     ``context_hash`` noise, which measured retrieval nondeterminism and passed at 0.9993 on a
     seed-only null pair.
 
-    ``treatment`` names comparability settings — a treatment that is not one is a category error
-    and refuses rather than being quietly ignored. An **empty** ``treatment`` is not "nothing
-    changed", it is "nobody said what changed", and a pair that cannot name its treatment
+    ``setting under test`` names settings that affect results — a setting under test that is not one is a category error
+    and refuses rather than being ignored. An **empty** ``setting under test`` is not "nothing
+    changed", it is "nobody said what changed", and a pair that cannot name its setting under test
     cannot be shown to be a comparison rather than a replicate.
 
     Absent and ``None`` stay apart throughout: ``_resolved_settings`` flattens ``UNSET`` to
@@ -356,10 +358,10 @@ def settings_comparable(
     """
     keys = setting_names()
 
-    undeclared = sorted(treatment - keys)
+    undeclared = sorted(under_test - keys)
     if undeclared:
         return _check(
-            "knobs_resolved",
+            "settings_resolved",
             Result.cannot_evaluate,
             Measured.unmeasured("treatment names a setting that is not declared"),
             a,
@@ -373,14 +375,14 @@ def settings_comparable(
     if missing:
         shown = ", ".join(missing[:5]) + (f" (+{len(missing) - 5} more)" if len(missing) > 5 else "")
         return _check(
-            "knobs_resolved",
+            "settings_resolved",
             Result.cannot_evaluate,
             Measured.unmeasured(f"{len(missing)} comparability settings absent from a config"),
             a,
             f"not recorded on both configs, so equality cannot be claimed: {shown}",
         )
 
-    confounders = keys - treatment
+    confounders = keys - under_test
     differing = sorted(k for k in confounders if values_a[k] != values_b[k])
     if differing:
         shown = "; ".join(
@@ -388,7 +390,7 @@ def settings_comparable(
         )
         extra = f" (+{len(differing) - 4} more)" if len(differing) > 4 else ""
         return _check(
-            "knobs_resolved",
+            "settings_resolved",
             Result.failed,
             Measured.rate(
                 len(confounders) - len(differing),
@@ -400,9 +402,9 @@ def settings_comparable(
             f"{shown}{extra}",
         )
 
-    if not treatment:
+    if not under_test:
         return _check(
-            "knobs_resolved",
+            "settings_resolved",
             Result.cannot_evaluate,
             Measured.unmeasured("no treatment declared"),
             a,
@@ -410,14 +412,14 @@ def settings_comparable(
             "than a replicate — every comparability setting is identical across the two configs",
         )
 
-    unmoved = sorted(k for k in treatment if values_a[k] == values_b[k])
+    unmoved = sorted(k for k in under_test if values_a[k] == values_b[k])
     if unmoved:
         return _check(
-            "knobs_resolved",
+            "settings_resolved",
             Result.failed,
             Measured.rate(
-                len(treatment) - len(unmoved),
-                len(treatment),
+                len(under_test) - len(unmoved),
+                len(under_test),
                 what="declared treatment settings that actually differ",
             ),
             a,
@@ -426,7 +428,7 @@ def settings_comparable(
         )
 
     return _check(
-        "knobs_resolved",
+        "settings_resolved",
         Result.passed,
         Measured.rate(
             len(confounders),
@@ -434,7 +436,7 @@ def settings_comparable(
             what="non-treatment comparability settings agreeing across configs",
         ),
         a,
-        f"treatment {sorted(treatment)} differs; all {len(confounders)} other comparability "
+        f"treatment {sorted(under_test)} differs; all {len(confounders)} other comparability "
         "settings agree",
     )
 
@@ -444,27 +446,27 @@ def comparison_quotable(
     b: Population,
     *,
     threshold: float = CONTEXT_HASH_THRESHOLD,
-    treatment: frozenset[str] = frozenset(),
+    under_test: frozenset[str] = frozenset(),
 ) -> tuple[bool, tuple[CheckResult, ...], tuple[CheckResult, ...], CheckResult, CheckResult]:
     """Whether a config-to-config delta may be quoted.
 
     Two cross-config checks with different jobs. :func:`context_hashes_distinct` is now an
     **existence** check — both configs assembled a context on the questions they share — because
     audit D9 established that its old 95%-distinctness threshold measured retrieval
-    nondeterminism and reported it as a treatment difference, passing at 0.9993 on a pair that
-    differs only by a random seed. Judging the treatment is :func:`settings_comparable`'s job, from
-    declared settings, and ``treatment`` is how the caller names what is supposed to have moved.
+    nondeterminism and reported it as a setting under test difference, passing at 0.9993 on a pair that
+    differs only by a random seed. Judging the setting under test is :func:`settings_comparable`'s job, from
+    declared settings, and ``setting under test`` is how the caller names what is supposed to have moved.
 
-    Single-config ``context_hash`` checks are replaced by the cross-config one. The ``knobs_resolved``
+    Single-config ``context_hash`` checks are replaced by the cross-config one. The ``settings_resolved``
     check is **not** replaced: each config's own within-config homogeneity is a different question
     from the two configs agreeing with each other, and both must hold.
 
-    Computed **once** and substituted into both configs' rows: each call stamps the population
+    Computed **once** and substituted into both configs' rows: each call finishes the population
     of whichever config it was given first, so recomputing per config makes config B's row report config
     A's ``describe()`` on the provenance line.
     """
     ctx = context_hashes_distinct(a, b, threshold=threshold)
-    settings = settings_comparable(a, b, treatment=treatment)
+    settings = settings_comparable(a, b, under_test=under_test)
     results_a = _with_cross_config_context(evaluate_config(a), ctx)
     results_b = _with_cross_config_context(evaluate_config(b), ctx)
     ok = (
@@ -479,14 +481,14 @@ def summarise(
     configs: Mapping[str, Sequence[Mapping[str, Any]]],
     *,
     pair: tuple[str, str] | None = None,
-    treatment: frozenset[str] | None = None,
+    under_test: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Build populations, headlines, optional paired McNemar + quotability.
 
-    ``treatment`` names the comparability settings the pair's second config was supposed to move.
+    ``setting under test`` names the settings that affect results the pair's second config was supposed to move.
     Left ``None`` it is read from ``configs.toml`` via the config's own name, which is the point of
     that file: the claim about what a config changed is committed and diffable rather than living
-    in whoever ran the command. An config with no profile contributes no treatment, and
+    in whoever ran the command. An config with no profile contributes no setting under test, and
     ``settings_comparable`` then reports ``cannot_evaluate`` rather than guessing — see D9.
     """
     pops = {name: config_population(rows, label=name) for name, rows in configs.items()}
@@ -512,8 +514,8 @@ def summarise(
         shared = a.units & b.units
         a_s = a.restrict(lambda r: str(r["question_id"]) in shared, "shared questions")
         b_s = b.restrict(lambda r: str(r["question_id"]) in shared, "shared questions")
-        declared = treatment if treatment is not None else _declared_treatment(right)
-        ok, ga, gb, ctx, settings = comparison_quotable(a_s, b_s, treatment=declared)
+        declared = under_test if under_test is not None else _declared_under_test(right)
+        ok, ga, gb, ctx, settings = comparison_quotable(a_s, b_s, under_test=declared)
         summary["comparison"] = {
             "pair": pair,
             "quotable": ok,
@@ -536,24 +538,24 @@ def summarise(
     return summary
 
 
-def _declared_treatment(config_name: str) -> frozenset[str]:
-    """The config's declared treatment from ``configs.toml``, or empty if it has no profile.
+def _declared_under_test(config_name: str) -> frozenset[str]:
+    """The config's declared setting under test from ``configs.toml``, or empty if it has no profile.
 
     Empty is not a fallback that lets the comparison through — ``settings_comparable`` treats an
-    undeclared treatment as ``cannot_evaluate``. An config nobody wrote a profile for is exactly
+    undeclared setting under test as ``cannot_evaluate``. An config nobody wrote a profile for is exactly
     that case, and ``KeyError`` is how ``config_profile`` says so.
 
     **``ValueError`` and ``OSError`` are not caught, and that is a correction.** This used to
-    swallow all three, so one typo in ``configs.toml`` — a treatment naming a setting that is not a
-    comparability setting, which the loader refuses the whole file for — silently un-declared
+    swallow all three, so one typo in ``configs.toml`` — a setting under test naming a setting that is not a
+    setting that affects results, which the loader refuses the whole file for — silently un-declared
     *every* config and turned each comparison into ``cannot_evaluate``. Nothing distinguishes that
-    from "these two configs genuinely cannot be compared", so a broken file reads as a data
+    from "these two configs cannot be compared", so a broken file reads as a data
     problem. A malformed or missing register is a defect in the tree and must say so.
     """
     from governed_bi.registry.config_profiles import config_profile
 
     try:
-        return config_profile(config_name).treatment
+        return config_profile(config_name).under_test
     except KeyError:
         return frozenset()
 
@@ -577,7 +579,7 @@ def _rendered_mcnemar(result: Any, *, quotable: bool) -> str:
     The concrete loss this prevents: ``summary["comparison"]["quotable"]`` is one key away
     and a reader copying the delta out of a report does not bring it. Every real pair in
     ``runs/eval/`` is non-quotable today — ``settings_comparable`` returns ``cannot_evaluate``
-    because ~50 of the 51 comparability settings are absent from those rows — so every line this
+    because ~50 of the 51 settings that affect results are absent from those rows — so every line this
     renders is currently a diagnostic that looked exactly like a result.
     """
     line = result.render()

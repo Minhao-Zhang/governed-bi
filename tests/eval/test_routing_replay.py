@@ -8,7 +8,7 @@ would leave the flag *accepted and ineffective* — the failure shape this repos
 paying for, because a config labelled pinned that was not is worse than no flag at all.
 
 This half is the artifact contract: reading a prior run and measuring the residual. That the
-pin actually reaches ``route_node`` is asserted in
+pin reaches ``route_node`` is asserted in
 ``tests/serve/test_routing_replay_node.py``, which lives there because the two-schema fixture
 corpus does — pytest shares a ``conftest`` down a package, not across siblings.
 """
@@ -169,7 +169,7 @@ def test_a_turn_that_ended_before_routing_is_not_recorded_as_a_replay() -> None:
 def test_a_partially_honoured_pin_is_not_the_pin() -> None:
     """``route_node`` drops pinned schemas the corpus does not know and keeps the rest, so the
     turn runs on a shortlist that is neither the pin nor a live route. A boolean saying "pinned"
-    there would report two treatments as one."""
+    there would report two settings under test as one."""
     from governed_bi.eval.harness import project_turn
 
     row = project_turn(
@@ -187,9 +187,9 @@ def test_drift_is_measured_over_the_rows_that_moved() -> None:
     """Averaging Jaccard over the identical rows too reports ~1.0 and hides the movers."""
     baseline = {"a": ["s.t1", "s.t2"], "b": ["s.t1"], "c": ["s.t9"]}
     rows = [
-        {"question_id": "a", "licensed": ["s.t1", "s.t2"]},
-        {"question_id": "b", "licensed": ["s.t1", "s.t3"]},
-        {"question_id": "zz", "licensed": ["s.t1"]},
+        {"question_id": "a", "retrieved_tables": ["s.t1", "s.t2"]},
+        {"question_id": "b", "retrieved_tables": ["s.t1", "s.t3"]},
+        {"question_id": "zz", "retrieved_tables": ["s.t1"]},
     ]
     drift = retrieved_tables_drift(rows, baseline)
 
@@ -216,9 +216,9 @@ def test_the_drift_baseline_holds_only_the_rows_the_pin_covered(tmp_path: Path) 
     path = _artifact(
         tmp_path,
         [
-            {"question_id": "a", "schemas": ["s"], "licensed": ["s.t1"]},
-            {"question_id": "declined", "schemas": [], "licensed": []},
-            {"question_id": "b", "schemas": ["s"], "licensed": []},
+            {"question_id": "a", "schemas": ["s"], "retrieved_tables": ["s.t1"]},
+            {"question_id": "declined", "schemas": [], "retrieved_tables": []},
+            {"question_id": "b", "schemas": ["s"], "retrieved_tables": []},
         ],
     )
     baseline = retrieved_tables_baseline(path)
@@ -232,11 +232,11 @@ def test_the_drift_baseline_holds_only_the_rows_the_pin_covered(tmp_path: Path) 
 def test_an_artifact_replayed_against_itself_shows_no_drift(tmp_path: Path) -> None:
     """The zero point. Without it a drift statistic can be wrong in a way nothing reveals."""
     rows = [
-        {"question_id": "a", "schemas": ["s"], "licensed": ["s.t1", "s.t2"]},
-        {"question_id": "b", "schemas": ["s"], "licensed": []},
+        {"question_id": "a", "schemas": ["s"], "retrieved_tables": ["s.t1", "s.t2"]},
+        {"question_id": "b", "schemas": ["s"], "retrieved_tables": []},
     ]
     path = _artifact(tmp_path, rows)
-    baseline = {r["question_id"]: r["licensed"] for r in rows}
+    baseline = {r["question_id"]: r["retrieved_tables"] for r in rows}
 
     assert routing_from_artifact(path) == {"a": ["s"], "b": ["s"]}
     drift = retrieved_tables_drift(rows, baseline)
@@ -248,7 +248,7 @@ def test_both_sides_of_a_drift_contrast_come_out_of_one_function(tmp_path: Path)
 
     The published sentence differenced ``mean_jaccard_when_moved`` (0.7049, 0.7029) against
     0.579 -- which is the mean over *every* compared row including the identical ones, a
-    quantity ``licensed_drift`` refuses to compute because rows that scored 1.0 by definition
+    quantity ``retrieved_drift`` refuses to compute because rows that scored 1.0 by definition
     drag it upward. The like-for-like value for the unpinned pair is 0.5719.
 
     Hand-computed here: two compared rows, one identical and one at Jaccard 1/2. The movers-only
@@ -256,13 +256,13 @@ def test_both_sides_of_a_drift_contrast_come_out_of_one_function(tmp_path: Path)
     one door both sides go through, so the two cannot be produced by different code again.
     """
     baseline_rows = [
-        {"question_id": "same", "schemas": ["s"], "licensed": ["s.t1"]},
-        {"question_id": "moved", "schemas": ["s"], "licensed": ["s.t1"]},
+        {"question_id": "same", "schemas": ["s"], "retrieved_tables": ["s.t1"]},
+        {"question_id": "moved", "schemas": ["s"], "retrieved_tables": ["s.t1"]},
     ]
     path = _artifact(tmp_path, baseline_rows)
     later = [
-        {"question_id": "same", "licensed": ["s.t1"]},
-        {"question_id": "moved", "licensed": ["s.t1", "s.t2"]},
+        {"question_id": "same", "retrieved_tables": ["s.t1"]},
+        {"question_id": "moved", "retrieved_tables": ["s.t1", "s.t2"]},
     ]
 
     drift = drift_against(path, later)
@@ -275,7 +275,7 @@ def test_both_sides_of_a_drift_contrast_come_out_of_one_function(tmp_path: Path)
     assert "mean_jaccard" not in {k for k in drift if k.endswith("_all")}
 
 
-# ── how much of a config actually ran on the pin ────────────────────────────────
+# ── how much of a config ran on the pin ────────────────────────────────
 
 
 def test_the_realised_pin_count_is_readable_on_an_old_semantics_artifact() -> None:

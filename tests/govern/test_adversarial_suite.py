@@ -132,7 +132,7 @@ def test_the_false_refusal_rate_is_reported(report, capsys) -> None:
     """False-refusal rate, denominator: every benign case.
 
     A positive function allowlist and a fail-closed binding rule trade false refusals for
-    closed holes, and the trade is only honest if the other side is measured (ADR 0006 §2).
+    closed holes, and the trade is only if the other side is measured (ADR 0006 §2).
     So the rate is printed on every run, and an undeclared false refusal fails: a benign case
     is a declaration that this statement must pass, and accepting one that does not should be
     a diff — the ``known_false_refusal`` field, empty today — rather than a drifting number.
@@ -216,7 +216,7 @@ version = "test"
 {BYPASS_ROWS}
 [world]
 default_schema = "s"
-licensed = ["s.t"]
+retrieved_tables = ["s.t"]
 [world.tables]
 "s.t" = ["a"]
 "s.u" = ["b"]
@@ -342,10 +342,16 @@ def test_the_probe_suite_loads(tmp_path: Path) -> None:
             'id = "benign_one"', 'id = "attack_one"', "duplicate case id", id="duplicate_id"
         ),
         pytest.param(
-            'licensed = ["s.t"]', 'licensed = ["s.t", "s.u"]', "lists every table", id="all_retrieved_tables"
+            'retrieved_tables = ["s.t"]',
+            'retrieved_tables = ["s.t", "s.u"]',
+            "lists every table",
+            id="all_retrieved_tables",
         ),
         pytest.param(
-            'licensed = ["s.t"]', 'licensed = ["s.absent"]', "no [world.tables] entry", id="phantom_licence"
+            'retrieved_tables = ["s.t"]',
+            'retrieved_tables = ["s.absent"]',
+            "no [world.tables] entry",
+            id="phantom_licence",
         ),
     ],
 )

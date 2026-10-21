@@ -1,4 +1,4 @@
-"""Facet channel configuration: targets, channels, and extraction.
+"""Channel channel configuration: targets, channels, and extraction.
 
 Declares which scoring channels and asset types each channel uses, and whether
 extraction runs. :class:`ChannelState` is three-valued so absence can be
@@ -45,7 +45,7 @@ class Channel(str, Enum):
     extraction = "extraction"
 
 
-#: The members that actually score documents, so ``extraction`` cannot be fused.
+#: The members that score documents, so ``extraction`` cannot be fused.
 #:
 #: ``retrieve.fuse.fuse`` renormalises over the channels a caller says were consulted, and
 #: the nearest source of that is the ``ran`` set — to which ``_rewritten_query`` also adds
@@ -95,7 +95,7 @@ DECLARED_CHANNELS: Mapping[Stage, frozenset[Channel]] = {
     Stage.channel_example: frozenset({Channel.semantic}),
 }
 
-#: Facets whose queries come from model extraction. ``channel_schema`` is absent because
+#: Channels whose queries come from model extraction. ``channel_schema`` is absent because
 #: rewriting buys nothing measurable there (see :mod:`.citations`); its prompt stays in
 #: ``PROMPT_REGISTRY`` as an unsent baseline.
 CHANNEL_EXTRACTS: frozenset[Stage] = frozenset(

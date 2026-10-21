@@ -21,7 +21,7 @@ BuildConfigurable = Callable[[], dict[str, Any]]
 
 @dataclass(frozen=True)
 class ConfigSpec:
-    """One treatment config: name + how to build LangGraph ``configurable``."""
+    """One setting under test config: name + how to build LangGraph ``configurable``."""
 
     name: str
     build_configurable: BuildConfigurable
@@ -54,7 +54,7 @@ def live_config(session: Any, *, name: str = "live", **extra: Any) -> ConfigSpec
 
     Built from a :class:`~governed_bi.serve.session.Session`, not loose keyword arguments:
     the session is what mints ``corpus_content_hash``, ``prompt_set_hash`` and
-    ``knobs_resolved``, the fields every quotability check reads. A fabricated hash (the
+    ``settings_resolved``, the fields every quotability check reads. A fabricated hash (the
     harness once used ``f"corpus-{config}"``) makes two runs over *different* corpora compare
     equal — a forged comparison, not a wrong one.
 

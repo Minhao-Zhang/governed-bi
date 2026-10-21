@@ -75,11 +75,11 @@ class OutcomeInputs:
     here and must not be.
 
     **Every field has a default**, so a test states the two or three facts its case is about
-    rather than assembling a turn — the property this seam exists for. Every default is the value
+    rather than assembling a turn — the property this boundary exists for. Every default is the value
     an absent channel projects to, so ``OutcomeInputs()`` is the unmarked turn: no path, no
     failure, no statement, no ledger. That is the case
     :func:`~governed_bi.registry.stages.classify_outcome` reads as ``crashed``, and it is the
-    honest reading of a turn nothing observed ending.
+     reading of a turn nothing observed ending.
 
     Not a ``TypedDict`` beside ``ServeState``: this is a *read* view, so the projection has to
     travel with it or there are two places that know how to pull ``failure``'s stage out of a
@@ -122,8 +122,8 @@ class OutcomeInputs:
         """**The only reader of the state dict in the decision.**
 
         One projection, so there is one answer to "where does ``terminal`` come from". Two
-        functions that both knew is the defect this seam is against: a second reader of a channel
-        is where ``measure/checks.py`` came to witness "reached finish" on
+        functions that both knew is the defect this boundary is against: a second reader of a channel
+        is where ``measure/checks.py`` came to evidence "reached finish" on
         ``Outcome.clarification`` and silently drop rows from a denominator.
 
         Calls :func:`normalised` on its input, which is idempotent, so the view is right whether
@@ -162,9 +162,9 @@ class TurnOutcome:
     stage row; it decides nothing, so no branch of the derivation is reachable only by building
     a turn.
 
-    ``rail_status`` is carried rather than derived at the seam, for the reason
+    ``rail_status`` is carried rather than derived at the boundary, for the reason
     :class:`~governed_bi.serve.abstention.AbstentionPatch` carries its own: a node's effect on the
-    timeline is a claim of its own, and the adapter computing it would mean the seam, not the
+    timeline is a claim of its own, and the adapter computing it would mean the boundary, not the
     decision, deciding what the timeline says.
     """
 

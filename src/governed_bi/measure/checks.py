@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Callable, Mapping
 
+from governed_bi.registry.stored_names import OLD_KEY, alias_row, artifact_get
+
 from ..registry.quantity import Measured
 from ..registry.record import CHECK_CONDITIONS, RECORD_REGISTER, Absence
 from ..registry.settings import setting_names
@@ -111,25 +113,39 @@ def _outcome_check(config: Population) -> CheckResult:
     return _zero_count_check("outcome", "crashed")(config)
 
 
+def _with_stored_names(config: Population) -> Population:
+    """Read old eval files under their current field names. A new row is left as it is."""
+    if not any(any(old in row for old in OLD_KEY.values()) for row in config.rows):
+        return config
+
+    return Population(
+        config.label,
+        config.unit_key,
+        tuple(alias_row(row) for row in config.rows),
+        config.filtered_by,
+    )
+
+
 def _channel_channels_check(config: Population) -> CheckResult:
     """No channel state differs from its declared expectation — on turns that ran.
 
-    Not a ``_zero_count_check``: ``facet_channels`` is stage-conditional (a guard-blocked
-    turn never runs the fan-out), so under a naive rate an empty ``facet_channels`` reads
+    Not a ``_zero_count_check``: ``channel_scoring`` is stage-conditional (a guard-blocked
+    turn never runs the fan-out), so under a naive rate an empty ``channel_scoring`` reads
     as "no channel differed" on a turn where no channel ran. The denominator is therefore
     turns where the fan-out ran, published; zero such turns is
     :attr:`Result.cannot_evaluate`, never a pass.
     """
-    ran = config.restrict(lambda r: r.get("facet_channels") not in (None, [], {}), "fan-out ran")
+    config = _with_stored_names(config)
+    ran = config.restrict(lambda r: r.get("channel_scoring") not in (None, [], {}), "fan-out ran")
     if ran.n == 0:
         return _result(
-            "facet_channels",
+            "channel_scoring",
             Result.cannot_evaluate,
             Measured.unmeasured(f"no turn in {config.describe()} ran the fan-out"),
             config,
             "a degradation rate of 0 over 0 turns is not a pass",
         )
-    result = _zero_count_check("facet_channels", "facet_degraded")(ran)
+    result = _zero_count_check("channel_scoring", "channel_degraded")(ran)
     if result.result is not Result.failed:
         return result
     return replace(result, detail=f"{result.detail}; {_drift(ran)}")
@@ -138,10 +154,10 @@ def _channel_channels_check(config: Population) -> CheckResult:
 def _drift(config: Population) -> str:
     """Which channel's which channel differed, for a check that has already failed.
 
-    Naming only — the result comes from the written ``facet_degraded`` counter. Judged
+    Naming only — the result comes from the written ``channel_degraded`` counter. Judged
     through :func:`~.degradation.channel_anomalies`, which is *not* the function
     ``serve.finish`` decides the counter with (that is
-    :func:`~.degradation.facets_degraded`). The two share
+    :func:`~.degradation.channels_degraded`). The two share
     :func:`~.degradation.channel_observations`, so they read the same observations, and they
     differ on purpose: ``extra_channel`` is included here and excluded there.
     ``extra_channel`` is included: it is drift, and it did not refuse this run.
@@ -151,7 +167,7 @@ def _drift(config: Population) -> str:
     why = ""
     for row in config.rows:
         try:
-            anomalies = channel_anomalies(row.get("facet_channels"))
+            anomalies = channel_anomalies(row.get("channel_scoring"))
         except ValueError as err:
             unjudgeable += 1
             why = why or str(err)
@@ -161,7 +177,7 @@ def _drift(config: Population) -> str:
     parts = [f"{key} on {count} turn(s)" for key, count in sorted(seen.items())]
     if unjudgeable:
         parts.append(
-            f"{unjudgeable} turn(s) whose facet_channels could not be judged against the "
+            f"{unjudgeable} turn(s) whose channel_scoring could not be judged against the "
             f"register, so their drift is not named here: {why}"
         )
     return "; ".join(parts) if parts else "no channel state differs from its declaration"
@@ -171,22 +187,22 @@ def _context_hash_check(config: Population) -> CheckResult:
     """The delivery check's single-config half: every turn carries a ``context_hash``. L-R2.
 
     On ``context_hash`` and not ``delivery_hash``, because the latter depends on which tool
-    calls the model chose, conflating "the treatment differs" with "the model behaved
+    calls the model chose, conflating "the setting under test differs" with "the model behaved
     differently".
 
-    **This check does not test that the treatment differed, and nothing does it by hash any
+    **This check does not test that the setting under test differed, and nothing does it by hash any
     more.** The cross-config half used to be a >= 95% distinctness threshold in
     ``eval/report.context_hashes_distinct``; audit D9 retired it, because retrieval is
-    nondeterministic and the hashes differ whether or not the treatment did — it passed at
+    nondeterministic and the hashes differ whether or not the setting under test did — it passed at
     0.9993 on a pair differing only by a random seed. That function is now an existence check
-    over the shared questions, and the declared treatment is judged from settings by
+    over the shared questions, and the declared setting under test is judged from settings by
     ``eval/report.settings_comparable``. What one config can answer is only this: a turn with no
     ``context_hash`` assembled no context, so no later comparison against it holds.
     """
     coverage = config.coverage("context_hash")
     # Three states, not two. **Never recorded**: the config is not instrumented, nothing to judge
     # (`cannot_evaluate`). **Recorded on some turns and not others**: the instrumentation exists
-    # and is dropping turns, so the treatment cannot be identified and no later comparison
+    # and is dropping turns, so the setting under test cannot be identified and no later comparison
     # against this config holds (`failed`). Collapsing the two either excuses broken
     # instrumentation or fails a config for not having any.
     if not coverage.is_measured or coverage.value == 0.0:
@@ -219,15 +235,15 @@ def _context_hash_check(config: Population) -> CheckResult:
     )
 
 
-#: The **other** treatment identity, used as the witness that ``finish`` ran on a row.
+#: The **other** setting under test identity, used as the evidence that ``finish`` ran on a row.
 #:
 #: Both hashes are declared ``Absence.never`` and owned by ``Stage.finish``, and ``Session``
 #: mints the pair together, so a row carrying neither was never written and a row carrying one
 #: but not the other is the partial-instrumentation failure the check exists to fail. Using the
 #: gated field itself as its own denominator test would be circular — every config would pass over
-#: the rows that already have it — which is why the witness has to be a different field.
-#: :func:`_assert_the_finish_witness_is_still_a_finish_field` holds the premise.
-_FINISH_WITNESS_FIELD = "prompt_set_hash"
+#: the rows that already have it — which is why the evidence has to be a different field.
+#: :func:`_assert_the_finish_evidence_is_still_a_finish_field` holds the premise.
+_FINISH_EVIDENCE_FIELD = "prompt_set_hash"
 
 
 def _paused_before_finish(row: TurnRow) -> bool:
@@ -258,14 +274,14 @@ def _paused_before_finish(row: TurnRow) -> bool:
     """
     return (
         str(row.get("outcome")) == Outcome.clarification.value
-        and row.get(_FINISH_WITNESS_FIELD) is None
+        and row.get(_FINISH_EVIDENCE_FIELD) is None
     )
 
 
 def _corpus_content_hash_check(config: Population) -> CheckResult:
     """One corpus per config, and it is named. D7.
 
-    ADR 0007 calls the corpus the treatment identity of every
+    ADR 0007 calls the corpus the setting under test identity of every
     measurement, and until 2026-08-10 no check read it. Two consequences were live at once: a config
     whose rows carry no corpus hash passed every check (both runs of the designated null replicate
     are in that state, 1351/1351 null), and two configs measured over *different* corpora also
@@ -288,7 +304,7 @@ def _corpus_content_hash_check(config: Population) -> CheckResult:
     instrumented (``cannot_evaluate``), whereas a config that records it on some turns and not
     others, or that changed corpus mid-run, cannot be identified (``failed``).
 
-    **Stage-conditional, like ``facet_channels``.** ``finish`` is what writes this field, and a
+    **Stage-conditional, like ``channel_scoring``.** ``finish`` is what writes this field, and a
     turn that paused on ``ask_user`` and was never resumed never reaches it — so such a row
     legitimately carries no corpus hash. Judging those as missing instrumentation would fail
     every config that ever asked a question, which is a check nobody can keep green and therefore a
@@ -354,17 +370,18 @@ def _corpus_content_hash_check(config: Population) -> CheckResult:
     )
 
 
-def _knobs_resolved_check(config: Population) -> CheckResult:
+def _settings_resolved_check(config: Population) -> CheckResult:
     """Every row in one config ran under the same settings.
 
-    Absent ``knobs_resolved`` is unmeasured, not passing. A row resolving ``route_top_n``
+    Absent ``settings_resolved`` is unmeasured, not passing. A row resolving ``route_top_n``
     to 3 beside one resolving it to 5 is not one config.
     """
+    config = _with_stored_names(config)
     keys = setting_names()
     seen: dict[tuple[tuple[str, str], ...], int] = {}
     absent = 0
     for row in config.rows:
-        settings = row.get("knobs_resolved")
+        settings = artifact_get(row, "settings_resolved")
         if not isinstance(settings, Mapping):
             absent += 1
             continue
@@ -375,18 +392,18 @@ def _knobs_resolved_check(config: Population) -> CheckResult:
 
     if absent:
         return _result(
-            "knobs_resolved",
+            "settings_resolved",
             Result.cannot_evaluate,
-            Measured.unmeasured(f"{absent}/{config.n} row(s) carry no knobs_resolved mapping"),
+            Measured.unmeasured(f"{absent}/{config.n} row(s) carry no settings_resolved mapping"),
             config,
             detail=(
-                f"{absent} of {config.n} rows have no knobs_resolved, so whether the config ran under "
+                f"{absent} of {config.n} rows have no settings_resolved, so whether the config ran under "
                 "one configuration is unknown. Absence.never already reports these as missing."
             ),
         )
     if not seen:
         return _result(
-            "knobs_resolved",
+            "settings_resolved",
             Result.cannot_evaluate,
             Measured.unmeasured(f"{config.label!r} is empty"),
             config,
@@ -394,9 +411,9 @@ def _knobs_resolved_check(config: Population) -> CheckResult:
     distinct = len(seen)
     observed = Measured.of(float(distinct))
     if distinct == 1:
-        return _result("knobs_resolved", Result.passed, observed, config)
+        return _result("settings_resolved", Result.passed, observed, config)
     return _result(
-        "knobs_resolved",
+        "settings_resolved",
         Result.failed,
         observed,
         config,
@@ -409,7 +426,7 @@ def _knobs_resolved_check(config: Population) -> CheckResult:
 
 
 def _differing_keys(seen: Mapping[tuple[tuple[str, str], ...], int]) -> set[str]:
-    """Which setting names actually differ, so a failure names them rather than the count."""
+    """Which setting names differ, so a failure names them rather than the count."""
     per_key: dict[str, set[str]] = {}
     for signature in seen:
         for name, value in signature:
@@ -419,10 +436,10 @@ def _differing_keys(seen: Mapping[tuple[tuple[str, str], ...], int]) -> set[str]
 
 CHECK_IMPLEMENTATIONS: Mapping[str, CheckFn] = {
     "outcome": _outcome_check,
-    "facet_channels": _channel_channels_check,
+    "channel_scoring": _channel_channels_check,
     "context_hash": _context_hash_check,
     "corpus_content_hash": _corpus_content_hash_check,
-    "knobs_resolved": _knobs_resolved_check,
+    "settings_resolved": _settings_resolved_check,
     "guardrail_errors": _zero_count_check("guardrail_errors", "guardrail_error"),
 }
 
@@ -455,19 +472,19 @@ def _assert_every_declared_check_is_implemented() -> None:
         )
 
 
-def _assert_the_finish_witness_is_still_a_finish_field() -> None:
-    """Import-time: :data:`_FINISH_WITNESS_FIELD` and the gated field are one node's writes.
+def _assert_the_finish_evidence_is_still_a_finish_field() -> None:
+    """Import-time: :data:`_FINISH_EVIDENCE_FIELD` and the gated field are one node's writes.
 
     :func:`_paused_before_finish` drops rows from the corpus check's denominator on the strength of
-    one claim — that ``finish`` writes both treatment identities or neither. That claim lives in
+    one claim — that ``finish`` writes both setting under test identities or neither. That claim lives in
     ``registry/record.py`` as a pair of ``RecordField`` declarations, so it can be read here
     instead of restated: if either field stops being ``Absence.never`` or stops being owned by
-    ``Stage.finish``, the witness witnesses nothing and the drop becomes a silent exclusion. The
+    ``Stage.finish``, the evidence evidence nothing and the drop becomes a silent exclusion. The
     version of this rule that shipped before was a sentence in a docstring, which is how a
     written clarification came to be dropped from the denominator without anything noticing.
     """
     declared = {f.name: f for f in RECORD_REGISTER}
-    for name in (_FINISH_WITNESS_FIELD, "corpus_content_hash"):
+    for name in (_FINISH_EVIDENCE_FIELD, "corpus_content_hash"):
         field = declared.get(name)
         if field is None:  # pragma: no cover - import-time guard
             raise AssertionError(
@@ -484,4 +501,4 @@ def _assert_the_finish_witness_is_still_a_finish_field() -> None:
 
 
 _assert_every_declared_check_is_implemented()
-_assert_the_finish_witness_is_still_a_finish_field()
+_assert_the_finish_evidence_is_still_a_finish_field()

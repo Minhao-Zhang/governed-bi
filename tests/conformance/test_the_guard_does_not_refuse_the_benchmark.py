@@ -13,13 +13,13 @@ a 1,351-question benchmark would move a published figure.
 **Read from the config's pinned dataset ref, not the working tree.** ``git cat-file`` against
 ``config_profile(...).dataset`` is the same read
 ``test_config_profiles_are_declared.py::test_every_config_names_a_dataset_whose_split_it_can_hash``
-does, for the same reason: a checkout that drifted would quietly change the denominator, and
+does, for the same reason: a checkout that drifted would change the denominator, and
 a rate whose population moved is not the rate anybody quoted.
 
 **Question *and* evidence.** The engine sees both — ``eval/harness.py`` records that evidence
 is one of the two conditions for EX being comparable to published BIRD, and ``accept`` carries
 it onto the turn. Screening only the question would measure a narrower input than the one the
-rules actually run on.
+rules run on.
 
 Skipped where ``../BIRD-Data-Obfuscation`` is absent, which is the same precondition the config
 tests carry and which CI's ``test`` job does not meet — so this number is established locally
@@ -63,7 +63,7 @@ def test_no_rule_fires_on_any_question_in_the_benchmark() -> None:
 
     This is what makes the five safe to ship enabled: the config they would have perturbed is the
     one every figure in ``docs/`` comes from, and they perturb none of it. If this ever goes
-    non-zero, the honest response is to re-measure the config, not to widen the rule — the number
+    non-zero, the response is to re-measure the config, not to widen the rule — the number
     and the guard configuration are one claim.
     """
     from governed_bi.govern.guard import guard

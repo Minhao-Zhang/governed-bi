@@ -39,12 +39,12 @@ def test_a_gold_naming_a_physical_name_is_covered_when_its_asset_is_retrieved_ta
     answerable under this retrieval" and "did the model convert it". A turn that retrieved_tables
     ``airline.Air_Carriers_66c534`` was allowed to read ``airline."Air Carriers"``; scoring it as
     a partial covers the question in the wrong bucket and lowers the ceiling below what the
-    retrieval actually delivered.
+    retrieval delivered.
     """
     from governed_bi.eval.datalake import table_coverage
 
     out = table_coverage(
-        [{"question_id": "q", "licensed": [AIR_CARRIERS_ID, "airline.Airlines"]}],
+        [{"question_id": "q", "retrieved_tables": [AIR_CARRIERS_ID, "airline.Airlines"]}],
         {"q": GOLD},
     )
 
@@ -68,7 +68,7 @@ def test_the_funnel_counts_the_same_retrieved_tables_table_the_coverage_metric_d
     row = {
         "question_id": "q",
         "db_id": "airline",
-        "licensed": [AIR_CARRIERS_ID, "airline.Airlines"],
+        "retrieved_tables": [AIR_CARRIERS_ID, "airline.Airlines"],
         "retrieved_tables_schemas": ["airline"],
         "outcome": "answered",
         "correct": True,
@@ -95,7 +95,7 @@ def test_a_slug_without_its_digest_is_not_the_same_table() -> None:
     from governed_bi.eval.datalake import table_coverage
 
     out = table_coverage(
-        [{"question_id": "q", "licensed": ["airline.Air_Carriers", "airline.Airlines"]}],
+        [{"question_id": "q", "retrieved_tables": ["airline.Air_Carriers", "airline.Airlines"]}],
         {"q": GOLD},
     )
 

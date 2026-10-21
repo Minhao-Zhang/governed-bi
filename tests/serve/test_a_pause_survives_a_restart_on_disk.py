@@ -19,7 +19,7 @@ pause could have been hiding in, gone -- so the only thing carrying it across is
 survive, and a bug that lived in one of those would pass here. Spawning ``langgraph dev``, killing
 it and waiting for a fresh one to bind is the test that would cover that, and it needs a model key
 and a port, which is why the hand procedure stays written down rather than automated. What is
-covered is the seam that had no coverage at all: a checkpoint written by one saver and resumed
+covered is the boundary that had no coverage at all: a checkpoint written by one saver and resumed
 through another.
 
 **Every test bounds its own hang.** ``aiosqlite`` binds its connection to the loop that opened it
@@ -105,7 +105,7 @@ def _turn(thread: str) -> dict[str, Any]:
         "attempt_id": "a",
         "corpus_content_hash": "c",
         "prompt_set_hash": "p",
-        "knobs_resolved": {},
+        "settings_resolved": {},
         "n_re_served": 0,
         "channel_route_hits": [("channel_schema", "sales", 1.0)],
         "messages": [],

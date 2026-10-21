@@ -7,8 +7,8 @@ SQLite is the offline test/CI substrate.
 ## Read in this order
 
 1. [Usage](usage.md) — install, env, serve.
-2. [Architecture](architecture.md) — serve spine and package map.
-3. [Measurement](measurement.md) — how to run an evaluation arm, what a
+2. [Architecture](architecture.md) — the serve graph and package map.
+3. [Measurement](measurement.md) — how to run an evaluation configuration, what a
    measurement row carries, and what makes a number quotable.
 4. [Corpus format](corpus-format.md) — where the corpus is, its layout and field
    tiers.
@@ -40,13 +40,13 @@ build in the present tense after that build was deleted.
 | [0008](adr/0008-identifiers-end-to-end.md) | Identifiers end to end |
 | [0009](adr/0009-browsing-and-filtering-api.md) | Browsing, filtering, and relationship API — **reversed**; the browse routes and every page but chat are deleted |
 | [0010](adr/0010-live-stage-events.md) | Live stage events |
-| [0011](adr/0011-two-model-split-and-facet-query-rewriting.md) | Two models and a query per facet |
-| [0012](adr/0012-access-seam-principal-and-authorization.md) | The access seam: principal, authorization, and the Layer 6 split — **reversed**; the seam is deleted and the Layer 6 split stays |
+| [0011](adr/0011-two-model-split-and-facet-query-rewriting.md) | Two models and a query per retrieval channel |
+| [0012](adr/0012-access-seam-principal-and-authorization.md) | Principal, authorization, and the Layer 6 split — **reversed**; the boundary is deleted and the Layer 6 split stays |
 | [0013](adr/0013-the-declared-abstention-policy.md) | The declared abstention policy |
 | [0014](adr/0014-one-conversation-store.md) | One conversation store, on a durable LangGraph checkpointer — **supersedes 0004 §5** |
 | [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **reversed**; the loop is deleted and the waiting list reads interrupts only |
-| [0016](adr/0016-gating-the-corpus-repository.md) | Gating the served corpus — **reversed**; the conformance rules and the nightly job are deleted, and the held-out quote check stays on the train-only gate |
-| [0017](adr/0017-a-served-chat-app-over-a-layer-the-user-brings.md) | A served chat app over a semantic layer the user brings — **Proposed**; deletes access, the return path, the extra pages and most repository gates |
+| [0016](adr/0016-gating-the-corpus-repository.md) | Checking the served corpus — **reversed**; the conformance rules and the nightly job are deleted, and the held-out quote check stays on the train-only check |
+| [0017](adr/0017-a-served-chat-app-over-a-layer-the-user-brings.md) | A served chat app over a semantic layer the user brings — **Proposed**; deletes access, the return path, the extra pages and most repository checks |
 | [0018](adr/0018-every-answer-states-its-assumptions.md) | Every answer states its assumptions, and the server checks them — **Proposed** |
 | [0019](adr/0019-one-plain-chat-page.md) | One plain chat page — **Proposed** |
 | [0020](adr/0020-ossie-export-and-a-separate-viewer.md) | Ossie as the export format, and a viewer as its own project — **Proposed** |
@@ -62,8 +62,8 @@ Git history is the record of what changed.
 
 | Doc | What it covers |
 |---|---|
-| [Measurement](measurement.md) | how to produce a finding: the eval driver's flags, the prompt registry, the measurement row schema, and the quotability gates |
-| [Failure modes](failure-modes.md) | how the engine answers wrongly, per failure class, with the causal repair experiments — arm `v4`, engine `3c0079a`, corpus `30872d3` |
+| [Measurement](measurement.md) | how to produce a finding: the eval driver's flags, the prompt registry, the measurement row schema, and the quotability checks |
+| [Failure modes](failure-modes.md) | how the engine answers wrongly, per failure class, with the causal repair experiments — configuration `v4`, engine `3c0079a`, corpus `30872d3` |
 | [Open work](open-work.md) | the unfinished items those findings imply, re-verified against the current tree |
 
 ## Frontend, and external data

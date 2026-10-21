@@ -102,7 +102,7 @@ class Stage(str, Enum):
     repair = "repair"
 
 
-#: Facet stages in fan-out order.
+#: Channel stages in fan-out order.
 CHANNEL_STAGES: tuple[Stage, ...] = (
     Stage.channel_schema,
     Stage.channel_term,
@@ -184,12 +184,12 @@ ABSTENTION_REASONS: frozenset[str] = frozenset({
     "retrieval_channel_failed",
     #: The turn retrieved_tables no table. No statement it writes can clear Layer 6, so the five
     #: ``run_query`` attempts are spent discovering what ``connect`` already knew.
-    "nothing_licensed",
+    "nothing_retrieved",
     #: The rendered context is empty. The model has been handed nothing to work from.
     "empty_context",
     #: The char budget dropped a whole retrieved table before the model saw it, so the turn is
     #: asking for SQL over a relation it did not show.
-    "licensed_table_evicted",
+    "retrieved_table_dropped",
 })
 
 #: Where each ``refused_by`` value was decided. Inventory of legal values for
@@ -252,7 +252,7 @@ def classify_outcome(
     ``ask_user`` never calls this function.
 
     ``terminal`` is ``govern.ledger.ExecutionRecord``'s field, and it is read in the **last two
-    lines only**. That ordering is load-bearing: a guard-blocked or declined turn also carries
+    lines only**. That ordering is: a guard-blocked or declined turn also carries
     an empty ledger, so ``terminal == "no_sql"`` is true of it, and reading the ledger any
     earlier would relabel a refusal as a turn that merely ran no statement.
     :func:`_assert_refusal_tables_are_closed` asserts the precedence over the whole declared
@@ -271,7 +271,7 @@ def classify_outcome(
     if clarification_requested:
         # Reaching here means the engine asked and the reader *declined* — a written turn with a
         # full record. A live pause never reaches this function at all; it raises
-        # ``GraphInterrupt``. So this member is **not** a witness of "never reached ``finish``",
+        # ``GraphInterrupt``. So this member is **not** a evidence of "never reached ``finish``",
         # and reading it as one is a live defect this project has already shipped once.
         #
         # Tested before the general ``refused_by`` on purpose, which masks exactly one pair

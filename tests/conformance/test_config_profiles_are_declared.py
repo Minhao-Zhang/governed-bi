@@ -4,8 +4,8 @@ Before it existed, ``runs/eval/`` named a config and nothing a reader could fetc
 name meant — the config's configuration lived in a gitignored ``.env`` on one machine. That is the
 "versioned is not rebuildable" problem the corpus has, one level up.
 
-The file is load-bearing rather than documentation because of audit D9: ``settings_comparable``
-refuses a pair that cannot name its treatment, and this is where the name comes from.
+The file is rather than documentation because of audit D9: ``settings_comparable``
+refuses a pair that cannot name its setting under test, and this is where the name comes from.
 """
 
 from __future__ import annotations
@@ -45,25 +45,25 @@ def test_the_repositorys_own_file_parses_and_names_real_settings() -> None:
 
     assert "v4" in profiles, "the config every quoted figure comes from is undeclared"
     for name, profile in profiles.items():
-        assert profile.treatment <= setting_names(), (
+        assert profile.under_test <= setting_names(), (
             f"[config.{name}] names a treatment that is not a comparability setting"
         )
 
 
-def test_v4s_declared_treatment_is_the_prompt() -> None:
+def test_v4s_declared_under_test_is_the_prompt() -> None:
     """Pinned because it is what makes v3-fold → v4 quotable at all.
 
     If this silently became empty, ``settings_comparable`` would report ``cannot_evaluate`` on the
     repository's headline comparison, and it would read as a data problem rather than a
     declaration problem.
     """
-    assert config_profile("v4").treatment == frozenset({"prompt_set"})
+    assert config_profile("v4").under_test == frozenset({"prompt_set"})
 
 
-def test_a_treatment_that_is_not_a_comparability_setting_is_refused(tmp_path: Path) -> None:
+def test_a_under_test_that_is_not_a_affects_results_setting_is_refused(tmp_path: Path) -> None:
     """Refused at load, not at use.
 
-    A typo reads as "no treatment declared" downstream, which ``settings_comparable`` turns into
+    A typo reads as "no setting under test declared" downstream, which ``settings_comparable`` turns into
     ``cannot_evaluate`` — a result that looks like missing data and sends the reader to the
     artifacts instead of to this file.
 
@@ -72,25 +72,25 @@ def test_a_treatment_that_is_not_a_comparability_setting_is_refused(tmp_path: Pa
     """
     path = _write(tmp_path, '''
         [config.typo]
-        treatment = ["prompt_sett"]
+        under_test = ["prompt_sett"]
     ''')
     with pytest.raises(ValueError, match="prompt_sett"):
         load_config_profiles(path)
 
 
-def test_git_sha_is_a_declared_setting_and_a_legal_treatment(tmp_path: Path) -> None:
-    """Roles are gone. A difference in ``git_sha`` fails a comparison unless it is the treatment."""
+def test_git_sha_is_a_declared_setting_and_a_legal_under_test(tmp_path: Path) -> None:
+    """Roles are gone. A difference in ``git_sha`` fails a comparison unless it is the setting under test."""
     path = _write(tmp_path, '''
         [config.wrong]
-        treatment = ["git_sha"]
+        under_test = ["git_sha"]
         corpus_content_hash = "86ed1dbf"
         question_subset = "1351:423a3f4b65fb"
     ''')
     profiles = load_config_profiles(path)
-    assert profiles["wrong"].treatment == frozenset({"git_sha"})
+    assert profiles["wrong"].under_test == frozenset({"git_sha"})
 
 
-def test_an_unknown_config_raises_rather_than_returning_an_empty_treatment() -> None:
+def test_an_unknown_config_raises_rather_than_returning_an_empty_under_test() -> None:
     """The dangerous default. An empty profile for a misspelled config name would degrade a real
     comparison to ``cannot_evaluate`` and say nothing about why."""
     with pytest.raises(KeyError, match="no_such_config"):
@@ -102,7 +102,7 @@ def test_reconcile_catches_an_artifact_labelled_with_the_wrong_corpus() -> None:
     profile = ConfigProfile(
         name="x",
         description="",
-        treatment=frozenset(),
+        under_test=frozenset(),
         corpus_content_hash="86ed1dbf",
         question_subset=SUBSET,
     )
@@ -115,7 +115,7 @@ def test_reconcile_catches_an_artifact_labelled_with_the_wrong_corpus() -> None:
 
 def test_reconcile_reads_the_row_and_not_the_setting_mapping() -> None:
     """``corpus_content_hash`` is a ``RecordField``, and ``reconcile`` looked for it in
-    ``knobs_resolved``.
+    ``settings_resolved``.
 
     It is never there, so the lookup returned ``None`` and the function returned agreement for
     every artifact ever produced — declared machinery whose one caller was its own tests, and
@@ -125,15 +125,15 @@ def test_reconcile_reads_the_row_and_not_the_setting_mapping() -> None:
     profile = ConfigProfile(
         name="x",
         description="",
-        treatment=frozenset(),
+        under_test=frozenset(),
         corpus_content_hash="86ed1dbf",
         question_subset=SUBSET,
     )
 
-    row = {"corpus_content_hash": "deadbeef", "knobs_resolved": {"corpus_content_hash": "86ed1dbf"}}
+    row = {"corpus_content_hash": "deadbeef", "settings_resolved": {"corpus_content_hash": "86ed1dbf"}}
     assert reconcile(profile, row), "the setting mapping was read instead of the row"
 
-    setting_only = {"knobs_resolved": {"corpus_content_hash": "deadbeef"}}
+    setting_only = {"settings_resolved": {"corpus_content_hash": "deadbeef"}}
     assert reconcile(profile, setting_only) == (), (
         "a row that does not name a corpus cannot contradict the profile"
     )
@@ -149,7 +149,7 @@ def test_reconcile_compares_the_digest_and_never_the_git_ref() -> None:
     git_only = ConfigProfile(
         name="x",
         description="",
-        treatment=frozenset(),
+        under_test=frozenset(),
         corpus="30872d3",
         question_subset=SUBSET,
     )
@@ -161,7 +161,7 @@ def test_reconcile_compares_the_digest_and_never_the_git_ref() -> None:
     both = ConfigProfile(
         name="x",
         description="",
-        treatment=frozenset(),
+        under_test=frozenset(),
         corpus="30872d3",
         corpus_content_hash="86ed1dbfef8b",
         question_subset=SUBSET,
@@ -179,7 +179,7 @@ def test_a_prefix_of_the_declared_digest_is_not_the_declared_digest() -> None:
     profile = ConfigProfile(
         name="x",
         description="",
-        treatment=frozenset(),
+        under_test=frozenset(),
         corpus_content_hash="86ed1dbfef8b325e",
         question_subset=SUBSET,
     )
@@ -212,7 +212,7 @@ def test_a_profile_that_cannot_be_reconciled_says_so_instead_of_agreeing() -> No
     locks are asserted: the loader refuses such a file, and this refuses such an object, because
     ``ConfigProfile`` is constructible directly and a fixture is where one gets invented.
     """
-    profile = ConfigProfile(name="x", description="", treatment=frozenset())
+    profile = ConfigProfile(name="x", description="", under_test=frozenset())
 
     problems = reconcile(profile, {"corpus_content_hash": "anything"})
     assert problems, "an unreconcilable profile must not report agreement"
@@ -229,14 +229,14 @@ def test_the_loader_refuses_an_config_that_declares_no_digest(tmp_path: Path) ->
     """
     path = _write(tmp_path, '''
         [config.undeclared]
-        treatment = ["prompt_set"]
+        under_test = ["prompt_set"]
         corpus = "30872d3"
     ''')
     with pytest.raises(ValueError, match="no corpus_content_hash"):
         load_config_profiles(path)
 
 
-def test_every_shipped_config_can_actually_be_reconciled() -> None:
+def test_every_shipped_config_can_be_reconciled() -> None:
     """Not just v4 and v5. ``v3_fold`` is the config the control is measured against, and it was
     the one with no digest — so the check that mattered most was the one that ran on nothing.
 
@@ -268,7 +268,7 @@ def test_a_turn_that_abstained_before_routing_does_not_contradict_the_profile() 
     profile = ConfigProfile(
         name="x",
         description="",
-        treatment=frozenset(),
+        under_test=frozenset(),
         corpus_content_hash="86ed1dbf",
         question_subset=SUBSET,
     )
@@ -292,7 +292,7 @@ def test_the_loader_refuses_an_config_that_declares_no_question_set(tmp_path: Pa
     """
     path = _write(tmp_path, '''
         [config.no_questions]
-        treatment = ["prompt_set"]
+        under_test = ["prompt_set"]
         corpus = "30872d3"
         corpus_content_hash = "86ed1dbf"
         dataset = "22fe2a6"
@@ -311,13 +311,13 @@ def test_reconcile_catches_an_config_rerun_on_a_replaced_dataset() -> None:
     profile = ConfigProfile(
         name="v4",
         description="",
-        treatment=frozenset(),
+        under_test=frozenset(),
         corpus_content_hash="86ed1dbf",
         question_subset=SUBSET,
     )
     same_corpus_other_questions = {
         "corpus_content_hash": "86ed1dbf",
-        "knobs_resolved": {"question_subset": "1351:0000deadbeef"},
+        "settings_resolved": {"question_subset": "1351:0000deadbeef"},
     }
 
     problems = reconcile(profile, same_corpus_other_questions)
@@ -327,12 +327,12 @@ def test_reconcile_catches_an_config_rerun_on_a_replaced_dataset() -> None:
 
 
 def test_reconcile_reads_the_question_set_out_of_the_setting_mapping_where_it_lives() -> None:
-    """The mirror image of ``test_reconcile_reads_the_row_and_not_the_knob_mapping``, and it
+    """The mirror image of ``test_reconcile_reads_the_row_and_not_the_setting_mapping``, and it
     has to be, because the two fields live in different places.
 
     ``corpus_content_hash`` is a ``RecordField`` and sits at the top of the row;
     ``question_subset`` is a ``Role.scope`` setting written by
-    ``eval/provenance.py::scope_identity`` and sits in ``knobs_resolved`` -- observed in
+    ``eval/provenance.py::scope_identity`` and sits in ``settings_resolved`` -- observed in
     ``runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl``, which records
     ``1351:423a3f4b65fb`` there and nothing at the top level. The 2026-08-11 defect was reading
     a field where it never is, not reading the setting mapping as such; a reader who "corrects"
@@ -342,14 +342,14 @@ def test_reconcile_reads_the_question_set_out_of_the_setting_mapping_where_it_li
     profile = ConfigProfile(
         name="x",
         description="",
-        treatment=frozenset(),
+        under_test=frozenset(),
         corpus_content_hash="86ed1dbf",
         question_subset=SUBSET,
     )
-    row = {"corpus_content_hash": "86ed1dbf", "knobs_resolved": {"question_subset": "9:aaaa"}}
+    row = {"corpus_content_hash": "86ed1dbf", "settings_resolved": {"question_subset": "9:aaaa"}}
     assert reconcile(profile, row), "the setting mapping was not read"
 
-    agreeing = {"corpus_content_hash": "86ed1dbf", "knobs_resolved": {"question_subset": SUBSET}}
+    agreeing = {"corpus_content_hash": "86ed1dbf", "settings_resolved": {"question_subset": SUBSET}}
     assert reconcile(profile, agreeing) == ()
 
     # The bare-mapping fallback, which is what lets the driver ask the same question of a
@@ -367,7 +367,7 @@ def test_a_profile_with_no_question_set_says_so_instead_of_agreeing() -> None:
     """The second lock, on the new field. ``ConfigProfile`` is constructible directly and a
     fixture is where the last unreconcilable profile came from."""
     profile = ConfigProfile(
-        name="x", description="", treatment=frozenset(), corpus_content_hash="86ed1dbf"
+        name="x", description="", under_test=frozenset(), corpus_content_hash="86ed1dbf"
     )
 
     problems = reconcile(profile, {"corpus_content_hash": "86ed1dbf"})
@@ -398,7 +398,7 @@ def test_every_shipped_config_declares_a_question_set() -> None:
         profile = config_profile(name)
         assert profile.question_subset, f"[config.{name}] cannot have its question set reconciled"
         assert reconcile(
-            profile, {"knobs_resolved": {"question_subset": "1351:0000deadbeef"}}
+            profile, {"settings_resolved": {"question_subset": "1351:0000deadbeef"}}
         ), f"[config.{name}] accepts a question set it did not run"
 
 
@@ -480,7 +480,7 @@ def test_the_loader_carries_a_declared_hypothesis_off_the_file(tmp_path: Path) -
     """
     profiles = _load(tmp_path, "effect", f"""
     [config.v6]
-    treatment = ["prompt_set"]
+    under_test = ["prompt_set"]
     hypothesised_effect = 0.05
     readout = "EX"
 {_MINIMAL}
@@ -494,11 +494,11 @@ def test_the_loader_carries_a_declared_hypothesis_off_the_file(tmp_path: Path) -
 
 def test_the_loader_carries_a_declared_corpus_release_off_the_file(tmp_path: Path) -> None:
     """``reconcile``'s ``corpus_release`` branch reads ``profile.corpus_release``, so a dropped
-    field makes that block unreachable and the one comparability setting that names the corpus as a
-    treatment reconciles against nothing."""
+    field makes that block unreachable and the one setting that affects results that names the corpus as a
+    setting under test reconciles against nothing."""
     profiles = _load(tmp_path, "release", f"""
     [config.v6]
-    treatment = ["corpus_release"]
+    under_test = ["corpus_release"]
     corpus_release = "v2026.08.20"
 {_MINIMAL}
     """)
@@ -512,20 +512,20 @@ def test_a_declared_release_reaches_reconcile_and_catches_the_wrong_one(tmp_path
     reach it."""
     profile = _load(tmp_path, "release_wire", f"""
     [config.v6]
-    treatment = ["corpus_release"]
+    under_test = ["corpus_release"]
     corpus_release = "v2026.08.20"
 {_MINIMAL}
     """)["v6"]
 
     agreeing = {
         "corpus_content_hash": "86ed1dbf",
-        "knobs_resolved": {"question_subset": SUBSET, "corpus_release": "v2026.08.20"},
+        "settings_resolved": {"question_subset": SUBSET, "corpus_release": "v2026.08.20"},
     }
     assert reconcile(profile, agreeing) == ()
 
     other = {
         "corpus_content_hash": "86ed1dbf",
-        "knobs_resolved": {"question_subset": SUBSET, "corpus_release": "v2026.08.13"},
+        "settings_resolved": {"question_subset": SUBSET, "corpus_release": "v2026.08.13"},
     }
     problems = reconcile(profile, other)
     assert problems and "v2026.08.13" in problems[0], (
@@ -545,7 +545,7 @@ def test_an_unknown_key_in_an_config_table_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="hypothesized_effect"):
         _load(tmp_path, "typo", f"""
     [config.v6]
-    treatment = ["prompt_set"]
+    under_test = ["prompt_set"]
     hypothesized_effect = 0.05
     readout = "EX"
 {_MINIMAL}
@@ -558,7 +558,7 @@ def test_an_effect_with_no_readout_is_refused_at_load(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="declares no readout"):
         _load(tmp_path, "no_readout", f"""
     [config.v6]
-    treatment = ["prompt_set"]
+    under_test = ["prompt_set"]
     hypothesised_effect = 0.05
 {_MINIMAL}
         """)
@@ -572,7 +572,7 @@ def test_a_readout_with_no_effect_is_refused_at_load(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="declares no hypothesised_effect"):
         _load(tmp_path, "no_effect", f"""
     [config.v6]
-    treatment = ["prompt_set"]
+    under_test = ["prompt_set"]
     readout = "EX"
 {_MINIMAL}
         """)
@@ -586,7 +586,7 @@ def test_an_effect_in_percentage_points_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="points of the readout"):
         _load(tmp_path, "pp", f"""
     [config.v6]
-    treatment = ["prompt_set"]
+    under_test = ["prompt_set"]
     hypothesised_effect = 3
     readout = "EX"
 {_MINIMAL}
@@ -600,26 +600,26 @@ def test_a_zero_effect_is_refused_rather_than_read_as_no_claim(tmp_path: Path) -
     with pytest.raises(ValueError, match="points of the readout"):
         _load(tmp_path, "zero", f"""
     [config.v6]
-    treatment = ["prompt_set"]
+    under_test = ["prompt_set"]
     hypothesised_effect = 0.0
     readout = "EX"
 {_MINIMAL}
         """)
 
 
-def test_an_config_whose_treatment_is_the_corpus_release_must_name_one(tmp_path: Path) -> None:
+def test_an_config_whose_under_test_is_the_corpus_release_must_name_one(tmp_path: Path) -> None:
     """The one place ``corpus_release`` is mandatory, and the reason it is conditional elsewhere.
 
-    An config declaring ``treatment = ["corpus_release"]`` claims the corpus release *is* what
+    An config declaring ``setting under test = ["corpus_release"]`` claims the corpus release *is* what
     changed. Not naming it leaves ``reconcile``'s release branch unentered, so the config's own
-    treatment is the single thing about it that nothing checks. Configs whose treatment is something
+    setting under test is the single thing about it that nothing checks. Configs whose setting under test is something
     else keep the field optional: every artifact on disk predates the setting, and refusing them
     would strand all seven to gain nothing the digest does not already reconcile.
     """
     with pytest.raises(ValueError, match="treatment is corpus_release"):
         _load(tmp_path, "release_unnamed", f"""
     [config.v6]
-    treatment = ["corpus_release"]
+    under_test = ["corpus_release"]
 {_MINIMAL}
         """)
 
@@ -628,9 +628,9 @@ def test_the_shipped_configs_declare_no_hypothesis_and_that_is_the_committed_sta
     """**Read this before quoting the power check as being in force.** On this file it is not.
 
     All four configs in ``configs.toml`` declare no ``hypothesised_effect``, so ``config_power_refusal``
-    abstains on every one of them. That is the honest outcome: all four were measured before the
+    abstains on every one of them. That is the outcome: all four were measured before the
     field existed, and an effect size written down after the measurement is not a hypothesis. What
-    is *not* honest is leaving that inferable only from the absence of a key, which is how the
+    is *not* is leaving that inferable only from the absence of a key, which is how the
     dropped field went unnoticed. This asserts the inventory, so the first config to declare one has
     to come through here and say so.
     """

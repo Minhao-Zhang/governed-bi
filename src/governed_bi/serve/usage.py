@@ -11,7 +11,7 @@ in the repository was low.
 Rows carry ``stage``: eight of them can produce one today (``agent_core``, ``guard``,
 ``narrate``, ``reflect``, and the four channels in ``CHANNEL_EXTRACTS`` — ``channel_schema`` does not
 rewrite, so it never calls a model). The split between the agent model and the utility model is
-a comparability setting (``llm_utility_model``) whose justification is cost and latency, which
+a setting that affects results (``llm_utility_model``) whose justification is cost and latency, which
 cannot be argued from a single total.
 
 A helper, not a node — five call sites in five modules build the same row, so a provider that
@@ -50,7 +50,7 @@ def reported_tokens(messages: Any) -> dict[str, int] | None:
     #: because the internal proxy does not report ``cache_read_tokens`` at all, so this count
     #: is the only route to an exact figure rather than a bound.
     calls = 0
-    #: Only the cache keys a provider actually reported. A two-key dict initialised to zero and
+    #: Only the cache keys a provider reported. A two-key dict initialised to zero and
     #: emitted whole as soon as **either** key appeared made ``cache_write_tokens: 0`` this
     #: code's claim wearing the provider's clothes.
     cache: dict[str, int] = {}
@@ -94,7 +94,7 @@ def usage_row(*, stage: str, model: Any, messages: Any, turn_index: Any) -> dict
 
     ``model_id(model)`` first and ``_llm_type`` only as the fallback. Reversed, every OpenAI turn
     recorded ``model: "openai-chat"`` — a LangChain *class* label — while
-    ``knobs_resolved["chat_model"]`` beside it held the real id, on a comparability field.
+    ``settings_resolved["chat_model"]`` beside it held the real id, on a field that affects results.
     """
     reported = reported_tokens(messages)
     if reported is None:

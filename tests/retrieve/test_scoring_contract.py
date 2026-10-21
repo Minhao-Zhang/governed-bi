@@ -9,7 +9,7 @@ Specification: ADR 0005 §2.
 **Why almost nothing here takes an ``Asset``.** Parcel D owns the asset types and is
 being built in parallel, so assertions against its API would be assertions against an
 API invented here. The scoring functions therefore take ``(id, text)`` pairs. That is
-not a workaround: a scorer has no business knowing what an asset is, and the seam is
+not a workaround: a scorer has no business knowing what an asset is, and the boundary is
 better for it. Only :func:`test_budgets_come_from_the_register` reaches into
 ``registry/assets.py``, which is already declared and committed.
 
@@ -273,7 +273,7 @@ def test_fuse_refuses_a_score_on_a_channel_it_was_told_did_not_run() -> None:
     """The numerator and the denominator must be over the same channel set.
 
     A caller that scores a document on a channel it says it did not consult is a caller whose
-    two facts disagree, and quietly widening the denominator to match would hide it.
+    two facts disagree, and widening the denominator to match would hide it.
     """
     from governed_bi.retrieve.fuse import fuse  # type: ignore[import-not-found]
 
@@ -314,7 +314,7 @@ def test_route_takes_the_per_channel_max_then_sums_across_channels() -> None:
 
 
 def test_route_runs_before_budgets_are_applied() -> None:
-    """ADR 0005 §2.5: ordering ``route`` before budgets is load-bearing.
+    """ADR 0005 §2.5: ordering ``route`` before budgets is.
 
     Had budgets applied first, ``route`` would aggregate a budget-truncated residue and
     a schema's rank would depend on how many of its assets survived a per-type cap.

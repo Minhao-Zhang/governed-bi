@@ -9,7 +9,7 @@
  * **The formatter only ever changes whitespace between tokens.** It never rewrites,
  * reorders, uppercases, or re-quotes anything. That is not a style preference: the
  * SQL on screen is what a reviewer audits, so a "prettier" rendering that differed
- * from what actually ran would be a correctness bug, not a cosmetic one.
+ * from what ran would be a correctness bug, not a cosmetic one.
  * `sameTokens()` below encodes that invariant so it can be checked.
  *
  * The tokenizer is shared with the syntax highlighter in `sql-block.tsx` — one

@@ -63,7 +63,7 @@ def _turn(thread_id: str) -> dict[str, Any]:
         "attempt_id": "a",
         "corpus_content_hash": "c",
         "prompt_set_hash": "p",
-        "knobs_resolved": {},
+        "settings_resolved": {},
         "n_re_served": 0,
         "channel_route_hits": [("channel_schema", "sales", 1.0)],
         "messages": [],
@@ -80,7 +80,7 @@ def _payload(paused: Mapping[str, Any]) -> dict[str, Any]:
     return value
 
 
-def test_decline_stamps_clarification_and_does_not_run_query() -> None:
+def test_decline_finishes_clarification_and_does_not_run_query() -> None:
     model = ScriptedChatModel(responses=[_ask("data_definition"), _run_query(), AIMessage("guess")])
     graph = compile_graph()
     config = _config("t-decline", model)
@@ -114,7 +114,7 @@ def test_ranking_cancel_is_fail_closed_like_decline() -> None:
     assert not done.get("__interrupt__"), "ranking cancel must consume the interrupt"
 
 
-def test_defer_proceeds_and_stamps_the_row() -> None:
+def test_defer_proceeds_and_finishes_the_row() -> None:
     model = ScriptedChatModel(responses=[_ask("data_definition"), AIMessage("ok under the constraint")])
     graph = compile_graph()
     config = _config("t-defer", model)

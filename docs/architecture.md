@@ -1,58 +1,58 @@
 # Architecture
 
-How a question becomes a stamped answer in this tree. Binding detail lives in
+How a question becomes a finished answer in this tree. Binding detail lives in
 [ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) (retrieval /
 memory) and [ADR 0006](adr/0006-execution-time-governance.md) (governance).
 
-## Serve spine
+## The serve graph
 
 Wired in [`serve/graph.py`](../src/governed_bi/serve/graph.py). Nodes live under
 [`serve/nodes/`](../src/governed_bi/serve/nodes/).
 
 ```
 [accept] → guard → rewrite
-  → fanout ─┬─ facet_schema
-            ├─ facet_term
-            ├─ facet_metric
-            ├─ facet_entity
-            └─ facet_example
+  → fanout ─┬─ channel_schema
+            ├─ channel_term
+            ├─ channel_metric
+            ├─ channel_entity
+            └─ channel_example
   → route → resolve → connect → assemble → abstain
-  → agent_core → narrate → stamp → [record] → END
+  → agent_core → narrate → finish → [record] → END
 
 guard blocked ───────────────────────────────→ refuse  ─┐
-route / connect / abstain ───────────────────→ decline ─┼─→ stamp
+route / connect / abstain ───────────────────→ decline ─┼─→ finish
 any node raising (wrap_node) ───────────────────────────┘
 ```
 
 `accept` and `record` are bracketed because both are optional arguments to
 `build_graph`: `accept` (the client-facing path) also switches the graph to the
 `ServeInput` / `ServeOutput` schemas, and without `record` the graph runs
-`stamp → END`. Every terminal path funnels through `stamp`, including crashes —
+`finish → END`. Every terminal path funnels through `finish`, including crashes —
 `wrap_node` turns a node exception into `failure` + `path_kind: crashed` and
 routes there rather than letting it escape the graph.
 
 `record` writes nothing itself. It returns the finished turn onto `ServeState.turns`, an
-accumulating channel, and the durable checkpointer `langgraph.json` mounts is what persists it —
+accumulating state field, and the durable checkpointer `langgraph.json` mounts is what persists it —
 so thread state is the only store of a turn
 ([ADR 0014](adr/0014-one-conversation-store.md)). It is the only producer of a turn record; the
 REST chat pair that was the second one is deleted.
 
 | Stage | Role |
 |---|---|
-| `guard` | Five deterministic rules (`govern/guard.py::GUARD_RULES`), then a model-backed BI-scope gate on the utility model. **Enabled per rule id, and `guard_rules_enabled` ships `UNSET`** — the served app (`api/graph_app.py`) turns on all six; the eval driver, the one-turn CLI and `tools/` all pass `{}`, so no guard rule fires on any measured arm. Until 2026-09-18 the served app turned on `g_bi_scope` *and nothing else*, which reads as "the guard is on" and means five of six are off: `g_bi_scope` is not a member of `GUARD_RULES`, and an id absent from the mapping is silently `False`. `GovernancePolicy.__post_init__` now refuses a key that dispatches nothing |
-| `rewrite` | Stub rail today; facet query rewriting lives inside `facet_*` |
-| `facet_*` | Parallel retrieval channels (each may rewrite its query) |
+| `guard` | Five deterministic rules (`govern/guard.py::GUARD_RULES`), then a model-backed BI-scope check on the utility model. **Enabled per rule id, and `guard_rules_enabled` ships `UNSET`** — the served app (`api/graph_app.py`) turns on all six; the eval driver, the one-turn CLI and `tools/` all pass `{}`, so no guard rule fires on any measured configuration. Until 2026-09-18 the served app turned on `g_bi_scope` *and nothing else*, which reads as "the guard is on" and means five of six are off: `g_bi_scope` is not a member of `GUARD_RULES`, and an id absent from the mapping is silently `False`. `GovernancePolicy.__post_init__` now refuses a key that dispatches nothing |
+| `rewrite` | Stub rail today; retrieval-channel query rewriting lives inside `channel_*` |
+| `channel_*` | Parallel retrieval channels (each may rewrite its query) |
 | `route` / `resolve` / `connect` | Schema pick, budgets, Steiner join |
 | `assemble` | Render retrieval context block |
-| `abstain` | The declared abstention policy — deterministic predicates over recorded state, no score. `abstention_policy_enabled` ships `False`, so it writes a `disabled` verdict and routes on ([ADR 0013](adr/0013-the-declared-abstention-policy.md)) |
+| `abstain` | The declared abstention policy — deterministic predicates over recorded state, no score. `abstention_policy_enabled` ships `False`, so it writes a `disabled` result and routes on ([ADR 0013](adr/0013-the-declared-abstention-policy.md)) |
 | `agent_core` | Nested `create_agent` loop (read-only tools) |
 | `narrate` | Short answer over the result table (must not crash an answered turn) |
-| `stamp` | The turn record: `outcome`, `guardrail_errors`, the ledger, `latency_sec` |
+| `finish` | The turn record: `outcome`, `guardrail_errors`, the ledger, `latency_sec` |
 
 `agent_core` tools: `read_body`, `inspect_schema`, `sample_rows`, `run_query`,
 `ask_user`.
 
-**Where governance actually runs.** The two executing tools call it themselves —
+**Where governance runs.** The two executing tools call it themselves —
 there is no tool-call interceptor, and `wrap_tool_call` appears nowhere in `src/`:
 
 ```
@@ -72,7 +72,7 @@ and introspection — never that one of them calls `check()`. Layers, rules and
 executor paths: [ADR 0006](adr/0006-execution-time-governance.md).
 
 **There is no authorization.** The engine serves one local operator, so the TABLES layer asks one
-question, whether the turn licensed the table (`r_table_not_licensed`), and COLUMNS asks whether the
+question, whether the turn retrieved the table (`r_table_not_retrieved`), and COLUMNS asks whether the
 corpus allows, excludes or marks the column suspect. `api/auth.py` admits every caller and refuses
 only a state-writing payload ([ADR 0012](adr/0012-access-seam-principal-and-authorization.md) is the
 reversal record).
@@ -99,14 +99,14 @@ Server entry: [`api/graph_app.py:make_graph`](../src/governed_bi/api/graph_app.p
 | `govern` | The layer stack (six layers), ledger, tool bounds |
 | `measure` | Population / stats helpers |
 | `model` | Chat and embedder adapters |
-| `register` | Settings, prompts, turn records |
+| `registry` | Settings, prompts, turn records |
 | `retrieve` | BM25, semantic channel, join planner |
 | `serve` | Rails graph + agent loop |
 
 ## Configuration
 
 Every setting is a named default in
-[`register/knobs.py`](../src/governed_bi/register/knobs.py). A `GOVERNED_BI_*`
+[`registry/settings.py`](../src/governed_bi/registry/settings.py). A `GOVERNED_BI_*`
 variable in the process environment overrides one for a run and enters the
 config hash. Secrets are read apart, from the environment and then `.env`, and
 never enter that hash. See [usage](usage.md).
@@ -120,13 +120,13 @@ dropped audit row or a node's traceback. `/livez` means the process is up; `/rea
 session resolved with no fatal corpus problem, and answers 503 otherwise; serving with no model is
 a supported mode and is ready.
 
-## What the turn is stamped with
+## What `finish` writes on the turn
 
-`stamp` projects the record `register/record.py` declares. The fields a reader reaches
+`finish` projects the record `registry/record.py` declares. The fields a reader reaches
 for first:
 
 - **`outcome`** — `answered` / `refused` / `capped` / `crashed` / `clarification` /
-  `no_sql`, from `register/stages.classify_outcome`, derived from the **ledger** rather
+  `no_sql`, from `registry/stages.classify_outcome`, derived from the **ledger** rather
   than from whether a SQL string exists. `no_sql` is a turn that ended having executed no
   governed statement: it is not `answered`, because an answer with no auditable statement is
   not a governed answer, and not `crashed`, because nothing failed. Rows written before
@@ -136,7 +136,7 @@ for first:
   Derived from the attempts, never counted alongside them.
 - **`terminal_reason`** — why a refusal or decline ended the way it did, so that
   "routing found nothing" and "the join graph is disconnected" are not one row.
-- **`execution`** — every attempt, with its verdict layer, reason code and executor
+- **`execution`** — every attempt, with its result layer, reason code and executor
   path.
 
 ### Outcome precedence, and the one pair it masks
@@ -147,29 +147,29 @@ then any `refused_by` is `refused`, then a statement makes it `answered`, then a
 `no_sql` terminal, else `crashed`. The order is the decision; two things follow from it that a
 reader cannot get from the enum.
 
-**`clarification` is not a witness of "never reached `stamp`", and must not be read as one.** The
+**`clarification` is not evidence that the turn "never reached `finish`", and must not be read as that.** The
 pause itself never reaches `classify_outcome` at all — `ask_user` raises `GraphInterrupt`, and the
 `clarification` on such a row is written by the transport or by `eval/projection.py` when no
 answer exists. What reaches this function is the *answered-and-declined* case: `ask_user` returns
 `clarification_requested=True` when the reader declines or cancels a ranking, the inner loop ends,
-and the turn stamps a full record including both treatment identities. `measure/gates.py` read the
-outcome as "reached stamp" and therefore dropped these rows — which do carry the corpus hash — out
+and the turn writes a full record including both config identities. A check that read the
+outcome as "reached finish" dropped these rows — which do carry the corpus hash — out
 of the population that checks it.
 
 **Clarification is tested before `refused_by`, and masks exactly one pair.**
-`clarification_requested` is only ever true on the answered path, where `stamp` returns some
+`clarification_requested` is only ever true on the answered path, where `finish` returns some
 `refused_by` whenever no answering attempt passed. Two of the three values it can return there
 already outrank the branch (`guardrail_error` is our bug, `attempt_cap` is the cap), so the only
 masked pair is `guardrail`: a layer refused every attempt, then the model asked and the reader
 declined. The decline wins deliberately — it is a decision something took on this turn, while
-`guardrail` there is a summary derived from "nothing passed", and this register puts a decision
-above a derived summary, the same rule that makes `terminal` the last thing read. The cost is
-worth naming: the row keeps its `refused_by` and its per-attempt trace, so the layer refusal is
+`guardrail` there is a summary derived from "nothing passed", and this registry puts a decision
+above a derived summary, the same rule that makes `terminal` the last thing read. The row keeps
+its `refused_by` and its per-attempt trace, so the layer refusal is
 readable, but it leaves `eval/report.refusal_histogram`, which counts rows classified `refused`.
 
-> **There is no reliability stamp on any path.** A turn carries the fields above and
+> **There is no reliability summary on any path.** A turn carries the fields above and
 > nothing that summarises them. A single collapsed trust score is worse than none, and
-> a verdict needs a definition of what measures it before it needs a field — so the
+> a result needs a definition of what measures it before it needs a field — so the
 > record carries only what something observes.
 > `tests/api/test_http_contract_answer_and_stream.py` fails if `safety_clearance` or
 > `semantic_assurance` appears in `src/`.

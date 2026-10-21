@@ -29,7 +29,7 @@ __all__ = [
 #: The sqlglot generation this list was enumerated against. A major bump renames and
 #: re-parents node classes, silently changing what the allowlist matches, so a
 #: mismatch raises at import. The minor version is recorded (not asserted) by the
-#: ``sqlglot_version`` comparability setting.
+#: ``sqlglot_version`` setting that affects results.
 SQLGLOT_TESTED_MAJOR = 30
 
 
@@ -161,7 +161,7 @@ def permitted_functions_digest() -> str:
     """Content digest of the allowlist, for the ``permitted_functions`` setting.
 
     Hashed by content, so widening the list moves the serve config hash and breaks
-    comparability with earlier runs. Intended, and not to be worked around: without
+    whether two runs can be compared with earlier runs. Intended, and not to be worked around: without
     it two runs with different security configuration hash identically (ADR 0006 §13).
     """
     payload = "\n".join(sorted(PERMITTED_FUNCTIONS))

@@ -198,7 +198,7 @@ def _resolve(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
             detail["n_pulled_in"] = len(pulled_in)
     retrieved_tables = update.get("retrieved_tables")
     if isinstance(retrieved_tables, (list, tuple)):
-        detail["n_licensed"] = len(retrieved_tables)
+        detail["n_retrieved_tables"] = len(retrieved_tables)
     return "ok", detail
 
 
@@ -209,7 +209,7 @@ def _connect(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
         detail["n_crossings"] = len(crossings)
     retrieved_tables = update.get("retrieved_tables")
     if isinstance(retrieved_tables, (list, tuple)):
-        detail["n_licensed"] = len(retrieved_tables)
+        detail["n_retrieved_tables"] = len(retrieved_tables)
     return "ok", detail
 
 

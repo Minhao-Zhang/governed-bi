@@ -14,7 +14,7 @@
  * as a live agent timeline (folded through `reduceSteps` on a ~250 ms timer), then resolves
  * to a synthetic AnswerView from the fixtures — MOCK_REFUSAL when the question trips the
  * restricted-content pattern (mirroring the engine's fail-closed negative-example /
- * excluded-field gates), MOCK_GRADED_ANSWER / MOCK_AGENT_ANSWER / MOCK_ANSWER otherwise. A
+ * excluded-field checks), MOCK_GRADED_ANSWER / MOCK_AGENT_ANSWER / MOCK_ANSWER otherwise. A
  * separate clarify path stands in for the `ask_user` HITL interrupt.
  *
  * The { messages, send, isRunning, steps, reset } shape below is transport-neutral, which is

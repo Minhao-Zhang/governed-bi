@@ -225,7 +225,7 @@ def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
     """One row per open clarification on ``thread``, or ``[]``.
 
     ``asked_at`` is the thread's ``updated_at``, a proxy: for an interrupted thread the runtime
-    stamps it in the same update that writes ``interrupts``, and nothing has run since.
+    finishes it in the same update that writes ``interrupts``, and nothing has run since.
     """
     if not isinstance(thread, Mapping):
         return []

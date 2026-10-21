@@ -2,7 +2,7 @@
 
 ``open-work.md`` §3.10 recorded ``require_power`` as a check nothing invoked. A check with no caller is
 a preference, and the specific cost of this one having none is on record: the run it was taken from
-measured a treatment reaching 9 of 131 questions against an MDE of 9.6pp and reported the null as a
+measured a setting under test reaching 9 of 131 questions against an MDE of 9.6pp and reported the null as a
 finding about the feature.
 
 **The arithmetic is not re-derived here.** ``tests/eval/test_an_underpowered_config_refuses_to_be_
@@ -24,7 +24,7 @@ def _profile(**over: object) -> ConfigProfile:
     base: dict[str, object] = dict(
         name="v6",
         description="a corpus release",
-        treatment=frozenset({"corpus_release"}),
+        under_test=frozenset({"corpus_release"}),
         corpus_content_hash="c" * 64,
         question_subset="1351:423a3f4b65fb",
     )
@@ -109,7 +109,7 @@ def _from_file(tmp_path: Path, name: str, body: str) -> ConfigProfile:
 def _declaring(tmp_path: Path, name: str, effect: float, readout: str) -> ConfigProfile:
     return _from_file(tmp_path, name, f"""
     [config.{name}]
-    treatment = ["prompt_set"]
+    under_test = ["prompt_set"]
     hypothesised_effect = {effect}
     readout = "{readout}"
     corpus_content_hash = "86ed1dbf"

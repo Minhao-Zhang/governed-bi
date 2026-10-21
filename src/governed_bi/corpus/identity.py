@@ -225,7 +225,7 @@ def _is_tooling(root: Path, path: Path) -> bool:
     """Is this a tool's bookkeeping rather than corpus content?
 
     Matters only once a corpus is version-controlled: with ``schemas=None`` the tree is the
-    manifest, so without this ``corpus_content_hash`` digests ``.git/`` and the treatment
+    manifest, so without this ``corpus_content_hash`` digests ``.git/`` and the setting under test
     identity changes on every commit, fetch and ``git gc``.
 
     The rule: a **directory a tool owns** is excluded, everything else is content. VCS
@@ -235,7 +235,7 @@ def _is_tooling(root: Path, path: Path) -> bool:
     everything in the selected subtrees, and a caller wanting assets alone passes ``schemas``.
 
     ``.github`` is not optional. Without it a corpus repository cannot be given CI at all: adding
-    ``.github/workflows/*.yml`` moves the treatment identity, so would editing a workflow, and an
+    ``.github/workflows/*.yml`` moves the setting under test identity, so would editing a workflow, and an
     identity that moves when the build script does is not one.
 
     ``.conformance`` is the general form of the same defect, measured. An untracked

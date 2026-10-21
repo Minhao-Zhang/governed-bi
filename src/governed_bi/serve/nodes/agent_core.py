@@ -61,7 +61,7 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
         # naming keys the graph does not declare, silently — see ``serve/agent_state.py``.
         state_schema=GovernedAgentState,
         # The delivered context, injected at model-call time rather than put in ``messages``,
-        # plus the thing that actually stops the loop at the attempt cap.
+        # plus the thing that stops the loop at the attempt cap.
         middleware=[
             *_context_middleware(state, model),
             _CapEndsTheTurn(policy_from_config(config).run_query_attempt_cap),
@@ -176,14 +176,14 @@ async def _run(
     (probed on langgraph 1.2.10).
 
     **``recursion_limit`` is passed at the top level of config** (not under ``configurable``).
-    ``create_agent`` binds 9999 via ``with_config``; a non-default value here is what actually
+    ``create_agent`` binds 9999 via ``with_config``; a non-default value here is what 
     bounds exploration tools that ``_CapEndsTheTurn`` does not cover.
 
     **Two bounds, because one cannot hold both guarantees.** ``timeout`` is the soft wall and is
     checked **between** frames; ``grace`` extends the wait for a single frame past it, and only
     that wait is ever cancelled.
 
-    * *Between frames* is what keeps the ledger honest. Cancelling mid-``run_query`` leaves a
+    * *Between frames* is what keeps the ledger. Cancelling mid-``run_query`` leaves a
       statement that reached the database off the projected ledger, because the ``to_thread``
       worker keeps running — the cancel-vs-thread hazard ``wrap.py`` refuses for sync nodes.
       Executed-but-unrecorded is an audit break, and worse than being slow
@@ -281,7 +281,7 @@ def _agent_node_timeout(state: Mapping[str, Any]) -> float | None:
     """
     from governed_bi.registry.settings import effective_settings
 
-    settings = state.get("knobs_resolved") or {}
+    settings = state.get("settings_resolved") or {}
     if settings.get("agent_node_timeout_s") is not None:
         return _positive(float(settings["agent_node_timeout_s"]))
     return _positive(float(effective_settings()["agent_node_timeout_s"]))
@@ -315,7 +315,7 @@ def _recursion_limit(state: Mapping[str, Any]) -> int:
     """Nested-agent superstep ceiling from the turn's settings, then the resolved default."""
     from governed_bi.registry.settings import effective_settings
 
-    settings = state.get("knobs_resolved") or {}
+    settings = state.get("settings_resolved") or {}
     if settings.get("agent_recursion_limit") is not None:
         return int(settings["agent_recursion_limit"])
     return int(effective_settings()["agent_recursion_limit"])
@@ -377,7 +377,7 @@ def _context_middleware(state: dict, model: Any = None) -> list[AgentMiddleware[
         return []
     cache_point = _cache_point(model)
 
-    # ``async def`` is load-bearing: ``wrap_model_call`` branches on ``iscoroutinefunction``, so
+    # ``async def`` is: ``wrap_model_call`` branches on ``iscoroutinefunction``, so
     # a sync body registers ``wrap_model_call`` only and the ``astream``-driven agent dies on
     # ``NotImplementedError: Asynchronous implementation of awrap_model_call is not available``.
     # ``_run`` cannot tell that from a provider error, so it surfaces as the turn crashing.
@@ -511,7 +511,7 @@ class _ClarificationEndsTheTurn(AgentMiddleware):
 
     The tool writes ``clarification_requested`` onto nested state and does not
     ``Command(goto=END)``: an inner jump to the outer ``END`` would skip
-    ``finish``. This hook is what actually stops the nested agent —
+    ``finish``. This hook is what stops the nested agent —
     ``before_model`` fires after the tool returns and before another SQL guess,
     and ``jump_to: "end"`` is the inner graph's end, not the parent.
     """
@@ -598,7 +598,7 @@ def _sealed(fresh: list[Any], failure: Mapping[str, Any] | None, *, paused: bool
 
     **A paused turn must not be "repaired".** A turn stopped at ``interrupt()`` has an unanswered
     ``tool_use`` *by design*: answering it is exactly what would break resume, the feature this
-    surface exists for. On the checkpointed path — the server, and every path that can actually
+    surface exists for. On the checkpointed path — the server, and every path that can 
     resume — the structure already decides that: :func:`_run` re-raises ``GraphInterrupt``
     untouched and ``agent_core_node`` calls ``_run`` inside no ``try``, so a pause propagates out
     of the node and this function is never reached (measured through ``compile_graph``: the node
@@ -651,7 +651,7 @@ def _stub(state: dict) -> dict:
 
 
 def _last_executed_sql(attempts: Any) -> str | None:
-    """The last statement the engine actually **sent** on the answering path, from the ledger.
+    """The last statement the engine **sent** on the answering path, from the ledger.
 
     Filtered through :func:`~governed_bi.serve.ledger.answering_attempts`, i.e. every path
     outside :data:`~governed_bi.serve.ledger.INTROSPECTION_PATHS`: a ``sample`` row also carries

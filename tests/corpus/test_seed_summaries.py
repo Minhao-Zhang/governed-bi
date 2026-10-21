@@ -1,7 +1,7 @@
 """The seed composes within the cap instead of slicing at it.
 
 ``corpus/validate.py`` refuses an oversized summary with *"Rewrite it; do not truncate --
-the indexed text is the treatment"*, and the producer used a bare ``[:250]`` on four asset
+the indexed text is the setting under test"*, and the producer used a bare ``[:250]`` on four asset
 types. The gold layer inherited 26 table and 3 schema summaries at exactly the cap, at least
 one cut mid-identifier.
 """

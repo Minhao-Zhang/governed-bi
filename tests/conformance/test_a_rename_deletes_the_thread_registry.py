@@ -109,7 +109,7 @@ def test_the_guard_message_names_the_damage_and_the_procedure() -> None:
         assert phrase in message, f"the renamer is never told about {phrase!r}"
 
 
-# ── the pin is what pickle actually writes ────────────────────────────────────────────────────
+# ── the pin is what pickle writes ────────────────────────────────────────────────────
 
 
 def _thread_row() -> dict[str, Any]:
@@ -348,7 +348,7 @@ def test_no_other_governed_bi_type_reaches_the_checkpointed_values() -> None:
 
     Driven against a real checkpointer rather than against ``build_serde_allowlist``, because the
     declaration and the runtime path disagree about how these values arrive: the allowlist is
-    derived from ``usage: list[UsageRecord]``, and what a served turn actually pickles arrives
+    derived from ``usage: list[UsageRecord]``, and what a served turn pickles arrives
     through ``answer["record"]`` — a ``dict[str, Any]`` channel that no schema constrains. A
     static check would therefore pass on a type that rides in through one of those holes.
 
@@ -375,7 +375,7 @@ def test_no_other_governed_bi_type_reaches_the_checkpointed_values() -> None:
             "thread_id": "t-pickled-surface", "turn_index": 1, "run_id": "run-1",
             "turn_id": "turn-refuse", "question_id": "q-1", "db_id": "beer_factory",
             "attempt_id": "attempt-1", "corpus_content_hash": "corpus-hash",
-            "prompt_set_hash": "prompt-hash", "knobs_resolved": {"route_top_n": 3},
+            "prompt_set_hash": "prompt-hash", "settings_resolved": {"route_top_n": 3},
             "n_re_served": 0, "channel_route_hits": [], "messages": [], "usage": [],
         },
         config,

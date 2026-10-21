@@ -372,7 +372,7 @@ def bind(
         try:
             sources[id(view.scope)] = _classify_sources(view, default_schema, tables)
         except OptimizeError:
-            # ``selected_sources`` raises where ``scope.sources`` quietly papered over it: two
+            # ``selected_sources`` raises where ``scope.sources`` papered over it: two
             # sources in one scope answering to one name. Measured on sqlglot 30.16.0,
             # ``FROM s.orders AS a, s.audit AS a`` yields ``{"a": s.orders, "audit": s.audit}``
             # -- the first keeps the alias and the second is filed under its *table name*,

@@ -107,7 +107,7 @@ def test_every_channel_rewriter_bills_its_own_stage() -> None:
     rewrites, so it makes no call and must bill nothing — asserted separately below, because
     "spent nothing" and "spent and did not say" are the two states this whole file is about.
 
-    Attribution is the point rather than the total: the agent/utility split is a comparability
+    Attribution is the point rather than the total: the agent/utility split is a setting that affects results
     setting (``llm_utility_model``) whose entire justification is cost and latency, and that cannot
     be argued from one number.
     """

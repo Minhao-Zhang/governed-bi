@@ -4,7 +4,7 @@ import { AlertTriangle, Info } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { ModelMarkdown } from "@/components/common/model-markdown";
-import { ReliabilityStamp } from "@/components/answer/reliability-stamp";
+import { OutcomeBadge } from "@/components/answer/outcome-badge";
 import { AgentTimeline } from "@/components/chat/agent-timeline";
 import {
   attemptsOf,
@@ -46,7 +46,7 @@ export function AnswerCard({
       )}
     >
       <CardContent className="space-y-3 pt-0">
-        <ReliabilityStamp
+        <OutcomeBadge
           outcome={answer.outcome}
           attempts={attemptsOf(answer)}
           sentence={refusalSentence(answer)}

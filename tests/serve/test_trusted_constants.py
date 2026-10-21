@@ -7,7 +7,7 @@ that decide what governance is: ``policy``, ``corpus``, ``assets_by_id``, ``conn
 ``index``, ``structure``, ``agent_model``.
 
 The server factory **used to** bind them with ``with_config``, and LangGraph merges caller
-config **over** a bound default. That is deliberate and load-bearing for ``thread_id`` — which
+config **over** a bound default. That is deliberate and for ``thread_id`` — which
 is exactly why the binding was used at all — and it applied identically to the six keys beside
 it. A request to ``/threads/{id}/runs`` carrying ``config.configurable.policy`` replaced the
 ``GovernancePolicy``; one carrying ``assets_by_id`` replaced the corpus every tool licenses
@@ -180,7 +180,7 @@ def test_the_server_factory_does_not_bind_the_constants_onto_config():
 
 
 def test_model_id_prefers_the_provider_id_over_the_langchain_class_label():
-    """``usage[].model`` and ``knobs_resolved["chat_model"]`` are compared, so they must agree.
+    """``usage[].model`` and ``settings_resolved["chat_model"]`` are compared, so they must agree.
 
     The usage row asked ``_llm_type`` first and recorded ``"openai-chat"`` for every OpenAI
     model ever served, while the setting beside it held the real id. One turn reporting two
@@ -232,9 +232,9 @@ def test_the_usage_row_and_the_setting_report_the_same_model(
     record = out["answer"]["record"]
     usage = list(record.get("usage") or [])
     assert usage, f"no usage row: path_kind={out.get('path_kind')!r}"
-    assert usage[0]["model"] == session.knobs_resolved["chat_model"] == "gpt-5.6-luna", (
-        f"usage says {usage[0]['model']!r}, knobs_resolved says "
-        f"{session.knobs_resolved.get('chat_model')!r}"
+    assert usage[0]["model"] == session.settings_resolved["chat_model"] == "gpt-5.6-luna", (
+        f"usage says {usage[0]['model']!r}, settings_resolved says "
+        f"{session.settings_resolved.get('chat_model')!r}"
     )
 
 
@@ -242,7 +242,7 @@ def test_the_usage_row_and_the_setting_report_the_same_model(
 #
 # `trust()` above closes `configurable`. It was the only one closed. `langgraph_api` forwards
 # the client's `input` dict to the graph unfiltered, `PER_TURN_RESET` does not clear
-# `TEST_HOOKS`, and `int_setting` reads state before `knobs_resolved` -- so a request could set
+# `TEST_HOOKS`, and `int_setting` reads state before `settings_resolved` -- so a request could set
 # its own `route_top_n` and the record would then publish the default it did not use.
 
 

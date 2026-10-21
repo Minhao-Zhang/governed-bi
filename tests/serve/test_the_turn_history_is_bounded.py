@@ -1,5 +1,5 @@
 """``ServeState.turns`` under :func:`~governed_bi.serve.state.keep_turns`: bounded, deduplicated,
-and honest about what it trimmed.
+and about what it trimmed.
 
 **The defect.** ``turns`` was ``Annotated[list[TurnEntry], operator.add]`` and each row holds a
 full turn record. ``AsyncSqliteSaver`` has exactly two tables — ``checkpoints`` and ``writes`` —
@@ -84,23 +84,23 @@ def _isolated():
 def _fat_record(turn_id: str = "turn-0001") -> dict[str, Any]:
     """A record shaped like the real ones, with the two bulk keys at their measured sizes.
 
-    ``facet_hits`` 49.8 KB and ``pulled_in`` 46.2 KB — together 92% of a 103.8 KB record. Every
+    ``channel_hits`` 49.8 KB and ``pulled_in`` 46.2 KB — together 92% of a 103.8 KB record. Every
     field the register declares ``Absence.never`` is filled, so ``missing_required`` is empty
     before compaction and the test can attribute any change to compaction itself.
     """
     return {
         "run_id": "run-1", "turn_id": turn_id, "thread_id": "t-1", "question_id": "q-1",
         "db_id": "facilities", "attempt_id": "a-1", "corpus_content_hash": "c0ffee",
-        "prompt_set_hash": "beef", "knobs_resolved": {f"knob_{i}": i for i in range(200)},
+        "prompt_set_hash": "beef", "settings_resolved": {f"knob_{i}": i for i in range(200)},
         "guard": {"allowed": True}, "execution": {"attempts": [{"passed": True}], "terminal": "ok"},
         "guardrail_errors": 0, "outcome": "answered",
         "usage": [{"turn_index": 1, "input_tokens": 10, "output_tokens": 2}],
         "n_re_served": 0,
         "terminal_reason": None, "schemas": ["facilities"],
         "generated_sql": "select count(*) from facilities.assets", "latency_sec": 12.5,
-        "licensed": [f"facilities.t{i}" for i in range(20)],
+        "retrieved_tables": [f"facilities.t{i}" for i in range(20)],
         # The two that dominate.
-        "facet_hits": {f"facet_{f}": [
+        "channel_hits": {f"facet_{f}": [
             {"asset_id": f"facilities.t{i}.c{j}", "asset_type": "column",
              "queries": ["how many actively maintained assets"], "lexical": 0.4, "semantic": 0.2}
             for i in range(20) for j in range(5)
@@ -108,7 +108,7 @@ def _fat_record(turn_id: str = "turn-0001") -> dict[str, Any]:
         "pulled_in": {f"facilities.t{i}.c{j}": "resolve" for i in range(40) for j in range(20)},
         # Small, and therefore must survive verbatim.
         "context_hash": "a" * 64,
-        "facet_channels": {f"facet_{f}": {"lexical": "ran"} for f in range(5)},
+        "channel_scoring": {f"facet_{f}": {"lexical": "ran"} for f in range(5)},
     }
 
 
@@ -155,7 +155,7 @@ def test_an_archived_row_is_still_judged_by_todays_register_at_read_time() -> No
     for name in ("turn_id", "run_id", "thread_id", "question_id", "db_id", "outcome",
                  "terminal_reason", "schemas", "generated_sql", "latency_sec", "execution"):
         assert archived[name] == full[name], name
-    assert len(archived["licensed"]) == len(full["licensed"]), "licensed_count would move"
+    assert len(archived["retrieved_tables"]) == len(full["retrieved_tables"]), "licensed_count would move"
 
 
 # ── what compaction does, and what it says it did ─────────────────────────────
@@ -174,7 +174,7 @@ def test_compaction_trims_the_two_bulk_keys_and_nothing_smaller() -> None:
 
     archived, dropped = compact_turn_record(full)
 
-    assert dropped == ["facet_hits", "pulled_in"], dropped
+    assert dropped == ["channel_hits", "pulled_in"], dropped
     after = _bytes(archived)
     assert after < before / 10, f"{before} -> {after} is not the ~17x the design claims"
     # **The budget is a target, not a guarantee**, and the reason is a floor: every protected key
@@ -197,14 +197,14 @@ def test_compaction_trims_the_two_bulk_keys_and_nothing_smaller() -> None:
 def test_a_trimmed_field_stays_present_and_says_so() -> None:
     """A silent cap reads as full coverage. Deleting the key would read as worse.
 
-    A deleted ``facet_hits`` would read as "the route stage produced nothing", a false fact about
+    A deleted ``channel_hits`` would read as "the route stage produced nothing", a false fact about
     the turn. So the key stays, holding a value that names itself.
     """
     archived, dropped = compact_turn_record(_fat_record())
 
     assert set(dropped) <= set(archived), "a trimmed key must not be deleted from the record"
-    marker = archived["facet_hits"]
-    assert marker["compacted"] == "facet_hits"
+    marker = archived["channel_hits"]
+    assert marker["compacted"] == "channel_hits"
     assert marker["bytes"] > 40_000, "the marker must say how much it stood in for"
     assert marker["n"] == 5, "and how many entries there were"
     assert len(marker["sha256"]) == 16, "and be matchable against the full copy in history"
@@ -213,7 +213,7 @@ def test_a_trimmed_field_stays_present_and_says_so() -> None:
     assert undeclared_keys(archived) == undeclared_keys(_fat_record())
 
 
-def test_the_trim_is_declared_on_the_envelope_not_inside_the_record() -> None:
+def test_the_trim_is_declared_on_the_wrapper_not_inside_the_record() -> None:
     """Where the marker lives is forced, not chosen.
 
     ``TurnEntry``'s own docstring records why ``question`` sits beside ``record`` rather than in
@@ -226,7 +226,7 @@ def test_the_trim_is_declared_on_the_envelope_not_inside_the_record() -> None:
     assert "compacted" not in rows[0], "the newest row keeps its record verbatim"
 
     rows = keep_turns(rows, [_entry(_fat_record("t-2"))])
-    assert rows[0]["compacted"] == {"dropped": ["facet_hits", "pulled_in"],
+    assert rows[0]["compacted"] == {"dropped": ["channel_hits", "pulled_in"],
                                     "was_bytes": _bytes(_fat_record("t-1"))}
     assert "compacted" not in rows[1]
     assert "compacted" not in rows[0]["record"], "it must not enter the record"
@@ -242,7 +242,7 @@ def test_the_newest_row_keeps_its_record_whole() -> None:
 
     Stated as a test because it is the *cost* half of the design: it is ~86 KB of the ~256 KB the
     capped channel carries, duplicating ``answer`` in the same checkpoint. Trimming it too would
-    save ~1.6 MB of writes per turn and cost the trace surface ``facet_hits`` on every turn.
+    save ~1.6 MB of writes per turn and cost the trace surface ``channel_hits`` on every turn.
     """
     rows = keep_turns([], [_entry(_fat_record("t-1"))])
     for i in range(2, 5):

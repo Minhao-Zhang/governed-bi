@@ -33,7 +33,7 @@ def _row(qid: str, *, outcome: str = "refused", **extra: Any) -> dict[str, Any]:
 def test_every_declared_abstention_reason_is_attributed_to_the_abstain_stage() -> None:
     """One refused row per reason, through the reader, counted under ``abstain``.
 
-    This is the assertion the ADR's argument actually needs and the one
+    This is the assertion the ADR's argument needs and the one
     ``classify_outcome(...) is Outcome.refused`` cannot make: it fails if a reason is dropped
     from ``REFUSED_BY_TO_STAGE``, if it is mapped to another stage, or if the reader stops
     consulting the table.
@@ -62,7 +62,7 @@ def test_an_undeclared_reason_lands_in_its_own_bucket_and_not_in_a_stage() -> No
     """
     hist = refusal_histogram(
         [
-            _row("q1", terminal_reason="nothing_licensed"),
+            _row("q1", terminal_reason="nothing_retrieved"),
             _row("q2", terminal_reason="banana_not_declared_anywhere"),
         ]
     )
@@ -82,7 +82,7 @@ def test_only_refused_turns_are_counted_and_the_coarser_channel_is_the_fallback(
     """
     hist = refusal_histogram(
         [
-            _row("q1", outcome="answered", terminal_reason="nothing_licensed"),
+            _row("q1", outcome="answered", terminal_reason="nothing_retrieved"),
             _row("q2", outcome="crashed", refused_by="model_error"),
             _row("q3", outcome="capped", refused_by="attempt_cap"),
             _row("q4", refused_by="guardrail", terminal_reason="no_schema_matched"),
@@ -113,7 +113,7 @@ def test_every_key_in_the_table_is_reachable_through_the_reader() -> None:
 def test_the_config_summary_carries_the_histogram() -> None:
     """``summarise`` is what the drivers and the report read, so the wire ends there."""
     summary = summarise(
-        {"v4": [_row("q1", terminal_reason="nothing_licensed"), _row("q2", outcome="answered")]}
+        {"v4": [_row("q1", terminal_reason="nothing_retrieved"), _row("q2", outcome="answered")]}
     )
     assert summary["configs"]["v4"]["refusals"]["by_stage"] == {Stage.abstain.value: 1}
     assert summary["configs"]["v4"]["refusals"]["n_rows"] == 2

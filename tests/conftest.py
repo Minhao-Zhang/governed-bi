@@ -2,10 +2,10 @@
 
 **Why here and not in the fixtures.** A library must not read ``.env`` — `src/` takes a DSN
 or a client and does not decide its own configuration. Something has to bridge the
-developer's ``.env`` to the process environment, and the honest place is the entry
+developer's ``.env`` to the process environment, and the place is the entry
 point of the process that wants it. For the test suite, that is this file.
 
-The alternative is what the suite actually had on 2026-08-03, and it is worth recording
+The alternative is what the suite had on 2026-08-03, and it is worth recording
 because the cost was invisible: three separate readers of "environment or ``.env``", one of
 which read only `os.environ`. Parcel I's contract therefore **skipped its OpenAI half over a
 key that was in ``.env`` the whole time**, and reported in capital letters that it had

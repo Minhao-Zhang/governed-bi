@@ -42,7 +42,7 @@ def _config(thread: str) -> dict[str, Any]:
 def _write_one(graph: Any, thread: str, values: dict[str, Any]) -> None:
     """Put a checkpoint on ``thread`` through the saver, without running the graph.
 
-    ``update_state`` is the seam because this file is about persistence, not about the serve
+    ``update_state`` is the boundary because this file is about persistence, not about the serve
     topology: a real turn would need a model, a connector and a corpus, and none of them are what
     could be broken here.
     """
@@ -109,7 +109,7 @@ def test_the_saver_answers_more_than_once_rather_than_hanging(tmp_path: Path) ->
 
 
 def test_closing_releases_the_connection_so_the_file_is_usable(tmp_path: Path) -> None:
-    """``close()`` is load-bearing, not tidiness — see this module's header.
+    """``close()`` is, not tidiness — see this module's header.
 
     Asserted through the filesystem rather than by inspecting the object: after ``close`` the
     write-ahead log has been folded back in and a *plain* ``sqlite3`` connection can read the

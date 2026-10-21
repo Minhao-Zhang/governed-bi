@@ -1,12 +1,12 @@
 """Every Protocol in the system, and the value types that cross one. stdlib only.
 
 Ports live at the bottom of the import graph so pure code can name a capability
-without importing an adapter. Single-adapter seams are rejected (no ChatModel /
+without importing an adapter. Single-adapter boundaries are rejected (no ChatModel /
 Tracer / Grader / Redactor / Checkpointer / Clock ports — adapters or values
 elsewhere satisfy the need).
 
 Every ``Adapters:`` line below must name files that exist, and every port left here has at
-least two of them. One adapter is a seam nothing can move, so the adapter list doubles as the
+least two of them. One adapter is a boundary nothing can move, so the adapter list doubles as the
 evidence that each port earns its declaration.
 """
 
@@ -58,7 +58,7 @@ class Embedder(Protocol):
     ``model/deterministic_embedder.py``. Both subclass ``model/embedder.py::BaseEmbedder``,
     which subclasses **this**.
 
-    **This is the seam's only declaration.** ``BaseEmbedder`` used to restate ``model``,
+    **This is the boundary's only declaration.** ``BaseEmbedder`` used to restate ``model``,
     ``dimensions`` and ``embed`` as a second set of abstract members, so "what must an embedder
     do" had two answers and a change had two places to land. It now inherits them, which is why
     the three below are ``@abstractmethod`` where no other port here is: ``Protocol`` members
@@ -147,4 +147,4 @@ class Connector(Protocol):
 
 # No port for the corpus store, the record sink or clarification: each has one implementation
 # and no second caller (``corpus/store.py``, ``record_node`` onto ``ServeState.turns``, and a
-# LangGraph interrupt resumed in ``serve/resume.py``), and a port with one adapter is not a seam.
+# LangGraph interrupt resumed in ``serve/resume.py``), and a port with one adapter is not a boundary.

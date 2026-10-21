@@ -8,9 +8,9 @@ only kind of reference the position permits.
 **Found in production, 2026-08-19.** Asked which buildings appear in EnergyCAP but not in
 Archibus, the agent proposed the natural shape and was refused twice:
 
-    SELECT code AS bldg_code, 'EnergyCAP only' AS side FROM ec WHERE ...
+    SELECT code AS bldg_code, 'EnergyCAP only' AS side FROM ec WHERE...
     UNION ALL
-    SELECT code AS bldg_code, 'Archibus only' AS side FROM ab WHERE ...
+    SELECT code AS bldg_code, 'Archibus only' AS side FROM ab WHERE...
     ORDER BY side, bldg_code
     -- run_query refused: bldg_code has no source to bind to: this scope selects from nothing
 
@@ -23,7 +23,7 @@ expression is not an ``exp.Select``, and a set operation's scope expression is a
 ``exp.SetOperation``. So the ``ORDER BY <alias>`` branch in ``_bind_columns`` could never fire
 for the one construct where an output name is the *only* legal spelling.
 
-**The negative case is the load-bearing one.** Resolving these names must not turn the position
+**The negative case is the one.** Resolving these names must not turn the position
 into a hole: a name that is not an output name still has nothing to bind to and must still
 refuse. Widening this to "anything under a set operation's ORDER BY passes" would be a
 fail-open, and it is the shape a careless fix takes.

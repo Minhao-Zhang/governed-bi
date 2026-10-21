@@ -47,31 +47,30 @@ export const MOCK_RUN_RECORD: Record<string, unknown> = {
   db_id: "BIRD-corpus",
   attempt_id: "ca9bed0e39d0bb07",
 
-  /* Tier.treatment */
+  /* Tier.setting under test */
   evicted: null,
   context_hash: "68de872dea5744c98bf0a24eb723396d215590a6ae68abb82989fbb4283e54ff",
   delivery_hash: "f04255af03ff1ce43b05502196def2030e1c5d76ab0108516193535c90b8b299",
   tool_delivered: {},
   corpus_content_hash: "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5",
   prompt_set_hash: "b1f9e4d7d230cb97",
-  knobs_resolved: { summary_max_chars: 250, schema_top_n: 3, lexical_weight: 0.5 },
+  settings_resolved: { summary_max_chars: 250, schema_top_n: 3, lexical_weight: 0.5 },
 
   /* Tier.decision */
-  facet_hits: {
+  channel_hits: {
     channel_schema: { queries: ["customers per region"], hits: [{ asset_id: "gbi_demo_sales.customers", asset_type: "table", lexical: 2.9, semantic: 0.81 }] },
   },
-  facet_degraded: true,
+  channel_degraded: true,
   schema_ranking: [["gbi_demo_sales", 2.9], ["gbi_demo_support", 2.62], ["gbi_demo_hr", 1.14]],
   schemas: ["gbi_demo_sales"],
   pulled_in: { "gbi_demo_sales.customers.region_id": "resolve", "gbi_demo_sales.regions.id": "connect" },
-  licensed: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
+  retrieved_tables: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
   crossings: [],
   lexical_coverage: 0.8,
   rewrite: null,
   guard: { outcome: "clear", rule_id: null, detail: null },
   negative: { outcome: "disabled", tau: null, top_score: null, matched_id: null },
   execution: { attempts: [], terminal: "no_sql", guardrail_errors: 0 },
-  reflect_verdict: null,
   n_re_served: 0,
 
   /* Tier.outcome */
@@ -91,7 +90,7 @@ export const MOCK_RUN_RECORD: Record<string, unknown> = {
   latency_sec: 39.31,
 
   /* Tier.health */
-  facet_channels: {
+  channel_scoring: {
     channel_schema: { lexical: "ran", semantic: "ran" },
     channel_entity: { lexical: "ran", semantic: "failed" },
   },
@@ -110,8 +109,8 @@ export const MOCK_ANSWER: AnswerView = {
     ...MOCK_RUN_RECORD,
     outcome: "answered",
     generated_sql: "SELECT r.name AS region, count(c.id) AS customers FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.name;",
-    execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", verdict_layer: null, path: "agent" }], guardrail_errors: 0 },
-    licensed: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
+    execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", result_layer: null, path: "agent" }], guardrail_errors: 0 },
+    retrieved_tables: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
     context_hash: "907e44d8b21c2212f21e01bf79e04737d3bf5305a24aeda98d4b326d54311921",
     corpus_content_hash: "c1296e937e4d7fe0a1b2c3d4e5f60718",
     db_id: "gbi_demo_sales",
@@ -133,8 +132,8 @@ export const MOCK_GRADED_ANSWER: AnswerView = {
     ...MOCK_RUN_RECORD,
     outcome: "answered",
     generated_sql: "SELECT r.name AS region, count(c.id) AS customers FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.name;",
-    execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", verdict_layer: null, path: "agent" }], guardrail_errors: 0 },
-    licensed: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
+    execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", result_layer: null, path: "agent" }], guardrail_errors: 0 },
+    retrieved_tables: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
     context_hash: "907e44d8b21c2212f21e01bf79e04737d3bf5305a24aeda98d4b326d54311921",
     corpus_content_hash: "c1296e937e4d7fe0a1b2c3d4e5f60718",
     db_id: "gbi_demo_sales",
@@ -154,16 +153,16 @@ export const MOCK_GRADED_ANSWER: AnswerView = {
  *
  * The shape it exercises, in order:
  *
- *  - the intake rails, including a `rewrite` that fired and the `negative_gate`
- *    reporting `gate: "disabled"` — which is what it reports on essentially every
- *    turn today, because `negative_tau` is unset until a negative corpus exists;
- *  - the five facets **interleaved**, starting together and resolving out of order,
- *    which is the concurrency the grouped timeline exists to absorb;
- *  - `route`/`resolve`/`connect`/`assemble`, with a cross-schema crossing;
- *  - the agent loop: two reads, a `check` that governance **blocks**, the repair,
- *    then a passing `check` + the `execute` that carries the statement and its
- *    digest — the pair that replaced v1's single `run_query` row;
- *  - `finish`, the one `final` event, agreeing with the answer fixture's outcome.
+ * - the intake rails, including a `rewrite` that fired and the `negative_check`
+ * reporting `check: "disabled"` — which is what it reports on essentially every
+ * turn today, because `negative_tau` is unset until a negative corpus exists;
+ * - the five retrieval channels **interleaved**, starting together and resolving out of order,
+ * which is the concurrency the grouped timeline exists to absorb;
+ * - `route`/`resolve`/`connect`/`assemble`, with a cross-schema crossing;
+ * - the agent loop: two reads, a `check` that governance **blocks**, the repair,
+ * then a passing `check` + the `execute` that carries the statement and its
+ * digest — the pair that replaced v1's single `run_query` row;
+ * - `finish`, the one `final` event, agreeing with the answer fixture's outcome.
  *
  * `useChat` replays it through `reduceSteps` on a timer. `seq` starts at 1 because
  * the engine's counter does (`itertools.count(1)`), and `execute` deliberately has
@@ -190,10 +189,10 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
     kind: "rail",
     step: "negative_gate",
     status: "ok",
-    detail: { gate: "disabled" },
+    detail: { check: "disabled" },
   },
 
-  /* ── the five facets, concurrent ─────────────────────────────────────────── */
+  /* ── the five retrieval channels, concurrent ─────────────────────────────────────────── */
   { seq: 9, id: "channel_schema:turn_mock", kind: "rail", step: "channel_schema", status: "start" },
   { seq: 10, id: "channel_term:turn_mock", kind: "rail", step: "channel_term", status: "start" },
   { seq: 11, id: "channel_metric:turn_mock", kind: "rail", step: "channel_metric", status: "start" },
@@ -203,7 +202,7 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
   { seq: 15, id: "channel_schema:turn_mock", kind: "rail", step: "channel_schema", status: "ok", detail: { n_hits: 6 } },
   { seq: 16, id: "channel_example:turn_mock", kind: "rail", step: "channel_example", status: "ok", detail: { n_hits: 3 } },
   { seq: 17, id: "channel_metric:turn_mock", kind: "rail", step: "channel_metric", status: "ok", detail: { n_hits: 1 } },
-  // Zero hits, and it says so rather than going quiet: a facet that found nothing
+  // Zero hits, and it says so rather than going quiet: a retrieval channel that found nothing
   // is a fact about the corpus.
   { seq: 18, id: "channel_entity:turn_mock", kind: "rail", step: "channel_entity", status: "ok", detail: { n_hits: 0 } },
 
@@ -224,7 +223,7 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
     kind: "rail",
     step: "resolve",
     status: "ok",
-    detail: { n_pulled_in: 4, n_licensed: 3 },
+    detail: { n_pulled_in: 4, n_retrieved_tables: 3 },
   },
   { seq: 23, id: "connect:turn_mock", kind: "rail", step: "connect", status: "start" },
   {
@@ -234,7 +233,7 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
     step: "connect",
     status: "ok",
     // One crossing: table_d lives in `billing` and the rest in `sales`.
-    detail: { n_crossings: 1, n_licensed: 3 },
+    detail: { n_crossings: 1, n_retrieved_tables: 3 },
   },
   { seq: 25, id: "assemble:turn_mock", kind: "rail", step: "assemble", status: "start" },
   {
@@ -294,7 +293,7 @@ export const MOCK_AGENT_EVENTS: GovEvent[] = [
     kind: "tool",
     step: "check",
     status: "blocked",
-    detail: { attempt: 1, layer: "table", reason_code: "r_table_not_licensed" },
+    detail: { attempt: 1, layer: "table", reason_code: "r_table_not_retrieved" },
   },
   // Attempt 2: the repair clears governance and runs.
   { seq: 36, id: "check:call_5", kind: "tool", step: "check", status: "start", detail: { attempt: 2 } },
@@ -352,8 +351,8 @@ export const MOCK_AGENT_ANSWER: AnswerView = {
     ...MOCK_RUN_RECORD,
     outcome: "answered",
     generated_sql: "SELECT r.name AS region, count(c.id) AS customers FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.name;",
-    execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", verdict_layer: null, path: "agent" }], guardrail_errors: 0 },
-    licensed: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
+    execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", result_layer: null, path: "agent" }], guardrail_errors: 0 },
+    retrieved_tables: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
     context_hash: "907e44d8b21c2212f21e01bf79e04737d3bf5305a24aeda98d4b326d54311921",
     corpus_content_hash: "c1296e937e4d7fe0a1b2c3d4e5f60718",
     db_id: "gbi_demo_sales",
@@ -396,8 +395,8 @@ export const MOCK_CLARIFIED_ANSWER: AnswerView = {
     ...MOCK_RUN_RECORD,
     outcome: "answered",
     generated_sql: "SELECT r.name AS region, count(c.id) AS customers FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.name;",
-    execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", verdict_layer: null, path: "agent" }], guardrail_errors: 0 },
-    licensed: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
+    execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", result_layer: null, path: "agent" }], guardrail_errors: 0 },
+    retrieved_tables: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
     context_hash: "907e44d8b21c2212f21e01bf79e04737d3bf5305a24aeda98d4b326d54311921",
     corpus_content_hash: "c1296e937e4d7fe0a1b2c3d4e5f60718",
     db_id: "gbi_demo_sales",
@@ -406,7 +405,7 @@ export const MOCK_CLARIFIED_ANSWER: AnswerView = {
   },
 };
 
-/** Decline / ranking cancel: fail closed, same outcome the live graph stamps. */
+/** Decline / ranking cancel: fail closed, same outcome the live graph finishes. */
 export const MOCK_CLARIFICATION_CLOSED: AnswerView = {
   outcome: "clarification",
   text: "The user declined this clarification. The engine did not guess a reading.",
@@ -419,7 +418,7 @@ export const MOCK_CLARIFICATION_CLOSED: AnswerView = {
     outcome: "clarification",
     generated_sql: null,
     execution: { terminal: "no_sql", attempts: [], guardrail_errors: 0 },
-    licensed: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
+    retrieved_tables: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
     context_hash: "907e44d8b21c2212f21e01bf79e04737d3bf5305a24aeda98d4b326d54311921",
     corpus_content_hash: "c1296e937e4d7fe0a1b2c3d4e5f60718",
     db_id: "gbi_demo_sales",
@@ -440,8 +439,8 @@ export const MOCK_REFUSAL: AnswerView = {
     ...MOCK_RUN_RECORD,
     outcome: "refused",
     generated_sql: null,
-    execution: { terminal: "refused", attempts: [{ passed: false, reason_code: "r_table_not_licensed", verdict_layer: 3, path: "agent" }], guardrail_errors: 0 },
-    licensed: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
+    execution: { terminal: "refused", attempts: [{ passed: false, reason_code: "r_table_not_retrieved", result_layer: 3, path: "agent" }], guardrail_errors: 0 },
+    retrieved_tables: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
     context_hash: "907e44d8b21c2212f21e01bf79e04737d3bf5305a24aeda98d4b326d54311921",
     corpus_content_hash: "c1296e937e4d7fe0a1b2c3d4e5f60718",
     db_id: "gbi_demo_sales",

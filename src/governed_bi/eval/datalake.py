@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from governed_bi.registry.stages import Outcome
+from governed_bi.registry.stored_names import artifact_get, artifact_has
 
 __all__ = [
     "load_questions",
@@ -139,7 +140,7 @@ def attach_quality_flags(
         flags = [name for name, ids in buckets if qid in ids]
         # An unparseable gold is **not** degenerate: `gold_tables` returns None there, and
         # collapsing "no tables" with "could not tell" would flag a parser gap as a dataset
-        # defect and quietly shrink the denominator.
+        # defect and shrink the denominator.
         if gold_tables(str(question.get("gold_sql") or "")) == set():
             flags.append("degenerate")
         question["quality_flags"] = flags
@@ -240,7 +241,7 @@ def load_questions(
     limit: int | None = None,
     per_schema: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Test questions, filtered to schemas the corpus actually carries.
+    """Test questions, filtered to schemas the corpus carries.
 
     A question whose ``db_id`` is not in the corpus is **not** an engine failure: the corpus
     covers 57 of the database's 70 schemas, so scoring the other 13 reports a curation gap as
@@ -353,9 +354,9 @@ def routing_recall(
                 "rank": (ranking.index(gold) + 1) if gold in ranking else None,
                 "n_scored": len(ranking),
                 # The table ids themselves, not only their schemas: `table_coverage` reads
-                # exactly this key, and without it reports `all_gold_tables_licensed: 0.0`
+                # exactly this key, and without it reports `all_gold_tables_retrieved: 0.0`
                 # for every config — a plausible number rather than an error.
-                "licensed": retrieved_tables,
+                "retrieved_tables": retrieved_tables,
                 # What survived `connect`'s component pick. `hit` says the router
                 # shortlisted the gold schema; this says the turn could still reach it.
                 "retrieved_tables_schemas": sorted({t.split(".", 1)[0] for t in retrieved_tables}),
@@ -541,13 +542,13 @@ def table_coverage(
         # means the producer does not carry the field, empty means the turn retrieved nothing
         # and is a real measurement. Scoring absent as zero published a 0.000 ceiling for two
         # configs that had in fact routed well (their recalls are retired; citations.py).
-        if "licensed" not in row:
+        if not artifact_has(row, "retrieved_tables"):
             raise KeyError(
-                "table_coverage needs `licensed` (the table ids) on every row and this one "
+                "table_coverage needs `retrieved_tables` (the table ids) on every row and this one "
                 f"carries {sorted(row)}. Scoring it as zero coverage would publish a ceiling "
                 "of 0.000 for a run that retrieved tables on every turn."
             )
-        retrieved_tables = {str(t).lower() for t in (row.get("licensed") or ())}
+        retrieved_tables = {str(t).lower() for t in (artifact_get(row, "retrieved_tables") or ())}
         hits = sum(1 for table in needed if gold_table_ids(table) & retrieved_tables)
         if needed and hits == len(needed):
             full += 1
@@ -586,9 +587,9 @@ def retrieval_funnel(
     ``schema_routed``
         gold ``db_id`` among the routed schemas. Unconditional.
     ``tables_in_routed_schemas``
-        given that, every gold table lives in a routed schema. A drop here is a genuinely
+        given that, every gold table lives in a routed schema. A drop here is a 
         cross-schema question; on BIRD-obfuscated there are none.
-    ``all_gold_tables_licensed``
+    ``all_gold_tables_retrieved``
         given that, every gold table survived pass two, the budget and ``connect``.
     ``answered``
         given a retrieved tables that could support an answer. The gap from the stage above is
@@ -628,7 +629,7 @@ def retrieval_funnel(
         "unmeasured": 0,
         "correct": 0,
         # Two different facts, counted apart. They were one counter, so a gold this metric
-        # *cannot read* and a gold that genuinely reads nothing were indistinguishable —
+        # *cannot read* and a gold that reads nothing were indistinguishable —
         # ``table_coverage`` has always separated them and the funnel disagreed with it.
         "gold_sql_unparsed": 0,
         "gold_reads_no_table": 0,
@@ -665,7 +666,7 @@ def retrieval_funnel(
 
         routed = {str(s) for s in (row.get("retrieved_tables_schemas") or ())}
         if not routed:
-            routed = {str(t).split(".", 1)[0] for t in (row.get("licensed") or ())}
+            routed = {str(t).split(".", 1)[0] for t in (artifact_get(row, "retrieved_tables") or ())}
         gold_db = str((gold_db_by_qid or {}).get(qid) or row.get("db_id") or "")
         if gold_db and gold_db not in routed:
             continue
@@ -675,7 +676,7 @@ def retrieval_funnel(
             continue
         counts["tables_in_routed_schemas"] += 1
 
-        retrieved_tables = {str(t).lower() for t in (row.get("licensed") or ())}
+        retrieved_tables = {str(t).lower() for t in (artifact_get(row, "retrieved_tables") or ())}
         # Through ``gold_table_ids`` and not ``str(t).lower() in retrieved_tables``: the same stage in
         # ``table_coverage`` reads the same two nouns, and two rules for "was this gold table
         # retrieved_tables" is one number disagreeing with another over the same rows.
@@ -816,14 +817,14 @@ def observed_tokens(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         "rows": len(rows),
         "calls": calls,
-        # How much of ``calls`` came from a row that actually counted, rather than from the
+        # How much of ``calls`` came from a row that counted, rather than from the
         # one-row-is-one-call fallback. Below ``calls`` means the batch predates ``model_calls``
         # and its agent loops are under-counted -- stated, because a total that is partly a
         # fallback and says so is a different fact from one that is not.
         "calls_measured": calls_measured,
         "input_tokens": tokens_in,
         "output_tokens": tokens_out,
-        # Per stage: ``llm_utility_model`` is a comparability setting justified by cost and
+        # Per stage: ``llm_utility_model`` is a setting that affects results justified by cost and
         # latency, and "which stage spent it" is the only way to argue either.
         "by_stage": dict(sorted(per_stage.items())),
     }

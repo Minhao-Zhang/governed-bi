@@ -272,7 +272,7 @@ def test_a_declining_node_still_reports_what_it_measured() -> None:
          "crossings": [], "retrieved_tables": ["a.t1", "a.t2"]},
     )
     assert detail["reason"] == "missing_join_path"
-    assert detail["n_licensed"] == 2
+    assert detail["n_retrieved_tables"] == 2
     assert detail["n_crossings"] == 0
 
 

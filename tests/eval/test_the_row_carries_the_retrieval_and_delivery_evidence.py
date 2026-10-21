@@ -1,9 +1,9 @@
 """Nine declared record fields reached ``finish`` and stopped there.
 
-Same defect as ``reflect_verdict`` (see the test beside this one): ``finish`` projects the field
+Same defect as ``reflect_result`` (see the test beside this one): ``finish`` projects the field
 into the turn record, ``eval/harness.project_turn`` builds the measurement row from a fixed key
 list, and the field is not on it — so the config that would have used the evidence produced an
-artifact without it. The nine were ``schema_ranking``, ``facet_hits``, ``lexical_coverage``,
+artifact without it. The nine were ``schema_ranking``, ``channel_hits``, ``lexical_coverage``,
 ``guard``, ``crossings``, ``pulled_in``, ``delivery_hash``, ``tool_delivered`` and
 ``latency_sec``; the last means none of the 1351-row configs in ``runs/eval/`` records wall clock
 at all.
@@ -100,14 +100,14 @@ def test_a_turn_that_never_routed_carries_no_ranking_and_an_empty_one_carries_ze
     }
 
 
-# ── facet_hits ───────────────────────────────────────────────────────────────
+# ── channel_hits ───────────────────────────────────────────────────────────────
 
 
 def test_the_row_attributes_a_channels_hits_to_named_assets():
     """The register's reason for the field is attribution, so the asset ids must survive."""
     hits = [{"asset_id": f"beer_factory.t{i}", "score": 1.0 - i / 100} for i in range(50)]
-    row = _row(_record(facet_hits={"channel_term": {"queries": ["beer"], "hits": hits}}))
-    channel = row["facet_hits"]["channel_term"]
+    row = _row(_record(channel_hits={"channel_term": {"queries": ["beer"], "hits": hits}}))
+    channel = row["channel_hits"]["channel_term"]
     assert channel["queries"] == ["beer"]
     assert channel["top"][0] == "beer_factory.t0"
     assert channel["top"][9] == "beer_factory.t9"
@@ -117,16 +117,16 @@ def test_the_hit_count_is_taken_before_the_summary_truncates():
     """`n_hits` says the fan-out returned fifty; `top` is the ten kept. A count of the kept
     list would report every channel as returning ten and hide a channel that returned two."""
     hits = [{"asset_id": f"a{i}"} for i in range(50)]
-    row = _row(_record(facet_hits={"channel_term": {"queries": ["q"], "hits": hits}}))
-    assert row["facet_hits"]["channel_term"]["n_hits"] == 50
-    assert len(row["facet_hits"]["channel_term"]["top"]) == 10
+    row = _row(_record(channel_hits={"channel_term": {"queries": ["q"], "hits": hits}}))
+    assert row["channel_hits"]["channel_term"]["n_hits"] == 50
+    assert len(row["channel_hits"]["channel_term"]["top"]) == 10
 
-    thin = _row(_record(facet_hits={"channel_term": {"queries": ["q"], "hits": hits[:2]}}))
-    assert thin["facet_hits"]["channel_term"]["n_hits"] == 2
+    thin = _row(_record(channel_hits={"channel_term": {"queries": ["q"], "hits": hits[:2]}}))
+    assert thin["channel_hits"]["channel_term"]["n_hits"] == 2
 
 
 def test_a_turn_whose_fan_out_did_not_run_carries_no_channel_hits():
-    assert _row(_record())["facet_hits"] is None
+    assert _row(_record())["channel_hits"] is None
 
 
 # ── pulled_in ────────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ timeouts are settings now.
 Two things are asserted here and they fail differently, which is why both exist:
 
 * the values **reach the SDK client**, because a setting that stops being passed leaves an
-  object that still works and quietly runs on someone else's defaults — the state this replaces;
+  object that still works and runs on someone else's defaults — the state this replaces;
 * the values are **recorded as settings**, because retries move `crash_rate` and `crash_rate` is
   what the quotability checks read. Two runs differing only in retries comparing as one is the
   `llm_reasoning_effort` failure exactly.
@@ -25,10 +25,10 @@ from governed_bi.registry.settings import SETTING_REGISTER, setting_default
 RESILIENCE_SETTINGS = ("llm_max_retries", "llm_timeout_s", "llm_utility_timeout_s")
 
 
-def test_the_three_settings_are_declared_comparability() -> None:
+def test_the_three_settings_are_declared_affects_results() -> None:
     """Not `Role.scope`, not undeclared config.
 
-    A retry budget that is not comparability is a run able to change its own crash rate and
+    A retry budget that is not a setting that affects results is a run able to change its own crash rate and
     still compare as unchanged — and `crash_rate` is a quotability check's input.
     """
     by_name = {k.name: k for k in SETTING_REGISTER}

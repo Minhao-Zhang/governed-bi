@@ -1,7 +1,7 @@
 """What an eval row can be ranked on, and which way round.
 
-Separated from :mod:`.selective` because the two answer different questions. This
-module answers "what did the artifact actually record", which is a fact about
+Separated from:mod:`.selective` because the two answer different questions. This
+module answers "what did the artifact record", which is a fact about
 ``eval/projection.py::project_turn`` (re-exported from ``eval/harness.py``);
 :mod:`.selective` answers "what does ranking on it
 buy", which is a fact about the config.
@@ -46,7 +46,7 @@ __all__ = [
 #: Adding a name here is the deliberate act the guard exists to force. It is checked
 #: against :data:`_NEVER_READABLE` below, so the addition cannot be a grade field.
 READABLE_FIELDS: frozenset[str] = frozenset(
-    {"usage", "attempts", "licensed", "generated_sql"}
+    {"usage", "attempts", "retrieved_tables", "generated_sql"}
 )
 
 #: Substrings no allowlisted field may contain. The second lock: it guards the
@@ -126,6 +126,13 @@ def _sql_length(row: TurnRow) -> float | None:
     return None if sql is None else float(len(str(sql)))
 
 
+def _n_retrieved_tables(row: TurnRow) -> float | None:
+    """How many tables the turn retrieved. Old artifacts still use the previous field name."""
+    if "retrieved_tables" in row:
+        return _size(row, "retrieved_tables")
+    return _size(row, "licensed")
+
+
 def _size(row: TurnRow, field: str) -> float | None:
     """Length of a recorded list, or ``None`` when the field was never written.
 
@@ -202,9 +209,9 @@ SIGNALS: Mapping[str, Signal] = {
             _failed_attempts,
         ),
         _declare(
-            "n_licensed", Direction.lower_first,
+            "n_retrieved_tables", Direction.lower_first,
             "a turn that retrieved many tables is a turn retrieval could not narrow",
-            lambda row: _size(row, "licensed"),
+            _n_retrieved_tables,
         ),
         _declare(
             "sql_len", Direction.lower_first,
@@ -219,7 +226,7 @@ class _RecordingRow(dict):
     """A row that remembers which keys were asked for.
 
     ``dict`` rather than a ``Mapping`` wrapper so a signal doing anything a dict supports
-    -- ``in``, ``[]``, iteration -- still works; the two access paths a signal actually
+    -- ``in``, ``[]``, iteration -- still works; the two access paths a signal 
     uses are overridden. Iteration is *not* recorded as a read of every key, and does not
     need to be: :func:`assert_no_signal_reads_the_grade` checks the keys against the
     allowlist, and a signal that iterated the whole row to find the grade would have to
@@ -274,7 +281,7 @@ def assert_no_signal_reads_the_grade(signals: Mapping[str, Signal]) -> None:
         "outcome": Outcome.answered.value,
         "usage": [{"stage": "agent_core", "output_tokens": 7, "input_tokens": 9, "model_calls": 2}],
         "attempts": [{"passed": True}, {"passed": False}],
-        "licensed": ["a", "b"],
+        "retrieved_tables": ["a", "b"],
         "generated_sql": "SELECT 1",
         "correct": True,
         "computed_correct": True,

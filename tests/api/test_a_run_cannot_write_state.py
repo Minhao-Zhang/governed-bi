@@ -19,7 +19,7 @@ scheduler and the v2 event-streaming path. One dispatch, so one test covers them
 2026-08-13.** It was written and audited alongside A4 and nothing in the suite ever dispatched
 against it, so deleting ``@auth.on.threads.update`` was a green diff: ``_get_handler`` returns
 ``None`` on no match and ``handle_event`` treats that as *allow*, which is the same fail-open
-shape the A4 story above is about. It became load-bearing when the transport key was removed,
+shape the A4 story above is about. It became when the transport key was removed,
 since the key was the other thing standing between an arbitrary local caller and
 ``POST /threads/{id}/state``.
 """
@@ -81,7 +81,7 @@ def test_the_runtime_dispatch_refuses_a_forged_retrieved_tables_and_corpus_hash(
     """The payload the audit row claimed was refused, through the path a request takes.
 
     ``retrieved_tables`` is the bound ``govern/bounds.py`` enforces against, so widening it and resuming
-    executes SQL against tables the corpus never retrieved_tables. ``corpus_content_hash`` is the treatment
+    executes SQL against tables the corpus never retrieved_tables. ``corpus_content_hash`` is the setting under test
     identity every quotability check reads.
     """
     with pytest.raises(Exception) as caught:
@@ -137,7 +137,7 @@ def test_the_runtime_dispatch_refuses_a_thread_state_write() -> None:
     assert "as_node" in str(getattr(caught.value, "detail", caught.value))
 
 
-def test_both_handlers_are_actually_registered() -> None:
+def test_both_handlers_are_registered() -> None:
     """The wiring, asserted separately — deleting a decorator left the old A4 test green.
 
     ``langgraph_api``'s ``_get_handler`` returns ``None`` when nothing matches and ``handle_event``

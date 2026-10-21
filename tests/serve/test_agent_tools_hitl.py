@@ -4,7 +4,7 @@
 checks that sat next to it (``test_delivery_hash_stable_for_same_tool_payload``,
 ``test_tool_bounds_from_state_includes_pulled_in``), moved to
 ``test_sample_rows_governed_executor.py``. This file was **seven lines** from ADR 0005 §6's hard
-cap at 1,000, so the next test written here would have failed the build; the seam is the one the
+cap at 1,000, so the next test written here would have failed the build; the boundary is the one the
 docstring above already draws, since neither the executor cluster nor those two checks touch the
 HITL machinery the rest of this file exists for.
 
@@ -93,7 +93,7 @@ def _state(**overrides: Any) -> dict[str, Any]:
         },
         "execution": {"attempts": [], "terminal": "no_sql", "guardrail_errors": 0},
         "messages": [],
-        "knobs_resolved": {},
+        "settings_resolved": {},
     }
     payload.update(overrides)
     return payload
@@ -434,7 +434,7 @@ def test_ask_user_interrupt_and_resume() -> None:
         "attempt_id": "a",
         "corpus_content_hash": "c",
         "prompt_set_hash": "p",
-        "knobs_resolved": {},
+        "settings_resolved": {},
         "n_re_served": 0,
         "channel_route_hits": [("channel_schema", "sales", 1.0)],
         "messages": [],
@@ -503,7 +503,7 @@ def test_the_ledger_survives_the_interrupt() -> None:
         "question": "revenue?", "thread_id": "t-ledger", "turn_index": 1,
         "turn_id": "turn-ledger", "run_id": "r", "question_id": "q", "db_id": "sales",
         "attempt_id": "a", "corpus_content_hash": "c", "prompt_set_hash": "p",
-        "knobs_resolved": {}, "n_re_served": 0, "retrieved_tables": ["sales.customers"],
+        "settings_resolved": {}, "n_re_served": 0, "retrieved_tables": ["sales.customers"],
         "channel_route_hits": [("channel_schema", "sales", 1.0)],
         "messages": [], "usage": [],
     }
@@ -602,7 +602,7 @@ def _clarify_turn(*, thread: str, turn: str) -> dict[str, Any]:
     return {
         "question": "revenue?", "thread_id": thread, "turn_index": 1, "turn_id": turn,
         "run_id": "r", "question_id": "q", "db_id": "sales", "attempt_id": "a",
-        "corpus_content_hash": "c", "prompt_set_hash": "p", "knobs_resolved": {},
+        "corpus_content_hash": "c", "prompt_set_hash": "p", "settings_resolved": {},
         "n_re_served": 0, "channel_route_hits": [("channel_schema", "sales", 1.0)],
         "messages": [], "usage": [], "clarifications": [],
     }

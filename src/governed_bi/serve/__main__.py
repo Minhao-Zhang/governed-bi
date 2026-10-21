@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-q", "--question", required=True)
     parser.add_argument("--schema", help="schema to seed from, or the manifest entry to load")
     parser.add_argument("--corpus-dir", help="a corpus already on disk; omit to seed from --schema")
-    # No `default=`: the only honest one is "a thread nobody named", and spelling that as a
+    # No `default=`: the only one is "a thread nobody named", and spelling that as a
     # constant would make the id look nameable when it is a fresh uuid per process. Absent is
     # absent, and `_forget_thread` reads it that way.
     parser.add_argument(
@@ -252,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"outcome  : {answer.get('outcome')}")
         print(f"answer   : {text}")
         print(f"sql      : {record.get('generated_sql')}")
-        print(f"licensed : {', '.join(record.get('licensed') or []) or '(none)'}")
+        print(f"licensed : {', '.join(record.get('retrieved_tables') or []) or '(none)'}")
         execution = record.get("execution") or {}
         print(f"terminal : {execution.get('terminal')}  attempts={len(execution.get('attempts') or [])}")
         for attempt in execution.get("attempts") or []:

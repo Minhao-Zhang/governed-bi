@@ -62,7 +62,7 @@ def test_changing_one_setting_changes_the_config_hash(monkeypatch) -> None:
     assert config_hash(first) != config_hash(second)
 
 
-# ── the guards must actually fire ──────────────────────────────────────────────
+# ── the guards must fire ──────────────────────────────────────────────
 
 
 def test_presence_test_rejects_a_record_of_nulls() -> None:
@@ -70,7 +70,7 @@ def test_presence_test_rejects_a_record_of_nulls() -> None:
 
     ``project`` writes every declared key, so key-presence alone always passes. This
     is the same defect as v1's ``corpus_content_hash == "unknown"`` comparing equal
-    to itself and letting two runs with no recorded treatment pass comparability.
+    to itself and letting two runs with no recorded setting under test pass the shared-settings check.
     """
     all_null = {f.name: None for f in record.RECORD_REGISTER}
     assert record.missing_required(all_null) == record.required_keys()
@@ -81,7 +81,7 @@ def test_a_refusal_path_record_passes() -> None:
 
     A guard-blocked turn reaches ``finish`` without running the channels, ``connect``
     or the agent loop. Declaring those fields ``never`` would either fail every
-    refusal or force an empty-collection encoding — and an empty ``facet_channels``
+    refusal or force an empty-collection encoding — and an empty ``channel_scoring``
     reads as *clean* to a check looking for degradation.
     """
     rec = {f.name: None for f in record.RECORD_REGISTER}
@@ -214,7 +214,7 @@ def _base_turn(**overrides):
         "attempt_id": "attempt-1",
         "corpus_content_hash": "corpus-hash",
         "prompt_set_hash": "prompt-hash",
-        "knobs_resolved": {"route_top_n": 3},
+        "settings_resolved": {"route_top_n": 3},
         "n_re_served": 0,
         "channel_route_hits": [],
         "messages": [],
@@ -290,7 +290,7 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> Non
     assert statementless["answer"]["outcome"] == stages.Outcome.no_sql.value, (
         f"refused_by={statementless['answer'].get('refused_by')!r} "
         f"terminal_reason={statementless.get('terminal_reason')!r} "
-        f"licensed={statementless.get('licensed')!r} "
+        f"licensed={statementless.get('retrieved_tables')!r} "
         f"schemas={statementless.get('schemas')!r}"
     )
     assert not missing_required(statementless["answer"]["record"])

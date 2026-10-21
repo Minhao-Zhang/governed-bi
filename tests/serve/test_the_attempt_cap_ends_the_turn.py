@@ -237,7 +237,7 @@ def test_a_capped_turn_reaches_the_record_as_capped(tmp_path: Path) -> None:
                 "turn_index": turn_index,
                 "turn_id": f"turn-cap-{turn_index}",
                 "run_id": "r", "question_id": "q", "db_id": "main", "attempt_id": "a",
-                "corpus_content_hash": "c", "prompt_set_hash": "p", "knobs_resolved": {},
+                "corpus_content_hash": "c", "prompt_set_hash": "p", "settings_resolved": {},
                 "n_re_served": 0, "retrieved_tables": ["main.customers", "customers"],
                 "channel_route_hits": [("channel_schema", "main", 1.0)],
                 "messages": [], "usage": [], "identity": {"token": "tok"},

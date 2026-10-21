@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
  * premise stopped being true. It rested on the narrate prompt asking for one or two
  * sentences, and `serve/nodes/narrate.py` *adopts the agent's own last message* whenever the
  * turn was not capped — so the prompt's constraints never ran on the text the card shows.
- * What a reader actually saw was `##` and backticks rendered as literal characters in the
+ * What a reader saw was `##` and backticks rendered as literal characters in the
  * middle of a report the agent had structured with headings, code spans and sections.
  *
  * **What is still not rendered: raw HTML.** No `rehype-raw`, so `<script>`, `<iframe>` and

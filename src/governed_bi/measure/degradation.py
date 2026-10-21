@@ -1,7 +1,7 @@
-"""Walk ``facet_channels`` against the declared channel table.
+"""Walk ``channel_scoring`` against the declared channel table.
 
 Judgement lives in ``registry.channels``; this module produces the triples.
-:func:`facets_degraded` for quotability (no ``extra_channel``);
+:func:`channels_degraded` for quotability (no ``extra_channel``);
 :func:`channel_anomalies` for diagnostics (includes ``extra_channel``).
 """
 
@@ -18,9 +18,9 @@ __all__ = ["channel_observations", "channels_degraded", "channel_anomalies"]
 
 
 def channel_observations(
-    facet_channels: Any,
+    channel_scoring: Any,
 ) -> tuple[tuple[Stage, Channel, ChannelState], ...]:
-    """Every ``(stage, scoring channel, observed)`` triple a recorded ``facet_channels`` names.
+    """Every ``(stage, scoring channel, observed)`` triple a recorded ``channel_scoring`` names.
 
     Empty for ``None`` or ``{}`` — the fan-out did not run, which is a stage-conditional
     absence and **not** "no channel differed"; ``checks.py`` restricts the population first.
@@ -28,13 +28,13 @@ def channel_observations(
     Raises ``ValueError`` on an undeclared channel or channel name: the record and the
     register disagreeing about what a channel is cannot be answered with "nothing wrong here".
     """
-    if not isinstance(facet_channels, Mapping):
+    if not isinstance(channel_scoring, Mapping):
         return ()
     out: list[tuple[Stage, Channel, ChannelState]] = []
-    for channel_name, channels in facet_channels.items():
+    for channel_name, channels in channel_scoring.items():
         if not isinstance(channels, Mapping):
             raise ValueError(
-                f"facet_channels[{channel_name!r}] is {type(channels).__name__}, not a "
+                f"channel_scoring[{channel_name!r}] is {type(channels).__name__}, not a "
                 "channel -> state mapping, so no channel state can be judged"
             )
         channel = _member(Stage, channel_name, "channel")
@@ -49,30 +49,30 @@ def channel_observations(
     return tuple(out)
 
 
-def channels_degraded(facet_channels: Any) -> bool:
+def channels_degraded(channel_scoring: Any) -> bool:
     """True when some channel ran on fewer channels than ``DECLARED_CHANNELS`` declares.
 
-    The value ``facet_degraded`` carries. ``False`` here means every declared channel of
-    every channel in the record reported ``ran``; on a record with no ``facet_channels`` at
+    The value ``channel_degraded`` carries. ``False`` here means every declared channel of
+    every channel in the record reported ``ran``; on a record with no ``channel_scoring`` at
     all it also returns ``False``, which is why the field's declared absence is
     ``not_applicable`` and the finish writes ``None`` rather than calling this on a turn
     whose fan-out never ran.
     """
     return any(
         is_degraded(stage, channel, observed)
-        for stage, channel, observed in channel_observations(facet_channels)
+        for stage, channel, observed in channel_observations(channel_scoring)
     )
 
 
-def channel_anomalies(facet_channels: Any) -> dict[str, str]:
+def channel_anomalies(channel_scoring: Any) -> dict[str, str]:
     """``"channel.channel" -> Anomaly`` for every state that differs from its declaration.
 
-    The diagnostic beside :func:`facets_degraded`'s result: ``True`` says the run is not
+    The diagnostic beside :func:`channels_degraded`'s result: ``True`` says the run is not
     quotable, this says which channel of which channel made it so — and it also names
     ``extra_channel``, which must be reported and must not refuse a run.
     """
     out: dict[str, str] = {}
-    for stage, channel, observed in channel_observations(facet_channels):
+    for stage, channel, observed in channel_observations(channel_scoring):
         anomaly = channel_anomaly(stage, channel, observed)
         if anomaly is not None:
             out[f"{stage.value}.{channel.value}"] = anomaly.value

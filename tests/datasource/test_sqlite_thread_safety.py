@@ -47,7 +47,7 @@ def test_execute_survives_a_call_from_a_different_thread_than_the_one_that_opene
     columns, rows, _ = connector.execute("SELECT COUNT(*) FROM t")
     assert rows == [(3,)]
 
-    # Second call, from a genuinely different thread — the exact shape of a LangGraph tool
+    # Second call, from a different thread — the exact shape of a LangGraph tool
     # node running after the connector's first use. Must not raise.
     result: dict[str, object] = {}
 
@@ -95,7 +95,7 @@ def test_many_sequential_calls_from_alternating_threads_all_succeed(db_path) -> 
     """Not just "the second caller" — every caller, in any order, on any thread.
 
     A fix that special-cased "the first call after construction" would still break on a third
-    thread; alternating threads across several calls is what actually exercises "no caching
+    thread; alternating threads across several calls is what exercises "no caching
     across threads at all," rather than "caching survives exactly one handoff."
     """
     connector = SqliteConnector(db_path)

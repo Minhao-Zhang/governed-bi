@@ -36,7 +36,7 @@ EVAL_MODULES = (
     "governed_bi.eval.report",
 )
 
-#: The scripts a person actually runs. Both were broken by a deletion and neither had a test.
+#: The scripts a person runs. Both were broken by a deletion and neither had a test.
 DRIVERS = ("run_datalake_eval.py", "regrade.py", "datalake_report.py")
 
 

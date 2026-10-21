@@ -3,7 +3,7 @@
 `routes.make_app(session, pending)` and `graph_app.build_serve_graph(session)` take their
 dependencies, and the fixtures below are four assets in memory, so nothing here needs a database,
 a model or a key. Two rules run through it: a client may not write the run's claims about itself
-(`run_id`, `corpus_content_hash`, `knobs_resolved` and their siblings), and a field the engine does
+(`run_id`, `corpus_content_hash`, `settings_resolved` and their siblings), and a field the engine does
 not observe must not be invented at the boundary (ADR 0007 §3).
 """
 
@@ -85,7 +85,7 @@ def test_a_client_cannot_set_any_provenance_field() -> None:
     not that it forgets: it is that it **merges** what the client sent.
 
     `run_id`, `turn_id`, `question_id`, `corpus_content_hash`, `prompt_set_hash`,
-    `knobs_resolved` are the run's own claims about itself, and `measure/checks.py` reads them
+    `settings_resolved` are the run's own claims about itself, and `measure/checks.py` reads them
     to decide whether a run is quotable. A client that can set `corpus_content_hash` can make
     two different corpora report as one, which is a forged comparison rather than a bad one.
 
@@ -194,7 +194,7 @@ def test_the_graph_is_loadable_the_way_langgraph_json_loads_it() -> None:
         f"Server can send: failed_stage={answer['failed_stage']!r} "
         f"error_type={answer['error_type']!r}"
     )
-    assert answer["record"]["licensed"], "no table was retrieved, so no node reached the corpus"
+    assert answer["record"]["retrieved_tables"], "no table was retrieved, so no node reached the corpus"
 
 
 # ── /capabilities: observations, and false is a real answer ───────────────────

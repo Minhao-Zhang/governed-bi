@@ -284,12 +284,12 @@ class VectorStore:
         payload alive at once, once per index build, which made it the largest allocation in the
         tree. Measured on the real 14,613-row store, one config per process, 179.6 MB payload:
 
-        ===================  ==========  =========
-        private commit       before      after
-        ===================  ==========  =========
-        net                  +944 MB     +318 MB
-        peak                 +1,473 MB   +566 MB
-        ===================  ==========  =========
+        =================== ========== =========
+        private commit before after
+        =================== ========== =========
+        net +944 MB +318 MB
+        peak +1,473 MB +566 MB
+        =================== ========== =========
 
         Net amplification 5.3x down to 1.8x. **Peak amplification is 3.1x, not 1.8x**, and the two
         should not be quoted as one number.
@@ -322,7 +322,7 @@ class VectorStore:
         was asserted in four places without being tested.
 
         An absent key is a sequencing bug — the caller embeds the miss set first — and skipping it
-        would build an index quietly short of vectors with the semantic channel reporting ``ran``
+        would build an index short of vectors with the semantic channel reporting ``ran``
         over part of it.
 
         Rows come out in **source order**, not ``pairs`` order. Nothing depends on it: this is
@@ -396,7 +396,7 @@ class VectorStore:
         # set grows 12.4 MB per call beside it — so an RSS tool sees some of this and not all. An
         # earlier version of this comment said working set stays flat. It does not.
         #
-        # **The scope of that, honestly, because the first version of this comment got it wrong.**
+        # **The scope of that,, because the first version of this comment got it wrong.**
         # `build_index` constructs a fresh `VectorStore` before every `load_from`, so `_replace`
         # runs exactly once per store and nothing in the tree retains one across calls. Measured in
         # isolated processes on the real path: 0.226 MB per build before this line, 0.201 MB after —

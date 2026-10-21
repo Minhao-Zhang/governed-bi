@@ -66,7 +66,7 @@ def assemble_node(state: dict, config: RunnableConfig) -> dict:
 
 
 def _budget_chars(state: Mapping[str, Any], cfg: Mapping[str, Any]) -> int:
-    for source in (state, state.get("knobs_resolved") or {}, cfg):
+    for source in (state, state.get("settings_resolved") or {}, cfg):
         if not isinstance(source, Mapping):
             continue
         value = source.get("context_budget_chars")

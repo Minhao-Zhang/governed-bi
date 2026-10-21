@@ -1,13 +1,13 @@
 """Capture a corpus tree and put it back.
 
-``corpus_content_hash`` is a detector: it says the treatment identity changed. It cannot say
+``corpus_content_hash`` is a detector: it says the setting under test identity changed. It cannot say
 what the tree was before, and it cannot undo the change. Two configs that must differ by exactly
 one thing need both halves.
 
 **``restore`` deletes as well as overwrites.** Anything a run wrote into the tree -- a draft
 asset, a ledger file, a scratch index -- is a file the snapshot never had, and a restore that only
 copied forward would leave it in place. The second config would then silently carry the first config's
-treatment, which is the failure mode a control config exists to prevent. Measured here on 2026-08-19:
+setting under test, which is the failure mode a control config exists to prevent. Measured here on 2026-08-19:
 adding one file inside ``corpus_root`` moves ``corpus_content_hash``, because it passes no
 ``suffixes`` and digests everything that is not VCS bookkeeping.
 

@@ -2,7 +2,7 @@
 
 ``tests/serve/test_stream_events.py`` tests the emitter and the per-stage readers in isolation.
 This file drives ``compile_graph().stream(..., stream_mode="custom")`` and asserts the ordered
-event stream a client would actually receive — which is a different claim, and the one that
+event stream a client would receive — which is a different claim, and the one that
 matters, because the emitter being correct and the *graph* delivering its events are two things
 and only the second is what a user sees.
 
@@ -109,7 +109,7 @@ def test_a_guard_blocked_turn_says_where_it_stopped() -> None:
 
 
 def test_the_skipped_nodes_of_a_refused_turn_are_silent() -> None:
-    """Stated separately because it is the property most likely to regress quietly.
+    """Stated separately because it is the property most likely to regress.
 
     ``route``, ``resolve``, ``connect``, ``assemble`` and ``agent_core`` each open with "if the
     turn already ended, return {}". They are not on the refuse path at all here, but the same
@@ -297,7 +297,7 @@ def test_a_streamed_turn_reaches_the_audit_log() -> None:
     turns, zero rows.
 
     The recorder is injected by ``api/graph_app.make_graph`` rather than living in ``finish``,
-    because ``serve`` does not import ``api``. This asserts the seam,
+    because ``serve`` does not import ``api``. This asserts the boundary,
     not the file: a ``record`` node placed after ``finish`` is called once, with the finished
     answer, on a turn that ends in a refusal — the cheapest path that still produces a record.
     """

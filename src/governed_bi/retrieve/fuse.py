@@ -38,7 +38,7 @@ def scale_to_ceiling(value: float, *, ceiling: float) -> float:
     is purely ordinal: the top-ranked document scores ``1/(k+1)``, the maximum a channel can
     award, however weak the match. That is the same defect expressed in ranks.
 
-    A fixed ceiling keeps what min-max destroyed — how good the best match actually was — and it
+    A fixed ceiling keeps what min-max destroyed — how good the best match was — and it
     needs no population, so the two retrieval passes cannot disagree about the scale by scoring
     different candidate sets.
     """

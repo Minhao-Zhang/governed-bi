@@ -76,7 +76,7 @@ class VectorCache:
 
     def keys(self) -> list[str]:
         """Every key, over the widths touched. A width nobody asked for is never opened,
-        so it is not counted: this reports what the run actually consulted."""
+        so it is not counted: this reports what the run consulted."""
         return [key for store in self._stores.values() for key in store.keys()]
 
     def at_width(self, dimensions: int) -> VectorStore:

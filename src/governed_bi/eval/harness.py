@@ -11,6 +11,7 @@ from governed_bi.eval.oracle import oracle_grade
 from governed_bi.eval.projection import project_turn
 from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
 from governed_bi.registry.stages import Outcome
+from governed_bi.registry.stored_names import artifact_get
 from governed_bi.serve.graph import compile_durable
 
 __all__ = ["EvictionWouldHang", "run_config", "run_comparison", "project_turn"]
@@ -172,7 +173,7 @@ def _run_one(
         # no-session path below has always honoured the question; these now agree.
         settings = _turn_settings(question, session)
         if settings is not None:
-            turn["knobs_resolved"] = settings
+            turn["settings_resolved"] = settings
     else:
         turn = _base_turn(question, run_id=run_id, config=config.name)
     # Inject route hits when no index so answered path can reach agent.
@@ -205,7 +206,7 @@ def _turn_settings(question: Mapping[str, Any], session: Any) -> dict[str, Any] 
     ``None`` when neither carries one — absent, not ``{}``, because an empty mapping reads to
     ``measure.checks`` as "one configuration whose every setting is None".
     """
-    for source in (question.get("knobs_resolved"), getattr(session, "knobs_resolved", None)):
+    for source in (artifact_get(question, "settings_resolved"), getattr(session, "settings_resolved", None)):
         if isinstance(source, Mapping):
             return dict(source)
     return None
@@ -332,7 +333,7 @@ def _run_concurrently(
                 # not the turn reached ``finish``. Omitting them here would make one crash turn
                 # the whole config's settings check ``cannot_evaluate`` and drop the row out of the
                 # funnel's routing stage, for a reason that has nothing to do with either.
-                "knobs_resolved": _turn_settings(question, session),
+                "settings_resolved": _turn_settings(question, session),
                 "db_id": question.get("db_id"),
                 "outcome": Outcome.crashed.value,
                 "correct": False,
@@ -340,7 +341,7 @@ def _run_concurrently(
                 "quality_flags": list(question.get("quality_flags") or ()),
                 "error_type": type(err).__name__,
                 "grade_detail": f"harness: {type(err).__name__}: {err}",
-                "licensed": [],
+                "retrieved_tables": [],
                 "schemas": [],
                 "usage": [],
             }
@@ -352,7 +353,7 @@ def _run_concurrently(
             # `as_completed`, not `pool.map`: `map` yields in *input* order, so one hung provider
             # request holds back every finished row behind it and the crash-safe writer goes
             # quiet. The returned list is still ordered -- callers index it -- but `on_row` now
-            # fires when the row is actually done.
+            # fires when the row is done.
             futures = [pool.submit(run_index, i) for i in range(len(questions))]
             for future in as_completed(futures):
                 index, row = future.result()
@@ -404,7 +405,7 @@ def _base_turn(question: Mapping[str, Any], *, run_id: str, config: str) -> dict
         "attempt_id": f"attempt-{config}-{qid}",
         "corpus_content_hash": str(question.get("corpus_content_hash") or f"corpus-{config}"),
         "prompt_set_hash": str(question.get("prompt_set_hash") or "prompt-eval"),
-        "knobs_resolved": dict(question.get("knobs_resolved") or {"route_top_n": 3}),
+        "settings_resolved": dict(question.get("settings_resolved") or {"route_top_n": 3}),
         "n_re_served": 0,
         "messages": [],
         "usage": [],

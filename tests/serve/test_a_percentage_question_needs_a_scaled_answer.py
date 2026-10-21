@@ -76,13 +76,13 @@ def test_no_suffix_when_no_statement_ran() -> None:
 # ── the setting ───────────────────────────────────────────────────────────────────
 
 
-def test_the_setting_ships_on_and_is_a_comparability_key() -> None:
+def test_the_setting_ships_on_and_is_a_affects_results_key() -> None:
     """Both halves, and the default is the interesting one.
 
     The fork registers this ``False`` and turns it on through ``POST /settings/toggles``, whose
     override its own handoff document records as in-process only with no environment path -- so
     every fresh server start switched it back off. A default-off setting with nothing to persist it
-    is a feature nobody ever runs. It is a comparability key because the suffix is agent input:
+    is a feature nobody ever runs. It is a key that affects results because the suffix is agent input:
     it can change which statement the turn ends on.
     """
     assert setting_default("enable_structured_percentage_check") is True
@@ -144,7 +144,7 @@ def _query(sql: str, *, retrieved_tables: str = "sales.customers", **state_extra
         "turn_index": 1,
         "retrieved_tables": [retrieved_tables],
         "messages": [],
-        "knobs_resolved": {},
+        "settings_resolved": {},
     }
     state.update(state_extra)
     config = {
@@ -168,11 +168,11 @@ def test_the_hint_reaches_the_model_on_an_unscaled_result() -> None:
 
 
 def test_the_setting_switches_it_off_for_the_same_turn() -> None:
-    """Reachable from the run, not only from the register (audit I10): a comparability setting
+    """Reachable from the run, not only from the register (audit I10): a setting that affects results
     that cannot change a result is a false claim about the run that published it."""
     reply = _query(
         "SELECT COUNT(*) * 1.0 / 2 AS ratio FROM sales.customers",
-        knobs_resolved={"enable_structured_percentage_check": False},
+        settings_resolved={"enable_structured_percentage_check": False},
     )
     assert "[structured check]" not in reply
 
@@ -195,7 +195,7 @@ def test_the_prefix_form_still_suppresses_the_hint_through_the_tool() -> None:
 
 
 def test_the_argument_and_the_executed_statement_are_two_different_strings() -> None:
-    """Why the call site's choice of input is load-bearing rather than stylistic.
+    """Why the call site's choice of input is rather than stylistic.
 
     ``govern.prepare`` rewrites what runs -- here by appending a row cap -- so "the SQL" is two
     values on this path. The check reads the executed one; reading the argument would produce a
@@ -211,7 +211,7 @@ def test_the_argument_and_the_executed_statement_are_two_different_strings() -> 
         "turn_index": 1,
         "retrieved_tables": ["sales.customers"],
         "messages": [],
-        "knobs_resolved": {},
+        "settings_resolved": {},
     }
     config = {
         "configurable": {

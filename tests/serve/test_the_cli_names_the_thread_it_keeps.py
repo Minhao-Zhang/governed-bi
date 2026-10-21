@@ -166,6 +166,6 @@ def test_a_run_that_names_no_thread_leaves_nothing_behind(tmp_path: Path, monkey
     )
 
     # The control, in the same file: a named run writes, so the assertion above is about
-    # eviction and not about a stub that quietly writes nothing.
+    # eviction and not about a stub that writes nothing.
     assert harness.ask("how many customers?", thread_id="t-kept") == 1
     assert harness.rows() == 1

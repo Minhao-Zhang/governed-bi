@@ -9,7 +9,7 @@ file covers what it leaves untested:
 * **Never assert a module against its own constant.** Nothing here compares a value
   to the table it came from.
 * **Test the negative case.** Every import-time guard is driven with a broken
-  register so it actually fires; a guard that only leaves a trace when it fires
+  register so it fires; a guard that only leaves a trace when it fires
   cannot afterwards be told from one that was never wired up. Each negative has its
   positive control beside it, or it would also pass for a guard that raises always.
 """
@@ -297,7 +297,7 @@ def test_each_rule_fires(overrides: dict, expected: str) -> None:
 def test_a_body_is_never_a_reason() -> None:
     """I2, as an explicit non-rule. The seed produces assets with no body at all, and
     requiring one would falsify ADR 0005's "measurable with no model" claim -- which
-    is the reason the seed exists. The other direction is equally load-bearing:
+    is the reason the seed exists. The other direction is equally:
     ``body`` is unbounded, so length must not be a reason either."""
     from governed_bi.corpus.validate import problems_with
 
@@ -416,8 +416,8 @@ def test_a_metric_is_not_written_into_a_directory_named_after_the_metric(tmp_pat
 
 
 def test_the_hash_ignores_a_schema_outside_the_manifest(tmp_path) -> None:
-    """An config's treatment identity must cover exactly the schemas that config served.
-    A leftover subtree moving the digest would make two runs over the same treatment
+    """An config's setting under test identity must cover exactly the schemas that config served.
+    A leftover subtree moving the digest would make two runs over the same setting under test
     look differently treated, which passes the delivery check for the wrong reason."""
     from governed_bi.corpus.hash import corpus_content_hash
 
@@ -435,7 +435,7 @@ def test_the_hash_ignores_a_schema_outside_the_manifest(tmp_path) -> None:
 
 def test_a_missing_corpus_has_no_digest_rather_than_a_sentinel_one(tmp_path) -> None:
     """v1's ``corpus_content_hash == "unknown"`` compared equal to itself, so two runs
-    with no recorded treatment passed comparability. Absence is reported out of band
+    with no recorded setting under test passed the shared-settings check. Absence is reported out of band
     precisely because a value can be compared."""
     from governed_bi.corpus.hash import corpus_content_hash
 
@@ -448,7 +448,7 @@ def test_the_hash_ignores_the_version_controls_own_bookkeeping(tmp_path) -> None
 
     Found by moving the corpus into ``../BIRD-corpus``: with ``schemas=None`` the tree is the
     manifest and ``rglob`` had no exclusions, so the digest was reading 29 files inside ``.git``.
-    A treatment identity that moves on every commit, fetch and ``git gc`` is not an identity, and
+    A setting under test identity that moves on every commit, fetch and ``git gc`` is not an identity, and
     it would have defeated the point of putting the corpus under version control.
     """
     from governed_bi.corpus.hash import corpus_content_hash

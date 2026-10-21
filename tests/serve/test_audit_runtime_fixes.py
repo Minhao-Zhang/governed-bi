@@ -97,10 +97,10 @@ def test_agent_recursion_limit_defaults_and_env(monkeypatch: pytest.MonkeyPatch)
     from governed_bi.registry.settings import setting_default
 
     assert _recursion_limit({}) == int(setting_default("agent_recursion_limit"))
-    assert _recursion_limit({"knobs_resolved": {"agent_recursion_limit": 17}}) == 17
+    assert _recursion_limit({"settings_resolved": {"agent_recursion_limit": 17}}) == 17
     monkeypatch.setenv("GOVERNED_BI_AGENT_RECURSION_LIMIT", "9")
     assert _recursion_limit({}) == 9
-    assert _recursion_limit({"knobs_resolved": {"agent_recursion_limit": 17}}) == 17
+    assert _recursion_limit({"settings_resolved": {"agent_recursion_limit": 17}}) == 17
 
 
 def test_n_re_served_is_not_a_quotability_check() -> None:
@@ -122,7 +122,7 @@ def test_capabilities_report_durability_by_observing_the_config_not_a_literal() 
     class _S:
         connector = type("C", (), {"dialect": "postgres"})()
         agent_model = None
-        knobs_resolved: dict[str, Any] = {}
+        settings_resolved: dict[str, Any] = {}
 
     caps = capabilities_for(_S())
     assert caps["checkpoint_durable"] is True

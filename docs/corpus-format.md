@@ -15,7 +15,7 @@ is live rather than assuming:
 
 | | |
 |---|---|
-| **Served today** (since 2026-08-23) | [`../BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus), paired with `GOVERNED_BI_PG_DSN` on port 5435 — `docker compose up pg_rename_decoy` in `../BIRD-Data-Obfuscation`. 13,304 assets, 0 problems, content hash `6e5c7b4be83d5682` at that repo's HEAD |
+| **Served today** (since 2026-08-23) | [`../BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus), together with `GOVERNED_BI_PG_DSN` on port 5435 — `docker compose up pg_rename_decoy` in `../BIRD-Data-Obfuscation`. 13,304 assets, 0 problems, content hash `6e5c7b4be83d5682` at that repo's HEAD |
 | **Retired as the served tree** | `../MS Fabric Facilities/corpus` — the facilities warehouse's flattened serving layer, one namespace, the `facilities` Postgres on 5432. Both `.env` lines are commented out and they are one switch |
 
 **Why the swap, because it is a standing choice and not a benchmark detour.**
@@ -31,7 +31,7 @@ versioning a corpus, made by the one that was not.
 warehouse, so swapping the corpus without swapping the DSN points the engine's semantic layer
 at tables that are not there. `.env` says so at the line above the pointer.
 
-**The corpus is the treatment identity of every measurement.** `corpus_content_hash` digests the
+**The corpus is the identity of what was measured of every measurement.** `corpus_content_hash` digests the
 tree, so a number is reproducible only if the corpus commit is known — which is why the table
 above matters: a BIRD figure re-run against the facilities corpus is a different experiment, not
 a replication. Quote the commit alongside any figure, and write nothing into that checkout except
@@ -70,10 +70,10 @@ subtree cannot enter a measurement.
 
 Six of the eight asset types appear above. `column` has no directory because columns are authored
 inline under their table and `corpus/identity.py::derive_column_id` mints their ids.
-`negative_example` has none because the shipped BIRD-corpus contains not one — so `negative_gate`
-never fires on it, and any measurement of that rail is a measurement of a different corpus.
+`negative_example` has none because the shipped BIRD-corpus contains not one — so the
+negative-example check never fires on it, and any measurement of that rail is a measurement of a different corpus.
 
-Nothing derived is written into the corpus, because the corpus tree is the treatment identity.
+Nothing derived is written into the corpus, because the corpus tree is the identity of what was measured.
 The vector store lives outside it, under `GOVERNED_BI_VECTOR_CACHE` (default `runs/vectors/`).
 
 ## Field tiers

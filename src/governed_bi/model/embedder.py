@@ -70,7 +70,7 @@ class BaseEmbedder(Embedder, ABC):
     declared here as abstract properties *and* in :class:`~governed_bi.ports.Embedder`, which
     made two answers to "what must an embedder do" — and the port is the one ``retrieve/`` and
     ``serve/`` annotate against, so a rule added to only this copy would bind nothing they can
-    see. Subclassing the Protocol keeps this class to what it actually contributes: the
+    see. Subclassing the Protocol keeps this class to what it contributes: the
     ``batch_size`` policy, the three checks in :meth:`embed`, and the ``_embed_batch`` hook.
 
     Explicit inheritance, not the structural conformance this used to rely on, because the

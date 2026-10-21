@@ -121,7 +121,7 @@ LEAD_IN = re.compile(r"^[\w.\-]+:\s*")
 #: ``summary: >-`` makes the joined value open with the literal ``>-``, so ``leads_with`` never
 #: matches and rule A cannot see a prepended phrase — and **32 of the 57 live schema assets in
 #: ``../BIRD-corpus`` use ``>-`` or ``>``**, which is to say rule A was blind in the form the
-#: corpus actually uses. Found by the 2026-08-10 audit; the folding indicators and the explicit
+#: corpus uses. Found by the 2026-08-10 audit; the folding indicators and the explicit
 #: chomping suffixes are all here because a producer picks whichever its writer preferred.
 BLOCK_SCALAR = re.compile(r"^[|>][+-]?\d*\s*")
 
@@ -396,7 +396,7 @@ def main() -> int:
     if "--root" in argv:
         repo = pathlib.Path(argv[argv.index("--root") + 1]).resolve()
     # ``--require-corpus`` makes "rule B scanned nothing" fatal instead of a printed note. CI
-    # checks out this repository alone, so no corpus is on disk there and rule B genuinely
+    # checks out this repository alone, so no corpus is on disk there and rule B 
     # cannot run — the flag exists so the caller who *can* satisfy the precondition says so and
     # gets an exit code for it, rather than every caller sharing an exit code that means
     # "rule A passed" and reads as "the corpus is clean". Use it before quoting a measurement.

@@ -18,7 +18,7 @@ and [`docs/usage.md`](../docs/usage.md) is how to run the engine this talks to.
 
 One page, the chat ([ADR 0019](../docs/adr/0019-one-plain-chat-page.md) describes the page that
 replaces it). Ask a question, watch the governed pipeline live (the engine's
-`register/stages.py` is the vocabulary), and get an answer card. The card reports only what the
+`registry/stages.py` is the vocabulary), and get an answer card. The card reports only what the
 engine **observed**: the `outcome` (`answered` / `refused` / `clarification` / `capped` /
 `crashed` / `no_sql`), how many statements passed or were blocked by governance, the answer text,
 and the step trace, which carries the SQL that ran. There is no reliability tier: the engine

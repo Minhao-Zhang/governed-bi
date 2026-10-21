@@ -347,6 +347,7 @@ def test_a_renamed_field_must_keep_its_value(rows: list[dict[str, Any]], tmp_pat
         if row["kind"] != "question" or "retrieved_tables" not in row:
             return dict(row)
         moved = {k: v for k, v in row.items() if k != "retrieved_tables"}
+        # The fixture's old spelling is the comparator's input, not a wire key this tree writes.
         return {**moved, "licensed": row["retrieved_tables"]}
 
     def renamed(row: dict[str, Any], value: Any = None) -> dict[str, Any]:

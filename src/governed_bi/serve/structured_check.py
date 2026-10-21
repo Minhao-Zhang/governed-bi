@@ -2,7 +2,7 @@
 
 ``govern/check.py``'s stack (PARSE..COST) decides whether a statement may run at all, before
 it runs. This module runs *after* a statement has already passed every layer and executed --
-it looks at whether the answer it produced actually matches what the question asked for, which
+it looks at whether the answer it produced matches what the question asked for, which
 ``govern/`` has no vocabulary for. Nothing here can refuse, so nothing here belongs in that
 stack: the only thing it does is append a hint to the text the model reads next.
 

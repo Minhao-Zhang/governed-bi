@@ -8,7 +8,7 @@ whatever ``quotable`` says is that line's job, and it is right. ``summary["compa
 One key away is the problem. The rendered line is the thing a person copies into a message,
 a commit or a doc, and the boolean does not travel with it. **Every real pair in
 ``runs/eval/`` is non-quotable today** — ``settings_comparable`` returns ``cannot_evaluate``
-because ~50 of the 51 comparability settings are absent from those rows — so every line that
+because ~50 of the 51 settings that affect results are absent from those rows — so every line that
 function has ever produced was a diagnostic that read exactly like a result:
 
     v4 - v3_fold: 0.0118 (p=0.1812, n=1351, discordant=126, MDE=0.0233)

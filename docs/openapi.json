@@ -399,7 +399,7 @@
               }
             ],
             "title": "Model",
-            "description": "Resolved agent model id, from `knobs_resolved.chat_model` (`api/routes.py::capabilities_for`). **Not `llm_model`**, which this description named until 2026-08-22 and which `register/knobs.py` has never declared -- the string survives only inside other knobs' description text, so a client written from the old sentence went looking for a knob that does not exist. Same value as `models.agent.id`; kept as a top-level field because the header chip reads it."
+            "description": "Resolved agent model id, from `settings_resolved.chat_model` (`api/routes.py::capabilities_for`). **Not `llm_model`**, which this description named until 2026-08-22 and which `registry/settings.py` has never declared -- the string survives only inside other knobs' description text, so a client written from the old sentence went looking for a knob that does not exist. Same value as `models.agent.id`; kept as a top-level field because the header chip reads it."
           },
           "models": {
             "$ref": "#/components/schemas/CapabilitiesModelsResponse"
@@ -453,7 +453,7 @@
               }
             ],
             "title": "Id",
-            "description": "The model id, read out of `knobs_resolved` rather than off the live client, so it is the identity a run is actually recorded under. `agent.id` is the `chat_model` knob and `utility.id` is `llm_utility_model`. Null when nothing resolved one -- an offline profile with no model wired."
+            "description": "The model id, read out of `settings_resolved` rather than off the live client, so it is the identity a run is actually recorded under. `agent.id` is the `chat_model` knob and `utility.id` is `llm_utility_model`. Null when nothing resolved one -- an offline profile with no model wired."
           },
           "provider": {
             "anyOf": [
@@ -465,7 +465,7 @@
               }
             ],
             "title": "Provider",
-            "description": "Which gateway served the id (`llm_provider` / `llm_utility_provider`). Carried beside the id and never folded into it: the same id behind two gateways is two treatments. Both knobs default to `openai`, so this is null only when `knobs_resolved` carries no entry at all."
+            "description": "Which gateway served the id (`llm_provider` / `llm_utility_provider`). Carried beside the id and never folded into it: the same id behind two gateways is two treatments. Both knobs default to `openai`, so this is null only when `settings_resolved` carries no entry at all."
           },
           "effort": {
             "anyOf": [

@@ -147,7 +147,7 @@ def _queue(threads: list[dict[str, Any]]) -> tuple[PendingClarifications, _FakeC
 
 
 def test_the_queue_asks_for_interrupted_threads_and_selects_the_interrupts() -> None:
-    """The two load-bearing arguments, asserted on the call rather than inferred from the result.
+    """The two arguments, asserted on the call rather than inferred from the result.
 
     Dropping ``status`` would page the whole store and call every idle thread pending; dropping
     ``interrupts`` from ``select`` would return rows with nothing in them. Both would still
@@ -370,7 +370,7 @@ def test_a_foreign_clarification_id_leaves_the_row_unlinked_rather_than_dropping
 def _app_client(threads: list[dict[str, Any]]) -> Any:
     """The real app over a real reader over a fake store.
 
-    Not a fake reader: the point of these two tests is the wire envelope, and a stub reader would
+    Not a fake reader: the point of these two tests is the wire wrapper, and a stub reader would
     let a route that dropped `truncated` still pass.
     """
     from fastapi.testclient import TestClient

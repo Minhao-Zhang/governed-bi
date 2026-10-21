@@ -98,7 +98,7 @@ def schema_tag_for(
 
 #: How alike two embeds of one text must be to be the same vector space.
 #:
-#: Deliberately **not** a register setting. A setting is a comparability dial — a value a config might
+#: Deliberately **not** a register setting. A setting is a dial that affects results — a value a config might
 #: legitimately want set differently, recorded so two runs can be told apart. This one only ever
 #: decides whether a corrupt store raises, so a config choosing its own value is a config choosing
 #: not to be checked. The margin is wide in both directions: one model embedding one text twice
@@ -112,7 +112,7 @@ _SAME_SPACE_COSINE = 0.99
 #: landing on a new row reports "fine". **Three is not a defence against a small partial re-embed
 #: and the comment here used to imply it was**: at ``1 - (1 - p)**3``, a 1% contamination of the
 #: 14,613-row store is caught 3% of the time. What three probes reliably catch is a *whole*-store
-#: move, which is the shape a repointed gateway actually produces, and the canary catches that on
+#: move, which is the shape a repointed gateway produces, and the canary catches that on
 #: its own. The ends and the middle rather than three from one neighbourhood.
 _SPACE_PROBES = 3
 

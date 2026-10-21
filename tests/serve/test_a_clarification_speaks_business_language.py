@@ -104,7 +104,7 @@ def _ask_user() -> Any:
         "turn_index": 1,
         "retrieved_tables": ["sales.customers"],
         "messages": [],
-        "knobs_resolved": {},
+        "settings_resolved": {},
     }
     config = {
         "configurable": {

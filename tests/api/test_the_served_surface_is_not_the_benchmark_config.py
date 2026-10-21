@@ -18,7 +18,7 @@ budget its attempts; it was a model denied the one column that carried the meani
 **These tests pin the difference, not just the value.** Asserting only that serve is ``False``
 would pass if someone "fixed" the setting default and made the benchmark soft-warn too — which
 would let a measured number rest on a column the corpus says not to trust. The benchmark half
-is the load-bearing half.
+is the half.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ def _result(policy: GovernancePolicy) -> dict:
 
 
 def test_the_served_policy_soft_warns_on_a_suspect_column() -> None:
-    """Production semantics, reached through the seam the server actually uses."""
+    """Production semantics, reached through the boundary the server uses."""
     from governed_bi.api.graph_app import serve_policy
 
     policy = serve_policy()
@@ -93,7 +93,7 @@ def test_the_served_policy_runs_every_guard_rule_and_the_benchmark_runs_none() -
         "rules came to be off on the served surface while the scope check read as 'the guard'"
     )
     # The config's own construction, not a restatement of it: `build_configurable` is what the
-    # harness calls, so a config that quietly gained a rule fails here rather than in a number.
+    # harness calls, so a config that gained a rule fails here rather than in a number.
     from governed_bi.eval.configs import oracle_config
 
     config_rules = oracle_config(connector=None).build_configurable()["policy"].guard_rules_enabled

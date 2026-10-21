@@ -2,7 +2,7 @@
 
 Taken from RyanChenJung/governed-bi-utkuai@12c3e15, where a control config was built by copying a
 tree by hand and confirming with ``diff -rq``. That worked once, and stopped working when a setting
-of theirs began writing drafts into the corpus mid-run -- a live config mutating its own treatment
+of theirs began writing drafts into the corpus mid-run -- a live config mutating its own setting under test
 identity. **No path in this repository writes to a corpus during a run**, so what is being taken
 is the capability and its three destructive-guard defects already found, not a fix for a live
 defect here. The reason to hold it now is that the hash is unforgiving: adding a single file inside
@@ -56,7 +56,7 @@ def test_restore_returns_the_tree_to_the_captured_hash(tmp_path: Path) -> None:
 
 def test_restore_removes_a_file_the_snapshot_did_not_have(tmp_path: Path) -> None:
     """A draft written mid-run is a *new* file. A restore that only overwrites would leave it
-    behind and the next config would inherit the previous config's treatment."""
+    behind and the next config would inherit the previous config's setting under test."""
     root = _corpus(tmp_path / "corpus")
     snapshot(root, tmp_path / "snap")
     (root / "draft.yaml").write_text("id: draft\nkind: term\nstatus: proposed\n")

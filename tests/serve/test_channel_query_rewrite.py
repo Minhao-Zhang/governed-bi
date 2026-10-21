@@ -10,9 +10,9 @@ BM25 nor an embedder finds much between those two, and until now every channel s
 raw question — which is why the maintainer's own testing found retrieval was getting nothing right.
 
 Two properties carry the weight here, and both are about honesty rather than quality: the
-``extraction`` channel must be marked ``ran`` **only** when a rewrite actually came back, and a
+``extraction`` channel must be marked ``ran`` **only** when a rewrite came back, and a
 rewrite must reach the *semantic* channel and not just BM25. A fallback that reports as a run is
-how, per ADR 0005 §2.3, a config quietly becomes v1's single-pass retrieval while every channel
+how, per ADR 0005 §2.3, a config becomes v1's single-pass retrieval while every channel
 claims to be working.
 """
 
@@ -108,7 +108,7 @@ def test_every_extracting_channel_has_its_own_rewriter_prompt() -> None:
 
 
 def test_the_rewriter_prompts_are_hashed() -> None:
-    """A prompt outside ``prompt_set_hash`` is a treatment the run cannot report."""
+    """A prompt outside ``prompt_set_hash`` is a setting under test the run cannot report."""
     from governed_bi.registry.prompts import prompt_set_hash
 
     baseline = prompt_set_hash()
@@ -117,7 +117,7 @@ def test_the_rewriter_prompts_are_hashed() -> None:
         assert PROMPT_REGISTRY[name].stage in {s.value for s in CHANNEL_STAGES}
 
 
-# ── the rewrite happens, and is attributed honestly ──
+# ── the rewrite happens, and is attributed ──
 
 
 # The extracting channels only. `channel_schema` is deliberately not one of them any more, and the
@@ -144,11 +144,11 @@ def test_a_rewrite_replaces_the_question_and_marks_extraction(stage: Stage) -> N
     ],
 )
 def test_a_failed_rewrite_falls_back_and_does_not_claim_the_channel(label: str, model: Any) -> None:
-    """**The property that keeps the measurement honest.**
+    """**The property that keeps the measurement.**
 
     Falling back to the raw question is the right behaviour — retrieval on the original wording
     is what this replaced, so the worst case is yesterday, not a dead turn. Reporting
-    ``extraction`` as ``ran`` while doing it is not: that is the config claiming a treatment it did
+    ``extraction`` as ``ran`` while doing it is not: that is the config claiming a setting under test it did
     not receive, and the degradation check reads exactly this field.
     """
     out, ran, spent = _rewrite("how many customers", Stage.channel_term, model)
@@ -217,7 +217,7 @@ def test_an_embedder_failure_is_reported_and_not_papered_over(caplog) -> None:
     is the more intuitive one: returning ``fallback`` keeps *a* cosine in the score rather than
     none.
 
-    What it actually produced was a channel whose lexical channel searched the rewrite while its
+    What it produced was a channel whose lexical channel searched the rewrite while its
     semantic channel searched the original question, blended into one ``score``, recorded as
     ``semantic: ran``. That is not a weaker measurement of the same query — it is a measurement of
     a different one, presented as the first. Nothing in any artifact distinguished it from a

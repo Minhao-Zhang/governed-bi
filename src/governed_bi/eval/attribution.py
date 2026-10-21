@@ -6,8 +6,8 @@ carries a ``failure_cause`` yet. They are kept rather than stripped because each
 argument for a specific check or a specific ordering, and a rule whose reason has been deleted is
 a rule the next reader deletes.
 
-The failure the instrument exists for: a config could not tell whether its treatment helped,
-because ``error_type`` was ``None`` on all 78 of its answered-but-wrong rows. The treatment was
+The failure the instrument exists for: a config could not tell whether its setting under test helped,
+because ``error_type`` was ``None`` on all 78 of its answered-but-wrong rows. The setting under test was
 aimed at decoy contact, which held 8 of those 78, and nothing said so until after the run. This
 module is what makes a target sayable in advance.
 

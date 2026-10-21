@@ -37,7 +37,7 @@ class CorpusStructure:
     """Projections ``resolve`` / ``connect`` run on, keyed on asset ids (not physical names)."""
 
     #: Undirected table-to-table edges, canonicalised by ``canon_edge``. Self-joins are
-    #: **excluded**: a loop makes an isolated terminal look adjacent, hiding a genuinely
+    #: **excluded**: a loop makes an isolated terminal look adjacent, hiding a 
     #: disconnected table from ``connect``'s missing-terminal check. They stay in
     #: :attr:`joins_by_edge`, so their keys still reach the prompt.
     join_edges: frozenset[tuple[str, str]]
@@ -76,7 +76,7 @@ def build_structure(
         # First-wins on a repeated id, and no problem recorded: two ``JoinAsset``s
         # differing only in endpoint qualification mint the same ``join_id`` by
         # construction (ADR 0005 §1.2), so reporting the second would make a valid
-        # corpus look broken. A genuinely duplicated id is refused by ``build_index``.
+        # corpus look broken. A duplicated id is refused by ``build_index``.
         by_id.setdefault(str(aid), asset)
 
     types = {aid: _type_of(asset) for aid, asset in by_id.items()}
@@ -180,7 +180,7 @@ def bind_endpoint(
     ``scope`` is the *referring asset's own* schema. A ``ColumnAsset`` declares ``schema``
     beside its bare ``parent_table``, so scoping is reading a qualification the corpus
     made, not inventing one. ``JoinAsset`` has no ``schema`` field by design (ADR 0005
-    §1.2), so its bare endpoints get no scope and are genuinely ambiguous in a pooled lake.
+    §1.2), so its bare endpoints get no scope and are ambiguous in a pooled lake.
     """
     if endpoint is None or not str(endpoint).strip():
         return None, "endpoint is empty"

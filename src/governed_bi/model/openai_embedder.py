@@ -6,7 +6,7 @@ was rejected as a port, ``ports.py``'s no-single-adapter rule).
 
 **``model`` reports what the provider served, not what was requested.** A provider may
 serve an alias, a dated snapshot or a silent upgrade, and ``embedding_model`` is a
-comparability setting, so recording the request would let two runs on different snapshots
+setting that affects results, so recording the request would let two runs on different snapshots
 compare as one (v1's reasoning-effort incident: an unrecorded live config field moved the
 baseline config past that ladder's own detection threshold — sizes retired, mechanism is not).
 ``ports.Embedder.embed``'s ordering rule also requires ``model`` to be stable for the object's

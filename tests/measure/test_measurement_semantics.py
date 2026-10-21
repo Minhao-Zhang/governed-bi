@@ -306,28 +306,28 @@ def test_a_fully_instrumented_clean_config_passes_the_zero_count_checks() -> Non
 def test_zero_fanout_turns_cannot_evaluate_the_degradation_check() -> None:
     """The precise defect that moved eight fields to stage-conditional.
 
-    A guard-blocked turn never runs the fan-out, so ``facet_channels`` is empty. Under
+    A guard-blocked turn never runs the fan-out, so ``channel_scoring`` is empty. Under
     a naive rate that empty value reads as "no channel differed from its expectation"
     — clean — on a turn where no channel ran at all. Absence reading as agreement, in
     the field added to stop absence reading as agreement.
     """
-    refused = [{"question_id": str(i), "facet_channels": None} for i in range(30)]
-    result = checks.CHECK_IMPLEMENTATIONS["facet_channels"](Population.of("refusals", refused))
+    refused = [{"question_id": str(i), "channel_scoring": None} for i in range(30)]
+    result = checks.CHECK_IMPLEMENTATIONS["channel_scoring"](Population.of("refusals", refused))
     assert result.result is checks.Result.cannot_evaluate
     assert "0 over 0" in result.detail
 
 
 def test_the_degradation_check_runs_on_the_turns_that_did_fan_out() -> None:
     rows = [
-        {"question_id": str(i), "facet_channels": {"schema": "ran"}, "facet_degraded": i == 2}
+        {"question_id": str(i), "channel_scoring": {"schema": "ran"}, "channel_degraded": i == 2}
         for i in range(10)
-    ] + [{"question_id": f"r{i}", "facet_channels": None} for i in range(5)]
-    result = checks.CHECK_IMPLEMENTATIONS["facet_channels"](Population.of("mixed", rows))
+    ] + [{"question_id": f"r{i}", "channel_scoring": None} for i in range(5)]
+    result = checks.CHECK_IMPLEMENTATIONS["channel_scoring"](Population.of("mixed", rows))
     assert result.result is checks.Result.failed
     assert "n=10" in result.population, "the denominator must exclude the refusals"
 
 
-def test_a_fully_instrumented_config_can_actually_be_quotable() -> None:
+def test_a_fully_instrumented_config_can_be_quotable() -> None:
     """``quotable()`` could never return ``True``, on any input.
 
     ``_context_hash_check`` returned ``cannot_evaluate`` on **both** its branches — including
@@ -337,7 +337,7 @@ def test_a_fully_instrumented_config_can_actually_be_quotable() -> None:
 
     The >= 95% cross-config distinctness condition this check used to defer to was retired by audit
     D9 — retrieval is nondeterministic, so it passed at 0.9993 on a pair differing only by a
-    random seed — and ``eval/report.settings_comparable`` judges the treatment from the declared
+    random seed — and ``eval/report.settings_comparable`` judges the setting under test from the declared
     settings instead. What is decided here is only the half one config can answer: did every turn
     carry a ``context_hash`` at all.
     """
@@ -354,21 +354,21 @@ def test_a_fully_instrumented_config_can_actually_be_quotable() -> None:
             "guardrail_error": False,
             "re_served": False,
             "negative_failed_open": False,
-            "facet_degraded": False,
-            "facet_channels": {"channel_schema": {"lexical": "ran"}},
-            # Added 2026-08-06 with the `knobs_resolved` check (audit §10): `settings.Role` derived
+            "channel_degraded": False,
+            "channel_scoring": {"channel_schema": {"lexical": "ran"}},
+            # Added 2026-08-06 with the `settings_resolved` check (audit §10): `settings.Role` derived
             # three key sets and none had a reader in `src/`, so a setting's role decided nothing.
             # A row with no resolved settings cannot be shown to have run under this config's
             # configuration -- and `Absence.never` already reports it as missing, so this
             # fixture was not "fully instrumented" before.
-            "knobs_resolved": {"route_top_n": 3, "candidate_depth": 50},
+            "settings_resolved": {"route_top_n": 3, "candidate_depth": 50},
             # Added 2026-08-10 with the `corpus_content_hash` check (audit D7), for the same
             # reason as the line above and with the same consequence for this fixture's name:
-            # the register has always said "the corpus IS the treatment" and no check read the
+            # the register has always said "the corpus IS the setting under test" and no check read the
             # field, so a config naming no corpus -- which is the state of both runs of the
             # designated null replicate, 1351/1351 -- passed every check. One value across all
             # rows, because one config is one corpus; no check does the cross-config half at all --
-            # `comparison_quotable` compares `context_hash` and the comparability settings, and
+            # `comparison_quotable` compares `context_hash` and the settings that affect results, and
             # `corpus_content_hash` is neither.
             "corpus_content_hash": "corpus-30872d3",
         }
@@ -407,41 +407,41 @@ def test_one_config_two_configurations_is_not_one_config() -> None:
             "guardrail_error": False,
             "re_served": False,
             "negative_failed_open": False,
-            "facet_degraded": False,
-            "facet_channels": {"channel_schema": {"lexical": "ran"}},
-            "knobs_resolved": {"route_top_n": top_n, "candidate_depth": 50},
+            "channel_degraded": False,
+            "channel_scoring": {"channel_schema": {"lexical": "ran"}},
+            "settings_resolved": {"route_top_n": top_n, "candidate_depth": 50},
         }
 
     assert "route_top_n" in setting_names(), (
         "the setting this fixture drifts is no longer a resume-drift key, so the test proves nothing"
     )
 
-    drifted = checks.CHECK_IMPLEMENTATIONS["knobs_resolved"](
+    drifted = checks.CHECK_IMPLEMENTATIONS["settings_resolved"](
         Population.of("drifted", [row(i, 3 if i < 25 else 5) for i in range(50)])
     )
     assert drifted.result is checks.Result.failed
     assert "route_top_n" in drifted.detail, drifted.detail
     assert "candidate_depth" not in drifted.detail, "only the settings that differ are named"
 
-    steady = checks.CHECK_IMPLEMENTATIONS["knobs_resolved"](
+    steady = checks.CHECK_IMPLEMENTATIONS["settings_resolved"](
         Population.of("steady", [row(i, 3) for i in range(50)])
     )
     assert steady.result is checks.Result.passed
 
     # Absent is not passing. `Absence.never` already reports these as missing_required, and this
     # check reporting clean on the same row would be two checks disagreeing about one hole.
-    missing = checks.CHECK_IMPLEMENTATIONS["knobs_resolved"](
+    missing = checks.CHECK_IMPLEMENTATIONS["settings_resolved"](
         Population.of("missing", [{"question_id": "a", "correct": True}])
     )
     assert missing.result is checks.Result.cannot_evaluate
 
     # A type change is a configuration change: 3 and "3" are two configurations, and a
     # comparison that coerced them would report drift as agreement.
-    typed = checks.CHECK_IMPLEMENTATIONS["knobs_resolved"](
+    typed = checks.CHECK_IMPLEMENTATIONS["settings_resolved"](
         Population.of(
             "typed",
             [
-                {**row(i, 3), "knobs_resolved": {"route_top_n": 3 if i < 25 else "3"}}
+                {**row(i, 3), "settings_resolved": {"route_top_n": 3 if i < 25 else "3"}}
                 for i in range(50)
             ],
         )
@@ -466,7 +466,7 @@ def test_partial_context_hash_coverage_fails_rather_than_abstaining() -> None:
             "guardrail_error": False,
             "re_served": False,
             "negative_failed_open": False,
-            "facet_degraded": False,
+            "channel_degraded": False,
         }
         for i in range(50)
     ]

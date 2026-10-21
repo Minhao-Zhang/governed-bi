@@ -32,7 +32,7 @@ export const capabilitiesSchema = z.object({
   can_stream: z.boolean(), // LangGraph Server present → useStream, else <NoTransport/>
   has_live_model: z.boolean(),
   model: z.string().nullable(), // null in the offline profile (no model wired)
-  // The clarification prompt does not gate on this: it mounts on the arriving `interrupt()`,
+  // The clarification prompt does not check on this: it mounts on the arriving `interrupt()`,
   // so a stale flag cannot hide a question the graph is waiting on.
   can_clarify: z.boolean().optional().default(false),
   // `embedding.id` is provider-qualified (`bedrock:amazon.titan-embed-text-v2:0`) and may hold a

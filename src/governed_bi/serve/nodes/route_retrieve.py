@@ -26,10 +26,10 @@ from governed_bi.retrieve.structure import CorpusStructure, complete_joins
 from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 from governed_bi.serve.runtime import (
     ChannelScale,
+    channel_hits,
     channel_scale,
     channel_weights,
     corpus_structure,
-    facet_hits,
     int_setting,
 )
 from governed_bi.serve.runtime import (
@@ -46,7 +46,7 @@ __all__ = [
 ]
 
 # No local defaults for `route_top_n`, `max_steiner_points` or `max_crossings`: `int_setting`
-# reads state, then `knobs_resolved`, then the register, which is the one place the value is
+# reads state, then `settings_resolved`, then the register, which is the one place the value is
 # declared. A `state.get(name, <constant>)` here is a setting nothing can set. ADR 0008 D7.
 
 
@@ -68,7 +68,7 @@ def empty_retrieved(
 def route_node(state: dict, config: RunnableConfig) -> dict:
     """Pass-one evidence → top-N schemas → pass-two re-search (or F1 fallback).
 
-    The terminal guard is load-bearing: ``route`` is the fan-in of five channel nodes, so it runs
+    The terminal guard is: ``route`` is the fan-in of five channel nodes, so it runs
     whenever *any* of them ran, including when one crashed and ``wrap.py`` marked the turn
     ``crashed``. Without it a channel crash reaches a full billed model call. This node must also
     write no ``path_kind`` key at all — writing ``None`` erased that mark, which is why
@@ -80,7 +80,7 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     structure = corpus_structure(config)
     hits = _route_hit_triples(state, structure)
     ranking = sorted(
-        # `channel_weight_schema` / `channel_weight_other`, comparability settings, both 1.0 as shipped.
+        # `channel_weight_schema` / `channel_weight_other`, settings that affect results, both 1.0 as shipped.
         route_scores(hits, weights=channel_weights(state)),
         key=lambda pair: (-float(pair[1]), str(pair[0])),
     )
@@ -92,7 +92,7 @@ def route_node(state: dict, config: RunnableConfig) -> dict:
     # ranking still reaches `retrieved` — pass two scores against it, and a pinned run that
     # skipped it would not be the same system. Nothing on a served turn writes this key.
     #
-    # Restricted to schemas the structure actually knows: an artifact from another corpus
+    # Restricted to schemas the structure knows: an artifact from another corpus
     # would otherwise pin a name that licenses nothing, and the config would read as a routing
     # collapse caused by the replay rather than by anything under test.
     pinned = state.get("pinned_schemas")
@@ -352,7 +352,7 @@ def _triples_from_channels(
     scale = channel_scale(state)
     triples: list[tuple[Any, Any, float]] = []
     for channel_name, channel_result in (state.get("channels") or {}).items():
-        hits = facet_hits(channel_result)
+        hits = channel_hits(channel_result)
         for hit in hits:
             schema = _hit_schema(hit, schema_tags)
             score = _hit_score(hit, scale)
@@ -449,7 +449,7 @@ def _retrieved_for_schemas(
     best_score: dict[str, float] = {}
 
     for channel_name, channel_result in (state.get("channels") or {}).items():
-        for hit in facet_hits(channel_result):
+        for hit in channel_hits(channel_result):
             schema = _hit_schema(hit, schema_tags)
             if schema is None or str(schema) not in schema_set:
                 continue

@@ -1,10 +1,10 @@
-"""The corpus is the treatment identity, so a check has to read it.
+"""The corpus is the setting under test identity, so a check has to read it.
 
-``docs/measurement.md`` and ``record.py`` both say "the corpus is the treatment", and until the 2026-08-10
+``docs/measurement.md`` and ``record.py`` both say "the corpus is the setting under test", and until the 2026-08-10
 audit (D7) no check read ``corpus_content_hash``. Two things were live at once: a config whose rows
 name no corpus passed all six checks, and two configs measured over *different* corpora also passed,
 because nothing compared the field. The repository had already paid for this once:
-v1's ``corpus_content_hash == "unknown"`` passed a comparability check.
+v1's ``corpus_content_hash == "unknown"`` passed a check that the runs share their settings.
 
 Measured against the seven artifacts on disk when the check landed: the two runs the power analysis
 designates as its **null replicate** carry the field as null on all 1351 rows and are now
@@ -38,7 +38,7 @@ def _config(
     outcomes: list[str] | None = None,
     prompts: list[Any] | None = None,
 ) -> Population:
-    """One config. ``prompts`` is ``prompt_set_hash``, the *other* treatment identity.
+    """One config. ``prompts`` is ``prompt_set_hash``, the *other* setting under test identity.
 
     It defaults to a written value on every row, so a fixture that means "this turn never reached
     ``finish``" has to say so by passing ``None`` — which is what the rows on disk look like, both
@@ -93,7 +93,7 @@ def test_an_config_that_names_no_corpus_cannot_be_evaluated() -> None:
     assert _result([None, None, None]) == "cannot_evaluate"
 
 
-def test_two_corpora_inside_one_config_is_not_one_treatment() -> None:
+def test_two_corpora_inside_one_config_is_not_one_under_test() -> None:
     assert _result(["abc", "abc", "def"]) == "failed"
 
 
@@ -104,7 +104,7 @@ def test_partial_instrumentation_fails_rather_than_passing_on_the_rows_it_has() 
 def test_a_clarification_that_never_reached_finish_is_not_missing_instrumentation() -> None:
     """``finish`` writes the field and a turn paused on ``ask_user`` never reaches it.
 
-    A paused row carries **neither** treatment identity, which is how the fixture says it is
+    A paused row carries **neither** setting under test identity, which is how the fixture says it is
     paused. Judging those as missing instrumentation would fail every config that ever asked a
     question — a check nobody can keep green, which this repository treats as a preference rather
     than a check. The first version of this check did exactly that and failed all five instrumented
@@ -123,7 +123,7 @@ def test_a_clarification_that_never_reached_finish_is_not_missing_instrumentatio
 
 def test_an_config_of_nothing_but_clarifications_is_not_a_pass() -> None:
     """The other side of that exclusion: restricting the denominator must not create a vacuous
-    pass, which is the trap ``_facet_channels_check`` documents for the same reason."""
+    pass, which is the trap ``_channel_scoring_check`` documents for the same reason."""
     result = _result(
         [None, None],
         [Outcome.clarification.value] * 2,
@@ -138,7 +138,7 @@ def test_a_stamped_fail_closed_clarification_is_still_counted_by_the_corpus_chec
     ``ask_user`` now fails closed on a decline or a ranking cancel: the middleware ends the agent
     loop, the turn **reaches** ``finish``, and it is written ``outcome: clarification`` with a full
     record. While the check tested the outcome alone — under a restriction whose label was literally
-    "reached finish" — such a row was dropped from the population that checks the treatment
+    "reached finish" — such a row was dropped from the population that checks the setting under test
     identity. A row that reached ``finish`` and named no corpus is exactly what this check exists to
     fail, so dropping it is the check excusing the one case it was written for.
 
@@ -169,17 +169,17 @@ def test_a_stamped_fail_closed_clarification_that_names_its_corpus_passes() -> N
     assert result == "passed"
 
 
-def test_the_check_rests_on_finish_writing_both_treatment_identities() -> None:
+def test_the_check_rests_on_finish_writing_both_under_test_identities() -> None:
     """The premise the exclusion is derived from, read from the register rather than restated.
 
     ``_paused_before_finish`` treats a null ``prompt_set_hash`` as "this turn never reached
     ``finish``". That is sound only while both identities are declared as written by ``finish`` on
     every terminal path; if one is ever declared optional, the exclusion becomes a silent drop of
     exactly the rows the check is for. ``checks.py`` asserts it at import, and this asserts the
-    assertion is wired to the field the check actually reads.
+    assertion is wired to the field the check reads.
     """
     declared = {f.name: f for f in RECORD_REGISTER}
-    for name in (checks._FINISH_WITNESS_FIELD, "corpus_content_hash"):
+    for name in (checks._FINISH_EVIDENCE_FIELD, "corpus_content_hash"):
         assert declared[name].absence is Absence.never
         assert declared[name].owner is Stage.finish
 

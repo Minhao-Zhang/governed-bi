@@ -427,7 +427,7 @@ NARRATE = Prompt(
 
 
 #: Stage → rewriter prompt. ``channel_schema`` absent: searches raw question;
-#: ``FACET_SCHEMA_QUERY`` stays in the registry (hashed) as an unsent baseline.
+#: ``CHANNEL_SCHEMA_QUERY`` stays in the registry (hashed) as an unsent baseline.
 CHANNEL_QUERY_PROMPTS: Mapping[str, str] = {
     "channel_term": "facet_term_query",
     "channel_metric": "facet_metric_query",

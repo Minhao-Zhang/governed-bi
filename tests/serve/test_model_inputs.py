@@ -1,4 +1,4 @@
-"""What the graph actually hands the model. Decision #1's ``prompts_seen`` / ``tools_seen``.
+"""What the graph hands the model. Decision #1's ``prompts_seen`` / ``tools_seen``.
 
 **Written because the system prompt could be emptied with a green suite.** Setting
 ``SYSTEM_PROMPT = ""`` left the suite at 358 passed / 27 xfailed — byte-identical to baseline
@@ -57,7 +57,7 @@ def _session(
         index=index, structure=structure, assets_by_id=assets, corpus=None, connector=None,
         policy=policy, corpus_content_hash="corpus-hash",
         prompt_set_hash=prompt_set_hash(variants),
-        knobs_resolved={}, db_id="ops_b", run_id="run-model-inputs", agent_model=model,
+        settings_resolved={}, db_id="ops_b", run_id="run-model-inputs", agent_model=model,
         prompt_variants=dict(variants or {}),
     )
 

@@ -193,7 +193,7 @@ def guard(question: str, settings: GovernancePolicy) -> GuardResult:
     """Screen one input. **One call site today: ``guard_node``, on ``question``.**
 
     ADR 0006 §6 requires a second pass over ``rewrite.after`` and it is not built. That
-    pass is load-bearing, which is why the gap is worth naming here rather than only in
+    pass is, which is why the gap is here rather than only in
     the ADR: ADR 0005's ``rewrite`` is a model call with unguarded history in scope and
     every downstream node reads its output, so until it exists the guarded artifact is
     not the delivered artifact. This docstring used to describe the second pass in the

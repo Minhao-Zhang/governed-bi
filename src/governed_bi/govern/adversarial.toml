@@ -101,7 +101,7 @@ default_schema = "sales"
 #: Table ids this turn licenses. `sales.payroll` is deliberately absent: a table that exists in
 #: the corpus and is not a retrieved table is the only way to test the TABLES layer, and a world with no
 #: such table would let a checker that licenses everything score perfectly.
-licensed = [
+retrieved_tables = [
     "sales.customers",
     "sales.orders",
     "sales.regions",

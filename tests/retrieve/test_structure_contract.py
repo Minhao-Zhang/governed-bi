@@ -389,7 +389,7 @@ def test_a_corpus_that_lost_edges_is_distinguishable_from_a_small_corpus() -> No
 
 
 def test_a_join_reaching_context_requires_both_endpoints_not_either() -> None:
-    """ADR 0005 §2.8's load-bearing row, and the reason §2.8.1 had to move it.
+    """ADR 0005 §2.8's row, and the reason §2.8.1 had to move it.
 
     `resolve(ids, references)` is a fixpoint over `Mapping[id, set[id]]`, so every edge in it
     is **disjunctive**: one id present pulls in all of its references. The rule is

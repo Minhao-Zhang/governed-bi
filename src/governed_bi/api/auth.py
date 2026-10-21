@@ -45,7 +45,7 @@ async def _no_state_writes(ctx: Auth.types.AuthContext, value: dict) -> None:
 
     A denial rather than a filter: a filter would restrict *which* threads may be written, and
     the finding is not about ownership. `ServeState` is the engine's own record — `retrieved_tables`,
-    `knobs_resolved`, `corpus_content_hash` — and a client that can set those can forge an
+    `settings_resolved`, `corpus_content_hash` — and a client that can set those can forge an
     audit record and widen the tool bounds the layer stack enforces against. There is no
     value of "which thread" that makes that acceptable.
     """
@@ -135,8 +135,8 @@ async def _no_state_writes_on_a_new_run(ctx: Auth.types.AuthContext, value: dict
     Both halves of that example matter and neither is a nuisance: ``retrieved_tables`` is the tool bound the
     layer stack enforces against, so widening it and then resuming executes SQL against tables the
     corpus never retrieved_tables — the model does not need a database handle if the caller can hand it one.
-    And ``corpus_content_hash`` is the treatment identity every quotability check reads, so a forged
-    one stamps an audit record with a corpus the run never served.
+    And ``corpus_content_hash`` is the setting under test identity every quotability check reads, so a forged
+    one finishes an audit record with a corpus the run never served.
 
     A denial and not a filter, for the reason the state hook gives: there is no value of "which
     thread" that makes forging the engine's own record acceptable. ``resume`` passes, because

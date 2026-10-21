@@ -100,7 +100,7 @@ def test_channel_schema_runs_the_semantic_channel_without_a_precomputed_query_ve
 
 
 def test_a_dead_embedder_reports_failed_and_scores_nothing() -> None:
-    """Audit I7, at the seam that writes the record rather than at the function.
+    """Audit I7, at the boundary that writes the record rather than at the function.
 
     The unit test on ``vector_for_query`` says it returns ``failed``; it says nothing about
     whether the node reads it. Before this, the node could not have: ``vector_for_query`` handed
@@ -181,7 +181,7 @@ def test_an_config_with_no_embedder_reports_unconfigured_rather_than_failed() ->
         f"no embedder is a configuration, not a failure: {channels}"
     )
     assert channels["lexical"] == ChannelState.ran.value
-    facet_channels = {"channel_schema": channels}
-    assert channel_anomalies(facet_channels) == {"channel_schema.semantic": "unconfigured"}
+    channel_scoring = {"channel_schema": channels}
+    assert channel_anomalies(channel_scoring) == {"channel_schema.semantic": "unconfigured"}
     # Still degradation: the channel declares two channels and ran one.
-    assert channels_degraded(facet_channels) is True
+    assert channels_degraded(channel_scoring) is True

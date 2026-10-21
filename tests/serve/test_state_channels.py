@@ -6,7 +6,7 @@ turn after the one that wrote it. One is loud in the wrong place: ``InvalidUpdat
 raised by the channel itself, after the nodes have returned, where ``wrap_node`` is no longer
 on the stack and ``finish`` never runs.
 
-That is the shape worth naming. The suite was green through all four, so a green suite was
+That is the shape. The suite was green through all four, so a green suite was
 evidence about the nodes and not about the graph. These tests fail against the reducers and
 the ``turn()`` reset removed.
 """
@@ -41,7 +41,7 @@ def _turn(**overrides: Any) -> dict[str, Any]:
         "run_id": "run-channels", "turn_id": "turn-channels", "question_id": "q-channels",
         "db_id": "sales_a", "attempt_id": "attempt-channels", "n_re_served": 0,
         "corpus_content_hash": "corpus-hash", "prompt_set_hash": "prompt-hash",
-        "knobs_resolved": {"route_top_n": 1}, "messages": [], "usage": [], "route_top_n": 1,
+        "settings_resolved": {"route_top_n": 1}, "messages": [], "usage": [], "route_top_n": 1,
     }
     payload.update(overrides)
     return payload
@@ -120,7 +120,7 @@ def test_the_concurrently_dropped_failure_is_named_rather_than_discarded(
     """``failed_stage`` holds one stage, so the second crash must still be legible.
 
     The register has one ``failed_stage`` field and two channels crashed, so one of the two is
-    genuinely not representable there. Dropping it silently would be the reportable-state-
+     not representable there. Dropping it silently would be the reportable-state-
     treated-as-nothing shape this repository keeps re-finding, so ``settle_failure`` appends
     it to ``detail`` — free text that already reaches the record.
     """
@@ -230,7 +230,7 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # never took.
         "abstention": {
             "policy": "context_sufficiency_v1", "outcome": "withhold",
-            "reason": "nothing_licensed", "rules_evaluated": [], "evidence": {},
+            "reason": "nothing_retrieved", "rules_evaluated": [], "evidence": {},
         },
         "guard": {"outcome": "blocked"}, "rewrite": {"outcome": "rewritten"},
         "retrieved": {"by_type": {"table": ["sales_a.customers"]}},
@@ -275,7 +275,7 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
 # ── a key one node adds must survive a node that never heard of it ────────────
 
 
-def test_the_budget_witness_reaches_finish(
+def test_the_budget_evidence_reaches_finish(
     monkeypatch, two_schema_index, two_schema_assets, guard_off_policy
 ):
     """``pass_two`` writes what the per-type cap discarded; ``resolve`` used to delete it.
@@ -285,11 +285,11 @@ def test_the_budget_witness_reaches_finish(
     ``budget_best_dropped_score`` — died one super-step later, on **every** turn that hit a cap.
     Verified 2026-08-11: neither key had a reader anywhere in ``src/``, and the reason is that
     neither key ever reached one. ``register/citations.py`` states what they are for: a cap can
-    discard a gold table, and without a witness the miss reads as retrieval never having found
+    discard a gold table, and without a evidence the miss reads as retrieval never having found
     it — the difference between a retrieval defect and a budget that is set too tight.
 
     Asserted at ``finish`` and not at ``route``, through a spy on the real node, because
-    ``tests/retrieve/test_budget_witness.py`` already proves ``apply_budgets`` produces the
+    ``tests/retrieve/test_budget_evidence.py`` already proves ``apply_budgets`` produces the
     counts and that is exactly as far as the evidence went. What was missing is the two
     super-steps in between.
 
@@ -303,7 +303,7 @@ def test_the_budget_witness_reaches_finish(
 
     So the mutation that turns this red is ``retrieved: Annotated[RetrievalResult, merge_delta]``
     → ``right`` (or dropping the annotation, which is the same thing): ``finish`` then sees
-    ``resolve``'s write and nothing else, and the witness is gone. Verified both ways.
+    ``resolve``'s write and nothing else, and the evidence is gone. Verified both ways.
     :func:`test_the_two_delta_channels_are_reduced` pins that annotation directly, because a
     mutation this test can only see through four super-steps of graph is one a reader cannot
     check by eye.
@@ -330,10 +330,10 @@ def test_the_budget_witness_reaches_finish(
     )
 
     assert len(seen) == 1, "the spy must see exactly one finish"
-    witness = (seen[0].get("retrieved") or {}).get("budget_dropped")
-    assert witness == routed["budget_dropped"], (
+    evidence = (seen[0].get("retrieved") or {}).get("budget_dropped")
+    assert evidence == routed["budget_dropped"], (
         "the cap's witness did not survive to finish: resolve/connect rebuilt `retrieved` from "
-        f"their own key list and dropped it. finish saw {witness!r}"
+        f"their own key list and dropped it. finish saw {evidence!r}"
     )
     assert (seen[0].get("retrieved") or {}).get("budget_best_dropped_score", {}).get("table"), (
         "the count survived and the best surviving-nothing score did not; a drop at 0.97 and a "
@@ -347,7 +347,7 @@ def test_the_budget_witness_reaches_finish(
     # **And it reaches the record, which is the only artifact anything downstream opens.**
     # Surviving to `finish` was one super-step, not a destination: `finish` projects a named list
     # of keys off `retrieved`, and until 2026-08-12 neither budget key was on it or in
-    # `registry/record.py`, so the witness was live in state and absent from every turn record,
+    # `registry/record.py`, so the evidence was live in state and absent from every turn record,
     # every trace page and every check. Asserted through the register rather than by name, so a
     # field declared and never projected fails here.
     record = out["answer"]["record"]
@@ -362,10 +362,10 @@ def test_the_budget_witness_reaches_finish(
     )
 
 
-def test_the_budget_witness_is_null_rather_than_absent_when_no_cap_bit(
+def test_the_budget_evidence_is_null_rather_than_absent_when_no_cap_bit(
     two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """The other half, and the one that keeps the field honest.
+    """The other half, and the one that keeps the field.
 
     ``pass_two`` emits the two keys **only when a cap bit**, so a turn under budget is
     byte-identical and ``context_hash`` holds. The record must still carry them — as ``null``,
@@ -401,7 +401,7 @@ def test_the_two_delta_channels_are_reduced() -> None:
 
     The mutation that breaks every claim in this section is one character wide — drop the
     ``Annotated[...]`` and LangGraph's default channel takes the last write whole — and until
-    this test existed nothing pinned it. ``test_the_budget_witness_reaches_finish`` sees it, but
+    this test existed nothing pinned it. ``test_the_budget_evidence_reaches_finish`` sees it, but
     only through four super-steps of a compiled graph, and
     ``test_turn_clears_every_per_turn_channel_through_the_real_reducers`` applies a
     hand-maintained ``{name: reducer}`` map that would go on testing ``merge_delta`` after the
@@ -452,7 +452,7 @@ def test_a_narrowing_write_still_narrows(
     assert narrowed["schema_ranking"] == [("a", 1.0)], "an untouched key must be carried"
 
 
-# ── the classification that keeps the reset honest ────────────────────────────
+# ── the classification that keeps the reset ────────────────────────────
 
 
 def test_every_declared_channel_is_classified_as_per_turn_or_not():
@@ -485,7 +485,7 @@ def test_every_executor_path_is_classified_as_answering_or_introspecting():
     default — under-recording an answer is this repository's recurring failure mode — but it
     is only right if forgetting is caught. It is caught here.
 
-    The distinction is load-bearing in three places: ``execution_from_attempts``' ``terminal``,
+    The distinction is in three places: ``execution_from_attempts``' ``terminal``,
     ``finish``'s outcome, and ``agent_core``'s ``generated_sql``. A ``sample`` row counted as
     answering makes a turn whose every ``run_query`` was refused record ``answered``, and makes
     a ``SELECT DISTINCT`` over one column the statement an eval re-executes as the answer.
@@ -505,7 +505,7 @@ def test_every_executor_path_is_classified_as_answering_or_introspecting():
     assert not (answering & INTROSPECTION_PATHS)
 
 
-def test_a_turn_built_by_the_session_seam_actually_answers(
+def test_a_turn_built_by_the_session_boundary_answers(
     two_schema_index, two_schema_assets, guard_off_policy
 ):
     """The turn every real caller builds, through the graph, end to end.
@@ -552,13 +552,13 @@ def test_a_turn_built_by_the_session_seam_actually_answers(
 
 
 def test_session_turn_writes_the_reset(guard_off_policy):
-    """The seam that mints a turn is the seam that clears the last one."""
+    """The boundary that mints a turn is the boundary that clears the last one."""
     from governed_bi.serve.session import Session
 
     session = Session(
         index=None, structure=None, assets_by_id={}, corpus=None, connector=None,
         policy=guard_off_policy, corpus_content_hash="h", prompt_set_hash="p",
-        knobs_resolved={}, db_id="sales_a", run_id="run-1",
+        settings_resolved={}, db_id="sales_a", run_id="run-1",
     )
     turn = session.turn("customers", turn_index=2)
     for name, reset in PER_TURN_RESET.items():
@@ -630,7 +630,7 @@ def test_a_node_timeout_is_attached_only_where_it_can_fire() -> None:
     assert "reflect" not in nodes, "the observer node is gone"
     # The fan-out stays out by decision, not by constraint: moving the clock inside wrap_node
     # removed the concurrent-sibling problem, but five simultaneous bounds against a shared
-    # provider quota is an unmeasured comparability change.
+    # provider quota is an unmeasured change that affects results.
     assert not (timed & {name for name, _ in graph_mod._CHANNEL_NODES}), (
         "a retrieval channel carries a timeout; that is now possible but is an unmeasured config change"
     )
@@ -648,7 +648,7 @@ def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
     Rail bounds are read from the environment before falling back to the declared default.
     ``agent_core``'s bound is settable the same way but lives on the node, not ``wrap_node``.
 
-    ``agent_node_timeout_s`` must also be reachable from ``knobs_resolved``, because it is
+    ``agent_node_timeout_s`` must also be reachable from ``settings_resolved``, because it is
     ``a recorded setting``: it took no state at all, so two configs declaring different values
     recorded two configurations that had behaved identically. And ``0`` must mean *no wall*
     rather than a zero-second deadline that fails every turn on its first frame.
@@ -670,21 +670,21 @@ def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
     assert _agent_node_timeout({}) == float(setting_default("agent_node_timeout_s"))
 
     # The config-settable path, which is the whole reason the setting is a recorded setting.
-    assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 55.0}}) == 55.0
+    assert _agent_node_timeout({"settings_resolved": {"agent_node_timeout_s": 55.0}}) == 55.0
 
     # `0` disables rather than kills. Both surfaces, because both used to parse it as a deadline.
-    assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 0}}) is None
+    assert _agent_node_timeout({"settings_resolved": {"agent_node_timeout_s": 0}}) is None
 
     # The grace is what lets the soft wall stay between-frames without losing the hang-stop.
     assert _hang_grace({}) == float(setting_default("llm_timeout_s"))
-    assert _hang_grace({"knobs_resolved": {"llm_timeout_s": 42.0}}) == 42.0
+    assert _hang_grace({"settings_resolved": {"llm_timeout_s": 42.0}}) == 42.0
 
     os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "12.5"
     os.environ["GOVERNED_BI_RAIL_NODE_TIMEOUT_S"] = "7"
     try:
         assert _agent_node_timeout({}) == 12.5
         # Env still wins over a resolved setting, as it does for every other node bound.
-        assert _agent_node_timeout({"knobs_resolved": {"agent_node_timeout_s": 55.0}}) == 55.0
+        assert _agent_node_timeout({"settings_resolved": {"agent_node_timeout_s": 55.0}}) == 55.0
         assert _node_timeout("guard") == 7.0
         os.environ["GOVERNED_BI_AGENT_NODE_TIMEOUT_S"] = "0"
         assert _agent_node_timeout({}) is None, "'0' from a deployment must mean off, not 0s"

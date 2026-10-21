@@ -1,20 +1,20 @@
 # Failure modes: how this engine gets BIRD questions wrong
 
-**Arm**: `proxy_v4_corpus30872d3.jsonl`, **EX 0.676** (clean 0.6762)
-**Engine**: `3c0079a`  **Corpus**: `../BIRD-corpus` @ `30872d3`  **Prompt**: ANALYST v4
+**configuration**: `proxy_v4_corpus30872d3.jsonl`, **EX 0.676** (clean 0.6762)
+**Engine**: `3c0079a` **Corpus**: `../BIRD-corpus` @ `30872d3` **Prompt**: ANALYST v4
 
 run1 (0.579), run2 (0.570) and v3-pinned (0.611) ran on engine `ba8cef2` or earlier.
 `r_ambiguous_fold` was narrowed after them, so on anything that rule touches they are **not**
-paired-comparable with later arms. v3-fold (0.664) ran on `4f7430a`, and it is the artifact v4
-and v5 pin their routing to with `--replay-routing`. Every section below names the arm it was
+side by side-comparable with later configurations. v3-fold (0.664) ran on `4f7430a`, and it is the artifact v4
+and v5 pin their routing to with `--replay-routing`. Every section below names the configuration it was
 measured on. A number is only true of the engine it came from.
 
-**Evidence**: per question, the row carries `licensed`, `gold_sql`, `generated_sql`,
+**Evidence**: per question, the row carries `retrieved`, `gold_sql`, `generated_sql`,
 `gold_fingerprint`, `attempts`, `computed_correct`, `context_evicted` and `routing_pinned`, plus
-the two treatment identities `corpus_content_hash` and `prompt_set_hash`. `model_calls` is a key
+the two setting under test identities `corpus_content_hash` and `prompt_set_hash`. `model_calls` is a key
 inside each `usage` record, not a field on the row.
 
-**Arm configuration, as `knobs_resolved` records it** — read off all 1,351 rows of
+**configuration configuration, as `settings_resolved` records it** — read off all 1,351 rows of
 `runs/eval/proxy_v4_corpus30872d3.jsonl` on 2026-08-22, identical on every row: `chat_model`
 Claude-Opus-4.8, `llm_utility_model` Claude-Sonnet-5, `embedding_model`
 `proxy:text-embedding-3-large`, `llm_provider` `custom:007df842` (the proxy), `route_top_n` 10,
@@ -22,13 +22,13 @@ Claude-Opus-4.8, `llm_utility_model` Claude-Sonnet-5, `embedding_model`
 
 **Inferred, not recorded** — stated separately because a header that mixes the two lets an
 unrecorded setting be quoted as a measurement. `llm_reasoning_effort` and `serve_workers` are
-`null` on every row. The "/high" therefore comes from the arm-name string alone
+`null` on every row. The "/high" therefore comes from the configuration-name string alone
 (`live_Claude-Opus-4.8_high_top10_embed_proxy_analystv4`), there is no field for the utility
 surface's effort at all, and the worker count is recorded nowhere — an earlier version of this
-header said "10 workers" and no artifact supports it. `llm_max_retries` 4 is a comparability
-knob and today's driver default is 8, so a rerun at the default is a different arm.
+header said "10 workers" and no artifact supports it. `llm_max_retries` 4 is a setting that affects results
+setting and today's driver default is 8, so a rerun at the default is a different configuration.
 
-> The corpus is the treatment identity of every measurement. Every number on this page holds only
+> The corpus is the identity of what was measured of every measurement. Every number on this page holds only
 > on corpus `30872d3`. The corpus is in git, and it cannot be regenerated from anything committed.
 
 > **And so is the model.** Every number on this page was measured with Claude-Opus-4.8 as the
@@ -36,7 +36,7 @@ knob and today's driver default is 8, so a rerun at the default is a different a
 > what this repo selects today**: `tools/run_datalake_eval.py` defaults to `--model
 > gpt-5.6-luna` and `--provider openai`, and `model/provider.py` hard-codes no chat model at all
 > — `default_embedding_model` is the only model default in it. Nothing on this page has been
-> replicated on the model the driver now picks. The newest full 1,351-question arm on disk is
+> replicated on the model the driver now picks. The newest full 1,351-question configuration on disk is
 > `runs/eval/proxy_v4_reflect_corpus30872d3.jsonl` (2026-08-10); the newest artifact of any kind
 > is a two-row aborted probe, `runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl`
 > (2026-08-12). There is no `runs/index.jsonl` and no `stage_events.jsonl` anywhere in the tree,
@@ -56,7 +56,7 @@ Counting only failures makes the base-rate mistake: if 37% of wrong answers over
 of right ones do as well, over-projection is not the disease.
 
 **Offline replay of the governance layers.** Each refused statement goes back into `check()` with
-the `licensed` set it had at the time, so the failing layer is read directly rather than guessed
+the `retrieved` set it had at the time, so the failing layer is read directly rather than guessed
 from `refused_by`.
 
 **Causal repair experiments.** Connect to the evaluation database, apply one controlled repair to
@@ -101,7 +101,7 @@ exactly one:
 | capped | 49 | five attempts spent with no passing statement |
 | answered, incomplete table coverage | 31 | retrieval |
 | refused | 20 | none with full coverage |
-| clarification | 4 | all zero-licensed |
+| clarification | 4 | all zero-retrieved |
 
 Cut the same 438 by coverage instead, across outcomes: **71 failures had incomplete table
 coverage** and **85 had a frozen-literal gold**. Those two totals overlap the capped, refused and
@@ -112,15 +112,15 @@ reads no table; of the 49 capped turns, 26 were incompletely covered or had a ta
 "the data was visible and the engine refused anyway."
 
 **Table coverage on real golds is 0.940** — 1,150 of the 1,224 questions with a real gold
-statement had every gold table licensed. Retrieval is mostly working, and that decides how to read
+statement had every gold table retrieved. Retrieval is mostly working, and that decides how to read
 every bucket below: only 74 questions were incompletely covered, and the engine answered just 3 of
 them correctly.
 
 **Recomputed 2026-08-24 on the same artifact, after a metric fix, and the five rows are named so
-nobody re-runs an arm looking for them.** `table_coverage` compared the gold statement's identifier
-against `licensed`, which holds asset **ids** — so `airline."Air Carriers"`, whose asset is
+nobody re-runs a configuration looking for them.** `table_coverage` compared the gold statement's identifier
+against `retrieved`, which holds asset **ids** — so `airline."Air Carriers"`, whose asset is
 `airline.Air_Carriers_66c534`, read as unlicensed on the five questions whose gold names it
-(`train_5835`, `_5837`, `_5894`, `_5902`, `_5909`), all five of which had licensed it. It is the one
+(`train_5835`, `_5837`, `_5894`, `_5902`, `_5909`), all five of which had retrieved it. It is the one
 table of 656 whose id is not its own name, so the bias was one-directional: coverage was
 under-reported, never over. The figures this replaces were 0.936 (1,145 of 1,224), 79 incompletely
 covered with 6 answered correctly, 73 failures with incomplete coverage, and 257/33 in the bucket
@@ -138,7 +138,7 @@ Outcome against coverage, v4, all 1,351 rows including the correct ones:
 Not one refusal or clarification lands in the full-coverage column. Capped splits about evenly
 between full coverage and incomplete.
 
-### 1.1 The historical arm (run1, engine `d121c34`)
+### 1.1 The historical configuration (run1, engine `d121c34`)
 
 Stratified by table coverage, using `table_coverage()`, whose docstring calls this "the EX
 ceiling":
@@ -168,11 +168,11 @@ entirely in the fully covered one. These three buckets are not three diseases.
 
 *(run1, 21 cases; v3-fold 23; v4 20. The conclusion does not change.)*
 
-Replaying the 21 statements into `check()` with each one's own `licensed` set:
+Replaying the 21 statements into `check()` with each one's own `retrieved` set:
 
 | Failing layer | n | Reason code |
 |---|---:|---|
-| **Layer 6 TABLES** | **18** | `r_table_not_licensed` |
+| **Layer 6 TABLES** | **18** | `r_table_not_retrieved` |
 | Layer 4 BINDING | 1 | `r_star_projection` (`SELECT *`) |
 | replay passed | 2 | — |
 
@@ -183,9 +183,9 @@ beer_factory.kunden resolves to beer_factory.kunden, which this turn does not li
 works_cycles.EmailAddress resolves to works_cycles.emailaddress, which this turn does not license
 ```
 
-In 19 of the 21, the gold table was not in `licensed` at all. **This is not governance
+In 19 of the 21, the gold table was not in `retrieved` at all. **This is not governance
 misfiring; it is governance correctly reporting a retrieval failure.** Relaxing this layer would
-let the engine query tables it was not licensed for, and what you would then be measuring is no
+let the engine query tables it was not retrieved for, and what you would then be measuring is no
 longer a governed engine.
 
 > The `works_cycles` message shows a case difference (`Product` → `product`). `normalise_table_key`
@@ -197,18 +197,18 @@ the same statement as the attempt that was refused. Unexplained, and worth its o
 
 ---
 
-## 3. Clarifications: every one licensed nothing
+## 3. Clarifications: every one retrieved nothing
 
-*(run1, 8 cases; v3-fold 6; v4 4. Still all zero-licensed.)*
+*(run1, 8 cases; v3-fold 6; v4 4. Still all zero-retrieved.)*
 
-All eight clarification turns had an empty `licensed` and an empty `schemas`. The agent's context
+All eight clarification turns had an empty `retrieved` and an empty `schemas`. The agent's context
 held nothing, so "I need more information" is the only correct response.
 
 This is not over-caution, and the fix is not to bias the agent toward answering under evaluation.
-That would force an agent that can see no schema at all to invent SQL, trading an honest signal
+That would force an agent that can see no schema at all to invent SQL, trading an signal
 for a guaranteed wrong answer.
 
-What actually needs fixing is **why routing returned zero schemas on those 8 turns**. `licensed`
+What needs fixing is **why routing returned zero schemas on those 8 turns**. `retrieved`
 has a median of 26, and these 8 rows are the only ones below 5.
 
 ---
@@ -238,7 +238,7 @@ EX within this layer is 0.715.
 **The two populations reproduce; most of the comparison rules were never written down.** Both
 denominators recompute exactly off `runs/eval/proxy_full_opus_high_corpus30872d3.jsonl` (recounted
 2026-08-22): 292 rows with `outcome == answered`, `correct == false` and every gold table
-licensed, against 732 correct rows with full coverage. What no file in the tree states is *how*
+retrieved, against 732 correct rows with full coverage. What no file in the tree states is *how*
 each feature was compared, and the rates are sensitive to that at the third decimal. Recomputing
 them with the obvious sqlglot definitions: the two DISTINCT rows land exactly (missing 20/292 =
 0.068 against 5/732 = 0.007; extra 28/292 = 0.096 against **53**/732 = 0.072), both join rows land
@@ -265,7 +265,7 @@ Two readings to hold on to:
 - The safety `LIMIT 200001` is inert: lift 0.87, and **650 of the 732 correct answers in the
   control carry it** — 0.888, counted 2026-08-22 as the literal `200001` appearing in
   `generated_sql`. One denominator, stated: an earlier version of this line said "695", which is
-  the same count taken over **all 782** of the arm's correct rows rather than over the 732 this
+  the same count taken over **all 782** of the configuration's correct rows rather than over the 732 this
   table's control is built from, and reading it against 732 makes the safety limit look more
   common than it is.
 
@@ -375,10 +375,10 @@ is charged).
 
 > **The "budgets blind" half of this item is closed.** Every `run_query` reply has ended with
 > `attempt N of M` since 2026-08-20 — `serve/tools.py::_attempt_budget`, applied on the capped
-> reply, the error reply and the successful reply alike, unconditionally rather than behind an arm.
-> The arms on this page were all measured before that, so their capped turns really were spent
+> reply, the error reply and the successful reply alike, unconditionally rather than behind a configuration.
+> The configurations on this page were all measured before that, so their capped turns really were spent
 > blind; a rerun would not be. What that does to the bucket is unmeasured, and it makes the earlier
-> `v4` a different arm from today's `v4` under an identical `prompt_set_hash` — see
+> `v4` a different configuration from today's `v4` under an identical `prompt_set_hash` — see
 > [measurement](measurement.md#what-prompt_set_hash-does-not-cover).
 
 Both examples are run1 turns; v3-fold and v4 answer all four of the questions named in this
@@ -441,13 +441,13 @@ on disk holds this count. The definition that survives is [open work
 §1.4](open-work.md)'s — failures whose prediction and gold statement share no schema at all —
 and it does not land on 22 either: reconstructing it by parsing the schema prefixes out of
 `generated_sql` and `gold_sql` over every row whose `correct` is not `true` gives **23 to 29
-across the seven arms** (24 on v3-fold, 28 on v4, 25 on run1), and the gold schema was routed in
+across the seven configurations** (24 on v3-fold, 28 on v4, 25 on run1), and the gold schema was routed in
 19 to 24 of them — **never in all of them**. So the sentence that used to stand here, that the
-gold schema *was* routed on these turns, is not supported on any arm; open work already says 20 of
-22. Read the claim as directional: **a double-digit number of answers on every arm are written
+gold schema *was* routed on these turns, is not supported on any configuration; open work already says 20 of
+22. Read the claim as directional: **a double-digit number of answers on every configuration are written
 against a schema the gold never touches, mostly with the gold schema sitting in the shortlist** —
-disambiguation inside the licensed set rather than a recall failure. The exact count wants
-`crossings` actually written to an artifact before it is quoted again.
+disambiguation inside the retrieved tables rather than a recall failure. The exact count wants
+`crossings` written to an artifact before it is quoted again.
 
 **A questionable gold — train_7810 (hockey), 340 rows against 339.** The gold carries a redundant
 `AND NOT spieler_id IS NULL`. This is the category [Pervasive Annotation Errors Break Text-to-SQL
@@ -461,7 +461,7 @@ on BIRD.
 
 ## 7. Frozen-literal golds (127)
 
-*(The 127 is a dataset property and is identical across arms. How many the engine happens to
+*(The 127 is a dataset property and is identical across configurations. How many the engine happens to
 match is not: 42 on v4, 39 on v5.)*
 
 For 127 questions the gold is not a query. It is a hard-coded answer literal:
@@ -479,17 +479,17 @@ the same rule `table_coverage` uses for `gold_reads_no_table` — `gold_tables()
 set — so the two read one judgement rather than each carrying its own.
 
 **Reporting discipline**: publish the **unfiltered EX**, which is what public BIRD reports, and
-which is **0.676** on this arm. A figure with the degenerate questions removed is supplementary
+which is **0.676** on this configuration. A figure with the degenerate questions removed is supplementary
 only, and must be labelled as a one-sided exclusion. Shrinking the gap by changing the denominator
 is a change of definition, not a result.
 
 ---
 
-## 8. Abstention quality, and the ceiling a contrast arm puts on it
+## 8. Abstention quality, and the ceiling a contrast configuration puts on it
 
 *(Includes v4.)*
 
-| Arm | Committed | Abstention rate | Abstained, if forced | Abstention precision |
+| configuration | Committed | Abstention rate | Abstained, if forced | Abstention precision |
 |---|---:|---:|---:|---:|
 | run1 | 0.658 (n=1189) | 12.0% (162) | 0.204 † | 0.796 † |
 | run2 | 0.655 (n=1175) | 13.0% (176) | 0.168 † | 0.832 † |
@@ -500,7 +500,7 @@ is a change of definition, not a result.
 
 † run1 and run2 have no `computed_correct` field on their rows. Those two columns come from a
 separate oracle pricing pass and cannot be recomputed from the artifact. v3-pinned and the three
-arms after it can.
+configurations after it can.
 
 The abstention rate fell from 13.0% to 5.4% while precision stayed between 0.77 and 0.85. What
 went away were abstentions caused by a bug, not judgement. On v4, **every** refusal and
@@ -515,13 +515,13 @@ Delivered accuracy is **3.16×** the accuracy of the priceable withheld set (0.7
 abstention were random, the withheld set should sit near 0.676.
 
 This behaviour is mechanical rather than narrative: 19 of the 20 refusals terminate on
-`r_table_not_licensed` — Layer 6 of `check()` reporting a retrieval failure — and all 4
-clarifications had an empty licensed set. **The governance layers are acting as an "I don't know"
+`r_table_not_retrieved` — Layer 6 of `check()` reporting a retrieval failure — and all 4
+clarifications had an empty retrieved tables. **The governance layers are acting as an "I don't know"
 detector.**
 
-### 8.1 What the contrast arm does to that claim
+### 8.1 What the contrast configuration does to that claim
 
-The argument above needs a governance-off arm to be a conclusion, and one is already on disk.
+The argument above needs a governance-off configuration to be a conclusion, and one is already on disk.
 WrenAI runs the same 1,351 questions on the same database and **abstains once**:
 `refusal_rate: 0.0007`, a single turn of 1,351, against v4's 73. For this contrast that is
 governance-off in practice.
@@ -550,17 +550,17 @@ so nothing is lost in the join.
 **If abstention tracked question difficulty, an ungoverned engine should collapse on the declined
 set. It loses eleven points.** So those questions are mostly answerable. What abstention tracks is
 not difficulty but **whether this engine had enough context on this turn** — and that is almost
-entirely retrieval: 19 of 20 refusals end on `r_table_not_licensed`, and 4 of 4 clarifications
-licensed nothing.
+entirely retrieval: 19 of 20 refusals end on `r_table_not_retrieved`, and 4 of 4 clarifications
+retrieved nothing.
 
 That is still a real and useful property. A missed table surfaces here as "I cannot answer" rather
 than as a confident answer written against the wrong table. But it is not the stronger claim —
 that the engine knows which questions are hard — and prose slides toward the stronger claim
-easily. The honest version is narrow: **the engine abstains when its own context is insufficient,
+easily. The version is narrow: **the engine abstains when its own context is insufficient,
 and on the priceable subset it is right to abstain 77.4% of the time.**
 
 WrenAI differs from this engine on every dimension at once, so it can bound the claim but cannot
-attribute it. The arm that would attribute it relaxes Layer 6 from "the 8 licensed tables" to "the
+attribute it. The configuration that would attribute it relaxes Layer 6 from "the 8 retrieved tables" to "the
 whole routed schema", holding the model and the corpus fixed and moving only the allowlist. See
 [open work §4.1 / §4.2](open-work.md).
 
@@ -580,7 +580,7 @@ v3-pinned:  PARSE/r_ambiguous_fold   568 attempts / 119 turns (8.8%)
               they consumed 24% of all input tokens
 ```
 
-**Mechanism.** `spellings_for` flattened the names of a turn's licensed tables — around 26 of them
+**Mechanism.** `spellings_for` flattened the names of a turn's retrieved tables — around 26 of them
 across about 8 schemas — into **one namespace**. Any two names differing only in case (`Name` and
 `name`) then caused **every** reference to either to be refused, including a fully qualified
 `T1."Name"`. The rule's intent, that a case fold might land on a decoy, was right. Its scope was
@@ -591,7 +591,7 @@ under its alias, because Postgres hides the table name behind one; and if a hand
 tables anywhere in the tree, discard it and fall back to the old behaviour.
 
 > **Those two resolver defects were fixed 2026-08-12** (open-work recorded the repair; both
-> had zero hits on this arm — all 1,342 statements and all 656 tables were scanned — so the
+> had zero hits on this configuration — all 1,342 statements and all 656 tables were scanned — so the
 > numbers below are unaffected). A later CTE-scope hole of the same family is written up in
 > `git-history:docs/analysis/binding-scope-and-statement-timeout-2026-08-19.md`, deleted with the
 > rest of `docs/analysis/` by `2396ca2`; read it with
@@ -609,7 +609,7 @@ input tokens       87.2M → 74.7M         −14.4%
 ```
 
 **The lesson is not "there was a bug."** It is that the bug sat there for an unknown length of time
-because the field that would have shown it stopped at `stamp`. Adding that field paid better than
+because the field that would have shown it stopped at `finish`. Adding that field paid better than
 any prompt intervention tried in the same period.
 
 ---
@@ -632,12 +632,12 @@ came from an offline reconstruction, not from this measurement.
 **The budget is not the constraint.** The question is whether the content earns its place, not
 whether it fits.
 
-The companion figures, from the first arm to carry `model_calls`:
+The companion figures, from the first configuration to carry `model_calls`:
 
 ```
 agent_core: 3,308 calls over 1,345 turns = 2.46 per turn, 22,285 input tokens per call
 second and later calls within a turn = 1,963 = 59.3% of all calls
-agent_core is 98.7% of the arm's input tokens (73.7M of 74.7M)
+agent_core is 98.7% of the configuration's input tokens (73.7M of 74.7M)
 ```
 
 Call counts and token totals are read straight out of `usage`. But `usage` writes **one** aggregated
@@ -662,7 +662,7 @@ columns the way the reference answer arranges them.**
 **Mechanism.** ANALYST v4 contains a paragraph about projection — the result table is the answer,
 its columns are part of being right, select only the columns the question asks for. That paragraph
 is an outlier in the prompt. v4's other two rules — qualify identifiers, `SELECT *` is refused —
-state constraints `check()` actually enforces. The projection rule states something **this engine
+state constraints `check()` enforces. The projection rule states something **this engine
 does not check at all**:
 
 - nothing in `RULES` in `govern/layers.py` constrains select-list width;
@@ -674,12 +674,12 @@ that aims at exactly one dimension of the comparator and affects nothing else is
 comparator.
 
 **Method.** v5 is v4 byte-for-byte with **only that paragraph deleted**. Same engine, same corpus
-`30872d3`, same `--replay-routing` pin on `proxy_v3_fold_opus_high_corpus30872d3.jsonl`. Both arms
+`30872d3`, same `--replay-routing` pin on `proxy_v3_fold_opus_high_corpus30872d3.jsonl`. Both configurations
 flag 1,345 of 1,351 rows `routing_pinned`, but that field recorded the driver's *intent* when
-these rows were written; `replay.pin_realised` is the producer that reads what the turn actually
+these rows were written; `replay.pin_realised` is the producer that reads what the turn 
 ran on, and it counts **1,342 of 1,351 realised on v4 and 1,340 on v5**. Residual mean Jaccard
 over the shortlists that moved is 0.7049 on v4 and 0.7029 on v5. It is the cleanest pair in the
-set: one variable. Paired McNemar, not two EX numbers subtracted.
+set: one variable. side by side McNemar, not two EX numbers subtracted.
 
 **Result**:
 
@@ -698,11 +698,11 @@ comparable pairs on v4 and 1,341 on v5.
 **What it means.** About **4 points** of this engine's EX come from aligning the output column set
 to the reference answer rather than from retrieving the right data. This is not specific to this
 engine — every system reporting EX on this benchmark carries some of it. Almost nobody measures it,
-because measuring it costs a whole second arm.
+because measuring it costs a whole second configuration.
 
 **Two over-readings to avoid.**
 
-- It does not follow that 0.635 is the honest number. WrenAI's 0.6773 — 915 of 1,351, the
+- It does not follow that 0.635 is the number. WrenAI's 0.6773 — 915 of 1,351, the
   `EX_lenient_over_all` of `runs/eval/wrenai/preds_full_usage_graded_summary.json`, 2026-08-07 —
   contains a shape component too, and that one cannot be measured from outside. Subtracting on
   this side only makes the comparison less accurate, not more. (The `0.678` this line used to
@@ -729,7 +729,7 @@ time.
 - [Pervasive Annotation Errors Break Text-to-SQL Benchmarks and Leaderboards](https://arxiv.org/abs/2601.08778)
   — a 52.8% annotation error rate on BIRD.
 - [The Death of Schema Linking?](https://arxiv.org/html/2408.07702) — aggressive pruning loses
-  22.6% of required elements. This arm's 0.940 coverage says the current configuration is not in
+  22.6% of required elements. This configuration's 0.940 coverage says the current configuration is not in
   that trap.
 - [CHASE-SQL](https://arxiv.org/html/2410.01943v1) /
   [DPC](https://aclanthology.org/2026.acl-long.313/) — candidate generation plus selection, BIRD
