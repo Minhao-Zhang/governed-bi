@@ -1,13 +1,5 @@
-"""Custom REST routes mounted by ``langgraph.json``'s ``http.app`` (ADR 0007).
-
-Four reads: ``/livez``, ``/readyz``, ``/capabilities`` and ``/clarifications/pending``. A turn
-is served by the graph the platform streams, not by this app. :func:`make_app` takes the session
-and the pending-clarification reader; :func:`app_from_environment` is the only place that
-resolves the environment, and it does so on the first request so importing this module needs no
-database.
-
-Nothing here asks for a credential. One operator on loopback is the deployment, so the
-port is the boundary. ``api/auth.py`` still refuses a client-supplied state write.
+"""Reads only (ADR 0007). The environment resolves on first request, so import needs no database.
+No credential; loopback is the boundary.
 """
 
 from __future__ import annotations
@@ -25,24 +17,13 @@ from governed_bi.paths import REPO_ROOT
 __all__ = ["make_app", "app_from_environment", "app"]
 
 
-# ── the boundary ─────────────────────────────────────────────────────────────────
-
-
 def make_app(session: Any, pending: Any) -> FastAPI:
-    """An app over the session and the pending-clarification reader.
-
-    Both are required. A default would put the environment back in the constructor.
-    """
+    """Both arguments are required. A default would put the environment back in the constructor."""
     return _build_app(lambda: session, pending)
 
 
 def app_from_environment() -> FastAPI:
-    """The process entry's adapter: the same app, over dependencies resolved on first request.
-
-    Lazy on purpose. ``langgraph.json`` points ``http.app`` at the module attribute below, so
-    this runs at import, and ``session_from_environment`` builds a Postgres connector and seeds
-    a corpus. Resolving it here would make importing this module require a database.
-    """
+    """Resolve on first request. ``http.app`` is imported by name, and a session build needs Postgres."""
     from governed_bi.api.graph_app import configure_logging, session_from_environment
     from governed_bi.api.thread_turns import PendingClarifications
 
@@ -51,11 +32,7 @@ def app_from_environment() -> FastAPI:
 
 
 def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
-    """Assemble the app from a session thunk and a pending-question reader.
-
-    A thunk rather than a value, so :func:`make_app` can hand over a concrete object and
-    :func:`app_from_environment` can defer.
-    """
+    """A thunk, so :func:`make_app` can pass a session and :func:`app_from_environment` can defer."""
     app = FastAPI(title="governed-bi", version="2")
 
     @app.get("/livez")
@@ -65,12 +42,8 @@ def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
 
     @app.get("/readyz", response_model=None)
     def readyz() -> dict[str, Any] | JSONResponse:
-        """Ready when the session resolves with no fatal corpus problem; 503 if not.
-
-        Resolving the session is the check. The reason carries our own ``RuntimeError`` text,
-        which names variables, and only the type of anything else, which may hold a DSN. No model
-        at all is a supported mode (``has_live_model: false``), so it is ready.
-        """
+        """Our ``RuntimeError`` text is returned; any other error contributes only its type, which can hide a DSN.
+        No model is a supported ready state."""
         try:
             session = get_session()
         except RuntimeError as err:
@@ -84,7 +57,7 @@ def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
 
     @app.get("/capabilities")
     def capabilities() -> dict[str, Any]:
-        """What this server can do. The UI blocks on this response."""
+        """The UI blocks on this response, so a missing field is a blank screen, not a later error."""
         return capabilities_for(get_session())
 
     @app.get("/clarifications/pending")
@@ -92,11 +65,7 @@ def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
         limit: int = Query(50, ge=1, le=500),
         offset: int = Query(0, ge=0),
     ) -> dict[str, Any]:
-        """Questions the engine asked and nobody has answered, oldest first.
-
-        Interrupt state only. A paused clarification writes nothing until it is
-        resumed, so the queue is the platform's interrupted threads.
-        """
+        """Oldest first. A paused clarification writes nothing, so the queue is interrupt state."""
         page = pending.pending(limit=limit, offset=offset)
         return {
             "rows": list(page.rows),
@@ -113,16 +82,9 @@ def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
     return app
 
 
-# ── projections: a function of the session, testable without an app ──────────
-
-
 def models_for(session: Any) -> dict[str, Any]:
-    """The three model surfaces this run resolved, read from ``settings_resolved``.
-
-    That mapping is what every measurement row publishes, so the screen and the artifact cannot
-    disagree. ``embedding.id`` is reported verbatim: it is provider-qualified and may contain a
-    colon. ``utility.effort`` is observed off the live client because no setting records it.
-    """
+    """From ``settings_resolved``, which measurement rows publish. ``embedding.id`` stays verbatim.
+    ``utility.effort`` comes off the live client: no setting records it."""
     settings = session.settings_resolved
     utility = getattr(session, "utility_model", None)
     return {
@@ -145,7 +107,7 @@ def models_for(session: Any) -> dict[str, Any]:
 
 
 def _gateway(model_id: Any) -> str | None:
-    """The gateway a model id names. A qualified id uses its prefix; a bare id is OpenAI."""
+    """A qualified id uses its prefix. A bare id is OpenAI."""
     if not isinstance(model_id, str) or not model_id.strip():
         return None
     prefix, separator, rest = model_id.partition(":")
@@ -155,11 +117,7 @@ def _gateway(model_id: Any) -> str | None:
 
 
 def connection_for(session: Any) -> dict[str, Any]:
-    """Which warehouse this engine is pointed at. **Credential-free by construction.**
-
-    The redaction is the connector's (``datasource/postgres.py::endpoint``). Here the only job is
-    to tolerate a session or test double with no ``endpoint``, or one that is not a mapping.
-    """
+    """The connector redacts the credential. A missing or non-mapping ``endpoint`` is tolerated."""
     out: dict[str, Any] = {"dialect": getattr(session.connector, "dialect", "postgres")}
     endpoint = getattr(session.connector, "endpoint", None)
     if isinstance(endpoint, Mapping):
@@ -168,11 +126,7 @@ def connection_for(session: Any) -> dict[str, Any]:
 
 
 def durable_checkpointer_configured() -> bool:
-    """Whether ``langgraph.json`` declares a checkpointer, and its module is on disk.
-
-    The platform injects the saver into the graphs it runs, and this app never holds one, so the
-    file that decides it is what can be read. It says nothing about whether the saver is open.
-    """
+    """Read ``langgraph.json``: this app never holds the saver the platform injects."""
     try:
         config = json.loads((REPO_ROOT / "langgraph.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -183,11 +137,8 @@ def durable_checkpointer_configured() -> bool:
 
 
 def served_graph_declared() -> bool:
-    """Whether ``langgraph.json`` declares the streamed graph, and its module is on disk.
-
-    Read off the file for the same reason as :func:`durable_checkpointer_configured`. It cannot
-    see that the graph imports, but then nothing answers ``/capabilities`` either.
-    """
+    """Read ``langgraph.json``, same as :func:`durable_checkpointer_configured`.
+    Import failure means this route is down too."""
     try:
         config = json.loads((REPO_ROOT / "langgraph.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -202,7 +153,7 @@ def _not_ready(reason: str) -> JSONResponse:
 
 
 def capabilities_for(session: Any) -> dict[str, Any]:
-    """``/capabilities``' body. Every field is an observation (ADR 0007 §7)."""
+    """Every field is an observation (ADR 0007)."""
     can_stream = served_graph_declared()
     durable = durable_checkpointer_configured()
     return {
@@ -223,6 +174,5 @@ def capabilities_for(session: Any) -> dict[str, Any]:
     }
 
 
-#: What ``langgraph.json``'s ``http.app`` points at. An attribute, not a factory — the platform
-#: imports the name — so the environment adapter is what builds it.
+#: An attribute, not a factory: the platform imports the name.
 app = app_from_environment()

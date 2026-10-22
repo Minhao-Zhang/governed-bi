@@ -1,11 +1,4 @@
-"""The semantic channel must run for ``channel_schema``, which never rewrites its query.
-
-``channel_schema`` is the only channel outside ``CHANNEL_EXTRACTS``, so its query always equals the
-raw question. ``vector_for_query`` skipped the embed in that case as a cache hit on the
-pre-computed question vector — but the harness config carries none, so the channel that decides
-which schema the analyst sees scored against ``None`` and reported ``semantic: failed`` on
-every turn of a 1,351-question run.
-"""
+"""``channel_schema`` never rewrites its query, so a missing precomputed vector must not skip the embed."""
 
 from __future__ import annotations
 
@@ -100,17 +93,7 @@ def test_channel_schema_runs_the_semantic_channel_without_a_precomputed_query_ve
 
 
 def test_a_dead_embedder_reports_failed_and_scores_nothing() -> None:
-    """Audit I7, at the boundary that writes the record rather than at the function.
-
-    The unit test on ``vector_for_query`` says it returns ``failed``; it says nothing about
-    whether the node reads it. Before this, the node could not have: ``vector_for_query`` handed
-    back the raw question's vector, so from ``semantic_search``'s side a substituted vector was
-    just a vector and the channel recorded ``ran``.
-
-    Paired with the test below, which is the *other* reason a declared channel does not run.
-    ``failed`` and ``not_configured`` must not converge — one is a dead endpoint and the other is
-    a lexical-only config, and ``Anomaly`` exists to tell them apart.
-    """
+    """A dead query embed is ``failed``. That is not the same word as a channel with no embedder."""
     from governed_bi.measure.degradation import channel_anomalies
 
     class _DiesAfterBuild:

@@ -1,22 +1,5 @@
-"""The two CI assertions ADR 0006 §2 mandates, in **both** directions.
-
-The ADR's first draft had only the narrowness test. A developer widening the list to
-make a gold query pass would have satisfied it — including by adding ``json_agg``,
-which is B2. So the disjointness test is the half, and it is written to
-survive the specific way this could go wrong:
-
-**Both tests parse their inputs and canonicalise them through the real
-:func:`canonical_function_name`.** A string comparison would be a re-implementation of
-the thing under test, and here it would be a *wrong* one: ``json_agg`` canonicalises
-to ``j_s_o_n_array_agg`` under the pinned sqlglot, so ``"json_agg" in
-PERMITTED_FUNCTIONS`` is ``False`` whether or not ``json_agg`` is permitted. A test
-asserting that would pass while the hole was open.
-
-Narrowness is asserted **through ``check()``**, not against the allowlist constant.
-The constant cannot tell you whether a real statement clears the function layer, and
-"every name in the inventory is in the set" is close to asserting a module against its
-own constant — L§7's fifth authoring rule.
-"""
+"""Both directions, through the real canonical name. ``json_agg`` does not compare equal to its canonical spelling. See
+ADR 0006."""
 
 from __future__ import annotations
 
@@ -42,25 +25,14 @@ def govern():
 
 
 def test_the_inventory_fixture_is_not_empty() -> None:
-    """A fixture that failed to load would make every test below vacuous.
-
-    The gold corpus lives in a sibling repository, so the inventory is committed. An
-    empty or truncated commit is the failure mode that turns two mandated CI
-    assertions into two green ticks.
-    """
+    """An empty committed inventory would turn both assertions green."""
     assert GOLD["statements"] > 6_000, GOLD["statements"]
     assert len(GOLD["function_calls_by_canonical_name"]) > 25
     assert GOLD["covering_sample"], "no statements to drive check() with"
 
 
 def test_not_too_narrow_every_gold_function_is_permitted_or_recorded(govern) -> None:
-    """Direction one: permitted, **or** on the intentionally-absent list with a reason.
-
-    "Or recorded" is not a loophole — it is the only way to ship a positive
-    allowlist. ``array_agg`` appears in gold and is refused on purpose (B2), and the
-    reason has to be written down next to the refusal or the next person deletes it to
-    make a query pass.
-    """
+    """Permitted, or recorded as refused on purpose. An unrecorded gold function can be added to make a query pass."""
     from governed_bi.govern.functions import INTENTIONALLY_ABSENT
 
     unexplained = sorted(
@@ -78,12 +50,7 @@ def test_not_too_narrow_every_gold_function_is_permitted_or_recorded(govern) -> 
 
 
 def test_the_covering_sample_clears_the_first_three_layers(govern, check) -> None:
-    """Narrowness as an **effect**: real gold statements clear PARSE/NO_WRITE/FUNCTIONS.
-
-    Each sample statement drives the real ``check()``. They are expected to fail
-    *later* — nothing licenses their tables — so the assertion is on the layer reached,
-    which is exactly the proof the ordered enum exists to give: a result at BINDING or
-    beyond is a proof that the function layer passed.
+    """A result past the function layer is proof that layer passed. The samples are expected to fail later, on tables.
     """
     from governed_bi.govern.functions import INTENTIONALLY_ABSENT
     from governed_bi.govern.layers import Layer
@@ -113,12 +80,7 @@ def test_the_covering_sample_clears_the_first_three_layers(govern, check) -> Non
 
 
 def test_not_too_wide_the_adversarial_set_is_disjoint_from_the_allowlist(govern) -> None:
-    """Direction two: ``PERMITTED_FUNCTIONS ∩ ADVERSARIAL_SET == ∅``.
-
-    Compared after parsing each spelling, because the SQL spelling and the canonical
-    name are different strings and the interesting failures are exactly where they
-    differ.
-    """
+    """Compared after parsing. The SQL spelling and the canonical name are different strings."""
     permitted: list[tuple[str, str]] = []
     for spelling in govern.ADVERSARIAL_SET:
         canonical = _canonical(govern, spelling)
@@ -157,12 +119,7 @@ def test_every_adversarial_spelling_is_refused_by_check(govern, check) -> None:
 
 
 def test_the_digest_moves_when_the_allowlist_moves(govern) -> None:
-    """Content-hashed, per ADR 0006 §13 — so widening the list moves the config hash.
-
-    Asserted as a property of the function over two inputs rather than against a
-    committed digest literal: a golden digest would have to be updated in the same
-    commit that widens the list, which is the review step this is meant to force.
-    """
+    """Widening the list changes the digest. A committed golden digest would move in the same commit. See ADR 0006."""
     from governed_bi.govern import functions
 
     before = functions.permitted_functions_digest()
@@ -200,12 +157,7 @@ def test_schema_qualification_is_stripped_before_matching(govern, check) -> None
 
 
 def _canonical(govern, spelling: str) -> str:
-    """Parse ``spelling`` as a call and canonicalise it through the real function.
-
-    Tries one argument then two, because arity is fixed per function and a
-    ``ParseError`` here would be mistaken for "not permitted" — a test that passes for
-    the wrong reason on exactly the names it exists to check.
-    """
+    """A parse error here would be mistaken for "not permitted" on the names this helper exists to check."""
     for args in ("'x'", "'x', 'y'"):
         try:
             tree = sqlglot.parse_one(f"SELECT {spelling}({args})", dialect="postgres")

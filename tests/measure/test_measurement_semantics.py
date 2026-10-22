@@ -1,22 +1,6 @@
-"""Acceptance tests for the measurement layer, written by the design holder.
+"""Assertions are effects against hand-computed literals, not a module compared with its own constant.
 
-**Why these are not written by whoever implements the layer.** The work is being
-parcelled out to agents, and an agent writes tests that pass against the
-implementation it just produced. v1 is the evidence: its gold-check test re-derived
-``share > THRESHOLD`` itself, so deleting the check, flipping the comparison, and
-reversing the denominator **all passed** — three ways to break a security-relevant
-check with a green suite. So the acceptance criterion is authored separately from the
-implementation, and it asserts *effects* against hand-computed literals.
-
-The authoring rules from ``tests/conformance/test_register_closure.py`` apply here
-too, and one of them does most of the work in this file: **never assert a module
-against its own constant.** Several of these tests could be written as "the code
-agrees with itself" and would then pass against an empty table.
-
-The property under test throughout is L-R1 — **absent is not zero** — in the four
-places it has to hold at once: the value type, the population, the statistics, and
-the checks. It recurred 25+ times in v1, which is more than any other defect, and
-every recurrence was locally reasonable.
+The property throughout is that an absent value is not zero.
 """
 
 from __future__ import annotations
@@ -177,12 +161,7 @@ def test_mcnemar_refuses_populations_filtered_differently() -> None:
 
 
 def test_mcnemar_refuses_to_silently_intersect_unit_sets() -> None:
-    """Intersecting is almost always wanted, which is why it must be explicit.
-
-    An config that crashed on 300 questions and one that did not are not comparable on
-    the survivors without saying so — the 300 are not missing at random. v1 compared
-    1351 against 1025 and reported the delta as though both configs answered everything.
-    """
+    """Intersecting has to be explicit: the missing units are not missing at random."""
     a = Population.of("a", [{"question_id": str(i), "ok": True} for i in range(5)])
     b = Population.of("b", [{"question_id": str(i), "ok": True} for i in range(4)])
     with pytest.raises(ValueError, match="unit sets differ"):
@@ -190,16 +169,7 @@ def test_mcnemar_refuses_to_silently_intersect_unit_sets() -> None:
 
 
 def test_mcnemar_p_value_against_a_hand_computed_literal() -> None:
-    """The arithmetic, checked against a number computed outside the module.
-
-    Ten discordant pairs, 2 favouring ``a`` and 8 favouring ``b``. Under the null
-    each is a fair coin, so the two-sided exact p is
-    ``2 * (C(10,0) + C(10,1) + C(10,2)) / 2**10 = 2 * 56/1024``.
-
-    Written as a literal on purpose. Re-deriving it from ``math.comb`` here would be
-    the test re-implementing the code, which is how v1's check test passed against a
-    reversed denominator.
-    """
+    """The p-value is a literal computed outside the module, so the test does not reimplement the code."""
     rows_a, rows_b = [], []
     for i in range(2):  # only a correct
         rows_a.append({"question_id": f"a{i}", "ok": True})
@@ -273,12 +243,7 @@ def test_every_declared_check_has_an_implementation() -> None:
 
 
 def test_an_uninstrumented_config_is_not_quotable() -> None:
-    """The v1 inversion, reversed.
-
-    Under v1's semantics a run with no health fields recorded passed every check,
-    because an absent counter could not exceed zero. Here every check must report
-    ``cannot_evaluate`` and the config must not be quotable.
-    """
+    """An absent counter is not a pass."""
     config = Population.of("bare", [{"question_id": str(i), "correct": True} for i in range(50)])
     ok, results = checks.quotable(config)
     assert not ok
@@ -304,13 +269,7 @@ def test_a_fully_instrumented_clean_config_passes_the_zero_count_checks() -> Non
 
 
 def test_zero_fanout_turns_cannot_evaluate_the_degradation_check() -> None:
-    """The precise defect that moved eight fields to stage-conditional.
-
-    A guard-blocked turn never runs the fan-out, so ``channel_scoring`` is empty. Under
-    a naive rate that empty value reads as "no channel differed from its expectation"
-    — clean — on a turn where no channel ran at all. Absence reading as agreement, in
-    the field added to stop absence reading as agreement.
-    """
+    """An empty ``channel_scoring`` is not "no channel differed"."""
     refused = [{"question_id": str(i), "channel_scoring": None} for i in range(30)]
     result = checks.CHECK_IMPLEMENTATIONS["channel_scoring"](Population.of("refusals", refused))
     assert result.result is checks.Result.cannot_evaluate
@@ -328,19 +287,7 @@ def test_the_degradation_check_runs_on_the_turns_that_did_fan_out() -> None:
 
 
 def test_a_fully_instrumented_config_can_be_quotable() -> None:
-    """``quotable()`` could never return ``True``, on any input.
-
-    ``_context_hash_check`` returned ``cannot_evaluate`` on **both** its branches — including
-    when coverage was complete — and ``quotable`` treats ``cannot_evaluate`` as blocking. So the
-    single-config API was a permanent refusal. That is not a strict check; it is a function no
-    caller can use.
-
-    The >= 95% cross-config distinctness condition this check used to defer to was retired by audit
-    D9 — retrieval is nondeterministic, so it passed at 0.9993 on a pair differing only by a
-    random seed — and ``eval/report.settings_comparable`` judges the setting under test from the declared
-    settings instead. What is decided here is only the half one config can answer: did every turn
-    carry a ``context_hash`` at all.
-    """
+    """A complete ``context_hash`` must be a pass, or this can never return true."""
     rows = [
         {
             "question_id": str(i),
@@ -356,20 +303,9 @@ def test_a_fully_instrumented_config_can_be_quotable() -> None:
             "negative_failed_open": False,
             "channel_degraded": False,
             "channel_scoring": {"channel_schema": {"lexical": "ran"}},
-            # Added 2026-08-06 with the `settings_resolved` check (audit §10): `settings.Role` derived
-            # three key sets and none had a reader in `src/`, so a setting's role decided nothing.
-            # A row with no resolved settings cannot be shown to have run under this config's
-            # configuration -- and `Absence.never` already reports it as missing, so this
-            # fixture was not "fully instrumented" before.
+            # Present so this fixture is fully instrumented. Absence is not a zero.
             "settings_resolved": {"route_top_n": 3, "candidate_depth": 50},
-            # Added 2026-08-10 with the `corpus_content_hash` check (audit D7), for the same
-            # reason as the line above and with the same consequence for this fixture's name:
-            # the register has always said "the corpus IS the setting under test" and no check read the
-            # field, so a config naming no corpus -- which is the state of both runs of the
-            # designated null replicate, 1351/1351 -- passed every check. One value across all
-            # rows, because one config is one corpus; no check does the cross-config half at all --
-            # `comparison_quotable` compares `context_hash` and the settings that affect results, and
-            # `corpus_content_hash` is neither.
+            # One value: one config is one corpus. The cross-config half is not this check.
             "corpus_content_hash": "corpus-30872d3",
         }
         for i in range(50)
@@ -380,21 +316,7 @@ def test_a_fully_instrumented_config_can_be_quotable() -> None:
 
 
 def test_one_config_two_configurations_is_not_one_config() -> None:
-    """The check that gives ``settings.Role`` a production consumer (audit §10).
-
-    ``Role`` declared three values and derived ``setting_names``,
-    ``setting_names`` and ``setting_names`` from them — and **none had a reader in**
-    ``src/``: no config hash existed and no resume-drift check existed, so a setting's declared role
-    decided nothing anywhere. A role that decides nothing is a comment.
-
-    ``setting_names()`` is the role's own definition of "fatal within one run directory",
-    and a config *is* one run directory. So a row that resolved ``route_top_n`` to 3 beside one
-    that resolved it to 5 is not one config, and every rate over the pair is a rate over a
-    population that does not exist — L-R3's defect with the filter moved into the configuration.
-
-    The failure names the differing settings rather than only the count, because "2 distinct
-    configurations" sends a reader to the code and ``route_top_n`` sends them to the driver.
-    """
+    """The failure names the differing settings, not only the count."""
     from governed_bi.registry.settings import setting_names
 
     def row(i: int, top_n: int) -> dict:
@@ -450,12 +372,7 @@ def test_one_config_two_configurations_is_not_one_config() -> None:
 
 
 def test_partial_context_hash_coverage_fails_rather_than_abstaining() -> None:
-    """Recorded-on-some-turns is a defect, not an absence.
-
-    An config with no ``context_hash`` at all was never instrumented for this check and reports
-    ``cannot_evaluate``; a config that records it on 49 of 50 turns has instrumentation that is
-    dropping turns, and abstaining there would excuse exactly the failure the check exists for.
-    """
+    """Recorded on only some turns is a defect, not an absence."""
     rows = [
         {
             "question_id": str(i),

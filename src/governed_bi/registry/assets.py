@@ -1,8 +1,6 @@
-"""Asset-type policies: identifier fields, tag rules, and retrieval budgets.
+"""Every asset type has an explicit budget, including ``"all"`` and ``"n/a"``.
 
-Every type has an explicit budget (including ``"all"`` and ``"n/a"``); consumers
-may iterate this table, not ``.get`` with a default. Predicates live beside the
-types they test, not here.
+Consumers iterate this table rather than calling ``.get`` with a default.
 """
 
 from __future__ import annotations
@@ -23,16 +21,14 @@ __all__ = [
 
 
 class AssetType(str, Enum):
-    """The eight. Values match the ``asset_type`` discriminator on the wire."""
+    """Values match the ``asset_type`` discriminator on the wire."""
 
     schema = "schema"
     table = "table"
     column = "column"
-    # ``type: ignore`` and not a rename: the member name collides with ``str.join``, which mypy
-    # reads as a member shadowing a base-class method. The value is the ``asset_type``
-    # discriminator on the wire and in every corpus file, so it cannot move, and the name is
-    # read by 20 call sites. The collision is inert at runtime — ``AssetType.join`` resolves to
-    # the member, and nothing calls ``.join`` on an ``AssetType``.
+    # type: ignore, not a rename: the name collides with ``str.join``, and mypy
+    # reads that as shadowing a base method. The wire value is ``join`` in every
+    # corpus file, so the name stays; nothing calls ``.join`` on an AssetType.
     join = "join"  # type: ignore[assignment]
     metric = "metric"
     term = "term"
@@ -41,21 +37,15 @@ class AssetType(str, Enum):
 
 
 class TagRule(str, Enum):
-    """How the index derives the schema an asset votes for in ``route``."""
-
-    #: The asset *is* the schema.
     itself = "itself"
-    #: Read the asset's own ``schema`` field.
     own_schema = "own_schema"
-    #: The schema of the table this column is inline in.
     parent_table = "parent_table"
-    #: The schema of ``base_table``.
     base_table = "base_table"
-    #: Schema of ``binding`` target; may be absent (untagged, no route vote).
+    #: Absent binding: untagged, no route vote.
     binding_target = "binding_target"
-    #: Schema of ``left_table``. Cross-schema joins vote once (left endpoint).
+    #: Cross-schema joins vote once, from the left endpoint.
     left_table = "left_table"
-    #: Own ``schema`` if set, otherwise untagged (system-wide).
+    #: Own ``schema`` if set, otherwise untagged.
     own_schema_or_global = "own_schema_or_global"
 
 
@@ -65,20 +55,12 @@ Budget = int | Literal["all", "n/a"]
 
 @dataclass(frozen=True, slots=True)
 class AssetPolicy:
-    """One row. Every field is required; there are no defaults to inherit."""
+    """Every field is required; there are no defaults to inherit."""
 
     asset_type: AssetType
-
-    #: Model fields that must appear in ``summary``. Empty = no physical id.
     identifier_fields: tuple[str, ...]
-
-    #: How the index tags this asset's schema.
     tag_rule: TagRule
-
-    #: Per-type retrieval budget after the second pass.
     budget: Budget
-
-    #: Whether this type carries ``rules: list[str]`` under ``## Must honour``.
     bears_rules: bool
 
 
@@ -99,7 +81,7 @@ def _p(
     )
 
 
-#: The table. Adding an asset type means adding a row here and nowhere else.
+#: Adding an asset type means adding a row here and nowhere else.
 ASSET_REGISTER: Mapping[AssetType, AssetPolicy] = {
     AssetType.schema: _p(
         AssetType.schema,
@@ -153,17 +135,14 @@ ASSET_REGISTER: Mapping[AssetType, AssetPolicy] = {
     ),
 }
 
-#: Every type enters the unified index.
 INDEXED_TYPES: frozenset[AssetType] = frozenset(ASSET_REGISTER)
 
-#: Types that can reach the prompt (budget != ``"n/a"``).
 CONTEXT_TYPES: frozenset[AssetType] = frozenset(
     t for t, p in ASSET_REGISTER.items() if p.budget != "n/a"
 )
 
 
 def _assert_register_is_total() -> None:
-    """Import-time: every AssetType has a policy row keyed to itself."""
     missing = set(AssetType) - set(ASSET_REGISTER)
     if missing:  # pragma: no cover - import-time guard
         raise AssertionError(

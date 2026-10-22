@@ -1,29 +1,7 @@
-"""A corpus cannot widen the licence set without limit by adding reference edges.
+"""A reference closure past ``max_resolve_additions`` declines instead of widening the licence set.
 
-``resolve_node`` takes the reference closure of the retrieval hits and puts **every table in
-it into ``retrieved_tables``** — which is what the TABLES layer accepts — and every asset in it into
-``pulled_in``, which is what the prompt renders. The closure was unbounded, so both sets grew
-with the corpus's own shape: one ``references`` edge widens what SQL the guard will approve,
-with no access-policy change and nothing to review it against.
-
-**Measured before a bound was chosen**, on ``../BIRD-corpus`` (13,304 assets, 57 schemas), so
-the number is not taste:
-
-* from one asset: median 15 additions, p90 42, p99 118, max 181
-* from a realistic seed (``route_top_n`` schemas, ``table`` budget 8): median 52-69,
-  p99 142-218, **max 279**
-* from every table of the three largest schemas (144 tables): **1,480 additions**, 11% of the
-  corpus
-
-So the pathological shape is reachable on the shipped corpus and the only thing in front of
-it is the ``table`` budget of 8 — whose placement ``govern/bounds.py`` already records as
-costing a wrong refusal. 400 sits ~45% above anything a real seed produced and well under
-1,480: the bound exists so the growth has a ceiling, not to change what this corpus does.
-
-**The bound is in the node, not in ``resolve``.** ``resolve`` is total by contract —
-``connect.py``'s docstring draws that line and both acceptance contracts assert it — and the
-first draft of this change broke both. The asymmetry is principled: ``connect`` searches, so
-an early stop means something; this is a fixpoint walk where it buys nothing.
+The bound lives in ``resolve_node``. ``resolve`` stays total: cutting the closure would drop
+a table and the TABLES layer would record that as a governance refusal.
 """
 
 from __future__ import annotations
@@ -69,11 +47,7 @@ def _run(structure: CorpusStructure, state: dict[str, Any]) -> dict[str, Any]:
 
 
 def test_a_closure_within_the_bound_licenses_everything_it_reaches() -> None:
-    """The behaviour the bound must not change, asserted first.
-
-    A cap that refused ordinary retrieval would trade an unbounded licence set for an outage,
-    and 27% of single-asset closures on the shipped corpus add more than 25.
-    """
+    """A closure of 50 still licenses every table it reaches."""
     update = _run(_fan_out(50), _state())
 
     assert update.get("path_kind") != "decline", update
@@ -82,12 +56,7 @@ def test_a_closure_within_the_bound_licenses_everything_it_reaches() -> None:
 
 
 def test_a_closure_past_the_bound_declines_rather_than_truncating() -> None:
-    """The headline. Over the bound is a refusal with a name, not a shorter licence set.
-
-    Truncating is the tempting fix and is the worse one: a silently cut closure drops a table
-    from ``retrieved_tables``, and the TABLES layer then refuses the statement
-    ``r_table_not_retrieved`` — a retrieval-budget outcome recorded as a governance result.
-    """
+    """Over the bound is a named refusal; truncating would record a governance miss for a budget stop."""
     cap = setting_default("max_resolve_additions")
     update = _run(_fan_out(cap + 1), _state())
 
@@ -101,11 +70,7 @@ def test_a_closure_past_the_bound_declines_rather_than_truncating() -> None:
 
 
 def test_the_bound_is_a_setting_and_not_a_constant() -> None:
-    """Read through ``int_setting``, so a deployment can move it and a config records it.
-
-    ``route_retrieve.py`` states the rule: "No local defaults … a ``state.get(name,
-    <constant>)`` here is a setting nothing can set."
-    """
+    """Read through ``int_setting``: a local default is a setting nothing can set."""
     structure = _fan_out(10)
 
     assert _run(structure, _state()).get("path_kind") != "decline"
@@ -115,11 +80,7 @@ def test_the_bound_is_a_setting_and_not_a_constant() -> None:
 
 
 def test_the_terminal_reason_is_in_the_declared_vocabulary() -> None:
-    """A reason the register cannot place is a refusal no report can attribute.
-
-    ``REFUSED_BY_TO_STAGE`` is the inventory ``classify_outcome`` reads; a value missing from
-    it is a turn that ends somewhere the funnel cannot name.
-    """
+    """Resolve has no stage of its own; the decline is attributed where the closure is used."""
     from governed_bi.registry.stages import REFUSED_BY_TO_STAGE, Stage
 
     assert REFUSED_BY_TO_STAGE["over_resolve_bounds"] is Stage.connect, (
@@ -130,9 +91,5 @@ def test_the_terminal_reason_is_in_the_declared_vocabulary() -> None:
 
 @pytest.mark.parametrize("n", [0, 1, 399, 400])
 def test_the_boundary_is_inclusive(n: int) -> None:
-    """``> max_added`` and not ``>=``: the bound is the largest closure still allowed.
-
-    Spelled out because an off-by-one here is a turn that declines for being exactly the size
-    somebody measured and chose.
-    """
+    """Exactly ``max_added`` still passes; the bound is the largest closure allowed."""
     assert _run(_fan_out(n), _state()).get("path_kind") != "decline", f"{n} additions declined"

@@ -1,20 +1,4 @@
-"""An absent grade is not a wrong answer, and the dataset's own warnings get read.
-
-Both halves are the same defect seen from two sides, and both are regressions this repository
-has already paid for once:
-
-* ``grade_turn`` returned ``correct=False`` when there was no gold to compare against, and
-  ``harness`` then coerced it with ``bool()``. ``Population.count`` refuses to measure a
-  population containing an absent outcome, and carries an *import-time* guard saying so — but
-  the coercion happened upstream of the guard, so a gold that would not execute was recorded as
-  a question the system got wrong.
-* ``gold_result_hashes_<dsn>.jsonl`` and ``leakage_test_qids.json`` ship with the dataset and had
-  no reader. The first is why the grader-ceiling config measured nothing; the second is 9 of the
-  pooled config's 1,351 questions being scored despite the dataset flagging them.
-
-The tests that matter most here are the **guards** on the digest wiring. Attaching a published
-digest to an order-sensitive question would turn a fix into a 23-question regression, because
-``hash_lenient`` always sorts and those questions are graded with row order preserved.
+"""Missing gold stays unmeasured. A published digest sorts, so it must not be attached to an order-sensitive question.
 """
 
 from __future__ import annotations
@@ -209,18 +193,7 @@ def test_quality_flags_tag_the_question_rather_than_dropping_it() -> None:
 
 
 def test_a_gold_that_reads_no_table_is_flagged_degenerate() -> None:
-    """The one flag derived here rather than published by the dataset.
-
-    127 of the 1 351 test questions have a gold that is a frozen answer literal rather than a
-    query, and the engine won 42 of them by accident (2026-08-09 full run, corpus 30872d3).
-    They were found by hand-reading an artifact; the flag makes the next reader's headline
-    recomputable without that.
-
-    The three cases that matter are the boundaries, not the happy path: a real query is not
-    degenerate, an *unparseable* gold is not degenerate either (that is the instrument failing,
-    and collapsing it with "no tables" would shrink a denominator over a parser gap), and the
-    flag composes with a dataset-published one rather than replacing it.
-    """
+    """An unparseable gold is not tableless. Collapsing the two would shrink a denominator over a parser gap."""
     questions = [
         {"question_id": "real", "gold_sql": 'SELECT "a" FROM "s"."t"'},
         {"question_id": "frozen", "gold_sql": "SELECT \"v\".\"c0\" FROM (VALUES (42)) AS \"v\"(\"c0\")"},

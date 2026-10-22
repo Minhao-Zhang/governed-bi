@@ -1,16 +1,5 @@
-"""Audit ledger (ADR 0006 §11) and what measurement must see (§12).
-
-Every executor writes an entry stamped with its ``path`` (G2).
-
-Invariants: hash the executed string, not the checked one (G4);
-:func:`guardrail_errors` is derived from attempts (quotability precondition).
-
-ADR 0006 §11's redacted retention table (``ledger_entry()``) is gone — §11's own superseding
-note, 2026-08-06, and ADR 0010's resolution paragraph record it:
-it had zero production callers while :func:`attempt_record` was what reached disk,
-carrying ``executed_sql`` raw. Do not re-add a redacted projection with no writer — it
-is a second answer to "what is the durable record", and the one a reader believes.
-"""
+"""Audit ledger. See ADR 0006 and ADR 0010. Hash the executed string. Do not add a second, redacted projection:
+:func:`attempt_record` stores ``executed_sql`` raw."""
 
 
 from __future__ import annotations
@@ -38,20 +27,15 @@ __all__ = [
     "execution_record",
 ]
 
-#: The four executors ADR 0006 §7 enumerates (G2).
+#: The four executors. See ADR 0006.
 ExecutorPath = Literal["agent", "graded", "sample", "profile"]
 
-#: The same four, as data, so a caller can iterate them instead of re-listing them.
+#: The same four as data, so a caller does not re-list them.
 EXECUTOR_PATHS: tuple[ExecutorPath, ...] = ("agent", "graded", "sample", "profile")
 
 
 class AttemptRecord(TypedDict):
-    """One statement's trip through the stack (ADR 0006 §12).
-
-    ``result_layer`` is the layer's **name**, not the :class:`~.layers.Layer`, because a
-    checkpoint round-trips through JSON. ``eval/projection.py::_attempt_trace`` re-keys it to
-    ``layer`` for the measurement row, so the two spellings are one field.
-    """
+    """``result_layer`` is the layer name, not the enum: a checkpoint round-trips through JSON. See ADR 0006."""
 
     result_layer: str | None
     passed: bool
@@ -65,30 +49,21 @@ class ExecutionRecord(TypedDict):
     """Written every turn, including turns with no SQL."""
 
     attempts: list[AttemptRecord]
-    #: ``crashed`` is written only by ``finish`` when the turn failed after attempts
-    #: existed — so ``outcome=crashed`` never sits beside ``terminal=answered``.
-    #:
-    #: ``"no_sql"`` is also an :class:`~governed_bi.registry.stages.Outcome` member, and
-    #: :func:`_assert_the_no_statement_word_is_shared` asserts the two spellings at import.
-    #: ``finish`` classifies that outcome by reading *this* field, so a drift here would leave
-    #: ``outcome`` and ``terminal`` answering "did a statement run" differently.
+    #: ``crashed`` only when the turn failed after attempts existed.
+    #: ``no_sql`` matches ``Outcome.no_sql``. ``finish`` classifies from this field, so a
+    #: second spelling records a statement-less turn as ``crashed``.
     terminal: Literal["answered", "graded", "refused", "capped", "no_sql", "crashed"]
-    #: Exceptions swallowed by ``check()``. ``== 0`` joins the quotability
-    #: preconditions.
+    #: Exceptions swallowed by ``check()``. Zero is a quotability precondition.
     guardrail_errors: int
 
 
 def statement_sha256(sql: str) -> str:
-    """Digest of the exact string sent to the database."""
+    """Digest of the exact string sent to the database, not of the string that was checked."""
     return hashlib.sha256(sql.encode("utf-8")).hexdigest()
 
 
 def structural_fingerprint(sql: str, *, dialect: str = DEFAULT_DIALECT) -> str:
-    """The statement's shape, with every literal elided.
-
-    Returns ``"unparseable"`` rather than raising: the ledger must be able to describe
-    a statement the parse layer rejected, which is the record that matters most.
-    """
+    """Literals elided. ``"unparseable"`` rather than raising, so a rejected statement still has a record."""
     try:
         tree = sqlglot.parse_one(sql, dialect=dialect)
     except SqlglotError:
@@ -104,12 +79,7 @@ def structural_fingerprint(sql: str, *, dialect: str = DEFAULT_DIALECT) -> str:
 def attempt_record(
     result: CheckResult, path: ExecutorPath, *, executed_sql: str | None = None
 ) -> AttemptRecord:
-    """Project a result into the measurement layer's per-attempt row.
-
-    ``executed_sql`` is :func:`~governed_bi.govern.pipeline.prepare`'s output, so the row
-    says what the engine sent, not what the model asked for. ``None`` means a refused
-    attempt sent nothing — a value, not a gap.
-    """
+    """``executed_sql`` is what ``prepare`` produced. ``None`` means a refused attempt sent nothing."""
     failed = result["failed_layer"]
     return AttemptRecord(
         result_layer=failed.name if failed is not None else None,
@@ -121,11 +91,7 @@ def attempt_record(
 
 
 def guardrail_errors(attempts: Iterable[AttemptRecord]) -> int:
-    """How many attempts died of an exception inside ``check()``.
-
-    Derived rather than counted alongside: a separate counter is a second table that
-    must agree, and the disagreeing case is the one that makes a run look clean.
-    """
+    """Derived from the attempts. A second counter can disagree, and that disagreement is a run that looks clean."""
     return sum(1 for attempt in attempts if attempt["reason_code"] == GUARDRAIL_ERROR)
 
 
@@ -142,16 +108,9 @@ def execution_record(
 
 
 def _assert_the_no_statement_word_is_shared() -> None:
-    """Import-time: the ledger's "no statement ran" word is ``Outcome.no_sql``'s.
-
-    Asserted rather than imported, for :data:`~.layers.GUARDRAIL_REFUSED_BY`'s reason: the
-    ``Literal`` above has to be spelled out to be a type at all. ``finish`` derives
-    ``Outcome.no_sql`` from this field, so if the two strings drift the outcome becomes
-    unreachable and every statement-less turn silently records ``crashed`` instead.
-    """
-    # ``get_type_hints``, not ``__annotations__``: ``from __future__ import annotations`` makes
-    # the latter a dict of strings, so ``get_args`` over it returns ``()`` and the guard passes
-    # vacuously on every spelling.
+    """Must equal ``Outcome.no_sql``. A drift makes ``finish`` record a statement-less turn as ``crashed``."""
+    # ``get_type_hints``, not ``__annotations__``: postponed annotations store strings, so
+    # ``get_args`` would return ``()`` and this guard would pass on every spelling.
     vocabulary = set(get_args(get_type_hints(ExecutionRecord)["terminal"]))
     if Outcome.no_sql.value not in vocabulary:  # pragma: no cover - import-time guard
         raise AssertionError(

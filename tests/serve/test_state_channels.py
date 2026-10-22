@@ -1,14 +1,6 @@
-"""What a state channel must do when a turn ends and the next one begins.
+"""A state channel must reset, accumulate, or settle when the next turn begins.
 
-**Every test here passed nothing before 2026-08-04 — it could not, because the failures it
-covers are not exceptions any node raises.** Three of them are silent: a channel read by the
-turn after the one that wrote it. One is loud in the wrong place: ``InvalidUpdateError``
-raised by the channel itself, after the nodes have returned, where ``wrap_node`` is no longer
-on the stack and ``finish`` never runs.
-
-That is the shape. The suite was green through all four, so a green suite was
-evidence about the nodes and not about the graph. These tests fail against the reducers and
-the ``turn()`` reset removed.
+Membership in ``PER_TURN_RESET`` is not the same as the reset reaching the channel.
 """
 
 from __future__ import annotations
@@ -53,7 +45,6 @@ def _crash(real: Any, *, on_turn: int | None) -> Any:
     # `async def`, because the channel nodes are. A sync double here does not fail loudly: it
     # returns the real node's coroutine unawaited, `wrap_node` hands that to
     # `rail_observation`, and the turn dies on `'coroutine' object has no attribute 'get'` —
-    # a stack trace about the double, three frames away from anything real.
     async def node(state: dict, config: Any) -> dict:
         if on_turn is None or state.get("turn_index") == on_turn:
             raise ValueError("retrieval channel exploded")
@@ -82,22 +73,12 @@ def _config(index: Any, assets: dict[str, Any], policy: Any, thread: str) -> dic
     }}
 
 
-# ── the loud one: a channel raising where nothing can catch it ────────────────
 
 
 def test_two_channels_crashing_in_one_super_step_still_produces_a_record(
     crashing_channels, two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """Two concurrent writes to one channel must not take the whole turn out.
-
-    The five channel nodes run in a single super-step, and ``wrap.py`` turns any exception into
-    ``{"failure": ..., "path_kind": "crashed"}`` — so two of them failing means two writes to
-    ``failure``, which had no reducer. LangGraph raises ``InvalidUpdateError: At key
-    'failure': Can receive only one value per step`` **from the channel**, after both nodes
-    have returned successfully. ``wrap_node`` is off the stack, ``finish`` never runs, and the
-    turn produces no record of any kind: the single failure mode the wrapper exists to
-    prevent, reached through the wrapper working correctly.
-    """
+    """Two concurrent writes to one channel must not take the whole turn out."""
     crashing_channels()
     out = graph_mod.compile_graph().invoke(
         _turn(),
@@ -117,13 +98,7 @@ def test_two_channels_crashing_in_one_super_step_still_produces_a_record(
 def test_the_concurrently_dropped_failure_is_named_rather_than_discarded(
     crashing_channels, two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """``failed_stage`` holds one stage, so the second crash must still be legible.
-
-    The register has one ``failed_stage`` field and two channels crashed, so one of the two is
-     not representable there. Dropping it silently would be the reportable-state-
-    treated-as-nothing shape this repository keeps re-finding, so ``settle_failure`` appends
-    it to ``detail`` — free text that already reaches the record.
-    """
+    """``failed_stage`` holds one stage, so the second crash must still be legible."""
     crashing_channels()
     out = graph_mod.compile_graph().invoke(
         _turn(),
@@ -138,20 +113,12 @@ def test_the_concurrently_dropped_failure_is_named_rather_than_discarded(
     )
 
 
-# ── the silent ones: a channel outliving its turn ─────────────────────────────
 
 
 def test_a_crash_is_not_erased_by_the_node_that_runs_after_the_fan_in(
     crashing_channels, two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """``route`` is the fan-in, so it runs after a channel crash — and must not proceed.
-
-    It had no terminal guard (every node downstream of it has one) and it wrote
-    ``"path_kind": None`` unconditionally. Together that erased the crash outright: routing,
-    reference closure, join connection, context assembly and a full billed model call all ran
-    on a turn that had already failed, and ``finish`` then recorded the crash as though nothing
-    had happened in between. The observable consequence is a usage row.
-    """
+    """``route`` is the fan-in, so it runs after a channel crash — and must not proceed."""
     crashing_channels()
     out = graph_mod.compile_graph().invoke(
         _turn(),
@@ -172,15 +139,7 @@ def test_a_crash_is_not_erased_by_the_node_that_runs_after_the_fan_in(
 def test_the_turn_after_a_crashed_turn_is_still_servable(
     crashing_channels, two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """A crash must not make the whole thread unservable.
-
-    ``path_kind`` outlives its turn under a checkpointer and nothing cleared it, so a crashed
-    turn 1 left ``"crashed"`` in the channel — and ``_after_guard`` reads exactly that key to
-    decide whether to skip straight to ``finish``. Turn 2 was therefore routed to ``finish``
-    before ``rewrite``, ``negative_check`` or the fan-out ran, and wrote turn 1's failure as
-    its own. Every later turn of that conversation did the same. This is the multi-turn REST
-    path, which is live.
-    """
+    """A crash must not make the whole thread unservable."""
     crashing_channels(on_turn=1)
     compiled = graph_mod.compile_graph()
     config = _config(two_schema_index, two_schema_assets, guard_off_policy, "t-next")
@@ -201,20 +160,11 @@ def test_the_turn_after_a_crashed_turn_is_still_servable(
 
 
 def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_policy):
-    """The reset has to survive the reducers, not just appear in the dict.
-
-    Three of these channels are reduced, and a reducer is free to ignore an update: writing
-    ``{}`` to ``channels`` is a no-op under ``merge_channels``, and writing ``None`` to
-    ``path_kind`` is a no-op under ``settle_path_kind`` — deliberately, because that is what
-    stops a node erasing a crash. So the reset is a **sentinel**, and asserting that
-    ``turn()`` mentions the key would not show that the value clears anything. This applies
-    each reducer by hand.
-    """
+    """The reset has to survive the reducers, not just appear in the dict."""
     reducers = {
         "channels": merge_channels,
         "path_kind": settle_path_kind,
         "failure": settle_failure,
-        # Reduced since 2026-08-11. Both matter here more than the three above: a merge rule
         # that did not clear would carry turn one's `evicted` and `budget_dropped` into turn
         # two and report drops that never happened.
         "retrieved": merge_delta,
@@ -227,7 +177,6 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # A carried-over abstention result is the previous turn's decision, with the previous
         # turn's evidence, filed against this turn's question — and because the policy writes
         # its reason into `terminal_reason`, a stale `withhold` explains a decline this turn
-        # never took.
         "abstention": {
             "policy": "context_sufficiency_v1", "outcome": "withhold",
             "reason": "nothing_retrieved", "rules_evaluated": [], "evidence": {},
@@ -243,8 +192,6 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # A carried-over result is the previous turn's opinion filed against this turn's SQL,
         # and the record would publish it as this turn's — an observer's judgement about a
         # statement it never saw.
-        # A carried-over query vector would score the *previous* question's semantics against
-        # this turn's candidates — a wrong ranking with nothing anywhere disagreeing.
         "query_vector": [0.1, 0.2, 0.3],
         # A carried-over clock makes turn two's `latency_sec` span turn one plus everything the
         # user did in between — the field would report a real number and mean nothing.
@@ -253,7 +200,6 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # A carried-over pin routes turn two to turn one's schemas and *succeeds*, so the run
         # produces a plausible answer against the wrong database with nothing recording that
         # routing never ran. Eval-only, which is why it has to be reset here rather than
-        # noticed in production.
         "pinned_schemas": ["ops_b"],
         "retrieved_tables": ["ops_b.sensors"], "clarification_requested": True,
     }
@@ -272,42 +218,12 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         assert settled != RESET, f"{name!r} leaked the reset sentinel into state"
 
 
-# ── a key one node adds must survive a node that never heard of it ────────────
 
 
 def test_the_budget_evidence_reaches_finish(
     monkeypatch, two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """``pass_two`` writes what the per-type cap discarded; ``resolve`` used to delete it.
-
-    ``_copy_retrieved`` rebuilt ``retrieved`` from the six keys ``RetrievalResult`` declared, so
-    the two ``pass_two`` had added beside them — ``budget_dropped`` and
-    ``budget_best_dropped_score`` — died one super-step later, on **every** turn that hit a cap.
-    Verified 2026-08-11: neither key had a reader anywhere in ``src/``, and the reason is that
-    neither key ever reached one. ``register/citations.py`` states what they are for: a cap can
-    discard a gold table, and without a evidence the miss reads as retrieval never having found
-    it — the difference between a retrieval defect and a budget that is set too tight.
-
-    Asserted at ``finish`` and not at ``route``, through a spy on the real node, because
-    ``tests/retrieve/test_budget_evidence.py`` already proves ``apply_budgets`` produces the
-    counts and that is exactly as far as the evidence went. What was missing is the two
-    super-steps in between.
-
-    **The falsifying mutation is removing the reducer, not restoring the rebuild** — corrected
-    2026-08-12, and the correction is worth more than the sentence it replaces. This docstring
-    used to claim that putting ``resolve_node``'s six-key rebuild back made this test fail. It
-    does not: restore it and the file is green. That is not a gap in the test, it is the
-    property ``merge_delta`` buys — right wins *per top-level key*, so a write naming six keys
-    cannot destroy a seventh, whatever it thinks it is rebuilding. The rebuild was only ever
-    destructive because the channel was unreduced.
-
-    So the mutation that turns this red is ``retrieved: Annotated[RetrievalResult, merge_delta]``
-    → ``right`` (or dropping the annotation, which is the same thing): ``finish`` then sees
-    ``resolve``'s write and nothing else, and the evidence is gone. Verified both ways.
-    :func:`test_the_two_delta_channels_are_reduced` pins that annotation directly, because a
-    mutation this test can only see through four super-steps of graph is one a reader cannot
-    check by eye.
-    """
+    """Copying ``retrieved`` must keep the budget fields pass two adds beside the declared keys."""
     seen: list[dict[str, Any]] = []
     real_finish = graph_mod.finish
 
@@ -346,10 +262,7 @@ def test_the_budget_evidence_reaches_finish(
 
     # **And it reaches the record, which is the only artifact anything downstream opens.**
     # Surviving to `finish` was one super-step, not a destination: `finish` projects a named list
-    # of keys off `retrieved`, and until 2026-08-12 neither budget key was on it or in
     # `registry/record.py`, so the evidence was live in state and absent from every turn record,
-    # every trace page and every check. Asserted through the register rather than by name, so a
-    # field declared and never projected fails here.
     record = out["answer"]["record"]
     assert record["budget_dropped"] == routed["budget_dropped"], (
         "the cap's witness reached `finish` and not the record. `register/citations.py` states "
@@ -365,15 +278,7 @@ def test_the_budget_evidence_reaches_finish(
 def test_the_budget_evidence_is_null_rather_than_absent_when_no_cap_bit(
     two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """The other half, and the one that keeps the field.
-
-    ``pass_two`` emits the two keys **only when a cap bit**, so a turn under budget is
-    byte-identical and ``context_hash`` holds. The record must still carry them — as ``null``,
-    the value :class:`~governed_bi.registry.record.Absence` ``not_applicable`` declares — rather
-    than omitting them, because a key that appears only on turns where something was dropped
-    cannot afterwards be told from a projection that was never wired up. That is the same
-    argument the register makes for ``guard`` ("a check that leaves a trace only when it fires").
-    """
+    """The other half, and the one that keeps the field."""
     from governed_bi.registry.record import record_keys
 
     out = graph_mod.compile_graph().invoke(
@@ -397,20 +302,7 @@ def test_the_budget_evidence_is_null_rather_than_absent_when_no_cap_bit(
 
 
 def test_the_two_delta_channels_are_reduced() -> None:
-    """``retrieved`` and ``delivery`` carry :func:`merge_delta`, read off the annotation.
-
-    The mutation that breaks every claim in this section is one character wide — drop the
-    ``Annotated[...]`` and LangGraph's default channel takes the last write whole — and until
-    this test existed nothing pinned it. ``test_the_budget_evidence_reaches_finish`` sees it, but
-    only through four super-steps of a compiled graph, and
-    ``test_turn_clears_every_per_turn_channel_through_the_real_reducers`` applies a
-    hand-maintained ``{name: reducer}`` map that would go on testing ``merge_delta`` after the
-    channel had stopped using it. Both of those are about what the reducer *does*; this is about
-    which channels have one.
-
-    Asserted from ``get_type_hints(include_extras=True)`` rather than from a list of names, so a
-    third channel adopting the rule needs no edit here and a channel losing it fails.
-    """
+    """``retrieved`` and ``delivery`` carry :func:`merge_delta`, read off the annotation."""
     from typing import Annotated, get_args, get_origin, get_type_hints
 
     hints = get_type_hints(ServeState, include_extras=True)
@@ -433,13 +325,7 @@ def test_the_two_delta_channels_are_reduced() -> None:
 def test_a_narrowing_write_still_narrows(
     two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """The risk a merge rule carries, stated as a test.
-
-    ``connect`` drops the assets of a component it could not join, and the prompt must not show
-    a table the turn may not query. A merge rule that recursed into the sub-collections would
-    make that write additive and put them straight back. ``merge_delta`` replaces per top-level
-    key for exactly this reason.
-    """
+    """The risk a merge rule carries, stated as a test."""
     before = {
         "by_type": {"table": ["a.x", "b.y"]},
         "selected": {"a.x": {}, "b.y": {}},
@@ -452,19 +338,10 @@ def test_a_narrowing_write_still_narrows(
     assert narrowed["schema_ranking"] == [("a", 1.0)], "an untouched key must be carried"
 
 
-# ── the classification that keeps the reset ────────────────────────────
 
 
 def test_every_declared_channel_is_classified_as_per_turn_or_not():
-    """A new channel must be classified before it can be forgotten.
-
-    ``PER_TURN_RESET`` is a list of names, and a list of names drifts — which is what ADR
-    0005 §6's "no hand-maintained field lists" is about. It cannot be *derived*, because
-    nothing in a ``TypedDict`` says whether a channel accumulates on purpose
-    (``usage``) or leaks (``negative``); that is a judgement. So the judgement is made once
-    per channel and this test refuses the alternative: adding a channel to ``ServeState``
-    without deciding fails here, rather than silently defaulting to "leaks".
-    """
+    """A new channel must be classified before it can be forgotten."""
     declared = set(ServeState.__annotations__)
     classified = set(PER_TURN_RESET) | ACCUMULATING | TURN_IDENTITY | TEST_HOOKS
     unclassified = declared - classified
@@ -478,18 +355,7 @@ def test_every_declared_channel_is_classified_as_per_turn_or_not():
 
 
 def test_every_executor_path_is_classified_as_answering_or_introspecting():
-    """A new executor path must be classified before ``terminal`` can read it.
-
-    ``INTROSPECTION_PATHS`` is stated as the complement of "can answer the question", so a
-    path added to ``EXECUTOR_PATHS`` and forgotten counts as answering. That is the right
-    default — under-recording an answer is this repository's recurring failure mode — but it
-    is only right if forgetting is caught. It is caught here.
-
-    The distinction is in three places: ``execution_from_attempts``' ``terminal``,
-    ``finish``'s outcome, and ``agent_core``'s ``generated_sql``. A ``sample`` row counted as
-    answering makes a turn whose every ``run_query`` was refused record ``answered``, and makes
-    a ``SELECT DISTINCT`` over one column the statement an eval re-executes as the answer.
-    """
+    """A new executor path must be classified before ``terminal`` can read it."""
     from governed_bi.govern.ledger import EXECUTOR_PATHS
     from governed_bi.serve.ledger import INTROSPECTION_PATHS
 
@@ -508,19 +374,7 @@ def test_every_executor_path_is_classified_as_answering_or_introspecting():
 def test_a_turn_built_by_the_session_boundary_answers(
     two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """The turn every real caller builds, through the graph, end to end.
-
-    **This is the test whose absence let a working entry point break.** Every other fixture in
-    this suite hand-builds a turn dict, so ``Session.turn`` — the only way in for
-    ``python -m governed_bi.serve``, ``POST /chat`` and the LangGraph Server node — was never
-    the thing under test. When ``turn()`` started writing the ``RESET`` sentinel, that sentinel
-    became the **first** write to each reduced channel, and
-    :func:`~governed_bi.serve.state.cleared` records what LangGraph does with a first write.
-    Result: ``outcome: "crashed"`` on every turn, and 387 green tests.
-
-    Asserted at the level a user sees, deliberately: not "the reducer normalises the sentinel"
-    but "a question asked the way the CLI asks it is not reported as a crash".
-    """
+    """The turn every real caller builds, through the graph, end to end."""
     from governed_bi.serve.session import from_assets
 
     session = from_assets(
@@ -567,20 +421,12 @@ def test_session_turn_writes_the_reset(guard_off_policy):
         )
 
 
-# ── the recorder itself ───────────────────────────────────────────────────────
 
 
 def test_a_failure_in_finish_is_not_swallowed(
     monkeypatch, two_schema_index, two_schema_assets, guard_off_policy
 ):
-    """``finish`` is the one node that must not be wrapped.
-
-    ``wrap_node`` converts an exception into state for the *next* node to record, and for
-    every other node that next node is ``finish``. There is nothing after ``finish``, so
-    wrapping it turned "the recorder crashed" into a run that returned a state with no
-    ``answer`` key and no reason — and a caller reading ``out["answer"]["record"]`` got a
-    ``KeyError`` several frames from the cause.
-    """
+    """``finish`` is the one node that must not be wrapped."""
     def boom(state):
         raise RuntimeError("finish exploded")
 
@@ -593,21 +439,7 @@ def test_a_failure_in_finish_is_not_swallowed(
 
 
 def test_a_node_timeout_is_attached_only_where_it_can_fire() -> None:
-    """The bound exists, and it is not claimed where it would be a false promise.
-
-    A node whose *body* still runs through ``asyncio.to_thread`` only has its ``await``
-    cancelled; the thread keeps going. Claiming a ceiling there reports a stop that did not
-    happen, so ``wrap_node`` refuses the wiring outright and only natively-async nodes carry a
-    bound.
-
-    ``agent_core`` is the node this is for: ``llm_timeout_s`` bounds one of its provider calls,
-    the loop makes several, and nothing else bounds the node.
-
-    **The bound is no longer LangGraph's.** ``add_node(timeout=...)`` enforced it outside the
-    node function, which needed an ``error_handler`` to catch — and that handler was measured
-    not to save the run under the stream modes the served path uses. ``wrap_node`` owns the
-    clock now, so the assertion reads the wrapper's configuration rather than the node's.
-    """
+    """The bound exists, and it is not claimed where it would be a false promise."""
     from governed_bi.serve.graph import _CANCELLABLE, _node_timeout, build_graph
 
     nodes = build_graph().nodes
@@ -643,16 +475,7 @@ def test_a_node_timeout_is_attached_only_where_it_can_fire() -> None:
 
 
 def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
-    """A setting reachable only from source is the defect the register exists to abolish.
-
-    Rail bounds are read from the environment before falling back to the declared default.
-    ``agent_core``'s bound is settable the same way but lives on the node, not ``wrap_node``.
-
-    ``agent_node_timeout_s`` must also be reachable from ``settings_resolved``, because it is
-    ``a recorded setting``: it took no state at all, so two configs declaring different values
-    recorded two configurations that had behaved identically. And ``0`` must mean *no wall*
-    rather than a zero-second deadline that fails every turn on its first frame.
-    """
+    """A setting reachable only from source is the defect the register exists to abolish."""
     import os
 
     from governed_bi.registry.settings import setting_default
@@ -672,7 +495,6 @@ def test_the_node_timeouts_are_settable_by_a_deployment() -> None:
     # The config-settable path, which is the whole reason the setting is a recorded setting.
     assert _agent_node_timeout({"settings_resolved": {"agent_node_timeout_s": 55.0}}) == 55.0
 
-    # `0` disables rather than kills. Both surfaces, because both used to parse it as a deadline.
     assert _agent_node_timeout({"settings_resolved": {"agent_node_timeout_s": 0}}) is None
 
     # The grace is what lets the soft wall stay between-frames without losing the hang-stop.

@@ -1,16 +1,7 @@
-"""Channel fan-out nodes (ADR 0005 §2–3).
+"""One node per channel stage (ADR 0005 §2–3).
 
-Five nodes, one per :data:`~governed_bi.registry.stages.CHANNEL_STAGES` member.
-Each writes only ``{"channels": {stage_value: ChannelResult}}`` so the graph's
-``merge_channels`` reducer can replace by key under concurrent fan-out.
-
-With a :class:`~governed_bi.retrieve.index.UnifiedIndex` on ``config["configurable"]["index"]``,
-pass one searches each channel's declared channels within
-:data:`~governed_bi.registry.channels.CHANNEL_TARGETS` types (top ``candidate_depth``, default 50).
-Without an index hits stay empty so F1 tests injecting ``channel_route_hits`` keep working — but
-``channels`` then says ``failed``, because reporting ``ran`` for a channel that consulted no
-index is what made the degradation check inert (ADR 0005 §2.3).
-"""
+With neither an index nor a hook, hits stay empty and declared channels report
+``failed``: ``ran`` with no index made the degradation check inert (ADR 0005 §2.3)."""
 
 from __future__ import annotations
 
@@ -49,7 +40,6 @@ __all__ = [
 ]
 
 def _effective_question(state: Mapping[str, Any]) -> str:
-    """``rewrite.after`` when rewriting succeeded, else ``question``."""
     rewrite = state.get("rewrite")
     if (
         isinstance(rewrite, Mapping)
@@ -65,20 +55,7 @@ def _channels_for(
     ran: frozenset[Channel],
     observed: Mapping[Channel, ChannelState],
 ) -> dict[str, str]:
-    """What each channel **did** for this channel, against what the table declares.
-
-    Never :func:`expected_channel_state` verbatim — that reports the configuration, which is
-    the degradation check's only input. The declaration decides one thing and the observation
-    the other: a channel this channel does not declare is ``not_configured``, **taken from the
-    table** and never from the producer (ADR 0005 §2.3). ``ran`` is collected where the call
-    happens, so it cannot claim a channel the code did not reach.
-
-    ``observed`` is how a *declared* channel says why it did not run. Without it every such
-    channel read ``failed``, so "this config wired no embedder" and "the embedder died" were one
-    word, and ``Anomaly.unconfigured`` — declared in ``registry/channels.py`` for exactly this —
-    was unreachable from the only producer of channel state. Both remain degradation under
-    ``is_degraded``; the distinction is diagnostic, and ``pass_two`` still consults only ``ran``.
-    """
+    """Observed state. Undeclared is ``not_configured`` from the table (ADR 0005 §2.3)."""
     out: dict[str, str] = {}
     for ch in Channel:
         expected = expected_channel_state(stage, ch)
@@ -93,16 +70,11 @@ def _channels_for(
 
 
 def _hook_name(stage: Stage) -> str:
-    """``channel_schema`` → ``schema`` for ``retrieve_hooks`` lookup."""
     return stage.value.removeprefix("channel_")
 
 
 def _hooked(state: Mapping[str, Any], stage: Stage) -> bool:
-    """Whether a test hook is supplied for this channel.
-
-    Separate from :func:`_hits_from_hook` because the caller must *branch* on it: "a hook
-    returned nothing" and "there is no hook" are different states.
-    """
+    """Whether a hook is supplied. An empty result is a different state."""
     hooks = state.get("retrieve_hooks") or {}
     return isinstance(hooks, Mapping) and hooks.get(_hook_name(stage)) is not None
 
@@ -118,11 +90,7 @@ def _hits_from_hook(state: Mapping[str, Any], stage: Stage, question: str) -> li
 
 
 def _index_from_config(config: RunnableConfig | None) -> UnifiedIndex | None:
-    """The index, through the shared reader — never by subscripting ``config`` here.
-
-    A second reader of ``config["configurable"]`` is a second answer to "may a request name
-    this key"; ``runtime.configurable`` answers it once.
-    """
+    """The index via ``runtime.configurable``. A second reader is a second answer."""
     index = runtime_config(config).get("index")
     return index if isinstance(index, UnifiedIndex) else None
 
@@ -139,27 +107,7 @@ def _pass_one_hits(
     query_vector: Sequence[float] | None = None,
     query_vector_state: ChannelState = ChannelState.ran,
 ) -> list[dict[str, Any]]:
-    """Top-``depth`` over this channel's target types, on every channel it declares.
-
-    ``ran`` is an out-parameter: every channel this function consults adds itself at the line
-    where the consultation happens, which is what lets ``_channels_for`` report the truth rather
-    than the configuration.
-
-    The semantic channel must be scored here and not only in pass two: ``channel_example``
-    declares **only** the semantic channel, so without it the past-SQL-example channel retrieves
-    nothing at all.
-
-    **The two channels are blended by :func:`~governed_bi.serve.runtime.combine_channels`,
-    which owns the scale**, and never by ``max``: BM25-after-saturation starts roughly where
-    cosine ends, so ``max`` is a lexical-only rule by construction. The audit that caught it is
-    retired (register/citations.py). ``fuse`` renormalises by *active* weight, so an asset missed
-    by one channel is not penalised and a channel declaring one channel does not score structurally
-    below one declaring two.
-
-    Raw scores go in. Each pass used to min-max its channels over its own scored population
-    first, which made every channel's favourite score exactly 1.0 however weak it was — see
-    :func:`~governed_bi.retrieve.fuse.scale_to_ceiling` (audit I1).
-    """
+    """``ran`` is recorded where the channel is consulted. A per-set scale made every favourite 1.0."""
     declared = DECLARED_CHANNELS[stage]
     if not question:
         return []
@@ -173,8 +121,7 @@ def _pass_one_hits(
 
     lexical_scores: dict[str, float] = {}
     if Channel.lexical in declared:
-        # An empty candidate set is a measurement ("nothing of these types is indexed"), not a
-        # channel failure, so the channel counts as consulted.
+        # An empty candidate set was consulted: nothing of these types is indexed.
         ran.add(Channel.lexical)
         if candidate_ids:
             for asset_id, score in index.lexical.restrict_to(candidate_ids).search(question):
@@ -184,17 +131,10 @@ def _pass_one_hits(
     semantic_scores: dict[str, float] = {}
     if Channel.semantic in declared:
         if query_vector_state is ChannelState.failed:
-            # **The query could not be embedded, so this channel does not run** (audit I7).
-            # `vector_for_query` used to hand back the raw question's vector here, which scored
-            # cosine over one text against BM25 over another, blended them into one `score`,
-            # and recorded `ran`. Skipped rather than scored, and the failure is what the record
-            # carries — `semantic_search` cannot tell this apart, because from its side a
-            # substituted vector is just a vector.
+            # Embedding failed. Do not score another text's vector or record ``ran``.
             observed[Channel.semantic] = ChannelState.failed
         else:
-            # Marked `ran` from `semantic_search`'s own result (it returns `not_configured` when
-            # the index holds no vectors or the query has none), not from this branch having been
-            # entered.
+            # ``ran`` only when ``semantic_search`` says so.
             ranked, state = semantic_search(index, query_vector, candidates=candidate_ids or None)
             if state is ChannelState.ran:
                 ran.add(Channel.semantic)
@@ -202,23 +142,14 @@ def _pass_one_hits(
                     if float(score) > 0.0:
                         semantic_scores[str(asset_id)] = float(score)
             else:
-                # Its own result, carried to the record rather than flattened to `failed`.
+                # Keep its state. Do not flatten every non-run to ``failed``.
                 observed[Channel.semantic] = state
 
     if not candidate_ids:
         return []
 
-    # **One combiner, and it owns the scale.** `combine_channels` must be shared with
-    # `nodes/pass_two.py`: untagged pass-one hits are carried into pass two verbatim and then
-    # compete against pass-two hits in `apply_budgets`' single global sort, so two combiners means
-    # one asset carrying two different scores in one turn. Each pass min-maxing its channels over
-    # its own scored population was that,: the two passes score different candidate sets,
-    # so the same raw pair scaled to two different numbers (audit I1).
-
-    # `fuse` needs this to tell "this channel has no semantic channel" from "the semantic channel
-    # returned nothing for this asset"; conflating them scores an asset found by both channels
-    # below one found by only one. Restricted to `SCORING_CHANNELS` because `ran` also carries
-    # `extraction` — the rewriter call — which has no weight to fuse with.
+    # Shared with pass two, so one asset is not scored on two scales.
+    # ``extraction`` is in ``ran`` and has no fusion weight; a missing channel is not an empty score.
     consulted = frozenset(c.value for c in ran if c in SCORING_CHANNELS)
 
     def _combined(aid: str) -> float:
@@ -234,8 +165,7 @@ def _pass_one_hits(
 
     merged = sorted(
         set(lexical_scores) | set(semantic_scores),
-        # Ties broken by id so two runs over one index cannot disagree — the same rule
-        # `semantic_search` follows for the same reason.
+        # Tie-break on id so two runs over one index agree.
         key=lambda aid: (-_combined(aid), aid),
     )
 
@@ -252,8 +182,7 @@ def _pass_one_hits(
                 "asset_type": (
                     asset_type.value if hasattr(asset_type, "value") else str(asset_type)
                 ),
-                # `None` where a channel did not score this asset, a float where it did — the
-                # record reads both, and they are the same raw numbers `_combined` was given.
+                # ``None`` where that channel did not score the asset.
                 "lexical": lexical,
                 "semantic": semantic,
                 "score": _combined(asset_id),
@@ -272,8 +201,7 @@ def _channel_result(
     ran: frozenset[Channel],
     observed: Mapping[Channel, ChannelState],
 ) -> dict[str, Any]:
-    # One query per channel, always. There is no `max_queries_per_channel` bound because there is
-    # no per-channel fan-out; a real multi-query channel brings its own.
+    # One query per channel. There is no per-channel query fan-out.
     queries = [question] if question else []
     return {
         "channel": stage.value,
@@ -292,23 +220,7 @@ async def _rewritten_query(
     spent: list[dict],
     turn_index: Any,
 ) -> str:
-    """The question, restated as search text for this channel. Falls back to the question.
-
-    Each channel looks for a different kind of object, so each gets its own restatement: a
-    question's wording and a schema summary's wording often share nothing for either channel to
-    match on.
-
-    ``spent`` is an out-parameter carrying this call's cost — four rewrites are four model calls
-    a turn (``CHANNEL_QUERY_PROMPTS`` has four entries; ``channel_schema`` is the fifth channel node
-    and returns early above), and a call the ledger does not know about is a turn priced below
-    what it spent.
-
-    ``Channel.extraction`` is added to ``ran`` **only when a rewrite came back**. A
-    model that errors or returns nothing falls back to the raw question and the channel reports
-    ``failed``: a fallback that reports as a run is how a config becomes v1's single-pass
-    retrieval while every channel claims to be working (ADR 0005 §2.3). Every failure returns
-    the question rather than raising.
-    """
+    """The question, or a rewrite. ``extraction`` is recorded only when a rewrite came back (ADR 0005 §2.3)."""
     from governed_bi.registry.prompts import CHANNEL_QUERY_PROMPTS, prompt_text
 
     prompt_name = CHANNEL_QUERY_PROMPTS.get(stage.value)
@@ -323,15 +235,13 @@ async def _rewritten_query(
     try:
         reply = await model.ainvoke(
             [SystemMessage(prompt_text(prompt_name, prompt_variants(config))), HumanMessage(question)],
-            # Named after the registered prompt, so the four concurrent rewrites are four
-            # distinguishable rows in LangSmith rather than four `ChatOpenAI`s.
+            # Named for the prompt, so concurrent rewrites are distinct traces.
             config={"run_name": prompt_name},
         )
         rewritten = str(getattr(reply, "text", "") or "").strip()
     except Exception:  # noqa: BLE001 — a rewriter is an improvement, never a dependency
         return question
-    # Recorded before the empty check: a model that answered with nothing still billed, and
-    # dropping the row would make a *failing* rewriter look like a free one.
+    # Billed even when the text is empty. An empty answer is not a free call.
     spent.append(usage_row(stage=stage.value, model=model, messages=reply, turn_index=turn_index))
     if not rewritten:
         return question
@@ -346,23 +256,7 @@ def _query_vector(
     query: str | None = None,
     question: str | None = None,
 ) -> tuple[Sequence[float] | None, ChannelState]:
-    """The vector to score against — **of the rewritten query when there is one**.
-
-    The cached ``query_vector`` is the *raw question's*, so a channel that restates the question
-    and then scores the original's vector has paid for the rewrite and discarded half of it.
-    :func:`~governed_bi.serve.runtime.vector_for_query` embeds the rewrite; this function is the
-    state/config lookup producing its fallback.
-
-    **State first, config second.** ``Session.configurable(question=...)`` puts a
-    ``query_vector`` on the config, which works for a caller building one config per question
-    (``eval/harness.py``, the CLI) but not on the streamed path, where
-    ``graph_app.make_graph`` binds run constants once at load time with no question — the key is
-    simply absent and the semantic channel reports ``failed`` however many vectors the index
-    holds. ``accept`` writes it into state per turn, so state must win.
-
-    Returns the channel's result beside the vector: a rewrite whose embed raised must reach
-    :func:`_pass_one_hits` as ``failed``, not as some other text's vector (audit I7).
-    """
+    """State before config: the streamed graph binds config once, with no question."""
     cfg = runtime_config(config)
     fallback = state.get("query_vector") or cfg.get("query_vector") or None
     return vector_for_query(
@@ -378,33 +272,18 @@ async def _run_channel(
     question = _effective_question(state)
     index = _index_from_config(config)
     ran: set[Channel] = set()
-    #: Declared channels that did not run, with the reason they gave. See `_channels_for`.
+    #: Why a declared channel did not run. See :func:`_channels_for`.
     observed: dict[Channel, ChannelState] = {}
-    # Filled by the rewriter, appended to the `usage` channel below. A list because that is
-    # the channel's shape and `operator.add` merges the five concurrent channels for free.
     spent: list[dict] = []
-    # `queries` is what the record publishes as "what this channel searched for", so it must be
-    # the text that went to the index.
+    # The text sent to the index, which is what the record publishes as searched.
     query = question
 
     if index is not None:
-        # The rewrite happens first and **both** channels then search with it: the point of
-        # restating the question in the vocabulary of the thing being searched is to move it
-        # semantically closer, so a rewrite reaching only BM25 misses it.
+        # Rewrite first. Both channels search with it.
         query = await _rewritten_query(
             question, stage, config, ran=ran, spent=spent, turn_index=state.get("turn_index", 1)
         )
-        # **Off the event loop.** This node is `async def`, and `_query_vector` embeds the
-        # rewritten query with the *synchronous* OpenAI client, so calling it directly ran a
-        # TLS handshake on the loop. Under `langgraph dev` blockbuster raises `BlockingError`
-        # on `socket.connect`, the SDK retries, its `time.sleep` raises too, and
-        # `vector_for_query` swallows the lot as `semantic: failed` — four of five channels
-        # degraded on every turn, silently, because a degraded channel is not a failed turn.
-        #
-        # The sync nodes never showed this: LangGraph runs a `def` node in a worker thread
-        # where blockbuster is not armed. Only the `async def` channels touch the loop, and only
-        # `channel_schema` escaped, because it is the one channel that does not rewrite and so
-        # reuses the call-level vector instead of embedding.
+        # Off the loop: a blocking embed inside ``async def`` is reported as a failed semantic channel.
         query_vector, query_vector_state = await asyncio.to_thread(
             _query_vector, state, config, query=query, question=question
         )
@@ -420,15 +299,10 @@ async def _run_channel(
             query_vector_state=query_vector_state,
         )
     elif _hooked(state, stage):
-        # An explicit "is a hook supplied for this channel", never a branch keyed on which channels
-        # rewrite. This line's predecessor keyed on `CHANNEL_EXTRACTS` membership, and when ADR
-        # 0011 put every channel inside that set the branch went unreachable and `retrieve_hooks`
-        # died with no test failing. `channel_schema` has since left the set again, so it holds
-        # four — the same drift arriving from the other direction.
+        # Branch on the hook being present, not on which stages rewrite.
         hits = _hits_from_hook(state, stage, question)
     else:
-        # No index, no hook. `ran` stays empty, so every channel this channel declares reports
-        # `failed` rather than the raw-question fallback passing for a run (ADR 0005 §2.3).
+        # No index and no hook: ``ran`` stays empty, so declared channels report ``failed``.
         hits = []
 
     update: dict[str, Any] = {
@@ -438,34 +312,28 @@ async def _run_channel(
             )
         }
     }
-    # Omitted when empty rather than written as `[]`: the reducer is `operator.add`, so both are
-    # no-ops, but leaving the key out keeps "this channel called no model" readable to
-    # `rail_observation`, which reads the node's update.
+    # Omit an empty ``usage``. A missing key says this channel called no model.
     if spent:
         update["usage"] = spent
     return update
 
 
 async def channel_schema_node(state: dict, config: RunnableConfig) -> dict:
-    """Schema channel: pass one over schema assets when an index is configured."""
     return await _run_channel(state, config, Stage.channel_schema)
 
 
 async def channel_term_node(state: dict, config: RunnableConfig) -> dict:
-    """Term channel: rewritten query + type-scoped pass one when indexed."""
     return await _run_channel(state, config, Stage.channel_term)
 
 
 async def channel_metric_node(state: dict, config: RunnableConfig) -> dict:
-    """Metric channel: rewritten query + type-scoped pass one when indexed."""
     return await _run_channel(state, config, Stage.channel_metric)
 
 
 async def channel_entity_node(state: dict, config: RunnableConfig) -> dict:
-    """Entity channel: rewritten query + table/column/join pass one when indexed."""
     return await _run_channel(state, config, Stage.channel_entity)
 
 
 async def channel_example_node(state: dict, config: RunnableConfig) -> dict:
-    """Example channel: semantic channel only — it declares no lexical channel."""
+    """Declares the semantic channel only, so pass one must score it here."""
     return await _run_channel(state, config, Stage.channel_example)

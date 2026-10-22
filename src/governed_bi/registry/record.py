@@ -1,15 +1,7 @@
-"""Turn-record schema: projection, presence, quotability checks.
+"""Adding a row records and checks a field by default.
 
-Adding a row records and checks a field by default. Checks are declared on fields;
-:func:`missing_required` treats ``None`` and unmeasured
-:class:`~.quantity.Measured` as absent for :attr:`Absence.never`. Not the setting
-register (:mod:`.settings`).
-
-A fifth column, ``redaction``, is gone (audit §8.1/§10): nothing enforced it, and
-the recorded turn carried the question, the answer and ``executed_sql``
-verbatim. Records here are unredacted by design -- this is a local-first single-user
-tool and the log is the user's own transcript. A redaction vocabulary needs a threat
-model first; a declaration with no enforcer reads as behaviour.
+``missing_required`` treats ``None`` and an unmeasured ``Measured`` as absent for ``Absence.never``. Records are
+unredacted: a redaction vocabulary with no enforcer would read as behaviour.
 """
 from __future__ import annotations
 
@@ -37,54 +29,36 @@ __all__ = [
 
 
 class Tier(str, Enum):
-    """Why a field is recorded, which decides how a reader may use it."""
-
-    #: Identifies the turn or the run. A comparison joins on these.
     identity = "identity"
-    #: The setting under test. The delivery check reads these.
     under_test = "treatment"
-    #: Retrieval and governance decisions. Attribution reads these.
     decision = "decision"
-    #: How the turn ended. ``stages.classify_outcome`` decides it.
     outcome = "outcome"
-    #: Cost and latency.
     cost = "cost"
-    #: Degradation counters. Every health field must feed a quotability check
-    #: (enforced at import).
+    #: Every health field must feed a quotability check, enforced at import.
     health = "health"
 
 
 class Absence(str, Enum):
-    """What a missing or null value means, declared per field. All three encode as
-    JSON ``null``; this column is the only thing distinguishing them.
+    """All three encode as JSON null. This column is what distinguishes them.
+
+    ``never`` fails the presence test. ``not_applicable`` means the stage did not run. ``not_measured`` means upstream
+    did not report it.
     """
 
-    #: Always written with a real value on every terminal path. ``None`` fails
-    #: the presence test.
     never = "never"
-    #: ``None`` means the producing stage did not run (e.g. fan-out skipped).
     not_applicable = "not_applicable"
-    #: ``None`` means the provider or upstream did not report it.
     not_measured = "not_measured"
 
 
 @dataclass(frozen=True, slots=True)
 class RecordField:
-    """One declared field of a turn record."""
-
     name: str
     tier: Tier
     absence: Absence
-
-    #: Stage after which this value is final (last contributing stage).
     owner: Stage
-
     why: str
-
-    #: Quotability precondition this field feeds, if any.
     check: str | None = None
-
-    #: Recoverable from other artifacts after the run; otherwise capture live.
+    #: Otherwise capture it live; it cannot be rebuilt after the run.
     reconstructable: bool = False
 
 def _f(
@@ -100,9 +74,8 @@ def _f(
     return RecordField(name, tier, absence, owner, why, check=check, reconstructable=reconstructable)
 
 
-#: The register. **Adding a row here is the only way to add a recorded field.**
+#: Adding a row here is the only way to add a recorded field.
 RECORD_REGISTER: tuple[RecordField, ...] = (
-    # ── identity ────────────────────────────────────────────────────────────
     _f("run_id", Tier.identity, Absence.never, Stage.finish,
        "joins a turn to its run", reconstructable=True),
     _f("turn_id", Tier.identity, Absence.never, Stage.finish,
@@ -119,7 +92,6 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "different worker counts into one file, and worker count saturates the shared "
        "quota the crash and degradation checks read"),
 
-    # ── setting under test ───────────────────────────────────────────────────────────
     _f("evicted", Tier.under_test, Absence.not_applicable, Stage.assemble,
        "what the char budget dropped before the model saw it: bodies, whole tables, and by "
        "how much the block still overran. Null means the block fit, which the assemble node "
@@ -169,7 +141,6 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
             "declared treatment differs and every other settings.setting_names() entry is "
             "recorded on both and equal"),
 
-    # ── decision ────────────────────────────────────────────────────────────
     _f("channel_hits", Tier.decision, Absence.not_applicable, Stage.route,
        "per retrieval channel: asset_id, asset_type, queries, lexical, semantic. Counts alone "
        "cannot attribute a finding to an asset, so no feedback loop is possible. Null "
@@ -266,7 +237,6 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "in a config into a refusal while crash_rate stays 0 and the run reads as quotable",
        check="guardrail_errors == 0"),
 
-    # ── outcome ─────────────────────────────────────────────────────────────
     _f("outcome", Tier.outcome, Absence.never, Stage.finish,
        "written at the source and never re-derived: `stages.classify_outcome` under `finish` "
        "is the only derivation, and nothing downstream recomputes it. The second entry point "
@@ -314,12 +284,6 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "`outcome == 'answered'`, or it reports a decline as a broken statement -- which is "
        "how 14 capped turns looked like an engine defect on 2026-08-04 "
        "(git-history:198e76e)"),
-    # `final_sql_source` was here and is gone (audit §10): zero writers, permanently null.
-    # There is one rule for selecting the final statement -- `agent_core._last_executed_sql`
-    # reads the ledger, not the tool arguments -- so a field naming a choice between
-    # alternatives that do not exist records nothing.
-
-    # ── cost ────────────────────────────────────────────────────────────────
     _f("usage", Tier.cost, Absence.never, Stage.finish,
        "one record per model call including retrieval-channel and rewrite calls. An empty list is "
        "a measured zero -- a guard-blocked turn made no model calls"),
@@ -329,7 +293,6 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "billed at 1.25x, so it cannot be folded into the input count"),
     _f("latency_sec", Tier.cost, Absence.not_measured, Stage.finish, "wall clock"),
 
-    # ── frozen evidence (not health: health fields must check quotability) ────
     _f("n_re_served", Tier.decision, Absence.never, Stage.finish,
        "always 0 on every production path: Session.turn seeds it and nothing increments. "
        "Retained so historical rows and the schema stay comparable. It was meant to catch "
@@ -338,37 +301,29 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "so it cannot sit as an always-pass quotability check"),
 )
 
-#: Quotability preconditions derived from the register. Refuse; do not warn.
+#: Refuse; do not warn.
 CHECK_CONDITIONS: Mapping[str, str] = {
     f.name: f.check for f in RECORD_REGISTER if f.check is not None
 }
 
 
 def record_keys() -> frozenset[str]:
-    """Every declared field name."""
     return frozenset(f.name for f in RECORD_REGISTER)
 
 
 def required_keys() -> frozenset[str]:
-    """Fields that must carry a real value on every terminal path."""
     return frozenset(f.name for f in RECORD_REGISTER if f.absence is Absence.never)
 
 
 def check_keys() -> frozenset[str]:
-    """Fields a quotability precondition reads. Checks are declared on fields."""
     return frozenset(CHECK_CONDITIONS)
 
 
 def live_capture_keys() -> frozenset[str]:
-    """Fields that must be captured at production time or are lost."""
     return frozenset(f.name for f in RECORD_REGISTER if not f.reconstructable)
 
 
 def missing_required(record: Mapping[str, Any]) -> frozenset[str]:
-    """Required keys absent, null, or an unmeasured :class:`~.quantity.Measured`.
-
-    Only :attr:`Absence.never` fields are checked; null is legal for the other two.
-    """
     out: set[str] = set()
     for f in RECORD_REGISTER:
         if f.absence is not Absence.never:
@@ -385,22 +340,17 @@ def missing_required(record: Mapping[str, Any]) -> frozenset[str]:
 
 
 def undeclared_keys(record: Mapping[str, Any]) -> frozenset[str]:
-    """Keys in ``record`` the register does not declare."""
     return frozenset(record) - record_keys()
 
 
 def project(
     state: Mapping[str, Any], *, extract: Callable[[Mapping[str, Any], str], Any]
 ) -> dict[str, Any]:
-    """Build a turn record from serve state. ``None`` is written, not omitted.
-
-    ``extract`` is injected so this module does not import serve types.
-    """
+    """``extract`` is injected so this module does not import serve types."""
     return {f.name: extract(state, f.name) for f in RECORD_REGISTER}
 
 
 def _assert_register_is_coherent() -> None:
-    """Import-time: unique names, Stage owners, every health field gated, no channel owners."""
     names = [f.name for f in RECORD_REGISTER]
     dupes = sorted({n for n in names if names.count(n) > 1})
     if dupes:  # pragma: no cover - import-time guard

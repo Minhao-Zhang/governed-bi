@@ -1,17 +1,7 @@
-"""An unconfigured connector is our mistake, not the statement's.
+"""A missing connector raises ``GovernanceUsageError`` instead of a governance refusal.
 
-``check.py`` states the doctrine: *"a security parameter was not wired up … never a statement's
-fault."* ``fetch.py`` applied it to a missing ``corpus`` (G1, raising ``GovernanceUsageError``) and
-broke it for a missing ``connector`` four lines away, manufacturing
-``refuse("r_not_a_read", "no connector configured")`` — a rule ``layers.py`` assigns to
-``Layer.NO_WRITE``, which is to say *"the model proposed a write"*. The ledger row an
-unconfigured connector produced was therefore indistinguishable from a real governance refusal,
-and the turn recorded ``outcome: refused`` for a deployment fault. 2026-08-10 audit (C2).
-
-The fabricated row was also in the suite, which is remembering: three
-tests in ``test_agent_core_partial_ledger.py`` and one in ``test_agent_tools_hitl.py`` asserted on
-"a governed statement" that was this refusal, with no connector anywhere and nothing having reached
-``check()``. One of them said so in its own failure message. They pass a stub connector now.
+``refuse("r_not_a_read", "no connector configured")`` blamed the statement for a wiring fault
+and recorded ``outcome: refused``.
 """
 
 from __future__ import annotations
@@ -72,18 +62,7 @@ def test_sample_rows_without_a_connector_raises_rather_than_refusing() -> None:
 
 
 def test_no_tool_body_manufactures_a_layer_result_for_its_own_wiring() -> None:
-    """The general form, so the next wiring check cannot reintroduce the pattern.
-
-    ``fetch.py`` may not call ``refuse``. Every legitimate result in this module comes back from
-    ``prepare``/``check``, which own :data:`RULES`; a rule id constructed here is ``serve/``
-    deciding which layer gets blamed, and ``layers.py`` says the layer comes from ``RULES`` and
-    never from a caller. Asserted structurally because the alternative is enumerating every
-    wiring hole, and it was a *second* hole four lines from a correct one that made this a bug.
-
-    By AST rather than by substring: the first version of this test searched the text for
-    ``"refuse("`` and failed on the comment in ``fetch.py`` that explains what was removed. A
-    prose-sensitive assertion about code is the fragility this audit spent its time on.
-    """
+    """``fetch.py`` must not call ``refuse``; the walk is by AST so a comment cannot trip it."""
     tree = ast.parse(pathlib.Path(fetch.__file__).read_text(encoding="utf-8"))
 
     called = {

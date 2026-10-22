@@ -1,23 +1,6 @@
-"""What the engine's declines would have been worth, over the subset that can be priced.
+"""Denominators here are not the config. Unpriceable declines are unknowable, not zero.
 
-Separated from :mod:`.selective` because the denominators are different, and this one
-is not the config. ``open-work.md`` §4.1: of v4's 73 declines, **62 can be priced and 11
-cannot** -- the dataset ships no gold fingerprint for those, so what the engine would
-have got is *unknowable*, not zero. Abstention precision is therefore a figure about a
-subset the dataset selected, and quoting it as though the denominator were the config is
-the mistake this module is shaped to prevent.
-
-The shape: :class:`PricedAbstention` stores two populations and no float, and the one
-thing it derives -- :class:`WouldHaveBeenWrong` -- stores a numerator and a denominator
-and no float either. There is no attribute anywhere on either object that hands back the
-bare rate, so a caller who wants ``0.7742`` has to divide two integers it is holding at
-the time.
-
-**This is the second attempt.** The first stored the populations and returned the rate as
-a ``Measured[float]``, and ``.would_have_been_wrong.value`` handed over ``0.7742`` with
-nothing attached -- as did ``.render(4)``. The claim "the rate cannot be obtained without
-its denominator" was true of the *object* and false of the thing the object returned,
-which is the more useful half.
+The rate is not stored. A caller who wants it divides two integers it is holding.
 """
 
 from __future__ import annotations
@@ -33,24 +16,13 @@ __all__ = ["PricedAbstention", "WouldHaveBeenWrong"]
 
 @dataclass(frozen=True)
 class WouldHaveBeenWrong:
-    """A count of wrong counterfactuals and the priced set it is out of. No rate.
+    """The rate is not stored. ``share`` takes the denominator, so the caller has to have read ``priced``."""
 
-    Two integers and a population description. The rate is not stored, not exposed as a
-    property, and not obtainable by attribute access -- :meth:`share` exists but takes
-    the denominator's own value as an argument, so a caller has to have read it. That is
-    the difference between a type that *documents* a denominator and one that carries it.
-
-    :meth:`render` is the ordinary way to display this, and it prints both numbers beside
-    the rate. Formatting goes through ``Measured.render``, the only formatting site in ``src/``.
-    """
-
-    #: Priced declines whose re-executed statement missed gold. ``None`` when unmeasured.
+    #: ``None`` when unmeasured.
     wrong: int | None
-    #: Declines the dataset could price at all -- **not** the count of declines.
+    #: Declines the dataset could price. Not the count of declines.
     priced: int
-    #: ``Population.describe()`` of the priced set, so the filter trail travels too.
     population: str
-    #: Non-empty when there is no measurement. Both :meth:`render` and :meth:`share` say so.
     why_unmeasured: str = ""
 
     @property
@@ -58,13 +30,7 @@ class WouldHaveBeenWrong:
         return not self.why_unmeasured and self.wrong is not None
 
     def share(self, of_priced: int) -> Measured[float]:
-        """The rate, computed against the denominator **the caller passed in**.
-
-        Refuses a denominator that is not this object's, which is the whole point: the
-        figure over 62 priced declines cannot be re-presented as a figure over 73
-        declines, or over 1 351 turns, by a caller that never looked at
-        :attr:`priced`. ``open-work.md`` §4.1 is about exactly that slippage.
-        """
+        """Refuses a denominator that is not this object's priced count."""
         if not self.is_measured:
             return Measured.unmeasured(
                 self.why_unmeasured or "no priced decline carries a counterfactual grade"
@@ -82,7 +48,6 @@ class WouldHaveBeenWrong:
         )
 
     def render(self, places: int = 4) -> str:
-        """The rate with both of its numbers, or the reason there is none."""
         if not self.is_measured:
             return Measured.unmeasured(
                 self.why_unmeasured or "no priced decline carries a counterfactual grade"
@@ -92,18 +57,9 @@ class WouldHaveBeenWrong:
 
 @dataclass(frozen=True)
 class PricedAbstention:
-    """Abstention precision that cannot be quoted without its denominator.
+    """The rate is not stored. ``priced`` must be a restriction of ``declined``.
 
-    ``open-work.md`` §4.1: of v4's 73 declines, 62 can be priced and 11 cannot, because
-    the dataset ships no gold fingerprint for them -- so what the engine would have got
-    is *unknowable*, not zero. The rate is therefore about a subset the dataset
-    selected, and the way to stop it travelling alone is to not store it. There is no
-    float on this object, only two populations; the rate is derived from the priced one
-    on demand, and :meth:`render` prints the denominator with it.
-
-    Build with :meth:`of`. The constructor refuses a ``priced`` population that is not a
-    restriction of ``declined``, so a caller cannot assemble a numerator and a
-    denominator that never met.
+    Unpriceable declines are unknowable, not zero.
     """
 
     declined: Population
@@ -125,7 +81,6 @@ class PricedAbstention:
 
     @classmethod
     def of(cls, config: Population) -> PricedAbstention:
-        """Split a graded config into its declines and the priceable subset of them."""
         declined = config.restrict(lambda r: r.get("outcome") in DECLINED, "declined turns only")
         return cls(
             declined=declined,
@@ -141,16 +96,9 @@ class PricedAbstention:
 
     @property
     def would_have_been_wrong(self) -> WouldHaveBeenWrong:
-        """Priced declines whose re-executed statement missed gold, over the priced set.
+        """Uses ``computed_correct``, never ``correct``: a turn that did not commit gets no credit.
 
-        ``computed_correct``, never ``correct``: ``docs/measurement.md`` is explicit that
-        the two are never folded, because an engine that would not commit to a statement
-        gets no credit for it. This asks the counterfactual question instead, and only
-        where the counterfactual exists.
-
-        Returns two integers rather than a rate. ``.value`` used to be a bare
-        ``0.7741935483870968`` and ``.render(4)`` a bare ``"0.7742"``; both travelled
-        without the 62 they were over, which is the one thing §4.1 asked for.
+        Returns two integers. The rate is derived by the caller.
         """
         right = self.priced.count("computed_correct")
         if not right.is_measured:

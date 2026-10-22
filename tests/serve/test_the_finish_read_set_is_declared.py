@@ -1,29 +1,4 @@
-"""``finish``'s outcome decision reads seven named channels, and that is written down.
-
-**The defect this closes.** ``finish`` is the node that decides what happened to a turn, and
-``(state, config) -> dict`` says nothing about which of ``ServeState``'s 47 channels it reads,
-which it writes, or what clears them. That is not an abstract complaint: ``measure/checks.py``
-read ``Outcome.clarification`` as a evidence of "reached ``finish``" and silently dropped every row
-carrying the corpus hash out of a check's denominator. A second reader of a channel, disagreeing
-with the first, in a place nothing pointed at.
-
-**What was measured before anything was moved.** ``finish`` reads **32** channels *effectively* —
-delete any one from a populated turn and the emitted record changes — plus ``failure_cause``,
-which arrives through the register fall-through and is not a ``ServeState`` channel at all, so it
-is always null. Method: delete one key at a time from each of 30 turn shapes and compare
-``json.dumps`` of the output.
-
-**Seven of the 32 are the decision's, and only those are declared.** The other 25 are the
-register's: ``project`` walks ``RECORD_REGISTER`` and asks ``finish`` for each field by name, so
-that read set already exists in ``registry/record.py`` and a dataclass restating it would be a
-second copy of one declaration. The boundary is worth drawing where a *decision* can have two
-readers who disagree. So this file asserts the seven, and asserts that the derivation cannot
-reach anything else — not that the whole node reads seven things, which would be false.
-
-**What it costs, stated rather than hidden.** Eight functions across the two files still take a
-state mapping: three are the decision's projection, one is the node's own boundary, and four are the
-register's readers. :func:`test_the_derivation_reads_no_state_dict` names all eight, so a ninth
-forces a decision here instead of appearing.
+"""``finish`` decides the outcome from a declared set of channels.
 """
 
 from __future__ import annotations
@@ -54,17 +29,10 @@ PASSED = {
 }
 
 
-# ── the read set, written down ─────────────────────────────────────────────────
 
 
 def test_the_projection_names_every_channel_the_decision_reads() -> None:
-    """Whole-object equality, so an eighth field cannot be added without this test naming it.
-
-    ``failure`` arrives as three fields, because presence and contents were read through
-    different tests before the split and a crash with no detail is still a crash. ``guard``
-    arrives whole and un-narrowed — :class:`OutcomeInputs` says why at length, and
-    :func:`test_a_malformed_guard_is_only_read_on_the_path_that_asks` drives it.
-    """
+    """Whole-object equality, so an eighth field cannot be added without this test naming it."""
     state = {
         "path_kind": "answered",
         "failure": {"stage": "check", "error_type": "RuntimeError"},
@@ -91,14 +59,7 @@ def test_the_projection_names_every_channel_the_decision_reads() -> None:
 
 
 def test_an_absent_channel_projects_to_the_field_default() -> None:
-    """The empty case, and it has to be its own assertion.
-
-    An absent channel and one recorded empty are the same value here on purpose: every field is
-    a route, a flag or a record, and the decision's question of each is "is there one". The
-    default view is therefore the *unmarked* turn — nothing marked it, nothing raised, no
-    statement, no ledger — which classifies ``crashed``, because a turn nothing observed ending
-    has not been observed ending.
-    """
+    """The empty case, and it has to be its own assertion."""
     empty = OutcomeInputs.from_state({})
     assert empty == OutcomeInputs(execution=empty.execution)
     assert empty.execution == {"attempts": [], "terminal": "no_sql", "guardrail_errors": 0}, (
@@ -109,12 +70,7 @@ def test_an_absent_channel_projects_to_the_field_default() -> None:
 
 
 def test_every_declared_channel_changes_a_result() -> None:
-    """The declaration is not padded: each of the seven moves an outcome on its own.
-
-    A read set is only worth writing down if every name in it is, and the cheapest
-    way for this file to become decoration is for someone to add a field the decision ignores.
-    So one pair per channel, differing in that channel alone, whose results differ.
-    """
+    """The declaration is not padded: each of the seven moves an outcome on its own."""
     from dataclasses import replace
 
     base = OutcomeInputs(path_kind="answered", has_sql=True, execution=PASSED)
@@ -140,7 +96,6 @@ def test_every_declared_channel_changes_a_result() -> None:
     assert classify_turn(replace(refused, guard={"outcome": "blocked"})).refused_by == "guard"
 
 
-# ── the derivation cannot reach a state dict ───────────────────────────────────
 
 
 #: Every function across the two files that takes a state mapping, and what it is for. The check
@@ -176,19 +131,7 @@ def _trees() -> list[tuple[Path, ast.Module]]:
 
 
 def test_the_derivation_reads_no_state_dict() -> None:
-    """Structural, because a behavioural check passes on the day it is written.
-
-    Two halves. Every function in :data:`DERIVATION` takes :class:`OutcomeInputs` and nothing
-    else — no ``state`` parameter, and no channel name as a string literal, so
-    ``state.get("path_kind")`` cannot creep back in under a local alias. And the functions that
-    *do* take a state mapping are exactly :data:`STATE_READERS`, each with a stated job.
-
-    The second half is the one. ``abstain``'s equivalent check can say "one projection and
-    the adapter"; this one cannot, because four of the readers are the register's and the
-    register is entitled to read the state it declares fields over. What the check buys is that
-    the list is a list: a new reader has to be added here, with a reason, and adding one is
-    where a second answer to "what happened to this turn" would come from.
-    """
+    """Structural, because a behavioural check passes on the day it is written."""
     functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
     for path, tree in _trees():
         for node in ast.walk(tree):
@@ -215,16 +158,7 @@ def test_the_derivation_reads_no_state_dict() -> None:
 
 
 def _channels_looked_up(fn: ast.AST) -> set[str]:
-    """Channel names this function pulls out of a mapping, by ``.get(...)`` or ``[...]``.
-
-    A lookup and not a bare string literal, because one of the seven channel names is also one of
-    the refusal *reasons*: ``_path_signals`` writes ``reason = "guard"`` when a blocked guard
-    refused the turn, which is a value in the ``refused_by`` vocabulary and not a read of the
-    ``guard`` channel. A literal-only check reported it and would have had to be waived by name,
-    which is how a check stops meaning anything. Matching the lookup instead catches
-    ``state.get("guard")`` and ``state["guard"]`` — including through a local alias, since the
-    alias is still a mapping — and leaves the vocabulary alone.
-    """
+    """Channel names this function pulls out of a mapping, by ``.get(...)`` or ``[...]``."""
     out: set[str] = set()
     for node in ast.walk(fn):
         if (
@@ -246,16 +180,7 @@ def _channels_looked_up(fn: ast.AST) -> set[str]:
 
 
 def test_the_boundary_normalises_before_it_projects() -> None:
-    """The reset sentinels, which are the reason ``normalised`` exists at all.
-
-    ``Session.turn`` writes ``RESET`` to ``path_kind`` and ``failure``; both annotations are
-    Unions, so the channel seeds ``MISSING`` and LangGraph assigns the first write raw. Read
-    unnormalised, ``state.get("failure") is not None`` was true on every successful first turn of
-    a fresh thread — every one of them recorded ``crashed``.
-
-    ``from_state`` normalises its own input, so the view is right whether or not the caller did
-    it first, and ``normalised`` is idempotent so the two callers cannot disagree.
-    """
+    """The reset sentinels, which are the reason ``normalised`` exists at all."""
     raw = {"path_kind": "reset", "failure": "reset", "channels": "reset", "execution": PASSED}
     assert OutcomeInputs.from_state(raw) == OutcomeInputs.from_state(normalised(raw))
     assert normalised(normalised(raw)) == normalised(raw)
@@ -274,7 +199,6 @@ def test_the_boundary_normalises_before_it_projects() -> None:
     assert classify_turn(view).failed_stage is None
 
 
-# ── the results, stated as facts instead of turns ────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -327,19 +251,7 @@ def test_the_boundary_normalises_before_it_projects() -> None:
 def test_the_result_for_each_path(
     what: str, inputs: OutcomeInputs, outcome: Outcome, refused_by: str | None, rail_status: str
 ) -> None:
-    """One case per path, each stated as the two or three facts it is about.
-
-    That is the whole return on this boundary, and it is worth being concrete about how small the
-    cases got: a decline used to need a turn dict with identity keys, a ledger and a channel map to
-    be projectable at all, and is now ``OutcomeInputs(path_kind="decline")``. What did **not**
-    get smaller is the total, because the projection became worth testing directly — the three
-    tests above build state dicts, and the register projection still needs a whole turn. The boundary
-    relocated the setup; it did not delete it.
-
-    ``rail_status`` is asserted here rather than in a stream test because it is carried on the
-    result on purpose: a node's effect on the timeline is a claim of its own, and ``declined``
-    against ``refused`` is the one distinction :class:`Outcome` has no member for.
-    """
+    """One case per path, each stated as the two or three facts it is about."""
     result = classify_turn(inputs)
     assert result.outcome is outcome, what
     assert result.refused_by == refused_by, what
@@ -347,12 +259,7 @@ def test_the_result_for_each_path(
 
 
 def test_a_crash_rewrites_the_ledgers_terminal_and_keeps_its_attempts() -> None:
-    """So ``outcome: crashed`` never sits beside ``execution.terminal: answered``.
-
-    A careless reader takes that pair as an answered turn. The attempts stay — they are what
-    happened — and the returned ledger is a copy, so the view the decision was handed is not
-    mutated under it.
-    """
+    """So ``outcome: crashed`` never sits beside ``execution.terminal: answered``."""
     inputs = OutcomeInputs(path_kind="answered", has_sql=True, failed=True, execution=PASSED)
     result = classify_turn(inputs)
     assert result.execution["terminal"] == "crashed"
@@ -361,16 +268,7 @@ def test_a_crash_rewrites_the_ledgers_terminal_and_keeps_its_attempts() -> None:
 
 
 def test_a_malformed_guard_is_only_read_on_the_path_that_asks() -> None:
-    """Why ``guard`` is carried whole instead of narrowed to a boolean in the projection.
-
-    ``guard`` is declared ``Absence.never``, so a non-mapping one is a wiring failure. Narrowed
-    eagerly in ``from_state`` it would become ``False`` on every turn, and a refusal would then
-    be attributed to ``negative_example`` — a wrong reason in place of a loud one. Carried whole,
-    the malformed value reaches only the fallback that asks, which raises, and ``finish`` is the
-    node left unwrapped so the raise is not swallowed.
-
-    Both halves: the paths that do not ask are unaffected, and the path that asks fails.
-    """
+    """Why ``guard`` is carried whole instead of narrowed to a boolean in the projection."""
     malformed = OutcomeInputs.from_state({"path_kind": "answered", "guard": "blocked"})
     assert malformed.guard == "blocked"
     assert classify_turn(malformed).outcome is Outcome.no_sql
@@ -380,12 +278,7 @@ def test_a_malformed_guard_is_only_read_on_the_path_that_asks() -> None:
 
 
 def test_the_node_still_writes_one_channel_and_one_event() -> None:
-    """The boundary changed no interface. ``finish`` returns ``{"answer":...}`` and nothing else.
-
-    Asserted on the update rather than inferred from a green turn, and paired with the result
-    the derivation reaches for the same state, so "the adapter translates and adds nothing" is a
-    property and not a hope.
-    """
+    """The boundary changed no interface."""
     state = {
         "path_kind": "answered", "generated_sql": "select 1", "execution": PASSED,
         "answer_text": "42", "result_table": {"columns": ["n"], "rows": [[42]]},

@@ -1,18 +1,8 @@
-"""``narrate`` — the turn's last step: say the answer in a sentence.
+"""Say the answer in a sentence, after ``agent_core``. See ADR 0002, amendment 3.
 
-**A node and not a boundary patch.** ``answer.answer_text`` is what the answer card reads, and
-it used to be written only at the now-deleted REST boundary (``routes._shape``) — so that transport had an
-answer and the streamed path, which is the one the UI uses, rendered the SQL and the ledger
-with no answer on it. This sits after ``agent_core``, where every answering path funnels.
-
-**It usually calls no model.** The agent narrates for free, so the normal path is to *adopt*
-that text; the model runs only on the remainder — a loop that ended on a tool call, or on
-reasoning blocks with no text at all — which is the case where there is nothing to fall back to.
-
-**A turn stopped by the attempt cap is the third case, and it always generates.** Its last AI
-message is ``_CapEndsTheTurn``'s synthetic "Stopped: run_query reached its attempt limit", so
-there is prose to adopt and adopting it would be worse than silence: the card would present the
-budget's exit line as the answer. See :func:`narrate_node`.
+Adopts the agent's prose, and generates only when that text is missing. A capped turn always
+generates: its last message is the budget's exit line, and adopting it would present that
+line as the answer.
 """
 
 from __future__ import annotations
@@ -34,10 +24,9 @@ __all__ = ["narrate_node"]
 #: a 200,001-row cap upstream means "the rows" is not a bounded thing to paste into a prompt.
 _ROWS_SHOWN = 20
 
-#: Prepended to the narrator's brief on a capped turn. Two claims it cannot get from the payload:
-#: the turn ran out of budget rather than reaching a conclusion, and the statement shown is the
-#: last one that *succeeded*, which on this path is usually a probe. Without it the narrator reads
-#: an intermediate result set out loud as though it answered the question.
+#: Prepended on a capped turn. The payload cannot say the turn ran out of budget, or that the
+#: statement shown is the last one that succeeded, usually a probe. Without it the narrator
+#: reads an intermediate result set out loud as the answer.
 _CAP_PREAMBLE = (
     "IMPORTANT — this turn ended at its statement-attempt budget, not at a conclusion. The "
     "statement and result below are the LAST ONE THAT SUCCEEDED, which on a capped turn is "
@@ -48,13 +37,7 @@ _CAP_PREAMBLE = (
 
 
 def _ended_at_the_cap(state: Mapping[str, Any]) -> bool:
-    """Whether the ledger says the attempt cap ended this turn.
-
-    Narrower than :func:`~governed_bi.serve.ledger.ledger_ended_without_answer`, which also
-    covers ``refused``, and deliberately not a change to that function: ``reflect`` is its other
-    caller and a refusal and a cap are the same thing to a judge of answer quality. The
-    distinction only matters to the narrator. See :func:`narrate_node`.
-    """
+    """Cap only. ``refused`` is the same to reflect, and not to the narrator."""
     execution = state.get("execution")
     if not isinstance(execution, Mapping):
         return False
@@ -62,31 +45,10 @@ def _ended_at_the_cap(state: Mapping[str, Any]) -> bool:
 
 
 async def narrate_node(state: dict, config: RunnableConfig) -> dict:
-    """Write ``answer_text``. Adopts the agent's prose; generates only when there is none.
+    """Write ``answer_text``. Adopt the agent's prose; generate only when there is none.
 
-    Returns ``{}`` rather than ``{"answer_text": None}`` on the paths with nothing to say: the
-    channel keeps its reset value and ``finish`` reads null either way, but the *update* says
-    which of the two happened.
-
-    **Never raises into ``wrap_node``.** A timeout or unexpected exception would otherwise mark
-    an already-answered turn ``crashed`` (``failure is not None`` wins in ``finish``). Degrade
-    to no prose instead.
-
-    **``capped`` is separated from ``refused``, which ``ledger_ended_without_answer`` groups.**
-    Grouping them was right about refusals and wrong about caps. A refused turn had every
-    attempt rejected, so it executed nothing and has no rows — narrating it would invent a
-    result, which is the "do not decorate a governance decision" rule this node already obeys
-    three lines up. A **capped** turn is the opposite: its statements passed every layer and
-    ran, and the budget ran out afterwards. Measured 2026-08-19 on the served surface: a turn
-    spent 47.5s over eight executed statements, returned a nine-row table, and wrote
-    ``answer_text: null`` — the reader got a table with no sentence on it and no way to know
-    what it was.
-
-    Two things keep that from becoming the decoration the old grouping feared. It **generates
-    rather than adopts** (above), and ``_brief`` tells the narrator the turn stopped at its
-    budget and that the table is the last statement that *succeeded* — on a capped turn usually
-    an intermediate probe, not the answer. Saying "here is how far it got" is; letting
-    the last probe's rows read as a conclusion is not.
+    Returns ``{}`` when there is nothing to say. Never raises into the wrapper: a crash would
+    mark an answered turn crashed. A capped turn generates, so the rows get a sentence.
     """
     # A terminal turn already has its wording, and it is not the model's: `refuse` and `decline`
     # write `answer["text"]`, which is system copy, and narrating over it would put a generated
@@ -115,10 +77,8 @@ async def narrate_node(state: dict, config: RunnableConfig) -> dict:
             update["usage"] = [spent]
         return update
     except GraphBubbleUp:
-        # Not an error to swallow: ``GraphInterrupt`` is a ``GraphBubbleUp`` and so an
-        # ``Exception``, and ``wrap_node`` re-raises it on purpose so the checkpointer can pause
-        # and resume. Catching it below would turn a clarification into a silently dropped
-        # pause — the turn would return ``{}`` and the question would never be asked.
+        # ``GraphInterrupt`` is a ``GraphBubbleUp``. Catching it below would return ``{}``
+        # and drop the pause. The wrapper re-raises it so the checkpointer can resume.
         raise
     except Exception:  # noqa: BLE001 — observer/narrator must not fail the turn
         return {}
@@ -131,16 +91,7 @@ async def _generate(
     *,
     capped: bool = False,
 ) -> tuple[str | None, dict | None]:
-    """One utility-model call over (question, statement, rows). ``(None, None)`` if it cannot run.
-
-    Returns its cost beside its text: a model call the ledger does not know about is a turn
-    priced below what it spent, and a cost appearing on some turns and not others is the kind
-    that averages into invisibility.
-
-    **A failure here does not fail the turn.** The answer, the SQL and the ledger are already
-    computed; the answer card falls back to the system copy and the stage event reports the
-    error, so the absence degrades visibly rather than hiding.
-    """
+    """``(None, None)`` if it cannot run. The cost is returned beside the text."""
     from langchain_core.messages import HumanMessage, SystemMessage
 
     from governed_bi.registry.prompts import prompt_text
@@ -171,11 +122,10 @@ async def _generate(
 
 
 def _brief(state: Mapping[str, Any], result: Mapping[str, Any], *, capped: bool = False) -> str:
-    """The narrator's whole input: the question, the statement, and a bounded slice of rows.
+    """The question, the statement, and a bounded slice of rows. Not the delivered context.
 
-    Deliberately not the delivered context, the retrieved assets or the transcript: this stage
-    reads a table out loud, and handing it the material the agent reasoned over invites it to
-    re-decide a conclusion that has already been through governance.
+    The transcript and the retrieved assets would invite the model to re-decide a conclusion
+    that has already been through governance.
     """
     rows = result.get("rows") or []
     shown = list(rows)[:_ROWS_SHOWN]

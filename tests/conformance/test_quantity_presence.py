@@ -1,22 +1,5 @@
-"""The presence test must recognise an explicit non-measurement.
-
-Separate file rather than folded into ``test_register_closure.py`` because it tests a
-hole that **the fix for the previous hole opened**, and that lineage is the point.
-
-Three appearances of one shape in this project:
-
-1. v1's ``corpus_content_hash == "unknown"`` compared equal to itself, so two runs
-   with no recorded setting under test passed the check that the runs share their settings.
-2. ``missing_required`` checked key-presence only, and ``project`` writes every key —
-   so a record of nulls passed. Fixed by treating ``None`` as absent.
-3. Introducing ``Measured`` reopened it: ``Measured.unmeasured(why)`` is not ``None``,
-   so a required field carrying an explicit non-measurement passed again.
-
-Each fix was correct and each left the next instance reachable, because the defect is
-not any one sentinel — it is that **a check for absence has to know every way absence
-can be spelled**. That is the argument for the value being a declared type in the same
-layer as the register, instead of a convention.
-"""
+"""``Measured.unmeasured`` is absence. A check for absence has to know every spelling of it, and a measured zero is a
+value."""
 
 from __future__ import annotations
 
@@ -52,12 +35,7 @@ def test_an_unmeasured_required_field_counts_as_missing() -> None:
 
 
 def test_a_measured_zero_is_a_value_and_must_not_count_as_missing() -> None:
-    """The complement, and it is L-R1 read in the other direction.
-
-    A check that rejected ``Measured.of(0)`` would make a genuine zero unreportable —
-    which is how "absent is not zero" gets over-applied into "zero is not real", and
-    then the fix gets reverted for being too strict.
-    """
+    """A measured zero is a value. Treating it as absence makes the check too strict to keep."""
     record = _fully_stubbed()
     victim = sorted(required_keys())[0]
     record[victim] = Measured.of(0)

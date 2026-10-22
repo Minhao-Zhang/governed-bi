@@ -25,10 +25,8 @@ from governed_bi.registry.settings import setting_names
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-#: The three shipped configs' question set, in the ``question_subset`` setting's format. Every fixture
-#: below declares one because :func:`reconcile`'s second lock refuses a profile without one —
-#: and a fixture is exactly where the *last* unreconcilable profile was invented, so the fixtures
-#: paying the same price as the shipped file is the mechanism working, not friction.
+#: Every fixture declares a question set. ``reconcile`` refuses a profile without one, and a
+#: fixture is where an unreconcilable profile gets invented.
 SUBSET = "1351:423a3f4b65fb"
 
 
@@ -51,25 +49,12 @@ def test_the_repositorys_own_file_parses_and_names_real_settings() -> None:
 
 
 def test_v4s_declared_under_test_is_the_prompt() -> None:
-    """Pinned because it is what makes v3-fold → v4 quotable at all.
-
-    If this silently became empty, ``settings_comparable`` would report ``cannot_evaluate`` on the
-    repository's headline comparison, and it would read as a data problem rather than a
-    declaration problem.
-    """
+    """If this set went empty, the headline comparison would look like missing data."""
     assert config_profile("v4").under_test == frozenset({"prompt_set"})
 
 
 def test_a_under_test_that_is_not_a_affects_results_setting_is_refused(tmp_path: Path) -> None:
-    """Refused at load, not at use.
-
-    A typo reads as "no setting under test declared" downstream, which ``settings_comparable`` turns into
-    ``cannot_evaluate`` — a result that looks like missing data and sends the reader to the
-    artifacts instead of to this file.
-
-    Mutation-verified 2026-08-11: deleting the ``unknown`` check in ``_parse_profiles`` turns
-    this red.
-    """
+    """A typo is refused at load. Downstream it would look like missing data."""
     path = _write(tmp_path, '''
         [config.typo]
         under_test = ["prompt_sett"]
@@ -114,14 +99,7 @@ def test_reconcile_catches_an_artifact_labelled_with_the_wrong_corpus() -> None:
 
 
 def test_reconcile_reads_the_row_and_not_the_setting_mapping() -> None:
-    """``corpus_content_hash`` is a ``RecordField``, and ``reconcile`` looked for it in
-    ``settings_resolved``.
-
-    It is never there, so the lookup returned ``None`` and the function returned agreement for
-    every artifact ever produced — declared machinery whose one caller was its own tests, and
-    which would have said "fine" if it had been called. Asserted from both sides, because a
-    reader that fell back to the setting mapping would still satisfy the first half.
-    """
+    """The hash is on the row, not in ``settings_resolved``. Reading the mapping agrees with every artifact."""
     profile = ConfigProfile(
         name="x",
         description="",
@@ -140,12 +118,7 @@ def test_reconcile_reads_the_row_and_not_the_setting_mapping() -> None:
 
 
 def test_reconcile_compares_the_digest_and_never_the_git_ref() -> None:
-    """The two fields are two namespaces, and comparing them is what made this vacuous.
-
-    ``corpus = "30872d3"`` is the corpus repository's git ref; every row records the content
-    digest ``86ed1dbf…``. The old check was ``str(recorded).startswith(profile.corpus)``, which
-    could not match on any real artifact and therefore never fired.
-    """
+    """A git ref and a content digest are different namespaces. Comparing them never matches a real row."""
     git_only = ConfigProfile(
         name="x",
         description="",
@@ -187,12 +160,7 @@ def test_a_prefix_of_the_declared_digest_is_not_the_declared_digest() -> None:
 
 
 def test_the_shipped_profiles_name_the_digest_their_artifacts_carry() -> None:
-    """v4 is the config every quoted figure comes from, and its artifact records this digest.
-
-    Pinned as a literal so that repointing ``configs.toml`` at a rebuilt corpus without re-running
-    the config is a test failure rather than a silent relabelling. The value is read off
-    ``runs/eval/proxy_v4_corpus30872d3.jsonl``, which is gitignored — hence the literal here.
-    """
+    """Pinned as a literal. The artifact is gitignored, so a rebuilt corpus would otherwise relabel in silence."""
     digest = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
     for name in ("v4", "v5"):
         assert config_profile(name).corpus_content_hash == digest
@@ -200,18 +168,7 @@ def test_the_shipped_profiles_name_the_digest_their_artifacts_carry() -> None:
 
 
 def test_a_profile_that_cannot_be_reconciled_says_so_instead_of_agreeing() -> None:
-    """The third way this function returned agreement without comparing anything.
-
-    It outlived the other two. ``reconcile`` was repaired on 2026-08-11 and ``v3_fold`` — the
-    baseline every v4 figure is measured against — declared no ``corpus_content_hash``, so the
-    ``is not None`` guard was never entered. A run launched ``--config v3_fold`` against *any*
-    corpus cleared the pre-flight check and was then told, in the report, that every one of its
-    1 351 rows agreed with the profile.
-
-    Silence is the wrong answer here because the caller cannot tell it apart from a pass. Both
-    locks are asserted: the loader refuses such a file, and this refuses such an object, because
-    ``ConfigProfile`` is constructible directly and a fixture is where one gets invented.
-    """
+    """Silence is not a pass. A profile with no digest must not report agreement."""
     profile = ConfigProfile(name="x", description="", under_test=frozenset())
 
     problems = reconcile(profile, {"corpus_content_hash": "anything"})
@@ -220,13 +177,7 @@ def test_a_profile_that_cannot_be_reconciled_says_so_instead_of_agreeing() -> No
 
 
 def test_the_loader_refuses_an_config_that_declares_no_digest(tmp_path: Path) -> None:
-    """The half that stops the *next* config reintroducing it.
-
-    Making ``reconcile`` loud fixes the configs already declared; refusing the file is what makes
-    a new ``[config.x]`` with no digest a build failure rather than a check with an off switch
-    nobody labelled. ``corpus`` alone does not satisfy it — that is the git ref, and comparing
-    it against the recorded digest is the original defect.
-    """
+    """A new config with no digest fails to load. A git ref does not stand in for the digest."""
     path = _write(tmp_path, '''
         [config.undeclared]
         under_test = ["prompt_set"]
@@ -237,18 +188,7 @@ def test_the_loader_refuses_an_config_that_declares_no_digest(tmp_path: Path) ->
 
 
 def test_every_shipped_config_can_be_reconciled() -> None:
-    """Not just v4 and v5. ``v3_fold`` is the config the control is measured against, and it was
-    the one with no digest — so the check that mattered most was the one that ran on nothing.
-
-    Each config is reconciled against **its own** declared digest, not against one constant. The
-    constant was here until 2026-09-20 and it encoded an assumption the file had outgrown:
-    that every config shares one corpus. ``luna_v4_embed`` is on the corpus *tip*, which is
-    ``30872d3``'s content plus a root ``LICENSE`` and ``README.md`` — an unchanged corpus with
-    a changed digest, because an unmanifested ``corpus_content_hash`` counts every file. A test
-    asserting one digest for all configs would have forced that config to declare a hash no session
-    can produce, which is the failure mode this whole file exists to prevent, arrived at from
-    the other side.
-    """
+    """Each config is reconciled against its own digest. One shared constant assumes every config uses one corpus."""
     for name in load_config_profiles():
         profile = config_profile(name)
         assert profile.corpus_content_hash, f"[config.{name}] cannot be reconciled"
@@ -279,17 +219,7 @@ def test_a_turn_that_abstained_before_routing_does_not_contradict_the_profile() 
 
 
 def test_the_loader_refuses_an_config_that_declares_no_question_set(tmp_path: Path) -> None:
-    """The hole `corpus_content_hash` closed for the corpus and not for the questions.
-
-    Found 2026-08-14 by a downstream fork that needed to know which questions the three
-    published configs ran, and had to recover it by filtering four historical versions of
-    `BIRD-Data-Obfuscation:eval_dataset/test_final.jsonl` against the 57 schemas
-    `BIRD-corpus@30872d3` covers. Until this field existed, a rerun on a replaced dataset
-    produced the same n = 1 351, a substantially different population, and passed every
-    quotability check -- because the checks compare the corpus digest and the settings, and both
-    matched. `corpus` alone does not satisfy it and neither does `dataset`: both are git refs,
-    and comparing a git ref against a recorded digest is the original defect.
-    """
+    """Same n and same corpus digest can hide a replaced question set. A git ref does not name that set."""
     path = _write(tmp_path, '''
         [config.no_questions]
         under_test = ["prompt_set"]
@@ -302,12 +232,7 @@ def test_the_loader_refuses_an_config_that_declares_no_question_set(tmp_path: Pa
 
 
 def test_reconcile_catches_an_config_rerun_on_a_replaced_dataset() -> None:
-    """**The defect this field exists for**, as a comparison that now fails.
-
-    Same corpus digest, same settings, same n -- and a different question population. That pair
-    was indistinguishable from a replicate, which is what makes it worse than an obviously
-    broken run.
-    """
+    """Same corpus and same n with a different question set must not look like a replicate."""
     profile = ConfigProfile(
         name="v4",
         description="",
@@ -327,18 +252,8 @@ def test_reconcile_catches_an_config_rerun_on_a_replaced_dataset() -> None:
 
 
 def test_reconcile_reads_the_question_set_out_of_the_setting_mapping_where_it_lives() -> None:
-    """The mirror image of ``test_reconcile_reads_the_row_and_not_the_setting_mapping``, and it
-    has to be, because the two fields live in different places.
-
-    ``corpus_content_hash`` is a ``RecordField`` and sits at the top of the row;
-    ``question_subset`` is a ``Role.scope`` setting written by
-    ``eval/provenance.py::scope_identity`` and sits in ``settings_resolved`` -- observed in
-    ``runs/eval/live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl``, which records
-    ``1351:423a3f4b65fb`` there and nothing at the top level. The 2026-08-11 defect was reading
-    a field where it never is, not reading the setting mapping as such; a reader who "corrects"
-    this branch to match the corpus branch recreates that defect pointing the other way, and
-    this test is what says so.
-    """
+    """``question_subset`` lives in ``settings_resolved``. Reading it from the row, as the corpus hash is read, misses
+    it."""
     profile = ConfigProfile(
         name="x",
         description="",
@@ -376,16 +291,7 @@ def test_a_profile_with_no_question_set_says_so_instead_of_agreeing() -> None:
 
 
 def test_the_shipped_profiles_name_the_question_set_their_artifacts_carry() -> None:
-    """Measured, not reconstructed, and pinned as a literal so a silent relabelling fails here.
-
-    Read on 2026-08-20 off the artifacts in ``runs/eval/``, which are gitignored -- hence the
-    literal. The 1 351 ``question_id`` values in each of ``proxy_v3_fold_...``, ``proxy_v4_...``
-    and ``proxy_v5_...`` are set-equal to the 1 351 in
-    ``BIRD-Data-Obfuscation@22fe2a6:eval_dataset/test_final.jsonl`` -- zero extra, zero missing,
-    covering exactly the 57 schemas ``BIRD-corpus@30872d3`` holds. Cross-checked against a value
-    the harness produced for itself: ``live_full_gpt-5.6-luna_xhigh_topdefault_lexical.jsonl``
-    records ``question_subset = "1351:423a3f4b65fb"``.
-    """
+    """Pinned as a literal. The artifacts are gitignored, so a silent relabel would not show up in review."""
     for name in ("v3_fold", "v4", "v5"):
         assert config_profile(name).question_subset == SUBSET
         assert config_profile(name).dataset == "22fe2a6", "the git ref is kept, and is not the digest"
@@ -403,16 +309,7 @@ def test_every_shipped_config_declares_a_question_set() -> None:
 
 
 def test_the_declared_question_set_is_the_dataset_commit_it_names() -> None:
-    """The literal above, checked against the repository it claims to come from.
-
-    Skipped where ``../BIRD-Data-Obfuscation`` is absent, which is the same precondition that
-    the dataset is a sibling checkout and is absent in CI -- so this proves the pin only on a
-    machine that holds the dataset. That is still worth having: ``SUBSET`` and ``dataset`` are
-    two claims about one fact, and nothing else in the tree can catch them drifting apart.
-
-    Verified 2026-08-20: ``22fe2a6:eval_dataset/test_final.jsonl`` holds 1 351 questions over
-    exactly the 57 schemas ``BIRD-corpus@30872d3`` covers, and their ids hash to
-    ``423a3f4b65fb``.
+    """``question_subset`` and ``dataset`` are two claims about one split. Skipped when the dataset checkout is absent.
     """
     import json
     import subprocess
@@ -440,18 +337,9 @@ def test_the_declared_question_set_is_the_dataset_commit_it_names() -> None:
         )
 
 
-# ── the three fields the loader did not read ──────────────────────────────────
-#
-# `hypothesised_effect`, `readout` and `corpus_release` were added to `ConfigProfile` on the
-# return-path branch, and the constructor call in `_parse_profiles` passed nine keys, none of them
-# these three. So a file could declare an effect size, the loader would drop it, and
-# `config_power_refusal` -- the whole reason the field exists -- read `None` and abstained on every
-# config forever. The power check was silent by construction and an underpowered paid config still
-# started.
-#
-# Every test below goes through `load_config_profiles`. That is the point: the tests that existed
-# built `ConfigProfile(**base)` directly, which cannot see a loader that drops a field, and that is
-# exactly how this survived being written, reviewed, and marked Closed in `open-work.md` §3.10.
+# The loader must copy hypothesised_effect, readout, and corpus_release. A test that
+# builds ConfigProfile directly cannot see a loader that drops a field, which is how
+# the power check stayed silent.
 
 
 def _load(tmp_path: Path, name: str, body: str) -> dict:
@@ -472,12 +360,7 @@ _MINIMAL = """    corpus_content_hash = "86ed1dbf"
 
 
 def test_the_loader_carries_a_declared_hypothesis_off_the_file(tmp_path: Path) -> None:
-    """The defect itself, as one assertion.
-
-    ``config_power_refusal`` reads ``profile.hypothesised_effect``. A loader that drops it makes the
-    check return ``None`` for every config ever declared, which is indistinguishable from "this config
-    claims nothing" -- and that is the reading the field was added to replace.
-    """
+    """A loader that drops the effect makes every config look like it claims nothing."""
     profiles = _load(tmp_path, "effect", f"""
     [config.v6]
     under_test = ["prompt_set"]
@@ -534,14 +417,7 @@ def test_a_declared_release_reaches_reconcile_and_catches_the_wrong_one(tmp_path
 
 
 def test_an_unknown_key_in_an_config_table_is_refused(tmp_path: Path) -> None:
-    """The rule that makes a dropped field impossible to add silently.
-
-    Until this existed, ``_parse_profiles`` read nine named keys and ignored everything else, so
-    the way this defect looked from the *file* side was that writing ``hypothesised_effect = 0.03``
-    into ``configs.toml`` parsed clean and did nothing. The field is spelled the British way, which
-    makes ``hypothesized_effect`` the likeliest single edit in this tree to be discarded in
-    silence.
-    """
+    """An unknown key is refused. Ignoring extra keys is how a misspelled field parsed and did nothing."""
     with pytest.raises(ValueError, match="hypothesized_effect"):
         _load(tmp_path, "typo", f"""
     [config.v6]
@@ -608,14 +484,7 @@ def test_a_zero_effect_is_refused_rather_than_read_as_no_claim(tmp_path: Path) -
 
 
 def test_an_config_whose_under_test_is_the_corpus_release_must_name_one(tmp_path: Path) -> None:
-    """The one place ``corpus_release`` is mandatory, and the reason it is conditional elsewhere.
-
-    An config declaring ``setting under test = ["corpus_release"]`` claims the corpus release *is* what
-    changed. Not naming it leaves ``reconcile``'s release branch unentered, so the config's own
-    setting under test is the single thing about it that nothing checks. Configs whose setting under test is something
-    else keep the field optional: every artifact on disk predates the setting, and refusing them
-    would strand all seven to gain nothing the digest does not already reconcile.
-    """
+    """Mandatory only when it is the setting under test. Elsewhere the digest already reconciles the corpus."""
     with pytest.raises(ValueError, match="treatment is corpus_release"):
         _load(tmp_path, "release_unnamed", f"""
     [config.v6]
@@ -625,15 +494,8 @@ def test_an_config_whose_under_test_is_the_corpus_release_must_name_one(tmp_path
 
 
 def test_the_shipped_configs_declare_no_hypothesis_and_that_is_the_committed_state() -> None:
-    """**Read this before quoting the power check as being in force.** On this file it is not.
-
-    All four configs in ``configs.toml`` declare no ``hypothesised_effect``, so ``config_power_refusal``
-    abstains on every one of them. That is the outcome: all four were measured before the
-    field existed, and an effect size written down after the measurement is not a hypothesis. What
-    is *not* is leaving that inferable only from the absence of a key, which is how the
-    dropped field went unnoticed. This asserts the inventory, so the first config to declare one has
-    to come through here and say so.
-    """
+    """No shipped config declares an effect, so the power check abstains. The first one to declare one fails here until
+    this inventory moves."""
     declared = {
         name: (p.hypothesised_effect, p.readout)
         for name, p in load_config_profiles().items()

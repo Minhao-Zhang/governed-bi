@@ -1,19 +1,8 @@
-"""``SqliteConnector`` must survive being called from a different thread than the one that
-opened it.
+"""``sqlite3`` connections are thread-affine, and LangGraph runs ``run_query`` on a worker thread.
 
-**Why this matters, and why it is not a theoretical case.** LangGraph's node executor runs
-each node — including ``run_query``'s tool call — in its own worker thread (``ThreadPoolExecutor``
-under ``wrap_node``'s ``asyncio.to_thread``). ``_connect()`` memoized ``self._conn`` per
-*instance*, not per *thread*, so the first call's thread owns the handle and every later call
-from a different thread hit Python's own guard: ``sqlite3.ProgrammingError: SQLite objects
-created in a thread can only be used in that same thread.`` Reproduced live against the real
-serve graph (RESUME.md, 2026-08-06) — not a hypothetical, the actual
-cause of two independent 15+-minute hangs before the agent's retry loop (a separate, since-fixed
-defect, upstream `c8b570d`) turned the crash into an infinite loop instead of a clean error.
-
-The fix is to stop caching across calls: a read-only local file connection is cheap enough to
-open per statement, and "cheap to open, expensive to share across threads" is exactly the
-tradeoff a per-call connection is for.
+Two live hangs of more than 15 minutes were this cache being reused across threads.
+A read-only file is cheap to open per call; a lock serialises every call, and
+``check_same_thread=False`` is unsafe.
 """
 
 from __future__ import annotations
@@ -42,13 +31,9 @@ def test_execute_survives_a_call_from_a_different_thread_than_the_one_that_opene
 ) -> None:
     connector = SqliteConnector(db_path)
 
-    # First call, on this (the main) thread — this is what used to poison every later call
-    # from anywhere else, because `_connect()` cached the handle here.
     columns, rows, _ = connector.execute("SELECT COUNT(*) FROM t")
     assert rows == [(3,)]
 
-    # Second call, from a different thread — the exact shape of a LangGraph tool
-    # node running after the connector's first use. Must not raise.
     result: dict[str, object] = {}
 
     def call_from_worker_thread() -> None:
@@ -71,7 +56,7 @@ def test_execute_survives_a_call_from_a_different_thread_than_the_one_that_opene
 def test_introspect_survives_a_call_from_a_different_thread_than_the_one_that_opened_it(
     db_path,
 ) -> None:
-    """Same defect class, the other public entry point that calls ``_connect()``."""
+    """``introspect`` is the other public call that opens a connection."""
     connector = SqliteConnector(db_path)
     connector.introspect()
 
@@ -92,11 +77,7 @@ def test_introspect_survives_a_call_from_a_different_thread_than_the_one_that_op
 
 
 def test_many_sequential_calls_from_alternating_threads_all_succeed(db_path) -> None:
-    """Not just "the second caller" — every caller, in any order, on any thread.
-
-    A fix that special-cased "the first call after construction" would still break on a third
-    thread; alternating threads across several calls is what exercises "no caching
-    across threads at all," rather than "caching survives exactly one handoff."
+    """Several threads, not a single handoff after construction.
     """
     connector = SqliteConnector(db_path)
     errors: list[Exception] = []

@@ -1,7 +1,4 @@
-"""Readers over the ``messages`` channel, beside the declaration in ``serve/state.py``.
-
-``api`` may import ``serve``. The other direction does not: ``narrate`` is a caller
-and it lives in ``serve``.
+"""Readers over the ``messages`` channel.
 """
 
 from __future__ import annotations
@@ -17,21 +14,10 @@ __all__ = ["last_ai_text", "last_proposed_sql", "surface_answer_text"]
 
 
 def last_ai_text(state: Mapping[str, Any]) -> str | None:
-    """The model's answer, via LangChain's own ``AIMessage.text``.
+    """Model answer via ``AIMessage.text``. A checkpoint dict has no ``.text``, so read it too.
 
-    Two callers that must not disagree — ``graph_app.record_node`` and
-    ``serve/nodes/narrate.py`` — because two readers of "what did the model say" is how the
-    audit list, the response and the answer card drift apart.
-
-    Not hand-flattened: the Responses API returns content as blocks and ``.text`` already
-    concatenates the text ones (decision #1 — do not re-implement what ``langchain-core`` owns).
-    A dict message is read too, and that is not defensive: restored from a checkpoint over the
-    wire a message is a plain mapping with no ``.text``, so the ``getattr`` path alone returns
-    ``None`` for every message of a rehydrated thread.
-
-    ``human`` and ``tool`` are skipped rather than filtering on ``type == "ai"``: an unseen
-    provider message type is more likely to be the answer than someone else's turn, and reading
-    it is recoverable where skipping it is silent.
+    Do not re-flatten content blocks; ``langchain-core`` owns that. Skip ``human`` and ``tool``
+    rather than requiring ``type == "ai"``: an unseen type is more likely the answer.
     """
     for message in reversed(state.get("messages") or []):
         kind = str(getattr(message, "type", "") or "")
@@ -47,27 +33,16 @@ def last_ai_text(state: Mapping[str, Any]) -> str | None:
     return None
 
 
-#: Outcomes whose prose is the model's own to show. Neither took a governance decision: one
-#: delivered a statement, the other delivered none. Every other member of
-#: :class:`~governed_bi.registry.stages.Outcome` has system copy in ``answer["text"]`` instead,
-#: and backfilling model text over it is how a refusal came to read as an explanation.
+# Only these may show model prose. Other outcomes carry system copy, and backfilling model
+# text over it makes a refusal read as an explanation.
 _MAY_ADOPT_MODEL_TEXT: frozenset[str] = frozenset({Outcome.answered.value, Outcome.no_sql.value})
 
 
 def surface_answer_text(answer: Mapping[str, Any], state: Mapping[str, Any]) -> str | None:
-    """Prose for REST/audit. Never backfill model text over a governance terminal.
+    """Prose for REST and audit. Never backfill model text over a governance terminal.
 
-    ``narrate`` already skips refuse/decline/crashed and ledger capped/refused. The old
-    ``answer_text or last_ai_text(...)`` at the boundary undid that and put model prose on
-    crashed/capped/refused turns. Only a turn that ended *without a governance decision* may
-    adopt leftover AI text.
-
-    :data:`_MAY_ADOPT_MODEL_TEXT` is two outcomes, not one. ``Outcome.no_sql`` is the turn that
-    produced prose and no governed statement, so it is exactly the turn whose only content is the
-    model's own words — and ``narrate`` reaches it (``ledger_ended_without_answer`` is false when
-    ``terminal`` is ``no_sql``), so on the ordinary path ``answer_text`` is already set and the
-    first branch returns. The set matters when ``narrate`` degraded: without ``no_sql`` here, the
-    turn record would carry no answer text for the one class of turn that has nothing else to show.
+    ``no_sql`` is included: that turn's only content is the model's words, and if ``narrate``
+    degraded the record would otherwise carry no answer text.
     """
     text = answer.get("answer_text")
     if text:
@@ -78,7 +53,6 @@ def surface_answer_text(answer: Mapping[str, Any], state: Mapping[str, Any]) -> 
 
 
 def _text_of(content: Any) -> str | None:
-    """The text of a raw ``content`` value — a string, or the text blocks of a block list."""
     if isinstance(content, str):
         return content or None
     if isinstance(content, list):
@@ -92,18 +66,10 @@ def _text_of(content: Any) -> str | None:
     return None
 
 def last_proposed_sql(messages: Sequence[Any]) -> str | None:
-    """The last SQL the model *proposed* to ``run_query``, from its tool-call arguments.
+    """The last SQL proposed to ``run_query``, not a governed statement.
 
-    **This is not a governed statement.** It is what the model asked for, which may have been
-    refused by the layer stack, blocked by the attempt cap, or never have reached ``prepare()`` at
-    all. The record's ``generated_sql`` deliberately does not carry it (audit C4): that field is
-    declared as "the statement the engine SENT" and two callers execute it.
-
-    It lives here, public and named for what it is, because exactly one consumer wants it —
-    ``eval/projection._abstained_fingerprint``, which
-    prices what a refusal cost by running the proposal read-only. Extracting it there from the
-    transcript would be a second implementation of "which tool call was the last run_query",
-    and this repository has paid for that shape.
+    The record's ``generated_sql`` is the statement the engine sent. One named reader, so
+    the refusal fingerprint does not grow a second parser of the transcript.
     """
     last: str | None = None
     for message in messages:

@@ -1,4 +1,4 @@
-"""Join identity: on_digest / join_id (ADR 0005 §1.2, decision #36)."""
+"""Join identity. See ADR 0005."""
 
 from __future__ import annotations
 

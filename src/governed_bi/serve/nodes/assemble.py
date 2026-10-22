@@ -23,16 +23,10 @@ __all__ = ["assemble_node"]
 
 
 def assemble_node(state: dict, config: RunnableConfig) -> dict:
-    """Render retrieval context into ``delivery``. **Not into ``messages``.**
+    """Render retrieval into ``delivery``, not ``messages``.
 
-    ``messages`` is checkpointed and ``add_messages``-reduced, so appending the block re-sends
-    every prior turn's context to the provider; it also adds a second human message per turn,
-    and ``api/graph_app.py`` derives ``turn_index`` by counting those.
-    ``agent_core`` passes the block to the agent as an ephemeral message instead. The block is
-    not lost — it is in ``delivery``, hashed, and the record publishes ``context_hash``.
-
-    Declares ``config`` so :func:`~governed_bi.serve.wrap.wrap_node` forwards
-    ``RunnableConfig`` (corpus / assets live under ``configurable``).
+    ``messages`` is checkpointed and ``add_messages``-reduced, so the block would be re-sent
+    and would add a second human message that ``turn_index`` counts. ``config`` carries the corpus.
     """
     if state.get("path_kind") in TERMINAL_PATH_KINDS:
         return {}
@@ -43,9 +37,8 @@ def assemble_node(state: dict, config: RunnableConfig) -> dict:
     schemas = list(state.get("schemas") or ())
     budget = _budget_chars(state, cfg)
 
-    # Out-parameter, filled only when the char budget bit. Without it the eviction ladder drops
-    # asset bodies and whole pulled-in tables with no signal anywhere, so a gold table that was
-    # routed, retrieved_tables and then evicted for space is indistinguishable from one that rendered.
+    # Filled only when the char budget bit. Without it, dropped bodies and tables leave no
+    # signal, so a table that was routed, retrieved, and then evicted matches one that rendered.
     evicted: dict[str, Any] = {}
     block, context_hash = render_context(
         retrieved=retrieved,

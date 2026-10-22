@@ -1,14 +1,7 @@
-"""Parcel F's acceptance criterion: the fixtures its specifications name.
+"""Fixtures the turn-contract specifications name.
 
-Split out of ``test_turn_contract.py`` when that file hit the hard cap of ADR 0005 §6, then
-**kept after the cap moved to 1000**, because the specifications next door still have five
-fixes to absorb and headroom is worth more than one file. Nothing here was edited on the way
-across: the twenty-two assertion messages were byte-identical before and after the move,
-which is the only available proof that a "pure move" was pure.
-
-These fixtures are part of the acceptance criterion, not scaffolding around it. **Editing a
-fixture here to make a contract test pass is editing the contract.** If a fixture looks
-wrong, stop and say so.
+Editing a fixture here to make a contract test pass edits the contract. If a fixture
+looks wrong, stop and say so.
 """
 
 from __future__ import annotations
@@ -18,8 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-# ── the fixtures the specifications name ──────────────────────────────────────
 
 #: ``src/governed_bi``. A behavioural fix that reimplements a declared comparison inline satisfies
 #: the behaviour and leaves the declaration unreachable, so some assertions are structural.
@@ -164,18 +155,7 @@ def _entry(asset: Any, schema: str) -> Any:
 
 @pytest.fixture(scope="module")
 def probe(dsn):
-    """A throwaway schema, a real connector, and a **real seeded corpus** indexed over it.
-
-    Its own schema, dropped afterwards, because the reachable server holds the real obfuscated BIRD
-    data and a test that wrote into it would corrupt the eval corpus.
-
-    The index is **lexical only** — no embedder is passed, so nothing below exercises the semantic
-    channel. That was once because no embedder existed to pass; it is now a choice, and an
-    unmade one: ``governed_bi.model.deterministic_embedder.DeterministicEmbedder`` ships and two
-    other files in this directory build two-channel indexes with it. Said here rather than left
-    implicit, because a lexical-only probe means every contract below is silent about the half
-    of retrieval where the measured defects were.
-    """
+    """A throwaway schema and a lexical-only index, so the probe never writes the eval corpus."""
     import psycopg
 
     from governed_bi.corpus.analyst import for_analyst
@@ -188,13 +168,8 @@ def probe(dsn):
         con.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
         con.execute(f'CREATE SCHEMA "{name}"')
         con.execute(f'CREATE TABLE "{name}".customers (id integer PRIMARY KEY, email text)')
-        # A table **no join reaches**, added 2026-08-03 after execution falsified the
-        # fixture note below. `customers` and `orders` cannot serve as the not_retrieved table:
-        # the seeded corpus mints `join_..._orders_customers` whose summary reads "orders
-        # joins customers on cid", so the question "customers" hits the *join* lexically and
-        # `resolve`'s closure licenses both endpoints -- which ADR 0006 §8 requires
-        # (`retrieved_tables` includes every table pulled in by resolve). No change to `serve/` could
-        # have made the old fixture pass without breaking join licensing.
+        # `audit_log` is the table no join reaches. `customers` and `orders` are linked by the
+        # seeded join, so a question about customers licenses both (ADR 0006).
         con.execute(f'CREATE TABLE "{name}".audit_log (id integer PRIMARY KEY, note text)')
         con.execute(f'CREATE TABLE "{name}".orders (id integer PRIMARY KEY, cid integer '
                     f'REFERENCES "{name}".customers(id), amount numeric)')

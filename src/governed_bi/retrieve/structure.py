@@ -1,9 +1,4 @@
-"""Corpus structure projection for ``resolve`` / ``connect`` (ADR 0005 §2.8.2).
-
-Built once at index time. Returns ``(structure, problems)``. Join endpoints bind
-by exact table-asset lookup (no first-match guess). Also hosts
-:func:`complete_joins` (conjunctive rule); graph search stays in ``connect``.
-"""
+"""Projections for closure and join choice, built once. Endpoints bind by exact lookup. See ADR 0005."""
 
 
 from __future__ import annotations
@@ -34,38 +29,22 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class CorpusStructure:
-    """Projections ``resolve`` / ``connect`` run on, keyed on asset ids (not physical names)."""
-
-    #: Undirected table-to-table edges, canonicalised by ``canon_edge``. Self-joins are
-    #: **excluded**: a loop makes an isolated terminal look adjacent, hiding a 
-    #: disconnected table from ``connect``'s missing-terminal check. They stay in
-    #: :attr:`joins_by_edge`, so their keys still reach the prompt.
+    #: Undirected. Self-joins are excluded: a loop hides an isolated terminal.
     join_edges: frozenset[tuple[str, str]]
-    #: ``asset id -> ids it points at``. **Disjunctive**, which is what ``resolve``
-    #: needs and why the conjunctive last row of §2.8 is not in here.
+    #: Disjunctive, which is what closure needs. The conjunctive join rule is not here.
     references: Mapping[str, frozenset[str]]
-    #: ``asset id -> AssetType value``.
     asset_types: Mapping[str, str]
-    #: ``table asset id -> schema``. Read for ``crossings`` accounting.
     table_schemas: Mapping[str, str]
-    #: ``asset id -> the schema it votes for in route``, from the declared
-    #: :class:`~governed_bi.registry.assets.TagRule` table via
-    #: :func:`~governed_bi.retrieve.index.schema_tag_for` -- not a second local rule.
+    #: The schema the asset votes for, from the register tag rule, not a second copy.
     schema_tags: Mapping[str, str]
-    #: ``canonical edge -> the join asset ids on it``, sorted. Several relationships per
-    #: table pair is the normal case ADR 0005 §1.2 put the ON digest in the join id for;
-    #: collapsing them cost 33 of 57 schemas an edge in v1 (2026-07-29, pre-2026-08-05).
+    #: Every join id on a table pair, sorted. Collapsing a pair to one edge drops joins.
     joins_by_edge: Mapping[tuple[str, str], tuple[str, ...]]
 
 
 def build_structure(
     assets: Iterable[Any],
 ) -> tuple[CorpusStructure, list[Problem]]:
-    """Project ``assets`` into the structure retrieval runs on.
-
-    A pure function of the asset set: no question, no config, no clock, order-independent
-    and idempotent. Asserted by ``tests/retrieve/test_structure_contract.py``.
-    """
+    """A pure function of the asset set: no question, no config, no clock."""
     problems: list[Problem] = []
     by_id: dict[str, Any] = {}
     for asset in assets:
@@ -73,10 +52,8 @@ def build_structure(
         if aid is None:
             problems.append(Problem(where="<asset>", reason="asset has no id"))
             continue
-        # First-wins on a repeated id, and no problem recorded: two ``JoinAsset``s
-        # differing only in endpoint qualification mint the same ``join_id`` by
-        # construction (ADR 0005 §1.2), so reporting the second would make a valid
-        # corpus look broken. A duplicated id is refused by ``build_index``.
+        # First id wins. Two joins that differ only in qualification mint one id.
+        # A duplicated id is refused when the index is built.
         by_id.setdefault(str(aid), asset)
 
     types = {aid: _type_of(asset) for aid, asset in by_id.items()}
@@ -115,12 +92,10 @@ def build_structure(
 
 
 def complete_joins(retrieved_tables: Set[Any], structure: CorpusStructure) -> frozenset[str]:
-    """Every join whose **both** endpoints are in ``retrieved_tables`` (§2.8's last row).
+    """Joins whose both endpoints were retrieved. Runs after ``connect``, not inside closure.
 
-    Runs **after** ``connect``, not inside ``resolve`` (§2.8.1): a Steiner point exists to
-    sit on a join path, so the pairs that most need their ``on`` clause in the prompt are
-    created after ``resolve`` runs. Returned joins are ``pulled_in`` and exempt from the
-    join budget — they never pass through ``apply_budgets``, which caps ranked hits only.
+    A Steiner point exists to sit on a path, so those pairs appear only after closure. The joins come back as pulled-in
+    and do not consume the ranked-hit cap.
     """
     ids = {str(x) for x in retrieved_tables}
     out: set[str] = set()
@@ -130,29 +105,11 @@ def complete_joins(retrieved_tables: Set[Any], structure: CorpusStructure) -> fr
     return frozenset(out)
 
 
-# ── endpoint reconciliation ───────────────────────────────────────────────────
-
-
 def table_lookup(tables: Mapping[str, Any]) -> Mapping[str, frozenset[str]]:
-    """Every spelling a table endpoint may use -> the table ids that answer to it.
+    """Every spelling of a table endpoint, mapped to the ids that answer to it.
 
-    Four spellings, deduplicated into a set: the asset id, ``table_id(schema,
-    physical_name)`` (which carries the **slug**), the bare ``physical_name``, and the
-    **engine spelling** ``{schema}.{physical_name}`` (which does not). Three of the four
-    collapse to one string whenever the physical name is already a bare identifier, so the
-    usual table contributes **two** keys, not four — measured on the shipped corpus, 655 of
-    656 tables contribute two and one contributes three. The fourth spelling exists for that
-    one table. The last
-    is the physical→id map ADR 0008 D1 implies — an asset id carries the *slug*
-    (``airline.Air_Carriers_66c534``) while SQL carries ``FROM airline."Air Carriers"``, so
-    without it every few-shot citing a slugged table reports "matches no table asset".
-
-    The value is a **set**: a bare name present in two schemas answers with two ids, and
-    :func:`bind_endpoint` refuses rather than guessing.
-
-    Public because ``serve/session.py`` has to answer "does this endpoint name an excluded
-    table?" before ``build_structure`` runs, and a second copy of the four-key policy here is
-    how ``airline."Air Carriers"`` ended up with no table asset in the first place.
+    The value is a set: a bare name in two schemas must not be guessed. Public because the session asks "is this an
+    excluded table?" before this projection is built, and a second copy of the spellings drifted.
     """
     out: dict[str, set[str]] = {}
     for aid, asset in tables.items():
@@ -175,12 +132,10 @@ def bind_endpoint(
     *,
     scope: Any = None,
 ) -> tuple[str | None, str | None]:
-    """``(table id, None)`` or ``(None, why it was refused)``. Never a guess.
+    """``(table id, None)`` or ``(None, why)``. Never a guess.
 
-    ``scope`` is the *referring asset's own* schema. A ``ColumnAsset`` declares ``schema``
-    beside its bare ``parent_table``, so scoping is reading a qualification the corpus
-    made, not inventing one. ``JoinAsset`` has no ``schema`` field by design (ADR 0005
-    §1.2), so its bare endpoints get no scope and are ambiguous in a pooled lake.
+    ``scope`` is the referring asset's own schema. A join has no schema field, so a bare endpoint stays unscoped in a
+    pooled lake.
     """
     if endpoint is None or not str(endpoint).strip():
         return None, "endpoint is empty"
@@ -207,9 +162,6 @@ def bind_endpoint(
     )
 
 
-# ── one linker per §2.8 closure row ───────────────────────────────────────────
-
-
 def _link_column(
     aid: str,
     asset: Any,
@@ -217,7 +169,6 @@ def _link_column(
     references: dict[str, set[str]],
     problems: list[Problem],
 ) -> None:
-    """``ColumnAsset`` hit pulls in its ``TableAsset``."""
     parent = _attr(asset, "parent_table")
     bound, why = bind_endpoint(parent, lookup, scope=_attr(asset, "schema"))
     if bound is None:
@@ -233,7 +184,6 @@ def _link_table(
     references: dict[str, set[str]],
     problems: list[Problem],
 ) -> None:
-    """A ``TableAsset`` in the set pulls in all of its columns."""
     declared = _attr(asset, "columns") or ()
     for column_id in declared:
         cid = str(column_id)
@@ -259,10 +209,9 @@ def _link_term(
     references: dict[str, set[str]],
     problems: list[Problem],
 ) -> None:
-    """``TermAsset`` hit pulls in its ``binding`` target."""
     binding = _attr(asset, "binding")
     if binding is None:
-        return  # an unbound term is a state, not a defect (validate.py, TAG_RULE_FIELDS)
+        return  # an unbound term is a state, not a defect
     target = _attr(binding, "target_id")
     if target is None or str(target) not in by_id:
         problems.append(
@@ -280,12 +229,10 @@ def _link_metric(
     references: dict[str, set[str]],
     problems: list[Problem],
 ) -> None:
-    """``MetricAsset`` hit pulls in its ``base_table`` **and its ``dimensions``** (D4).
+    """Pulls in ``base_table`` and ``dimensions``.
 
-    A dimension is a **column** id and may name a column of a table other than
-    ``base_table`` (grouped by country = a column of the joined country table), so it is
-    looked up in ``by_id`` rather than bound through ``lookup``, which answers for tables
-    only. Resolving them is also what makes a dangling dimension reportable at all.
+    A dimension is a column id and may belong to another table, so it is looked up by id, not through the table spelling
+    map.
     """
     bound, why = bind_endpoint(_attr(asset, "base_table"), lookup)
     if bound is None:
@@ -307,8 +254,7 @@ def _link_metric(
                         "field is not scoped to one, so the reference cannot be "
                         "resolved and the column never reaches the prompt"
                     ),
-                    # Degradation, not a stop (ADR 0008 D9): the metric still renders and
-                    # resolves its base table, so this costs recall, not correctness.
+                    # Recall cost, not a stop (ADR 0008). The metric still resolves its base table.
                     fatal=False,
                 )
             )
@@ -321,18 +267,12 @@ def _link_few_shot(
     references: dict[str, set[str]],
     problems: list[Problem],
 ) -> None:
-    """``FewShotAsset`` hit pulls in the tables its SQL references.
-
-    §2.8: a parse failure resolves nothing for that few-shot and is **recorded**,
-    never silently dropped.
-    """
     sql = _attr(asset, "sql")
     if not sql:
         return
     names, parse_error = _sql_table_names(str(sql))
     if parse_error is not None:
-        # Advisory content, so non-fatal: an unusable few-shot costs recall and cannot
-        # mis-license anything, because nothing downstream keys on it (ADR 0008 D9).
+        # Non-fatal: an unusable example costs recall and cannot mis-bind anything (ADR 0008).
         problems.append(
             Problem(where=aid, reason=f"sql did not parse: {parse_error}", fatal=False)
         )
@@ -357,12 +297,6 @@ def _link_join(
     edges: set[tuple[str, str]],
     problems: list[Problem],
 ) -> None:
-    """``JoinAsset`` hit pulls in both endpoint tables, and contributes one edge.
-
-    Endpoint closure belongs here because it expands the terminal set ``connect`` must
-    then join. The reverse direction is :func:`complete_joins` (§2.8.1: it cannot live
-    in a disjunctive fixpoint).
-    """
     left, left_why = bind_endpoint(_attr(asset, "left_table"), lookup)
     right, right_why = bind_endpoint(_attr(asset, "right_table"), lookup)
     for side, why in (("left_table", left_why), ("right_table", right_why)):
@@ -386,21 +320,13 @@ def _link_join(
         edges.add((str(edge[0]), str(edge[1])))
 
 
-# ── schema tags ───────────────────────────────────────────────────────────────
-
-
 def _schema_tags(
     by_id: Mapping[str, Any],
     types: Mapping[str, str | None],
     table_schemas: Mapping[str, str],
     lookup: Mapping[str, frozenset[str]],
 ) -> Mapping[str, str]:
-    """Every asset's route vote, through the declared ``TagRule`` table.
-
-    This reads the endpoints and delegates the rule to
-    :func:`~governed_bi.retrieve.index.schema_tag_for`; a second per-type ``if`` ladder
-    here would be a second answer to "which schema does a cross-schema join vote for".
-    """
+    """Delegates the vote to ``schema_tag_for``. A second per-type ladder would be a second answer."""
     out: dict[str, str] = {}
     bound_to: dict[str, str] = {}
     for aid, asset in by_id.items():
@@ -435,17 +361,10 @@ def _schema_tags(
 
 
 def _tag_through_bindings(out: dict[str, str], bound_to: Mapping[str, str]) -> None:
-    """Give a still-untagged bound asset the tag of what it is bound to.
+    """Copy a bound target's tag onto an asset that still has none.
 
-    Closes the pooled lake's licensing leak: ``TagRule.binding_target`` reads the target's
-    own ``schema``, a metric has none, so a term bound to a metric was untagged — and an
-    untagged asset is carried into pass two *unconditionally*, letting one lexical hit
-    license another schema's tables that ``connect`` can never join. 136 untagged terms
-    on the gold-semantic-layer corpus; it declined even at ``route_top_n = 1``.
-
-    A fixpoint, not capped recursion: ``term → term → metric`` is legitimate and a cycle
-    must stop rather than raise. Bounded by ``len(bound_to)``, so it terminates on any
-    graph. Adds no rule — the propagated tag is whatever ``TagRule`` gave the target.
+    An untagged asset is carried into the next pass unconditionally, so one hit can bring in tables from another schema.
+    A fixpoint, because a binding chain may cycle.
     """
     for _ in range(len(bound_to)):
         progressed = False
@@ -461,12 +380,10 @@ def _tag_through_bindings(out: dict[str, str], bound_to: Mapping[str, str]) -> N
 
 
 def _own_schema(asset: Any) -> str | None:
-    """A binding target's *own* schema field, one level only.
+    """The target's own schema field, one level only.
 
-    ``SchemaAsset`` answers with its ``name``, everything else with ``schema``. ``join``,
-    ``metric`` and ``term`` have none and get ``None``; :func:`_tag_through_bindings`
-    carries their *derived* tag across. One level deep on purpose — merging "read a
-    field" with "follow a chain" is how the chain became invisible.
+    A schema asset answers with its name. Joins, metrics, and terms have none; the binding walk carries their derived
+    tag.
     """
     if asset is None:
         return None
@@ -475,14 +392,11 @@ def _own_schema(asset: Any) -> str | None:
     return _str_or_none(_attr(asset, "schema"))
 
 
-# ── SQL and attribute access ──────────────────────────────────────────────────
-
-
 def _sql_table_names(sql: str) -> tuple[tuple[str, ...], str | None]:
-    """``(table names the statement reads, parse error)``. CTE names are excluded.
+    """Table names the statement reads. CTE names are excluded.
 
-    A CTE is a name the statement defines, not one it references; reporting it would turn
-    every well-formed few-shot with a ``WITH`` clause into a curation problem (decision #5).
+    A CTE is defined by the statement, not referenced. Reporting it would flag every well-formed example that uses
+    ``WITH``.
     """
     try:
         tree = sqlglot.parse_one(sql, dialect="postgres")
@@ -505,18 +419,12 @@ def _sql_table_names(sql: str) -> tuple[tuple[str, ...], str | None]:
 
 
 def _attr(asset: Any, name: str) -> Any:
-    """One field of an asset, whether it is a dataclass or a raw mapping.
-
-    Both reach here: ``corpus.store`` yields dataclasses, ``configurable["corpus"]`` may
-    hold mappings that never went through ``parse``.
-    """
     if isinstance(asset, Mapping):
         return asset.get(name)
     return getattr(asset, name, None)
 
 
 def _type_of(asset: Any) -> str | None:
-    """The ``AssetType`` value of an asset, or ``None`` when it declares none."""
     raw = _attr(asset, "asset_type")
     if raw is None:
         return None

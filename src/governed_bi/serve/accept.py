@@ -1,8 +1,4 @@
-"""The served graph's entry node, bound to the session that mints its turns.
-
-A client submits messages. Provenance fields are the run's own claims, derived
-here through the session, so a client-supplied value is not merged. It lives in
-``serve/`` because it writes ``ServeState`` and reads nothing from HTTP.
+"""Entry node. Provenance comes from the session, so a client-supplied value is not merged.
 """
 
 from __future__ import annotations
@@ -16,16 +12,10 @@ __all__ = ["accept_node"]
 
 
 def accept_node(session: Any) -> Callable[[dict, Any], dict]:
-    """The ``accept`` node for ``session``.
-
-    Returned rather than declared, because the session is a live object graph — policy,
-    connector, index, models — and LangGraph Server can only put JSON on
-    ``config["configurable"]``. Closing over it here is the same move ADR 0007 §1 makes for the
-    graph factory, one level down.
+    """Closes over ``session``: LangGraph Server can only put JSON on configurable. See ADR 0007 §1.
     """
 
     def accept(state: dict, config: Any) -> dict:
-        """Derive a turn from the conversation. Client provenance fields are ignored."""
         question = _last_human(state)
         if not question:
             # Clear prior-turn LastValue channels before jumping to finish. Without this (and

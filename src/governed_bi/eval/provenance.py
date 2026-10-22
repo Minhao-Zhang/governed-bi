@@ -1,25 +1,8 @@
-"""What identifies one measurement run, and whether an artifact on disk shares that identity.
+"""What identifies one measurement run, and whether an artifact shares it.
 
-Two halves of one question, kept together because they have to agree: the driver *finishes*
-the harness-side identity onto every row here, and *reads it back* here when ``--resume``
-opens an artifact somebody else's run may have written.
-
-**The incident.** ``--resume`` decided whether to keep an artifact from the artifact's
-*filename*. The tag carries ``--model``, ``--effort``, ``--top-n``, ``--embed``, the provider
-and ``--prompt-variant``; it carries no corpus, no dataset and no worker count, and an
-explicit ``--out`` bypasses it entirely. So ``git pull`` in ``../BIRD-corpus``, resume, and one
-artifact holds two corpora — with every quotability check passing and the driver printing that
-the numbers are quotable as a single config. The corpus is the identity under test
-(ADR 0007 on ``corpus_content_hash``),
-which makes that the worst sentence the driver can print.
-
-Both config hash were already on every row. The half that was missing is a reader, and
-the half that is added here is the rest of the identity: the harness commit, the worker count,
-and which questions and schemas were served.
-
-**Not a setting home.** ``registry/settings.py`` owns every setting's *declaration* and default; this
-module only resolves the ones whose value is a fact about the running process — a git sha
-cannot have a register default. Every name written here is declared there.
+Resume reads that identity off the rows. A filename omits the corpus, and an
+explicit output path bypasses the filename. This module resolves facts about
+the running process; the register owns setting declarations.
 """
 
 from __future__ import annotations
@@ -52,43 +35,25 @@ __all__ = [
     "truncation_notice",
 ]
 
-#: How many hex characters of a SHA-256 a scope digest keeps. Twelve is 48 bits, which is far
-#: more than the collision resistance a *drift* check needs (the populations being compared are
-#: two attempts at one run, not an adversarial pair) and short enough that the value costs a
-#: few dozen bytes on each of 1 351 rows.
+#: Twelve hex characters. Enough to tell two attempts at one run apart, and short on every row.
 _DIGEST_CHARS = 12
 
 
 def short_digest(parts: Iterable[str]) -> str:
-    """A stable, order-independent digest of a set of strings.
+    """A stable digest of a set of strings.
 
-    Sorted before hashing: the caller's iteration order is an accident of a directory scan or
-    a dict, and a digest that moved with it would report drift on every run.
+    Sorted before hashing. Iteration order is an accident, and a digest that
+    moved with it would report drift on every run.
     """
     joined = "\n".join(sorted(str(p) for p in parts))
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:_DIGEST_CHARS]
 
 
 def _git(repo: Path, *args: str) -> str | None:
-    """``git <args>`` in ``repo``, or ``None`` if it cannot be answered.
+    """``git`` in ``repo``, or ``None`` if it cannot be answered.
 
-    Never raises: a run must not die because the harness is a tarball rather than a checkout,
-    and a missing answer is recorded as ``None`` — which reads as "unmeasured" rather than as
-    a value two rows can agree on.
-
-    **``encoding="utf-8", errors="replace"`` rather than ``text=True``, and it is not a style
-    preference.** ``text=True`` decodes with the *locale* codec, which on Windows is cp1252, and
-    cp1252 has no mapping for five bytes UTF-8 uses routinely. ``git diff HEAD`` over a working
-    tree containing one edited non-ASCII file — in 2026-08 the Chinese documents under
-    ``git-history:docs/analysis/``; nothing in ``docs/`` carries CJK today, and one non-ASCII
-    byte anywhere in a diff is enough — therefore killed the reader thread, left
-    ``proc.stdout`` as ``None``, and
-    made this function raise ``AttributeError`` on the next line. Found 2026-08-12 by editing one
-    of those documents: four tests went red and, on a real run, ``harness_settings()`` would have
-    died before the first paid question. ``errors="replace"`` because the caller digests this
-    string rather than reading it, so a mangled character is a fact about the diff and a crash is
-    the loss of a run. With ``errors="replace"`` the reader thread cannot die, so the ``or ""``
-    guard below is redundant now and still worth not needing.
+    A missing answer is unmeasured, not a shared value. Decode as UTF-8:
+    ``text=True`` uses the locale codec and dies on a non-ASCII diff on Windows.
     """
     try:
         proc = subprocess.run(
@@ -106,30 +71,15 @@ def _git(repo: Path, *args: str) -> str | None:
 
 
 def git_provenance(repo: Path) -> dict[str, Any]:
-    """The four resume-drift keys, resolved from the working tree.
+    """Resume-drift keys from the working tree.
 
-    All four are ``Role.operational``: two runs at different commits are the *normal*
-    comparison, and the same difference inside one artifact is corrupting.
-    ``measure/checks.py::_settings_resolved_check`` looks for disagreement across a config's rows —
-    and until this existed all four were ``None`` on every row of every config, so the check that
-    exists to stop a resume blending two harness versions into one score was comparing four
-    constants against themselves. That is exactly what ``diff_sha256``'s own register note says
-    the absence would cost.
-
-    ``git_main_sha`` is asked of ``main`` and then ``origin/main``: on the experiment server the
-    code sits on a branch never equal to main, so the branch tip alone cannot say which main
-    commit a paid run was based on.
-
-    ``diff_sha256`` digests ``git diff HEAD``. Checking ``git_sha`` alone lets a resume across an
-    uncommitted edit blend two harness versions with no check firing, which is the incident the
-    setting was declared for.
+    Two commits are normal across runs and corruption inside one artifact.
+    ``diff_sha256`` covers an uncommitted edit. Ask ``main``, then ``origin/main``.
     """
     head = _git(repo, "rev-parse", "HEAD")
     main = _git(repo, "rev-parse", "main") or _git(repo, "rev-parse", "origin/main")
     diff = _git(repo, "diff", "HEAD")
-    # `_git` returns None for an empty stdout, so "clean tree" and "git could not answer" arrive
-    # as the same value and must not be reported as the same fact. `git status --porcelain` is
-    # asked separately rather than inferred from `diff`, because it also sees untracked files.
+    # Empty stdout is also "git could not answer". Status is separate: it sees untracked files.
     status = _git(repo, "status", "--porcelain")
     dirty: bool | None = None
     if head is not None:
@@ -150,24 +100,10 @@ def scope_identity(
     question_ids: Collection[str],
     dataset_file: Path,
 ) -> dict[str, Any]:
-    """The three ``Role.scope`` settings: what was served, from which file, to which questions.
+    """What was served, from which file, to which questions.
 
-    Scope keys are *fatal on resume* by declaration and had no writer at all, so an artifact
-    could not say which schemas were in the router or which questions were asked.
-
-    **Counts and digests, not lists.** ``schemas_under_test``'s register note describes the
-    incident it exists to prevent — "a schema dropped from one attempt leaves its YAML behind
-    and competes as a router candidate for every other schema's questions" — which is drift
-    *between attempts at one run*, and a digest detects that exactly. Carrying the 57 names
-    verbatim would add roughly 740 bytes to each of a 1 351-row artifact's 6.4 KB rows, about
-    12%, to make recoverable something ``corpus_content_hash`` already pins. ``question_subset``
-    is the same shape, and its note is explicit that "a probe set's identity is not its count",
-    so the count alone would not do.
-
-    ``split`` is the dataset **file stem**, not the word "train" or "test". The ids in
-    ``test_final.jsonl`` are BIRD ``train_*`` ids re-split by that repository's
-    ``build_eval_dataset.py``, so answering "train or test" from the ids would be a claim about
-    another repository's intent; the file name is a fact.
+    Digests, not name lists: drift is between attempts, and the corpus hash
+    already pins the names. ``split`` is the file stem, not the question ids.
     """
     return {
         "schemas_under_test": f"{len(schemas)}:{short_digest(schemas)}",
@@ -184,14 +120,7 @@ def harness_settings(
     dataset_file: Path,
     serve_workers: int,
 ) -> dict[str, Any]:
-    """Every setting whose value is a fact about *this process* rather than about the corpus.
-
-    ``serve_workers`` is here and ``build_workers`` deliberately is not: this driver serves, it
-    does not build a corpus, and writing a number for a stage that did not run would be the
-    ``embedding_provider`` defect (a null reads as unmeasured, a value reads as a measurement).
-    Its note is about a worker that "holds a connection AND a long-lived agent conversation",
-    which is the curator, and the curator is not in this repository.
-    """
+    """``build_workers`` is not written: a number for a stage that did not run is a fake measurement."""
     return {
         **git_provenance(repo),
         "serve_workers": int(serve_workers),
@@ -201,24 +130,11 @@ def harness_settings(
     }
 
 
-# --------------------------------------------------------------------------- #
-# Reading the identity back
-# --------------------------------------------------------------------------- #
-
-
 def flag_conflict(*, resume: bool, truncate: bool) -> str | None:
-    """Why this pair of flags cannot both be honoured, or ``None``.
+    """Why ``--resume`` and ``--truncate`` cannot both be honoured, or ``None``.
 
-    ``--resume`` keeps what was measured; ``--truncate`` throws it away. The file is the same
-    one, so the two are opposite instructions and resolving them in either direction guesses at
-    hours of paid model calls.
-
-    A pure function and not three lines of ``argparse`` glue, for a reason the hung test run
-    that produced it makes concrete: driving ``main`` to check this guard means driving it past
-    credential resolution, model construction and a database connection, so a mutation that
-    *removes* the guard does not fail the test — it hangs it, or worse, gets far enough to spend
-    something. The decision is the thing worth testing, so the decision is what a test can
-    reach.
+    One keeps the file and one discards it. A pure function so a test can
+    reach the decision without building a model and a database.
     """
     if resume and truncate:
         return (
@@ -233,21 +149,7 @@ def _rows_on_disk(out_path: Path) -> int:
 
 
 def append_refusal(out_path: Path, *, resume: bool, truncate: bool) -> str | None:
-    """Why this artifact must not be opened for appending, or ``None``.
-
-    **Appending to an existing artifact without ``--resume`` is not a resume, it is two
-    populations in one file.** The driver opened the output in ``"a"`` mode unconditionally, so
-    a re-run duplicated every question, ``_report`` printed EX over the doubled population, and
-    only *afterwards* did ``Population.of`` raise on the repeated ids — the number was printed
-    before the check that would have withdrawn it.
-
-    ``truncate`` is the caller having said, in its own flag, that discarding the rows on disk is
-    what it meant. It is **not** ``--force-fresh``: see :func:`truncation_notice`.
-
-    A pure function rather than three lines inside ``main`` because ``main`` needs a corpus, a
-    dataset, a database and a model before it reaches them, so a branch left there is a branch
-    no test can run.
-    """
+    """Appending without ``--resume`` puts two populations in one file, before the repeated-id check."""
     if resume or not out_path.exists() or not out_path.stat().st_size:
         return None
     if truncate:
@@ -261,25 +163,8 @@ def append_refusal(out_path: Path, *, resume: bool, truncate: bool) -> str | Non
 
 
 def truncation_notice(out_path: Path, *, resume: bool, truncate: bool) -> str | None:
-    """What is about to be destroyed, or ``None`` if nothing is. Non-empty means *do it*.
-
-    **The destructive branch, extracted so it has a name, a test and a sentence on stdout.**
-    ``--force-fresh`` used to be non-destructive: it relaxed the *sibling-artifact* abort, a
-    path on which the output file does not exist. It then acquired
-    ``out_path.write_text("")`` as well, so a flag whose documented job was "yes, I know there
-    are other artifacts, start anyway" began deleting a completed run. On this dataset a config is
-    hours of paid model calls, and the irony is recorded three functions up:
-    :func:`append_refusal` exists because "a branch left there is a branch no test can run", and
-    the destructive half stayed in ``main`` where no test could reach it.
-
-    So the two meanings are two flags. ``--force-fresh`` relaxes the sibling abort and touches
-    nothing on disk; ``--truncate`` is the only thing in this repository that discards a
-    measured artifact, and it says how many rows it is discarding before it does.
-
-    Refuse-by-default lives in :func:`append_refusal`: without ``truncate`` an existing artifact
-    stops the run. This function only answers "and now that the caller has asked for it, what
-    exactly goes".
-    """
+    """What ``--truncate`` will discard. ``--force-fresh`` does not touch the file; this flag is the only discard, and
+    it names the row count first."""
     if resume or not truncate:
         return None
     if not out_path.exists() or not out_path.stat().st_size:
@@ -293,27 +178,8 @@ def truncation_notice(out_path: Path, *, resume: bool, truncate: bool) -> str | 
 
 
 def _is_pre_routing_abstention(row: Mapping[str, Any]) -> bool:
-    """A turn that ended before anything wrote the setting under test onto it.
-
-    Every row in the 2026-08-09 artifacts whose ``corpus_content_hash`` is ``None`` is a
-    zero-retrieved_tables turn that ended in a clarifying question — 6 of 6 in v3-fold, 8 of 8 in
-    v3-pinned, 4 of 4 in v4, 5 of 5 in v5, 13 of 13 in v4-reflect. ``None`` there does not mean
-    "written before the field existed"; it means the field has a path it is not written on.
-
-    That matters here because a guard that warns on **every** legitimate resume is the shape
-    that teaches a reader to ignore a warning. These rows are counted and reported as a number,
-    not as a caution.
-
-    **Three conditions, since ``outcome: clarification`` stopped implying "before ``finish``".** A
-    reader who declines a question ``ask_user`` asked ends a turn that reaches ``finish`` and is
-    written ``clarification`` (``registry/stages.Outcome``), and it may hold no licence — the
-    abstention policy is a setting and need not have run. Such a row carrying a null identity is
-    unwritten, the thing this function must not launder into a counted number, so both
-    setting under test identities have to be absent as well. Its caller has already established that the
-    field it is examining is null, so the added test is the *other* one; on the artifacts on disk
-    the two are null together on every one of the rows counted above, which is why the number
-    does not move.
-    """
+    """Ended before the identity was written. Counted, not warned. A later ``clarification`` that reached ``finish``
+    needs both identity fields absent."""
     return (
         str(row.get("outcome")) == "clarification"
         and not (artifact_get(row, "retrieved_tables") or ())
@@ -325,7 +191,6 @@ def _is_pre_routing_abstention(row: Mapping[str, Any]) -> bool:
 def _identity_problem(
     rows: Sequence[Mapping[str, Any]], field: str, want: Any
 ) -> tuple[str | None, str | None, int]:
-    """``(refusal, warning, n_pre_routing)`` for one setting under test-identity field."""
     foreign: dict[Any, int] = {}
     unwritten = 0
     pre_routing = 0
@@ -364,36 +229,10 @@ def _setting_problem(
     settings_resolved: Mapping[str, Any],
     affects_results: Collection[str],
 ) -> tuple[list[str], list[str]]:
-    """Where the artifact's recorded configuration disagrees with this run's.
+    """Where the recorded configuration disagrees with this run.
 
-    **Why the two config hash are not enough.** The filename tag is the only thing that
-    separated a ``--top-n 3`` artifact from a ``--top-n 8`` one, and ``--out`` bypasses the tag.
-    Neither ``corpus_content_hash`` nor ``prompt_set_hash`` moves with ``--top-n``, ``--embed``,
-    ``--reflect`` or the model id, so a resume under a renamed output file could merge two
-    settings under test with both hashes agreeing. These are the same keys
-    ``eval/report.py::settings_comparable`` compares across two configs; here they are compared
-    across one artifact and the run about to extend it.
-
-    ``repr`` rather than ``==``, for the reason the within-config check gives: ``3`` and ``"3"`` are
-    two configurations, and a comparison that coerced them would report drift as agreement. It
-    is the repr of the value **as the artifact would hold it** and not as this process holds
-    it — see :func:`_as_recorded`, without which this function refused every resume there has
-    ever been.
-
-    A key absent from every row **and** from this run is skipped — both sides declined to say.
-    No live run is in that state: ``session._resolved_settings`` starts from ``settings.defaults()``
-    and omits no key, so this run always records every key the register declares. Present on one
-    side only is a **warning**: the likeliest cause is an
-    artifact older than the setting, and refusing on it would strand every artifact on disk. That
-    is the branch every artifact on disk hits — five settings that affect results are absent from all
-    seven ``proxy_*`` artifacts in ``runs/eval/`` (``abstention_policy_enabled``,
-    ``the retired budget``, ``the retired threshold``, ``semantic_scale_ceiling``,
-    ``sqlglot_version``) and recorded by any run that would resume one.
-
-    "Absent" and "recorded ``None``" stay apart throughout, which is why membership is tested
-    rather than ``.get()``: ``_resolved_settings`` flattens ``UNSET`` to ``None`` on purpose, so a
-    recorded ``None`` is a value two runs may agree on while a missing key is a run declining
-    to say.
+    Content hashes miss top-n, embed, and the model. Compare ``repr`` as JSON
+    would store it. Missing on both sides is skipped; recorded ``None`` is a value.
     """
     refusals: list[str] = []
     warnings: list[str] = []
@@ -433,33 +272,11 @@ def _setting_problem(
 
 
 def _as_recorded(value: Any) -> str:
-    """``repr`` of ``value`` **as an artifact would hold it**, not as this process holds it.
-
-    The comparison in :func:`_setting_problem` has one side in memory and the other side read
-    back from JSON, and bare ``repr`` compared the two representations rather than the two
-    configurations. ``asset_budgets`` ships as a ``tuple`` of ``tuple``\\ s and comes back from
-    the artifact as a ``list`` of ``list``\\ s, so ``repr`` disagreed with itself on **every
-    resume of every config that has ever been written** — 1 of the 62 ``setting_names``, and
-    the one on every row. The refusal that produced said "Two settings under test in one artifact is not
-    a config. Rename the artifact and start a new one", over hours of paid model calls, for a
-    value that had not changed. It was found by resuming a 3-row smoke; a full config takes hours
-    and ``docs/measurement.md`` tells the reader to expect to interrupt and resume it, so this
-    sat directly in front of the next run.
-
-    Round-tripping through the writer's own encoding rather than special-casing ``tuple``:
-    the question this comparison asks is "would this run record what the artifact recorded",
-    and the only way to answer it is to encode the way the writer encodes. ``default=str``
-    matches the drivers' ``json.dump(..., default=str)``.
-
-    **It does not weaken the distinction the docstring above defends.** ``3`` encodes to ``3``
-    and ``"3"`` to ``"3"`` (quoted), so they decode to an ``int`` and a ``str`` and still compare
-    unequal. What it collapses is exactly the set of differences no artifact can express.
-    """
+    """``repr`` as JSON would store it, so a tuple and the list it comes back as are one configuration."""
     try:
         return repr(json.loads(json.dumps(value, default=str)))
     except (TypeError, ValueError):
-        # Not encodable, so no artifact holds it either; the in-memory repr is the best
-        # available answer and comparing two of them is still sound.
+        # Not encodable, so no artifact holds it. The in-memory repr is what two of them can share.
         return repr(value)
 
 
@@ -473,25 +290,8 @@ def resume_identity_problem(
     question_ids: Collection[str],
     replay_routing: bool,
 ) -> tuple[str, list[str]]:
-    """``(refusal, warnings)`` — is the artifact on disk the same setting under test as this run?
-
-    Pure, so it can be driven from a list of dicts; ``main`` owns only the printing and the
-    exit code.
-
-    ``rows`` are the rows the resume intends to **keep** (crashed rows are dropped by the
-    caller before this is asked, because a crashed row is not a measurement).
-
-    **What this does not catch**, stated rather than implied:
-
-    * a dataset whose gold statements were edited while the question ids stayed the same. The
-      row carries no dataset identity beyond ``split`` and ``question_subset``, and
-      ``gold_fingerprint`` is attached after the resume decision. A dataset with a *different
-      question set* is caught, by ``question_subset`` and by the ids themselves.
-    * an *unpinned* run resumed into a *pinned* artifact when every kept row happens to be a
-      turn that never routed. The reliable direction is asserted below; the other one would
-      need the driver's intent on the row, and ``routing_pinned`` is deliberately an outcome
-      (open-work §3.7) rather than an intent.
-    """
+    """Same configuration as this run. Misses gold edited under the same ids. ``routing_pinned`` is an outcome, so a
+    pinned resume of pre-routing rows is invisible."""
     problems: list[str] = []
     warnings: list[str] = []
 
@@ -517,9 +317,7 @@ def resume_identity_problem(
     problems.extend(setting_refusals)
     warnings.extend(setting_warnings)
 
-    # Ids the artifact has and this run does not. Either --dataset changed or the scope narrowed
-    # (--limit / --per-schema). Both mean the two are not one population; the driver cannot tell
-    # them apart from here, so it names both rather than guessing.
+    # Ids the artifact has and this run does not. Dataset or scope changed; name both.
     resumed = {str(row.get("question_id")) for row in rows}
     stale = sorted(resumed - set(map(str, question_ids)))
     if stale:
@@ -529,11 +327,8 @@ def resume_identity_problem(
             f"narrowed the scope. Example question id: {stale[0]}"
         )
 
-    # One direction only, and it is the sound one: under the corrected semantics of
-    # `routing_pinned` (the turn's shortlist *is* the pinned one), only a run that passed
-    # `--replay-routing` can produce a `True`. The converse — a pinned run resuming an unpinned
-    # artifact — cannot be read off the rows, because a pinned run whose kept rows all abstained
-    # before routing also carries no `True`.
+    # Only a replayed run can record `True`. The other direction is invisible:
+    # a pinned run whose kept rows all ended before routing also has none.
     if not replay_routing:
         pinned_rows = sum(1 for row in rows if row.get("routing_pinned") is True)
         if pinned_rows:
@@ -553,46 +348,17 @@ def resume_identity_problem(
     return "\n".join(problems), warnings
 
 
-# --------------------------------------------------------------------------- #
-# Reading the *config profile* back
-# --------------------------------------------------------------------------- #
-
-
-#: Discordance to assume when a config declares a hypothesis and no prior pair exists to estimate it
-#: from: **the fork's ``beer_factory`` pair, 20 discordant of 131 questions.**
-#:
-#: A fraction and not a decimal, deliberately. ``eval/power.py``'s whole docstring is about not
-#: presenting a figure carried from another tree as a measurement of this one, and ``0.153`` reads
-#: like a rate somebody measured here while ``20 / 131`` reads like what it is. It is also why
-#: :func:`config_power_refusal` scales it with integer arithmetic rather than a float: ``require_power``
-#: refuses a float ``discordant`` outright, because a rate passed as a count understates the
-#: detection floor by about sqrt(n) and passes the exact config shape the check exists to refuse.
+#: Discordance assumed when a hypothesis has no prior pair. A fraction, not a
+#: decimal, so it is not a rate measured here. Integer arithmetic: a float
+#: count understates the detection floor.
 PRIOR_DISCORDANT, PRIOR_OF = 20, 131
 
 
 def config_power_refusal(profile: Any, n: int) -> str | None:
-    """Why ``--config NAME`` cannot detect what it claims to be testing, or ``None``.
+    """Why this config cannot detect what it claims, or ``None``.
 
-    **This is ``eval/power.py::require_power``'s caller**, which ``open-work.md`` §3.10 recorded as
-    missing: the check existed, was tested, and nothing in the tree invoked it — so a config whose
-    hypothesis sat under its own detection floor spent its whole budget and reported a null about
-    the feature rather than about the sample. That is the exact failure the module was taken from
-    another repository to prevent.
-
-    Asked beside :func:`config_startup_refusal`, before the first paid question, because that is the
-    only point where refusing is free.
-
-    **Silent when the profile declares no hypothesis**, and that is not a loophole — it is the
-     reading. Every config on disk predates the field, and inventing an effect size for them so
-    the check has something to check would be worse than not checking: the number would be this
-    function's, quoted later as the config's.
-
-    ``readout`` is required alongside the effect and is *not* used in the arithmetic. It is in the
-    message, because MDE is denominated in points of the whole population and two readouts' base
-    rates can differ by two orders of magnitude — a mechanism indicator with a 2.15pp ceiling has
-    1.9 resolvable steps against EX's 28.5, and a draft of this design read the smaller MDE as the
-    better instrument. Naming the readout in the refusal is what makes that visible to the person
-    reading it.
+    No declared hypothesis means no check. Inventing an effect size would
+    quote this function's number as the config's. The readout is named, not used.
     """
     effect = getattr(profile, "hypothesised_effect", None)
     if effect is None:
@@ -608,9 +374,7 @@ def config_power_refusal(profile: Any, n: int) -> str | None:
 
     from governed_bi.eval.power import UnderpoweredConfiguration, require_power
 
-    # Integer arithmetic all the way: `require_power` takes a COUNT and refuses a float. `max(1,
-    # ...)` because it also refuses zero discordance as unmeasurable rather than as infinite
-    # precision -- a config small enough to floor the estimate to nothing must not read as a pass.
+    # A count, never a float. At least one: zero discordance is unmeasured and must not pass.
     estimated = max(1, int(n) * PRIOR_DISCORDANT // PRIOR_OF)
     try:
         require_power(n=int(n), discordant=estimated, hypothesised_effect=float(effect))
@@ -628,31 +392,15 @@ def config_power_refusal(profile: Any, n: int) -> str | None:
 
 
 def config_startup_refusal(profile: Any, session_identity: Mapping[str, Any]) -> str | None:
-    """Why ``--config NAME`` must not run against this session, or ``None``.
+    """Why this config must not run against this session, or ``None``.
 
-    Asked **before the first paid question**, which is the only place the check is worth
-    anything: a run labelled ``v4`` against a corpus that is not v4's is a mislabelled artifact,
-    and mislabelled artifacts are how a number is quoted against the wrong setting under test.
-
-    ``session_identity`` is anything shaped like a measurement row — the driver passes both
-    reconcilable fields, ``{"corpus_content_hash":..., "question_subset":...}``
-    (``tools/run_datalake_eval.py``, before the first paid question), which is why ``reconcile``
-    was written to read a row rather than a session. It said ``corpus_content_hash`` alone until
-    2026-08-22; the second field has been mandatory since the profile gained it, as the comment
-    on the refusal text below records.
-
-    Extracted from ``main`` for the reason :func:`append_refusal` was: the driver reaches this
-    point only after a corpus, a dataset, a database and four models are built, so the branch
-    was unreachable from a test. It was also the wire that made ``reconcile`` non-vacuous, and
-    an untested wire is exactly what let a vacuous ``reconcile`` through in the first place.
+    Asked before the first paid question. Both reconcilable fields are
+    required. A pure function so a test can reach it without building models.
     """
     mislabelled = reconcile(profile, session_identity)
     if not mislabelled:
         return None
-    # "this corpus" until 2026-08-20, when the profile gained a second reconcilable field and
-    # the sentence started naming the wrong one: a question-set mismatch was reported as a
-    # corpus mismatch and sent the reader to --corpus-dir. Two identifiers named by one word is
-    # how `corpus` and `corpus_content_hash` came to be compared against each other.
+    # Name the field that mismatched. One word for two identifiers sent a question-set mismatch to the corpus flag.
     lines = [f"--config {profile.name} does not match this run's identity:"]
     lines += [f"  {problem}" for problem in mislabelled]
     lines.append(
@@ -663,25 +411,8 @@ def config_startup_refusal(profile: Any, session_identity: Mapping[str, Any]) ->
 
 
 def derived_question_set(rows: Sequence[Mapping[str, Any]]) -> str | None:
-    """The question set an artifact *contains*, in ``question_subset``'s format, or ``None``.
-
-    **This is the method the fork had to invent, written down so nobody invents it again.** The
-    three published configs' artifacts predate ``scope_identity``'s writer, so no row of them
-    records a ``question_subset`` — and identifying which questions they ran cost a downstream
-    fork a schema-filtered count across four versions of ``BIRD-Data-Obfuscation``. It did not
-    have to: every row carries its own ``question_id``, so the set is *in* the artifact, and
-    hashing it the way the setting is hashed produces a value comparable to the profile's claim.
-
-    ``question_id`` is ``Absence.never`` in the record register, so a real row always has one.
-    ``None`` here therefore means "not an artifact of measurement rows" — a fixture, or an empty
-    file — and not "an artifact whose questions cannot be determined".
-
-    **What it is not.** This is what the artifact *holds*, and the setting is what the run *set out
-    to cover*. They differ on a part-done run: 900 rows of a 1 351-question config derive a
-    different value, correctly, because 900 rows are not that population. So this is the
-    fallback for artifacts with no recorded setting, never a second opinion about one that has it —
-    :func:`reconciliation_lines` uses it only when no row recorded the setting.
-    """
+    """The question set the rows contain. A part-done run is not the set the run set out to cover, so this is only the
+    fallback when nothing recorded the setting."""
     ids = [row.get("question_id") for row in rows]
     if not ids or any(qid is None for qid in ids):
         return None
@@ -692,16 +423,10 @@ def derived_question_set(rows: Sequence[Mapping[str, Any]]) -> str | None:
 def _question_set_from_the_ids(
     rows: Sequence[Mapping[str, Any]], profile: Any
 ) -> tuple[str | None, str | None]:
-    """``(problem, note)`` for an artifact that records no ``question_subset`` setting.
+    """``(problem, note)`` when no row recorded ``question_subset``.
 
-    ``reconcile`` cannot make this call from one row — one row names one question — so the
-    artifact-level check lives here, which is also the only place that can distinguish "this
-    artifact predates the writer" from "this row abstained".
-
-    An agreeing derivation returns a **note**, not silence: the reader has to be able to tell
-    "the harness recorded the config's question set" from "the harness recorded nothing and the ids
-    were hashed after the fact", and printing the same sentence for both is how a weaker check
-    gets read as the stronger one.
+    An agreement is a note, not silence. The same sentence for a recorded set
+    and a set hashed afterwards would read the weaker check as the stronger.
     """
     declared = getattr(profile, "question_subset", None)
     if declared is None:
@@ -730,16 +455,7 @@ def _question_set_from_the_ids(
 
 
 def reconciliation_lines(rows: Sequence[Mapping[str, Any]], profile: Any) -> list[str]:
-    """Every row against the config profile's committed claim, as report lines.
-
-    The startup check reads the *session*; this reads the artifact, which is what a resume can
-    make differ from it. One line per distinct disagreement with a count — 1 351 copies of the
-    same sentence is not a finding, it is a wall.
-
-    Returns the agreement line only when there was something to agree about. ``reconcile``
-    refuses an unreconcilable profile outright, so "every row agrees" can no longer be printed
-    by a check that compared nothing.
-    """
+    """One line per disagreement. Agreement is printed only when there was something to agree about."""
     counts: dict[str, int] = {}
     for row in rows:
         for problem in reconcile(profile, row):
@@ -749,9 +465,7 @@ def reconciliation_lines(rows: Sequence[Mapping[str, Any]], profile: Any) -> lis
     if not counts and derived_problem is None:
         return [f"config {profile.name}: every row agrees with the profile in configs.toml", *notes]
     total = sum(counts.values())
-    # The header counts rows, and the derived finding is not about a row — it is about the
-    # artifact as a whole. Saying "0 row(s) contradict" above a real contradiction is the
-    # reading the header must not permit.
+    # The derived finding is about the artifact. The header must not say zero rows contradict it.
     if counts:
         lines = [f"config {profile.name}: {total} row(s) contradict configs.toml"]
     else:
@@ -766,21 +480,7 @@ def reconciliation_lines(rows: Sequence[Mapping[str, Any]], profile: Any) -> lis
 
 
 def _pinned_routing_note(rows: Sequence[Mapping[str, Any]]) -> str | None:
-    """How many of an artifact's turns replayed another config's shortlist, or ``None``.
-
-    **Not a contradiction, and that is why it is a note.** ``configs.toml`` does not claim a config
-    routed for itself, so a pinned run disagrees with nothing declared. It is on the
-    provenance line because a reader cannot see it any other way and it changes what the
-    config's numbers are *about*: ``eval/replay.py`` writes ``pinned_schemas``,
-    ``serve/nodes/route_retrieve.py`` honours it by **replacing** the score-ranked shortlist
-    outright, and the config then measures generation against a router that did not run.
-
-    The justification for pinning is real — four of the five channel nodes are model calls, so
-    two runs of one question hand ``route`` different hits, and an A/B that lets the shortlist
-    move cannot attribute its own delta. What was missing is that the reader was never told.
-    v4, v4_reflect and v5 each carry it on 1,345 of 1,351 rows, and ``README.md``'s three
-    caveats do not mention it.
-    """
+    """Turns that replayed another shortlist. The profile does not claim the config routed itself."""
     pinned = sum(1 for row in rows if row.get("routing_pinned"))
     if not pinned:
         return None

@@ -1,9 +1,4 @@
-"""Pins from the 2026-08-08 LangGraph runtime audit.
-
-Defects that already burned a turn or a measurement: accept soft-crash leaking into
-guard, narrate able to crash an answered turn, rewrite fall-through after crash, and
-create_agent's 9999 recursion ceiling.
-"""
+"""A soft crash in accept routes to finish. The recursion ceiling is a setting."""
 
 from __future__ import annotations
 
@@ -112,10 +107,7 @@ def test_n_re_served_is_not_a_quotability_check() -> None:
 
 
 def test_capabilities_report_durability_by_observing_the_config_not_a_literal() -> None:
-    """The value is **derived**: a capability flag is flipped by building the thing, never by
-    editing the line (ADR 0007 §7), so the test removes the declaration and requires the flag to
-    follow.
-    """
+    """A capability flag follows the thing that is built, not a literal (ADR 0007)."""
     from governed_bi.api import routes
     from governed_bi.api.routes import capabilities_for
 
@@ -142,10 +134,8 @@ def test_capabilities_report_durability_by_observing_the_config_not_a_literal() 
     )
     assert undeclared["hitl_survives_process_restart"] is False
 
-    # `can_stream` is the same kind of claim and was the last flag still hardcoded. It stayed a
-    # literal while a `false` value would have mounted a REST fallback at a deleted route; that
-    # fallback is gone and the UI now renders an explanatory panel instead, so the flag is an
-    # observation too — and `can_clarify` rides on it, which is why it must not drift.
+    # `can_clarify` rides on `can_stream`: no transport must not be told it can answer a
+    # clarification (ADR 0007).
     routes.served_graph_declared = lambda: False
     try:
         ungraphed = capabilities_for(_S())

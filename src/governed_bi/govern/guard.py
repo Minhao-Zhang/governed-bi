@@ -1,12 +1,4 @@
-"""``guard``: deterministic input check (ADR 0006 §6). No model call.
-
-Rules carry a ``rule_id`` to the ledger only; callers see
-:data:`GUARD_PUBLIC_MESSAGE`. ``g_encoding`` runs before NFKC (pipeline order):
-NFKC is a rewrite, so a post-rewrite rule inspects a string the caller never sent.
-
-``guard_rules_enabled`` is ``UNSET`` until ADR 0006 OQ3 (both calibration numbers
-per rule). Out-of-scope is ADR 0005's ``negative_check``, not a rule here.
-"""
+"""Deterministic input check. No model call. See ADR 0006. One message for callers; ``g_encoding`` runs before NFKC."""
 
 from __future__ import annotations
 
@@ -28,27 +20,23 @@ __all__ = [
 
 
 class GuardResult(TypedDict):
-    """ADR 0006 owns this type; ADR 0005 imports it."""
+    """Outcome of one screen. See ADR 0006."""
 
     outcome: Literal["clear", "blocked", "error_failed_open"]
     rule_id: str | None
-    #: Ledger only. Never surfaced — see the note on rule-probing above.
+    #: Ledger only. Never surfaced, so a caller cannot probe which rule fired.
     detail: str | None
 
 
-#: The single string a blocked caller sees. One string, so no rule is inferable from
-#: the response, and no rule's *absence* is either.
+#: One string, so neither a rule nor its absence is inferable from the response.
 GUARD_PUBLIC_MESSAGE = (
     "This request cannot be processed. Rephrase the question in terms of the data you "
     "want to see."
 )
 
-#: Characters that must not reach the model or the normaliser: C0/C1 controls except
-#: tab, newline and return; bidi overrides and isolates; zero-width space/joiner/
-#: non-joiner; word joiner; BOM; soft hyphen.
-#:
-#: Written as escapes, not literals: a literal zero-width joiner in a character class
-#: is invisible in review and in a diff, which is the property the rule rejects.
+#: Controls, bidi overrides, and zero-width characters, written as escapes. A literal
+#: zero-width joiner in a character class is invisible in review, which is what this
+#: rule rejects. Tab, newline, and return stay.
 _CONTROL = re.compile(
     "["
     "\x00-\x08\x0b\x0c\x0e-\x1f"  # C0 controls, keeping tab, newline, return
@@ -61,9 +49,8 @@ _CONTROL = re.compile(
     "]"
 )
 
-#: Imperatives aimed at the model rather than at the data. English only (recorded
-#: weakness). Each pattern needs a *verb plus an object*: "ignore" and "system" alone
-#: are ordinary words in questions about data ("ignore returns", "system uptime").
+#: English only. Each pattern needs a verb plus an object: "ignore" and "system" alone
+#: are ordinary words in questions about data.
 _INSTRUCTION_OVERRIDE = re.compile(
     r"(?ix)"
     r"(ignore|disregard|forget|override)\s+(all\s+|any\s+|the\s+)?"
@@ -75,7 +62,7 @@ _INSTRUCTION_OVERRIDE = re.compile(
     r"|disregard\s+your\s+(guidelines|governance|safety)"
 )
 
-#: Turn and role markers that would forge a message boundary.
+#: Markers that would forge a message boundary.
 _ROLE_INJECTION = re.compile(
     r"(?im)"
     r"^\s*(system|assistant|developer|tool)\s*:"
@@ -85,18 +72,11 @@ _ROLE_INJECTION = re.compile(
     r"|^\s*###\s*(system|assistant)\b"
 )
 
-#: Text shaped like a tool call or a tool result. The forged *result* is the dangerous
-#: half: the model cannot tell one it asked for from one pasted into a question.
+#: A tool call or a pasted tool result. The model cannot tell a result it asked for
+#: from one pasted into the question.
 _TOOL_FORGERY = re.compile(
-    # ``m`` matches ``_ROLE_INJECTION`` above, and for the same reason: the last
-    # alternative below anchors on ``^``, and without it that anchor is the start of the
-    # whole question rather than of a line. A forged tool result one newline in was not
-    # seen -- which is where a question burying one would put it. Two rules with ``^``
-    # anchors, one per-line and one not, was an oversight and not a decision.
-    #
-    # Free to close: across 1,351 held-out questions and 13,304 model-visible corpus
-    # texts, adding the flag moves the firing count from 0 to 0 on both. The rule gets
-    # stricter and no measured behaviour changes.
+    # ``^`` is per line, matching ``_ROLE_INJECTION``. Without ``m`` the anchor is the
+    # start of the question, so a forged result after a newline is missed.
     r"(?imx)"
     r'"(tool_calls|tool_call_id|function_call)"'
     r"|</?tool_(call|result|use)>"
@@ -106,11 +86,7 @@ _TOOL_FORGERY = re.compile(
 
 
 def has_control_characters(text: str) -> bool:
-    """Whether ``text`` holds a character :data:`_CONTROL` rejects.
-
-    Exported because the statement pipeline needs the *same* test before it normalises
-    (§3 step 1); a second copy of the character class is a second answer to "which
-    characters are invisible", which is B10's shape.
+    """Exported so the statement pipeline uses this class before it normalises. A second copy would be a second answer.
     """
     return _CONTROL.search(text) is not None
 
@@ -144,11 +120,8 @@ def _rule_length(text: str, settings: GovernancePolicy) -> str | None:
     return f"{len(text)} characters, bound is {limit}"
 
 
-#: rule id → predicate. Returns the ledger detail when the rule fires, else ``None``.
-#:
-#: ``g_encoding`` is first because it is the only rule whose position is part of its
-#: specification (it must precede NFKC). The rest are order-independent; first to fire
-#: wins, so a question cites at most one rule.
+#: ``g_encoding`` is first because it must precede NFKC. The rest are order-independent;
+#: first to fire wins, so a question cites at most one rule.
 GUARD_RULES: Mapping[str, Callable[[str, GovernancePolicy], str | None]] = {
     "g_encoding": _rule_encoding,
     "g_length": _rule_length,
@@ -157,21 +130,13 @@ GUARD_RULES: Mapping[str, Callable[[str, GovernancePolicy], str | None]] = {
     "g_tool_forgery": _rule_tool_forgery,
 }
 
-# Imported from policy.py, not defined here and not re-exported. The policy refuses a
-# guard_rules_enabled key that names no rule. A re-export would be a second home for the name.
+# Names stay in policy.py. A re-export would be a second home for the same set.
 
 _WARNED: set[str] = set()
 
 
 def _assert_the_predicates_match_the_vocabulary() -> None:
-    """Import-time: ``guard.py``'s predicates and ``policy.py``'s ids are the same five.
-
-    The two halves are deliberately apart — the names are what a policy may legally enable,
-    the predicates are code — and apart is where they can drift. A rule added here and not
-    there would be dispatched by :func:`guard` and rejected by
-    :meth:`~governed_bi.govern.policy.GovernancePolicy.__post_init__`, so no policy could
-    enable it; a name added there and not here would be accepted by a policy and dispatch
-    nothing, which is the original defect with a new spelling.
+    """Names and predicates are apart so a policy can name a rule. A name on one side only can be enabled and never run.
     """
     if set(GUARD_RULES) != GUARD_RULE_IDS:  # pragma: no cover - import-time guard
         raise AssertionError(
@@ -190,18 +155,7 @@ _assert_the_predicates_match_the_vocabulary()
 
 
 def guard(question: str, settings: GovernancePolicy) -> GuardResult:
-    """Screen one input. **One call site today: ``guard_node``, on ``question``.**
-
-    ADR 0006 §6 requires a second pass over ``rewrite.after`` and it is not built. That
-    pass is, which is why the gap is here rather than only in
-    the ADR: ADR 0005's ``rewrite`` is a model call with unguarded history in scope and
-    every downstream node reads its output, so until it exists the guarded artifact is
-    not the delivered artifact. This docstring used to describe the second pass in the
-    present tense, which is how a reader stops looking for it.
-
-    ``settings.guard_rules_enabled`` must be explicit — a default would be a decision
-    about what is enabled, made where nobody would look for it.
-    """
+    """Screens the string it is given, not a later rewrite. ``guard_rules_enabled`` must be explicit. See ADR 0006."""
     if isinstance(settings.guard_rules_enabled, Unset):
         raise GovernanceUsageError(
             "guard_rules_enabled is UNSET: no rule has both of its numbers yet (ADR 0006 "

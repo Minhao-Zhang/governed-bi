@@ -1,21 +1,8 @@
-"""``parse_resume`` fails closed on a payload it cannot read, and did not until 2026-09-18.
+"""``parse_resume`` fails closed on a payload it cannot read.
 
-The ``declined`` branch was already fail-closed and the fall-through was not, so the function
-held two opposite opinions about what an uninterpretable payload means. What the open half
-produced:
-
-* ``{}``            → the model was told the analyst's answer was the empty string
-* ``None``          → told the answer was the literal ``"None"``
-* ``123`` / a list  → ``"123"`` / ``"[1, 2, 3]"``
-
-each written ``resolution: "answered"`` in the record, beside the real ones, and each letting
-the turn proceed to ``run_query`` on the strength of a reply nobody gave. An operator reading
-``/audit/turns/{id}/trace`` afterwards would find a clarification marked answered and an
-answer that came from the transport.
-
-``malformed`` rather than ``declined`` for the closure: a reader's decision and a transport
-fault are different facts, and a record that spells them the same cannot support either
-"how often do analysts decline" or "how often does the resume path break".
+An empty map, ``None``, a number, or a list is ``malformed`` and must not be recorded as
+``answered``. ``malformed`` stays distinct from ``declined``: a transport fault is not an
+analyst's decision.
 """
 
 from __future__ import annotations
@@ -45,7 +32,7 @@ from governed_bi.serve.clarification import (
     ],
 )
 def test_an_unreadable_payload_fails_closed(payload: object, what: str) -> None:
-    """Each of these used to return ``answered`` and let the turn continue."""
+    """An unreadable payload is ``malformed`` and ends the turn."""
     text, resolution, fail_closed = parse_resume(payload, why="w")
 
     assert fail_closed is True, f"{what} did not end the turn"
@@ -54,11 +41,7 @@ def test_an_unreadable_payload_fails_closed(payload: object, what: str) -> None:
 
 
 def test_malformed_is_not_declined() -> None:
-    """The two closures are both closed and must stay distinguishable in the record.
-
-    Collapsing them would be the cheaper fix and would put a decision the analyst never made
-    into the one field that reports how often they make it.
-    """
+    """A transport fault and an analyst's decline stay different resolutions."""
     declined = parse_resume({"declined": True}, why="w")
     malformed = parse_resume({}, why="w")
 
@@ -83,22 +66,12 @@ def test_malformed_is_not_declined() -> None:
     ],
 )
 def test_every_documented_shape_still_works(payload: object, expected: str) -> None:
-    """The protocol's own vocabulary, unchanged. Closing the fall-through must not narrow it.
-
-    The bare string matters most: the client does not send one, but the docstring declares it
-    and a stricter reading that required a mapping would refuse a shape this function
-    promises to accept.
-    """
+    """Closing the fall-through still accepts a bare string, which the protocol promises."""
     assert parse_resume(payload, why="w")[1] == expected
 
 
 def test_a_resume_naming_another_clarification_is_refused() -> None:
-    """A stale tab or a replayed request answering whichever question is outstanding now.
-
-    Checked only when the payload names an id: the live client sends
-    ``{clarification_id, answer}``, and the documented bare-string and flag shapes do not, so
-    requiring one would refuse the protocol above.
-    """
+    """An id is checked only when the payload names one; a bare answer is still the protocol."""
     stale = parse_resume(
         {"clarification_id": "clar-old", "answer": "three"}, why="w", expected_id="clar-now"
     )

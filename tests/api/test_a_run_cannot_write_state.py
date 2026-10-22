@@ -1,27 +1,8 @@
-"""Audits A2/A3 and A4, through the runtime's own dispatch rather than by calling the handler.
+"""Auth denials go through ``handle_event``, the path a request takes.
 
-**This file exists because the first A4 test called the handler function directly.** It passed while
-the handler was dead: it read ``value["command"]`` and ``langgraph_api`` puts the command at
-``value["kwargs"]["command"]``, so every real request returned early and was allowed. The test, both
-declared mutations and the audit row all agreed the hole was closed, because none of them touched the
-path a request takes. Deleting the ``@auth.on.threads.create_run`` decorator outright also left that
-test green.
-
-So this one goes through ``Runs.put``, which is what ``POST /threads/{id}/runs`` calls, with the real
-``AuthContext`` and the committed ``auth.py`` loaded the way the server loads it. It needs no port, no
-model, no corpus and no Postgres — the in-memory runtime is enough.
-
-Every route that can apply a ``command`` funnels through this one action: ``POST /threads/{id}/runs``,
-``/runs/stream``, ``/runs/wait``, the threadless ``POST /runs`` family, ``/runs/batch``, the cron
-scheduler and the v2 event-streaming path. One dispatch, so one test covers them.
-
-**A2/A3 — the ``threads.update`` denial — is here too, and it had no test at all until
-2026-08-13.** It was written and audited alongside A4 and nothing in the suite ever dispatched
-against it, so deleting ``@auth.on.threads.update`` was a green diff: ``_get_handler`` returns
-``None`` on no match and ``handle_event`` treats that as *allow*, which is the same fail-open
-shape the A4 story above is about. It became when the transport key was removed,
-since the key was the other thing standing between an arbitrary local caller and
-``POST /threads/{id}/state``.
+Calling the handler directly stayed green while it read ``value["command"]`` and the runtime nests
+the command under ``kwargs``. An unregistered action is fail-open: ``_get_handler`` returns ``None``
+and ``handle_event`` allows it.
 """
 
 from __future__ import annotations
@@ -44,7 +25,6 @@ FORGED = {
 
 
 def _event(action: str, value: object) -> None:
-    """Put one event through the real auth dispatch. Raises the SDK's 403 when refused."""
     import asyncio
 
     from langgraph_api.auth.custom import handle_event
@@ -69,7 +49,6 @@ def _event(action: str, value: object) -> None:
 
 
 def _dispatch(command: dict | None) -> None:
-    """Put a run creation through the real auth dispatch."""
     # The shape `langgraph_runtime_inmem/ops.py` builds: the command is nested under `kwargs`.
     kwargs: dict = {"input": {"question": "how many"}, "config": {}, "context": {}}
     if command is not None:
@@ -78,12 +57,7 @@ def _dispatch(command: dict | None) -> None:
 
 
 def test_the_runtime_dispatch_refuses_a_forged_retrieved_tables_and_corpus_hash() -> None:
-    """The payload the audit row claimed was refused, through the path a request takes.
-
-    ``retrieved_tables`` is the bound ``govern/bounds.py`` enforces against, so widening it and resuming
-    executes SQL against tables the corpus never retrieved_tables. ``corpus_content_hash`` is the setting under test
-    identity every quotability check reads.
-    """
+    """Widening ``retrieved_tables`` and resuming would run SQL the corpus never retrieved."""
     with pytest.raises(Exception) as caught:
         _dispatch({"update": FORGED})
     assert getattr(caught.value, "status_code", None) == 403, caught.value
@@ -91,43 +65,27 @@ def test_the_runtime_dispatch_refuses_a_forged_retrieved_tables_and_corpus_hash(
 
 
 def test_the_runtime_dispatch_refuses_a_goto() -> None:
-    """``goto`` writes too — ``langgraph_api/command.py``'s ``map_cmd`` reads goto/update/resume."""
+    """``map_cmd`` treats ``goto`` as a state write, the same as ``update``."""
     with pytest.raises(Exception) as caught:
         _dispatch({"goto": "check"})
     assert getattr(caught.value, "status_code", None) == 403
 
 
 def test_the_runtime_dispatch_still_allows_a_resume() -> None:
-    """The paused-turn protocol, which a blanket deny would have deleted.
-
-    ``ask_user`` interrupts and the client answers — ``ui/hooks/use-stream-chat.ts``
-    submits ``{command: {resume: response}}``.
-    """
+    """A blanket deny would delete ``ask_user``, which answers with ``command.resume``."""
     _dispatch({"resume": "the sales schema"})
     _dispatch(None)
 
 
 def test_a_command_shape_this_hook_cannot_read_is_refused_not_allowed() -> None:
-    """Fail **closed** on an unexpected shape, because failing open is how A4 survived a fix.
-
-    With request encryption on, ``models/run.py`` hands ``command`` through ``encrypt_request``, so it
-    arrives as ciphertext rather than a mapping. Returning early there would silently reopen this.
-    """
+    """Request encryption delivers ``command`` as ciphertext, and returning early would allow it."""
     with pytest.raises(Exception) as caught:
         _dispatch("Z0FBQUFBQm9wYXFl")  # type: ignore[arg-type]
     assert getattr(caught.value, "status_code", None) == 403
 
 
 def test_the_runtime_dispatch_refuses_a_thread_state_write() -> None:
-    """Audit A2/A3, through the dispatch ``ops.Threads.State.post`` uses.
-
-    ``POST /threads/{id}/state`` forwards the caller's ``as_node`` into ``graph.aupdate_state``,
-    and ``as_node`` is what bypasses ``input_schema``: ``as_node="accept"`` writes ``ServeState``
-    directly, widening ``ToolBounds.retrieved_tables`` and forging ``corpus_content_hash``. The denial is
-    unconditional, so the payload here is the one the audit measured rather than an edge case.
-
-    ``PATCH /threads/{id}`` dispatches the same ``"update"`` action, so it is covered by this.
-    """
+    """``as_node`` bypasses the input schema, so this route writes ``ServeState`` directly."""
     with pytest.raises(Exception) as caught:
         _event(
             "update",
@@ -138,16 +96,7 @@ def test_the_runtime_dispatch_refuses_a_thread_state_write() -> None:
 
 
 def test_both_handlers_are_registered() -> None:
-    """The wiring, asserted separately — deleting a decorator left the old A4 test green.
-
-    ``langgraph_api``'s ``_get_handler`` returns ``None`` when nothing matches and ``handle_event``
-    treats that as **allow**, so an unregistered action is fail-open and silent. Nothing else in
-    the suite would notice: every other test here asserts a *refusal*, and an unregistered action
-    simply stops refusing.
-
-    Both actions, because they are the whole of what this module protects now that no credential
-    is required to reach the port.
-    """
+    """An unregistered action is fail-open, and every other test here only asserts a refusal."""
     from langgraph_api.auth.custom import get_auth_instance
 
     instance = get_auth_instance()

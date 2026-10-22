@@ -1,18 +1,7 @@
-"""The one-turn CLI's thread: nameable, and otherwise not left behind.
+"""``--thread-id`` names the durable thread; an unnamed thread is deleted.
 
-``serve/__main__`` compiles a **durable** graph so a turn paused on ``ask_user`` outlives the
-process. That was true and unreachable: the thread id was ``session.run_id``, a fresh
-``uuid4().hex[:16]`` per process, and there was no flag with which a later invocation could ask
-for it. Measured 2026-08-20: ``runs/harness-checkpoints.sqlite`` held two such orphan threads in
-4.6 MB — about 1.8 MB stranded per question ever asked.
-
-Two halves, tested separately because they are separable: ``--thread-id`` makes the durability
-reachable, and its absence now means the checkpoints are deleted rather than kept for nobody.
-
-The graph body is stubbed and the **saver is real**. A real turn would need a corpus, a Postgres
-connection and a model, none of which is what could be broken here; the saver is exactly what
-could, and it is the async-only ``AsyncSqliteSaver`` whose sync ``delete_thread`` hangs rather
-than raising, so a stubbed saver would prove nothing about the eviction path.
+The graph body is stubbed and the saver is the real ``AsyncSqliteSaver``, whose sync
+``delete_thread`` hangs, so a stubbed saver would not exercise eviction.
 """
 
 from __future__ import annotations

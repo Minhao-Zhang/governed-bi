@@ -1,39 +1,8 @@
-"""Renaming or moving a ``registry.quantity`` class deletes the whole thread registry.
+"""Renaming or moving a pickled class makes startup delete the whole thread registry, not one row.
 
-**The chain, every link measured on 2026-08-20 against the installed langgraph.**
-``langgraph.json`` mounts a custom checkpointer, so ``langgraph_api.config
-.USE_CUSTOM_CHECKPOINTER`` is true and ``langgraph_runtime_inmem/ops.py::_get_checkpointer``
-returns on that branch *before* it can pass ``unpack_hook=_msgpack_ext_hook_to_json`` — the
-sanitiser the built-in path uses to flatten unknown extension types down to JSON. So live
-:class:`~governed_bi.registry.quantity.Measured` / ``State`` / ``Relation`` instances survive into
-``checkpoint["values"]``, are copied verbatim onto the thread row (``Threads.set_status`` and
-``set_joint_status``, both ``update["values"] = checkpoint["values"]``), and that row is pickled
-**by reference** into ``.langgraph_api/.langgraph_ops.pckl`` (``PersistentDict.dump`` →
-``pickle.dump(..., 2)``). The langchain message classes are in that file today for the same
-reason, which is independent evidence the sanitiser never ran.
-
-On the next boot ``PersistentDict.load`` raises. ``database.py::start_pool`` has two handlers —
-``except ModuleNotFoundError`` and a bare ``except Exception`` — and **both** ``os.remove`` the
-file. So a rename in place (``AttributeError``) and a move (``ModuleNotFoundError``) both destroy
-the *entire* registry rather than the one unreadable row, and only the second gets the log line
-naming the cause ("Renamed or moved classes"); the rename gets "Failed to load cached data".
-``runs/conversations.sqlite`` is untouched, so every paused turn stays resumable while nothing can
-enumerate it — the pending-clarification queue reports an empty queue and the conversation list goes
-blank — and nothing reconciles the registry from the checkpointer, so the loss is permanent.
-
-**Why a mechanism and not a comment.** A prose rule delivered into a reader's context was
-measurably ignored this week, and the conclusion recorded was that an obligation needs a mechanism.
-Three here, because none covers the next one's case: ``quantity.renamed_pickled_classes`` runs at
-**import**, so a rename in place stops every process including the boot that would do the deleting,
-but a move deletes the file that guard lives in; this file pins the fully-qualified ``(module,
-name)`` pairs from outside and ratchets the *set* of types allowed to reach a checkpoint; and
-:func:`test_the_thread_registry_on_disk_still_loads_under_todays_names` asks the real file, because
-no guard over names can prove a file was migrated.
-
-Authoring rules from ``test_register_closure.py`` apply: assert on the effect, drive the real
-function, never assert a module against its own constant — hence
-:func:`test_the_pinned_names_are_the_strings_pickle_writes`, which checks the names against
-*pickle's own output* rather than against ``CHECKPOINT_PICKLED_NAMES``.
+The custom checkpointer skips the sanitiser, so live objects are pickled into the ops file.
+Both load handlers delete that file. The sqlite store is left in place, so paused turns
+stay resumable while nothing can list them. The pin is checked against pickle's own output.
 """
 
 from __future__ import annotations
@@ -95,12 +64,7 @@ def test_the_guard_fires_on_a_renamed_class(what: str, namespace_edit: Any) -> N
 
 
 def test_the_guard_message_names_the_damage_and_the_procedure() -> None:
-    """The failure text is the deliverable as much as the assertion.
-
-    Asserted on the phrases a renamer needs and would not guess: *what* is destroyed, *what
-    survives to mislead them*, the constant to update, and the one mechanism that migrates the
-    file instead of discarding it.
-    """
+    """The message names the damage, what still looks fine, and how to migrate the file."""
     from governed_bi.registry.quantity import RENAME_DELETES_THE_THREAD_REGISTRY
 
     message = RENAME_DELETES_THE_THREAD_REGISTRY.format(renamed="Measured")
@@ -113,12 +77,7 @@ def test_the_guard_message_names_the_damage_and_the_procedure() -> None:
 
 
 def _thread_row() -> dict[str, Any]:
-    """The shape ``ops.py`` puts on a thread row: ``values`` straight off the checkpoint.
-
-    ``Measured.unmeasured`` and not ``Measured.of``, because an absence carries a ``State`` *and*
-    a ``Relation`` and so names all three classes in one object — which is the point of pinning
-    the companions rather than only :class:`Measured`.
-    """
+    """An unmeasured value carries ``State`` and ``Relation`` too, so one row names all three classes."""
     absence = Measured.unmeasured("no usage block")
     return {
         "runs": [],
@@ -134,13 +93,7 @@ def _thread_row() -> dict[str, Any]:
 
 
 def test_the_pinned_names_are_the_strings_pickle_writes() -> None:
-    """The pin, checked against pickle's output rather than against the module's own constant.
-
-    This is what stops :data:`PICKLED_NAMES` from being a list of strings that happens to agree
-    with itself. Read from the ``GLOBAL`` opcodes, so it is the *import instruction* being
-    compared and not a substring that might have come from anywhere in the payload. Protocol 2 is
-    not incidental — it is what ``PersistentDict.dump`` passes.
-    """
+    """Checked against pickle's ``GLOBAL`` opcodes, protocol 2, not against the module's own constant."""
     written = _pickled_globals(pickle.dumps(_thread_row(), 2))
     assert PICKLED_NAMES <= written, (
         f"pickle does not reference {sorted(PICKLED_NAMES - written)}. Either those classes "
@@ -151,13 +104,7 @@ def test_the_pinned_names_are_the_strings_pickle_writes() -> None:
 
 
 def test_every_pinned_name_resolves_where_the_pickle_looks_for_it() -> None:
-    """The half the import-time guard cannot cover: the **module path**.
-
-    Moving these classes out of ``registry/quantity.py`` deletes the guard along with the file, so
-    a move is caught here or not at all. Asserted the way pickle resolves it — import the module,
-    ``getattr`` the name, and require the class to *claim* that home, because a re-export from a
-    new module leaves ``__module__`` pointing at the new one and the old pickles unreadable.
-    """
+    """A move deletes the import-time guard with the file. The class must claim the module pickle imports."""
     for module, name in sorted(PICKLED_NAMES):
         try:
             imported = importlib.import_module(module)
@@ -206,12 +153,7 @@ def _handled_by_start_pool() -> tuple[type[BaseException], ...]:
 
 
 def test_a_renamed_class_makes_the_thread_registry_unloadable() -> None:
-    """Not "would break": the break, performed.
-
-    Both spellings of the mistake are exercised because they land in different handlers and only
-    one of them logs a usable reason. The registry payload is a *paused* thread, which is the row
-    whose loss is invisible — SQLite still holds the resumable turn.
-    """
+    """Both a rename and a move delete the file. The payload is a paused thread, which SQLite still holds."""
     blob = pickle.dumps(_thread_row(), 2)
     quantity = importlib.import_module("governed_bi.registry.quantity")
     handled = _handled_by_start_pool()
@@ -245,16 +187,7 @@ def test_a_renamed_class_makes_the_thread_registry_unloadable() -> None:
 
 
 def _pickled_globals(blob: bytes) -> set[tuple[str, str]]:
-    """Every ``(module, name)`` the pickle would import, read from the **opcodes**.
-
-    ``pickletools.genops`` walks the stream without executing it, which is the only safe way to
-    ask this question: unpickling is the operation whose failure destroys the file, so a check
-    that unpickled would be reproducing the incident to detect it.
-
-    ``GLOBAL`` is what ``PersistentDict.dump``'s protocol 2 emits (arg ``"module name"``);
-    ``STACK_GLOBAL`` is handled too so a future protocol bump does not silently empty this set,
-    which would turn the test below into a rubber finish.
-    """
+    """Read from opcodes, not by unpickling: unpickling is the operation that deletes the file."""
     found: set[tuple[str, str]] = set()
     recent: list[str] = []
     for op, arg, _pos in pickletools.genops(blob):
@@ -269,17 +202,7 @@ def _pickled_globals(blob: bytes) -> set[tuple[str, str]]:
 
 
 def test_the_thread_registry_on_disk_still_loads_under_todays_names() -> None:
-    """The hole the two name guards cannot close, checked against the real file.
-
-    Both guards go green the moment someone renames a class **and** edits
-    ``CHECKPOINT_PICKLED_NAMES`` to match — which is step 3 of the four-step procedure and says
-    nothing about whether they did step 2, the migration. Nothing in code can prove a file on
-    disk was migrated. So this asks the file.
-
-    Skips when there is no registry, because it is untracked and machine-local: on CI and on a
-    fresh clone there is nothing to check, and failing there would teach people to ignore it. That
-    is also its limit — it protects the developer who has the file, and no one else.
-    """
+    """Updating the pin does not prove the file was migrated. Skips when this machine has no registry."""
     if not OPS_PICKLE.exists():
         pytest.skip(f"no thread registry at {OPS_PICKLE} — nothing on this machine to strand")
 
@@ -307,13 +230,7 @@ def test_the_thread_registry_on_disk_still_loads_under_todays_names() -> None:
 
 
 def _governed_bi_types(root: Any) -> dict[str, str]:
-    """``{qualified name -> first path where it was found}`` for every ``governed_bi``-owned
-    object reachable from ``root``.
-
-    Ownership by ``type(obj).__module__`` and not by ``isinstance`` of a known base, because the
-    question is exactly "what will pickle write a ``governed_bi`` name for", and the class's home
-    is what decides it. ``TypedDict`` values are plain ``dict`` and correctly do not appear.
-    """
+    """Ownership is ``type(obj).__module__``. A known base would miss a class pickle still names."""
     found: dict[str, str] = {}
 
     def walk(obj: Any, path: str, depth: int) -> None:
@@ -344,18 +261,7 @@ def _governed_bi_types(root: Any) -> dict[str, str]:
 
 
 def test_no_other_governed_bi_type_reaches_the_checkpointed_values() -> None:
-    """The ratchet on the *set*, so a fourth type cannot join the pickled surface unguarded.
-
-    Driven against a real checkpointer rather than against ``build_serde_allowlist``, because the
-    declaration and the runtime path disagree about how these values arrive: the allowlist is
-    derived from ``usage: list[UsageRecord]``, and what a served turn pickles arrives
-    through ``answer["record"]`` — a ``dict[str, Any]`` channel that no schema constrains. A
-    static check would therefore pass on a type that rides in through one of those holes.
-
-    The refuse path is enough and is the cheapest terminal: it reaches ``finish``, which writes the
-    unmeasured token counts. A non-empty result is asserted first, because "no types found" is how
-    this test would pass while walking nothing.
-    """
+    """A real checkpointer, not the declared allowlist: values arrive through an unconstrained dict."""
     from langgraph.checkpoint.memory import InMemorySaver
 
     from governed_bi.govern.policy import GovernancePolicy

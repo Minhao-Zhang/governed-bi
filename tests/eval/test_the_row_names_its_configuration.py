@@ -1,12 +1,4 @@
-"""A measurement row must say what produced it.
-
-Measured on the 2026-08-07 pooled run: ``settings_resolved`` was absent — not empty, missing —
-from 1351/1351 rows of both configs, so ``measure.checks`` returned ``cannot_evaluate`` and no
-figure could be joined to the configuration it ran under. ``Session.turn`` wrote the field and
-``finish`` projected it; ``eval.harness.project_turn`` built the row from a fixed key list that
-did not carry it, and the same list omitted the question's ``db_id``, which is the input every
-funnel stage below ``schema_routed`` is conditioned on.
-"""
+"""Absent settings are missing, not an empty dict. An empty dict reads as every setting unset."""
 
 from __future__ import annotations
 
@@ -49,12 +41,7 @@ def _questions() -> list[dict]:
 
 
 def test_a_measured_row_carries_the_configuration_and_the_gold_schema(tmp_path: Path) -> None:
-    """Driven through the real harness and judged by the real check, not by key presence.
-
-    The check is the thing that broke: asserting ``"settings_resolved" in row`` would pass for a
-    row carrying ``{}``, which ``_settings_resolved_check`` reads as a genuine one-configuration
-    config whose every setting is None.
-    """
+    """``{}`` reads as a real configuration whose every setting is missing, so key presence is not the check."""
     rows = run_config(_questions(), stub_config(connector=_connector(tmp_path)))
 
     for row in rows:
@@ -68,13 +55,7 @@ def test_a_measured_row_carries_the_configuration_and_the_gold_schema(tmp_path: 
 
 
 def test_a_crashed_row_still_names_the_config_it_crashed_in(tmp_path: Path) -> None:
-    """A crash is not a reason to lose the configuration.
-
-    The config's settings and the question's gold schema are known before the turn starts. Without
-    them one crashed question makes the whole config's settings check ``cannot_evaluate`` — the config
-    refuses to be quoted for a reason unrelated to the crash — and drops the row out of the
-    funnel's routing stage rather than counting it as a loss there.
-    """
+    """A crash still carries settings and the gold schema. They are known before the turn starts."""
     import governed_bi.eval.harness as harness
 
     class _Exploding:
@@ -130,15 +111,7 @@ class _FakeSession:
 
 
 def test_a_per_question_setting_override_is_not_silently_replaced(tmp_path: Path) -> None:
-    """``--top-n`` was a no-op on every config that passed a session.
-
-    ``tools/run_datalake_eval.py`` writes ``question["settings_resolved"]`` and prints the
-    override in its header; ``Session.turn`` then overwrote it with the session's own settings, so
-    the run served the register default while announcing something else. The no-session path
-    (``_base_turn``) had always honoured the question, so the two paths disagreed about what a
-    turn's configuration is — and with ``settings_resolved`` now on the row, whichever one is
-    wrong becomes a published lie rather than an invisible one.
-    """
+    """``Session.turn`` overwrites settings, so a per-question override must be reapplied."""
     questions = [{**q, "settings_resolved": {"route_top_n": 7}} for q in _questions()]
     rows = run_config(
         questions,
@@ -149,27 +122,7 @@ def test_a_per_question_setting_override_is_not_silently_replaced(tmp_path: Path
 
 
 def test_a_measured_row_names_both_under_test_identities(tmp_path: Path) -> None:
-    """The corpus and the prompt wording that produced the row.
-
-    Same defect as ``settings_resolved`` above, found the same way and later: ``Session`` mints
-    both, ``finish`` projects both, and ``project_turn``'s key list carried neither. The
-    2026-08-09 artifacts therefore record which corpus produced them only in their *filename*
-    — a human convention — and which prompt wording produced them not at all.
-
-    That is fatal for the thing the prompt registry exists to enable. Two configs differing only
-    in ``--prompt-variant`` would emit rows indistinguishable in every field, so a merged
-    analysis could not tell the setting under test from the control, and neither could a later reader.
-
-    ``docs/measurement.md``: the corpus is the setting under test identity of every measurement. An
-    identity that lives in a filename is one ``mv`` away from being wrong.
-
-    **Asserted on the value, and across two runs.** The predecessor asserted
-    ``"corpus_content_hash" in row``, which a row carrying ``None`` satisfies — and a row
-    carrying a constant satisfies it forever, which is the whole failure it exists to catch,
-    reintroduced one layer down. Two runs differing only in the identities they are given must
-    produce rows that differ in exactly those fields; if they do not, a prompt or corpus A/B
-    emits two artifacts nothing can tell apart.
-    """
+    """Two runs that differ only in corpus or prompt must differ in those fields. A constant ``None`` would not."""
     connector = _connector(tmp_path)
     under_tests = {
         "alpha": ("corpus-alpha-0f1e", "prompt-alpha-9c8d"),
@@ -206,19 +159,10 @@ def test_a_measured_row_names_both_under_test_identities(tmp_path: Path) -> None
 
 
 def test_the_prompt_hash_on_the_row_moves_with_the_selected_variant() -> None:
-    """Presence is not enough: the field has to *track* the selection.
-
-    A row carrying a constant would satisfy the test above forever while reporting one
-    setting under test for both configs — the failure that test exists to catch, reintroduced one layer
-    down. Asserted against the registry rather than against a literal, because a hardcoded
-    digest here would pin the test to today's wording of every prompt in the tree.
-    """
+    """The field has to track the selection. A constant would report one setting for both configs."""
     from governed_bi.registry.prompts import ANALYST, prompt_set_hash
 
-    # Derived, not hardcoded: this asserted ``v3`` and started failing the day v3 became the
-    # default, which is the test rotting rather than the property breaking. Any variant that
-    # is not the default will do, and there must be one -- a registry whose only variant is
-    # the default cannot express an A/B at all.
+    # Any non-default variant will do. A hardcoded default rots when the default moves.
     others = sorted(v for v in ANALYST.variants if v != ANALYST.default)
     assert others, "ANALYST has no non-default variant, so no prompt A/B is expressible"
 

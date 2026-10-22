@@ -1,22 +1,6 @@
-"""The attempt cap must end the loop, not just refuse the statement.
+"""The attempt cap ends the loop.
 
-**The defect, reproduced before the fix.** ``registry/settings.py`` said "the cap TERMINATES the
-turn. v1's returned a 'capped' tool message and the agent kept going, burning unbounded
-round-trips against a cap it could never clear" — describing v2. ``run_query`` returned exactly
-that message, in a ``Command`` with no ``goto``, so control went back to the model with one more
-sentence and the same instructions. Measured on this tree at ``cap=5, recursion_limit=60``: five
-statements executed, **25** further model calls, then ``GraphRecursionError`` — recorded as
-``crashed``, which also discards the super-step and with it the ledger of the work that did
-happen. The only real brake in production was ``agent_node_timeout_s = 900``.
-
-The live symptom was quieter and worse: an agent hit the cap and wrote *"The query tool reached
-its execution-attempt limit before returning the winning district, so I can't reliably state the
-result."* It stopped because the model chose to. A bound that a model can decline is not a bound,
-and nothing in the repository could tell the two cases apart.
-
-**These tests count model calls**, because the ledger looked correct throughout the defect —
-``terminal`` was already ``"capped"`` while 25 paid round trips were happening behind it. Only
-the call count distinguishes "the cap fired" from "the cap ended the turn".
+A capped tool message that lets the agent continue burns further round-trips against a cap it cannot clear.
 """
 
 from __future__ import annotations
@@ -97,12 +81,7 @@ class _QueriesBesideAnotherTool(ScriptedChatModel):
 
 
 class _QueriesTwiceInOneMessage(ScriptedChatModel):
-    """Two ``run_query`` calls in the same assistant message — the shape production hit.
-
-    Distinct from ``_QueriesBesideAnotherTool``: there the stranded sibling has a *different*
-    tool name, and the middleware's own filter was keyed on the name. Two calls to the capped
-    tool put the boundary inside one name, which is where the real thread died.
-    """
+    """Two ``run_query`` calls in the same assistant message — the shape production hit."""
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[no-untyped-def]
         self.prompts_seen.append(list(messages))
@@ -180,12 +159,7 @@ def _rows(out: dict[str, Any]) -> tuple[list[Any], list[Any]]:
 
 
 def test_the_loop_ends_at_the_cap_instead_of_running_to_the_recursion_limit(tmp_path: Path) -> None:
-    """The count that matters. ``cap + 1`` calls: the model must propose the statement that
-    exceeds the cap before anything can refuse it, and that proposal is the last thing it says.
-
-    Before the fix this was 30 with ``cap=5`` — the recursion limit, reached by 25 post-cap
-    round trips that could not have gone anywhere.
-    """
+    """The count that matters."""
     model = _AlwaysQueries(responses=[])
     out = _run(tmp_path, model, cap=5)
 
@@ -202,12 +176,7 @@ def test_the_loop_ends_at_the_cap_instead_of_running_to_the_recursion_limit(tmp_
 
 
 def test_the_ended_turn_still_records_exactly_one_cap_row(tmp_path: Path) -> None:
-    """The cap now fires in a middleware, *before* the tool node, so ``run_query`` never runs
-    and ``AttemptBook`` never sees the refused call. Without a row written from there,
-    ``execution_from_attempts`` reads a passing statement and calls the turn ``answered`` —
-    the inversion ``test_capped_after_a_passing_attempt`` exists to prevent, arriving from the
-    other side. Two writers now exist, so "exactly one" is the other half of the assertion.
-    """
+    """The cap fires before the tool node, so the refused call never reaches ``AttemptBook``."""
     out = _run(tmp_path, _AlwaysQueries(responses=[]), cap=5)
     executed, caps = _rows(out)
 
@@ -217,14 +186,7 @@ def test_the_ended_turn_still_records_exactly_one_cap_row(tmp_path: Path) -> Non
 
 
 def test_a_capped_turn_reaches_the_record_as_capped(tmp_path: Path) -> None:
-    """End to end through the compiled graph, because ``Outcome.capped`` is what an eval reads.
-
-    Also the guard on ``thread_limit``: the native counter is a ``PrivateStateAttr`` on the
-    nested agent's checkpointed state, so if it were scoped to the outer *thread* rather than
-    the turn, turn 2 of a conversation would open with its budget already spent. It is not —
-    both turns execute a full budget — and this is the test that would notice if a LangGraph
-    release changed where nested channels live.
-    """
+    """End to end through the compiled graph, because ``Outcome.capped`` is what an eval reads."""
     model = _AlwaysQueries(responses=[])
     graph = compile_graph()
     config = _config(tmp_path, model, cap=2, thread="t-cap-graph")
@@ -254,13 +216,7 @@ def test_a_capped_turn_reaches_the_record_as_capped(tmp_path: Path) -> None:
 
 
 def test_a_cap_reached_beside_another_tool_call_still_ends_the_turn(tmp_path: Path) -> None:
-    """``ToolCallLimitMiddleware``'s own ``exit_behavior="end"`` raises ``NotImplementedError``
-    when the blocked message also calls a different tool, and ``_run`` would record that as
-    ``crashed``. Falling back to ``"continue"`` instead restores the original defect exactly —
-    measured at 20 model calls and ``GraphRecursionError``. So the middleware here ends the turn
-    itself and answers the stranded calls, and this is the test that says which of the three
-    behaviours shipped.
-    """
+    """A cap beside another tool call still ends the turn, rather than recording a crash."""
     model = _QueriesBesideAnotherTool(responses=[])
     out = _run(tmp_path, model, cap=3)
     executed, caps = _rows(out)
@@ -286,22 +242,7 @@ def test_a_cap_reached_beside_another_tool_call_still_ends_the_turn(tmp_path: Pa
 
 
 def test_a_cap_reached_inside_one_batch_of_the_capped_tool_answers_both_calls(tmp_path: Path) -> None:
-    """The defect that poisoned a live thread, reproduced.
-
-    Two ``run_query`` calls arrive in one assistant message with one slot left. Upstream's
-    ``_separate_tool_calls`` allows the first and blocks the second, and — on
-    ``exit_behavior="continue"``, which this middleware is constructed with — it writes a
-    ``ToolMessage`` for the *blocked* one only. The allowed one was to be answered by the tool
-    node, which ``jump_to: "end"`` skips. Upstream does answer it, but only inside its own
-    ``exit_behavior="end"`` branch, which this subclass never reaches.
-
-    The stranded-call filter was keyed on ``name != tool_name``, so it looked past a sibling
-    that shared the capped tool's name and the call was never answered at all. Measured on
-    thread ``01a01bb8`` (2026-08-19): 12 ``tool_use`` blocks, 11 ``tool_result``. The gateway
-    requires every ``tool_use`` to be answered, so every subsequent turn on that thread
-    raised ``ValidationException``** — 0 attempts, no answer, permanently. A dangling id is not
-    a cosmetic defect in a message list; it is a conversation that cannot be continued.
-    """
+    """The defect that poisoned a live thread, reproduced."""
     model = _QueriesTwiceInOneMessage(responses=[])
     out = _run(tmp_path, model, cap=3)
     _executed, caps = _rows(out)
@@ -327,15 +268,7 @@ def test_a_cap_reached_inside_one_batch_of_the_capped_tool_answers_both_calls(tm
 
 
 def test_sampling_a_column_does_not_spend_a_statement(tmp_path: Path) -> None:
-    """The two enforcers have to be counting the same population.
-
-    ``attempts_by_call`` is the *turn's* ledger, not the cap's: since the sample path started
-    writing rows into it, ``AttemptBook`` charged a slot for every ``sample_rows`` call, so a
-    turn that explored three columns had two statements left out of five. The native counter
-    counts ``run_query`` tool calls and nothing else, so leaving that in place would have meant
-    two enforcers disagreeing about what "5 attempts" means, with the stricter one winning
-    invisibly.
-    """
+    """The two enforcers have to be counting the same population."""
     model = _SamplesThenQueries(responses=[])
     out = _run(tmp_path, model, cap=5)
     executed, caps = _rows(out)

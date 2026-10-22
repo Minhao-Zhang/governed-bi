@@ -1,24 +1,5 @@
-"""Coverage compares asset ids to asset ids, not asset ids to engine spellings.
-
-``gold_tables()`` returns the table names a benchmark statement *writes* — the engine's
-identifiers, ``airline."Air Carriers"``. ``retrieved_tables`` carries **asset ids**, and an id is a key
-rather than a name (ADR 0008 D1): the corpus stores that table as
-``id: airline.Air_Carriers_66c534`` with ``physical_name: Air Carriers``. Comparing the two
-strings, case-insensitively or otherwise, compares two different nouns.
-
-It agrees anyway for 655 of the 656 table assets in ``../BIRD-corpus``, because
-``corpus.identity.slug`` returns a bare identifier unchanged — so the metric has been right by a
-property of one corpus rather than by construction. On the one table where the two spellings
-differ it is wrong in one direction only: the gold names a table that *was* retrieved_tables and the
-turn is scored as a coverage miss, so the published ceiling is too low, never too high. Five of
-the 1 351 rows in ``runs/eval/proxy_v4_corpus30872d3.jsonl`` are that table, and in all five it
-is the only miss.
-
-The recovery rule is ``slug`` itself, not string tidying: the ``_66c534`` tail is a digest of the
-exact name and exists so ``a b`` and ``a_b`` cannot collide, so mapping spaces to underscores
-would both fail to reproduce the id and start matching decoys apart. The negative test at the
-bottom of this file is what holds that shut.
-"""
+"""Coverage matches asset ids via ``slug``, not the gold's spelling (ADR 0008). Folding spaces would also match a
+different table."""
 
 from __future__ import annotations
 
@@ -33,14 +14,7 @@ GOLD = (
 
 
 def test_a_gold_naming_a_physical_name_is_covered_when_its_asset_is_retrieved_tables() -> None:
-    """The EX ceiling must not count a retrieved table as not_retrieved because its id is a slug.
-
-    ``table_coverage`` is documented as *"the EX ceiling"* — the split between "was this question
-    answerable under this retrieval" and "did the model convert it". A turn that retrieved_tables
-    ``airline.Air_Carriers_66c534`` was allowed to read ``airline."Air Carriers"``; scoring it as
-    a partial covers the question in the wrong bucket and lowers the ceiling below what the
-    retrieval delivered.
-    """
+    """A retrieved slug must count as covered; scoring it as a miss lowers the ceiling."""
     from governed_bi.eval.datalake import table_coverage
 
     out = table_coverage(
@@ -57,12 +31,7 @@ def test_a_gold_naming_a_physical_name_is_covered_when_its_asset_is_retrieved_ta
 
 
 def test_the_funnel_counts_the_same_retrieved_tables_table_the_coverage_metric_does() -> None:
-    """``retrieval_funnel`` compares the same two nouns at its own stage, and must agree.
-
-    Two places deciding "was this gold table retrieved_tables" by two rules is the drift this module's
-    own prose warns about for ``degenerate``. The funnel's stage is conditional, so a false miss
-    here also removes the row from the denominators of ``answered``, ``graded`` and ``correct``.
-    """
+    """A false miss here also drops the row from later funnel denominators."""
     from governed_bi.eval.datalake import retrieval_funnel
 
     row = {
@@ -85,13 +54,7 @@ def test_the_funnel_counts_the_same_retrieved_tables_table_the_coverage_metric_d
 
 
 def test_a_slug_without_its_digest_is_not_the_same_table() -> None:
-    """Normalising spaces to underscores is not the fix, and must not become one.
-
-    ``slug`` appends a six-hex digest of the exact name precisely because ``a b`` and ``a_b``
-    sanitise alike. ``airline.Air_Carriers`` is therefore a *different* table from
-    ``airline."Air Carriers"`` — on the obfuscated benchmark it is the shape a rename decoy takes
-    — and licensing it covers nothing.
-    """
+    """A slug without the digest is a different table; folding spaces would match it."""
     from governed_bi.eval.datalake import table_coverage
 
     out = table_coverage(

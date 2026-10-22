@@ -1,8 +1,6 @@
-"""Analyst-visible corpus type (ADR 0005 §1.5, B10).
+"""Analyst-visible corpus. Only :func:`for_analyst` builds :class:`AnalystCorpus`. See ADR 0005.
 
-Only :func:`for_analyst` builds :class:`AnalystCorpus`. Column keys are folded to match
-``govern.identifiers``; this module cannot import ``govern``, so the two spellings are kept
-in step by hand and **nothing checks them** — see :func:`column_key_for`.
+Column keys are folded by hand to match ``govern.identifiers``. This package cannot import ``govern``.
 """
 
 
@@ -24,17 +22,9 @@ __all__ = [
 
 
 def column_key_for(asset: ColumnAsset) -> str:
-    """``{schema}.{table}.{column}`` folded, or ``{table}.{column}`` when schema empty.
+    """Folded column key compared with ``govern.identifiers.column_key``. See ADR 0008.
 
-    Must match ``govern.identifiers.column_key`` (ADR 0008 D1), which ``check()``'s COLUMNS
-    layer compares :attr:`AnalystCorpus.allowed_columns` against. **It is not tested, here or
-    anywhere**: no test in this repository references this function by name and no conformance
-    sweep compares the two foldings. The prose said "conformance-tested" until 2026-08-12.
-
-    The two also do not fold the table part the same way — this takes the last dot-segment of
-    ``parent_table`` verbatim, ``identifiers.column_key`` runs it through ``slug``. They agree
-    while ``parent_table`` holds the table's **asset id**, which already carries the slug
-    (ADR 0008 D4), and diverge on a corpus that stores a bare physical name there.
+    This does not slug the table; that function does. They match only while ``parent_table`` is already an asset id.
     """
     table = _bare(asset.parent_table).lower()
     column = slug(asset.physical_name).lower()
@@ -46,8 +36,6 @@ def column_key_for(asset: ColumnAsset) -> str:
 
 @dataclass(frozen=True, slots=True)
 class AnalystCorpus:
-    """Filtered view over a loaded corpus. Construction is :func:`for_analyst` only."""
-
     _by_id: Mapping[str, Asset]
     _allowed_columns: frozenset[str]
     _excluded_columns: frozenset[str]
@@ -78,7 +66,7 @@ class AnalystCorpus:
 
 
 def for_analyst(assets: Sequence[Asset]) -> AnalystCorpus:
-    """Drop ``governance.excluded`` assets; record their column keys for ``check()``."""
+    """Drop excluded assets. Their column keys stay so a later check can refuse them."""
     visible: dict[str, Asset] = {}
     excluded_cols: set[str] = set()
     allowed_cols: set[str] = set()
@@ -119,8 +107,6 @@ def analyst_corpus_from_keys(
     excluded: Iterable[str] = (),
     suspect: Iterable[str] = (),
 ) -> AnalystCorpus:
-    """A minimal :class:`AnalystCorpus` for tests and key-holding call sites; production
-    paths use :func:`for_analyst` over real assets."""
     by_raw: dict[str, ColumnAsset] = {}
     for raw in allowed:
         schema, table, column = _parse_column_key(raw)

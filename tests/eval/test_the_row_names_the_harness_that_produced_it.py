@@ -1,19 +1,4 @@
-"""The four resume-drift keys and the three scope keys had no writer at all.
-
-``git_sha``, ``git_main_sha``, ``working_tree_dirty`` and ``diff_sha256`` are ``Role.operational``
-— which is to say resume-drift keys — and were ``None`` on all 8 106 rows of all six configs in
-``runs/eval/``. ``measure/checks.py::_settings_resolved_check`` looks for *disagreement* across an
-config's rows, and four constants cannot disagree, so the check that exists to stop a resume
-blending two harness versions into one config's score was comparing each key against itself.
-``diff_sha256``'s own register note says exactly what the absence would cost.
-
-``schemas_under_test``, ``split`` and ``question_subset`` are ``Role.scope`` — *fatal on resume*
-by declaration — and had no writer either, so no artifact said which schemas were in the router
-or which questions were asked.
-
-Every test here asserts a **value**, never that a key is present: ``None`` is present, and eight
-tests in this repository were found in one sweep asserting a constant against itself.
-"""
+"""Resume keys that are constant ``None`` cannot disagree, so the check compares each key with itself."""
 
 from __future__ import annotations
 
@@ -50,34 +35,13 @@ def _settings(**over):
 
 
 def test_every_key_the_harness_writes_is_a_declared_setting() -> None:
-    """Every key the harness writes is a declared setting, asserted at the writer.
-
-    An undeclared key is outside ``setting_names()`` and therefore outside every
-    comparison, so writing one would put a configuration into the artifact that no check can
-    see — which is exactly what ``settings["llm_model"]`` did.
-    """
+    """An undeclared key is outside every comparison, which is what a stray model name did."""
     undeclared = sorted(set(_settings()) - setting_names())
     assert not undeclared, f"{undeclared} are written but not declared in registry/settings.py"
 
 
 def test_the_harness_writes_a_value_for_every_resume_drift_key_it_can_answer() -> None:
-    """A name scan credits any occurrence of a setting's name, so a coincidental string
-    literal launders one. This asserts the values instead.
-
-    ``build_workers`` is the deliberate exception and is asserted absent rather than null: this
-    driver serves, it does not build a corpus, and a number for a stage that did not run is the
-    ``embedding_provider`` defect (a null reads as unmeasured, a value reads as a measurement).
-
-    ``diff_sha256`` is the other exception and is asserted *relationally*, because it is null on a
-    clean tree — there is no diff to digest — and that is the correct answer rather than a missing
-    one. The first version of this test asserted it non-null with the rest, which passed only
-    because the tree was dirty when it was written and **would have failed on every CI run**: CI
-    checks out a clean tree. Found by merging to main and running there, not by the suite.
-
-    So the invariant is one-directional. ``git diff HEAD`` does not see untracked files and
-    ``git status --porcelain`` does, so a tree holding only untracked files is dirty with an empty
-    diff. A digest therefore implies dirty; dirty does not imply a digest.
-    """
+    """A digest implies a dirty tree. A dirty tree of only untracked files has an empty diff."""
     settings = _settings()
     written = {
         "git_sha",
@@ -200,13 +164,7 @@ def test_split_names_the_dataset_file_that_decided_the_scope() -> None:
 
 
 def test_the_harness_settings_reach_the_measurement_row(tmp_path: Path) -> None:
-    """The half that was missing on every other declared-but-unconsumed item: a wire that
-    stops one function short of the artifact is the same as no wire.
-
-    Driven through ``run_config`` rather than ``project_turn``, because the path the driver uses
-    goes through ``_turn_settings``, and it is that function's precedence — the question's mapping
-    over the session's — that decides whether these survive.
-    """
+    """The question's settings override the session's, which is why this goes through ``run_config``."""
     from governed_bi.datasource.sqlite import SqliteConnector
     from governed_bi.eval.configs import stub_config
     from governed_bi.eval.harness import run_config

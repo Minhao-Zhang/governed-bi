@@ -1,22 +1,4 @@
-"""The check over the adversarial governance suite (``govern/adversarial.toml``).
-
-This is the build-failing half of the instrument open-work.md 3.11 asks for. It fails on a
-**bypass** (an attack that reached a passing result, or that produced an executable string
-whatever the result said), on a **misattribution** (an attack refused by the wrong layer or
-the wrong rule — refusing for the wrong reason means the rule meant to catch it did not), on a
-**guardrail error** (the checker crashed rather than deciding), and on a false refusal nobody
-declared. It reports the false-refusal rate whether or not it is zero.
-
-**Every test here drives the real entry points.** None re-implements a layer's arithmetic, and
-the expectations live in the TOML rather than in these functions, so a disagreement between the
-code and the criterion is a diff in a data file.
-
-**This file has positive controls.** The loader tests below plant a case that must
-fail to load — a suite that accepted a malformed case would report a perfect score
-over fewer cases than it appears to run. Misattribution is measured separately from
-a bypass: a statement refused by the wrong rule is still refused, and a check that
-only asks "was it refused" reports a deleted rule as working.
-"""
+"""Fails on a bypass, a wrong rule, a crash, or an undeclared false refusal. Expectations live in the TOML."""
 
 from __future__ import annotations
 
@@ -54,12 +36,7 @@ def test_the_suite_declares_both_halves_and_every_family(report) -> None:
 
 
 def test_a_suite_with_no_benign_controls_is_refused(report) -> None:
-    """The positive control for the test above: the guard fires rather than being decorative.
-
-    Reaches for the private guard on purpose. It runs at import time over the real suite, so
-    there is no public call that can be handed a broken one, and the alternative to importing
-    it is not testing the argument this whole file rests on.
-    """
+    """The guard runs at import over the real suite, so a broken suite has to be handed to the private function."""
     from governed_bi.govern.adversarial import _assert_the_suite_has_both_halves
 
     attacks_only = tuple(r.case for r in report.of_kind("attack"))
@@ -86,12 +63,7 @@ def test_no_attack_reaches_a_passing_result(report) -> None:
 
 
 def test_no_attack_is_refused_by_the_wrong_layer_or_rule(report) -> None:
-    """Misattribution rate, denominator: every attack case.
-
-    "It was refused" is not the claim. If a whole-row aggregate refuses because its *name* is
-    absent from the allowlist rather than because of the whole-row argument rule, then the rule
-    written to catch that shape is untested and the next spelling of it walks through.
-    """
+    """Refused by the wrong rule leaves the rule written for that shape untested."""
     from governed_bi.govern.adversarial_run import format_case_failures
 
     wrong = report.with_status("misattributed", "attack")
@@ -102,12 +74,7 @@ def test_no_attack_is_refused_by_the_wrong_layer_or_rule(report) -> None:
 
 
 def test_no_case_makes_the_checker_crash(report) -> None:
-    """Guardrail-error rate, denominator: every case, both halves.
-
-    ADR 0006 §1 makes any exception inside ``check()`` a block, and §12 requires it also be
-    *counted*: a systematically broken checker otherwise presents as a config that refuses
-    everything, with ``crash_rate == 0`` and every register key present.
-    """
+    """A crash must be counted. A broken checker otherwise looks like a config that refuses everything. See ADR 0006."""
     from governed_bi.govern.adversarial_run import format_case_failures
 
     crashed = report.with_status("guardrail_error")
@@ -129,14 +96,7 @@ def test_every_attack_leaves_prepare_with_nothing_to_execute(report) -> None:
 
 
 def test_the_false_refusal_rate_is_reported(report, capsys) -> None:
-    """False-refusal rate, denominator: every benign case.
-
-    A positive function allowlist and a fail-closed binding rule trade false refusals for
-    closed holes, and the trade is only if the other side is measured (ADR 0006 §2).
-    So the rate is printed on every run, and an undeclared false refusal fails: a benign case
-    is a declaration that this statement must pass, and accepting one that does not should be
-    a diff — the ``known_false_refusal`` field, empty today — rather than a drifting number.
-    """
+    """An undeclared false refusal fails. The rate is the other side of a positive allowlist. See ADR 0006."""
     from governed_bi.govern.adversarial_run import format_case_failures
 
     benign = report.of_kind("benign")
@@ -151,14 +111,7 @@ def test_the_false_refusal_rate_is_reported(report, capsys) -> None:
 
 
 def test_every_layer_that_owns_an_attack_catches_all_of_them(report) -> None:
-    """Per-layer recall, denominator: the attacks each layer owns.
-
-    Reported per layer rather than pooled, because a pooled 100% over a suite weighted towards
-    one cheap layer says nothing about the expensive ones. ``COST`` owns none and its rate is
-    ``not measured`` rather than 1.0 — the layer ships disabled (``the retired budget`` is UNSET), and
-    a rate of 1.0 over an empty denominator is the shape that made v1's unmeasured quantities
-    read as clean.
-    """
+    """Per layer, not pooled. A layer that owns no attacks is unmeasured, not a perfect score."""
     from governed_bi.govern.layers import Layer
 
     for layer in Layer:
@@ -182,14 +135,8 @@ def test_every_layer_that_owns_an_attack_catches_all_of_them(report) -> None:
     ],
 )
 def test_the_two_confirmed_resolver_defects_refuse(report, case_id: str) -> None:
-    """Both were reproduced in open-work.md 3.2a and neither was fixed until this suite.
-
-    Named individually as well as being covered by the bypass check, because the check reports
-    "an attack passed" and these two want their own diagnosis: the first is a derived-source
-    alias borrowing a base table's spelling map, the second is a self-colliding table failing
-    to poison its bare handle. Each ``prepare()`` emitted valid SQL reading a column the
-    result never approved.
-    """
+    """A derived alias borrowing a spelling map, and a self-colliding table that leaves its bare name owned by another
+    schema."""
     result = next(r for r in report.results if r.case.id == case_id)
     assert result.prepared.sql is None, result.prepared.sql
     assert result.observed["reason_code"] == "r_ambiguous_fold", result.observed
@@ -198,10 +145,7 @@ def test_the_two_confirmed_resolver_defects_refuse(report, case_id: str) -> None
 
 # ── the loader refuses a case that does not explain itself ────────────────────
 
-#: The ten ``[bypass.*]`` rows every suite must declare, as text. Built rather than typed out:
-#: the probe fixture is read on every failure below and ten hand-written stanzas would bury the
-#: one line each test breaks. All ten claim **no** SQL surface, which is what makes
-#: :data:`VALID` — whose two cases tag no bypass — consistent.
+#: Ten rows, built rather than typed, all claiming no SQL surface so ``VALID`` stays consistent.
 BYPASS_ROWS = "".join(
     f'[bypass.B{n}]\nsql_surface = false\nwhy = "a probe suite aims no statement at it."\n'
     f'pinned_by = "this docstring"\n\n'
@@ -358,14 +302,8 @@ def test_the_probe_suite_loads(tmp_path: Path) -> None:
 def test_a_case_that_does_not_explain_itself_fails_to_load(
     tmp_path: Path, find: str, replace: str, expect: str
 ) -> None:
-    """One break per parameter, because these are nine separate branches in the loader and a
-    single case passing would leave eight that might never have been wired up.
-
-    The two that matter most are the last pair of typos. ``expect_layer`` and ``expect_rule``
-    are declared twice on purpose — once by the case, once by ``govern.layers.RULES`` — so a
-    typo in either half fails to load rather than pinning the wrong attribution and reporting
-    100% recall for a layer that never fired.
-    """
+    """One break per parameter. A typo in ``expect_layer`` or ``expect_rule`` must fail to load, not pin the wrong
+    attribution."""
     broken = VALID.replace(find, replace, 1)
     assert broken != VALID, "the parametrised break did not match the fixture"
     with pytest.raises(ValueError) as err:
@@ -377,21 +315,7 @@ def test_a_case_that_does_not_explain_itself_fails_to_load(
 
 
 def test_every_bypass_the_suite_claims_to_reach_has_a_statement_aimed_at_it(report) -> None:
-    """The coverage claim, over the real suite, in both directions.
-
-    It used to be a paragraph at the top of ``adversarial.toml``: *"B1, B2, B4, B5 and B6 are
-    statement-shaped and are here; B3, B7, B8, B9 and B10 have no SQL surface."* Nothing held it
-    to the cases, so a bypass could lose its last case and the paragraph would go on saying it
-    was covered — which is the failure ADR 0006's own bypass list exists to stop, one level up.
-
-    ``bypass`` was also the one case field with no closed vocabulary while ``kind``, ``family``,
-    ``enforced_by``, ``expect_layer`` and ``expect_rule`` all fail to load on a typo, so ``B4``
-    mistyped as ``B44`` was a case that loaded, ran, and counted towards nothing.
-
-    Asserted here as well as at load because the loader's version runs over whatever file it is
-    handed; this one runs over the shipped suite and prints the split, so the number of bypasses
-    with a statement behind them is a thing a reader can see rather than infer.
-    """
+    """The shipped suite, both directions. A typo such as ``B44`` must not load and count toward nothing."""
     from governed_bi.govern.adversarial import BYPASSES, load_adversarial_suite
 
     suite = load_adversarial_suite()
@@ -460,16 +384,7 @@ def test_every_bypass_the_suite_claims_to_reach_has_a_statement_aimed_at_it(repo
 def test_the_bypass_coverage_claim_must_match_the_cases(
     tmp_path: Path, find: str, replace: str, expect: str
 ) -> None:
-    """Seven ways the declaration and the cases can disagree, each its own load failure.
-
-    The first two are the vocabulary: an id ADR 0006 does not name, and a case filed under a
-    bypass the suite says it cannot express — which would make the ``sql_surface = false`` rows
-    meaningless and turn ``pinned_by`` into a pointer away from a case that is right there.
-
-    The third is the one the paragraph could never catch: a bypass claiming a statement surface
-    with no statement aimed at it. That is exactly the state the prose version would have
-    survived, because prose does not notice a deleted case.
-    """
+    """Each disagreement is its own load failure, including a statement surface with no statement aimed at it."""
     broken = VALID.replace(find, replace, 1)
     assert broken != VALID, "the parametrised break did not match the fixture"
     with pytest.raises(ValueError) as err:
@@ -499,12 +414,7 @@ def probes():
 
 
 def test_nothing_outside_the_licence_is_disclosed_on_any_surface(probes) -> None:
-    """The build-failing half of the disclosure instrument.
-
-    A ``[[case]]`` asks whether a statement was refused. A ``[[probe]]`` asks what a turn was
-    shown, and ``inspect_schema`` and ``sample_rows`` build no statement for the layer stack to
-    read, so a suite that measured only SQL would let them hand over an not_retrieved table.
-    """
+    """``inspect_schema`` and ``sample_rows`` build no statement, so a SQL-only suite would miss them."""
     leaked = [r for r in probes if r.kind == "attack" and r.failed]
     assert not leaked, "\n".join(f"{r.id} [{r.surface}]: {r.detail}" for r in leaked)
 

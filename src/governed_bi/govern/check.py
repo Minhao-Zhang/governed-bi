@@ -1,15 +1,5 @@
-"""``check()``: seven layers in order, first failure wins (ADR 0006 §1).
-
-Invariants (G1 / ADR 0006 §12):
-
-* Every security parameter is required; ``retrieved_tables=None`` / missing ``corpus``
-  raise :class:`GovernanceUsageError` (caller error, not a statement fault).
-* An empty ``retrieved_tables`` set licenses nothing.
-* Column authorization is an :class:`~governed_bi.corpus.analyst.AnalystCorpus`.
-* Any exception inside the walk is ``passed=False`` with
-  :data:`~governed_bi.govern.layers.GUARDRAIL_ERROR` (counted by the ledger).
-* A parse failure refuses at PARSE with a rule id — not a guardrail error.
-"""
+"""Six layers, first failure wins. See ADR 0006. A missing security argument raises. An empty retrieved set allows
+nothing. An exception inside the walk is :data:`~governed_bi.govern.layers.GUARDRAIL_ERROR`, not a parse rule."""
 
 from __future__ import annotations
 
@@ -31,17 +21,12 @@ __all__ = ["check", "GovernanceUsageError", "graded_delivery_eligible"]
 
 
 class GovernanceUsageError(TypeError):
-    """A security parameter was not wired up. Never a statement's fault."""
+    """A security parameter was not wired up. Not a fault of the statement."""
 
 
-#: Node types that write, change schema, control transactions, or hand sqlglot a
-#: statement it does not model (``exp.Command`` — ``VACUUM``, ``COPY``, anything the
-#: parser passes through as text).
-#:
-#: A **denylist inside a fail-closed frame**: the root must already be a read
-#: expression (``READ_ROOTS``), so these are only the constructs that hide *inside*
-#: one — ``WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d`` is a ``Select`` at
-#: the root and deletes rows.
+#: Writes, DDL, transaction control, or a statement sqlglot does not model (``exp.Command``).
+#: A denylist inside a fail-closed frame: the root must already be a read (``READ_ROOTS``),
+#: so these catch writes hidden inside one, such as ``WITH ... DELETE ... RETURNING``.
 WRITE_NODES: tuple[type[exp.Expr], ...] = (
     exp.Insert, exp.Update, exp.Delete, exp.Merge, exp.Copy,
     exp.Create, exp.Drop, exp.Alter, exp.TruncateTable,
@@ -65,11 +50,7 @@ def check(
     dialect: str = DEFAULT_DIALECT,
     policy: GovernancePolicy | None = None,
 ) -> CheckResult:
-    """Run the layer stack against ``sql``. Returns on the first failure.
-
-    ``retrieved_tables`` is table keys. Column authorization is derived from ``corpus``
-    (ADR 0005 §1.5 / ADR 0006 §1) — never from a parallel set that can drift.
-    """
+    """Column authorization comes from ``corpus`` alone, so a second set cannot drift. See ADR 0006."""
     if retrieved_tables is None or isinstance(retrieved_tables, (str, bytes)):
         raise GovernanceUsageError(
             "retrieved_tables must be a set of table keys. None is not 'no restriction' and a "
@@ -85,8 +66,7 @@ def check(
         )
     policy = policy or GovernancePolicy()
 
-    # Normalised OUTSIDE the try: a malformed key is a caller error, and a blocked
-    # result would report a broken caller as an unsafe query.
+    # Outside the try: a malformed key is a caller error, not an unsafe query.
     retrieved_tables_keys = frozenset(normalise_table_key(key, default_schema) for key in retrieved_tables)
     excluded_keys = frozenset(
         normalise_column_key(key, default_schema) for key in corpus.excluded_columns
@@ -121,10 +101,9 @@ def check(
 
         layer = Layer.BINDING
         evaluated.append(layer)
-        # Every column key the corpus declares, whatever its disposition: binding uses
-        # it to pick *which* source a bare name belongs to and authorises nothing. An
-        # excluded column must still bind, or the column layer never gets to refuse it
-        # and the statement fails as "ambiguous" instead of "excluded".
+        # Every declared column key, any disposition. Binding picks a source and authorises
+        # nothing. An excluded column must still bind, or the failure is "ambiguous" and
+        # the column layer never refuses it.
         declared = excluded_keys | suspect_keys | allowed_keys
         bound = bind(views, default_schema=default_schema, known_columns=declared)
         if isinstance(bound, LayerRefusal):
@@ -194,7 +173,7 @@ def _no_write(tree: exp.Expr, evaluated: list[Layer]) -> CheckResult | None:
 
 
 def _nearest_function(node: exp.Expr) -> exp.Func | None:
-    """The innermost function this node is an argument of."""
+    """Innermost function this node is an argument of, so a nested call is not this one's."""
     current = node.parent
     while current is not None:
         if isinstance(current, exp.Func):
@@ -204,14 +183,9 @@ def _nearest_function(node: exp.Expr) -> exp.Func | None:
 
 
 def _scope_arguments(func: exp.Func, own: frozenset[int]) -> Iterator[exp.Column | exp.Star]:
-    """Argument nodes of ``func`` in its own scope.
-
-    ``own`` excludes nested scopes; :func:`_nearest_function` excludes nested
-    functions (so ``NULLIF(COUNT(*), 0)`` keeps the ``count(*)`` carve-out).
-    """
+    """Own scope only, so ``NULLIF(COUNT(*), 0)`` keeps the ``count(*)`` carve-out."""
     for node in func.find_all(exp.Column, exp.Star):
-        # isinstance rather than trusting find_all's filter: the narrowing lets the
-        # caller read `.parts` and `.table` without a cast.
+        # isinstance, not find_all's filter alone: the caller reads .parts and .table.
         if not (id(node) in own and isinstance(node, (exp.Column, exp.Star))):
             continue
         if _nearest_function(node) is not func:
@@ -222,7 +196,7 @@ def _scope_arguments(func: exp.Func, own: frozenset[int]) -> Iterator[exp.Column
 def _functions(
     views: Sequence[ScopeView], policy: GovernancePolicy, evaluated: list[Layer]
 ) -> CheckResult | None:
-    """The allowlist, plus the whole-row argument rule that closes B2."""
+    """The allowlist, plus the whole-row argument rule (B2)."""
     for view in views:
         own = frozenset(id(node) for node in view.nodes)
         for func in view.functions():
@@ -233,23 +207,12 @@ def _functions(
                     f"{name} is not on the positive allowlist",
                     evaluated=evaluated,
                 )
-            # Two star shapes, and they are different AST nodes rather than two spellings of
-            # one. A **bare** star is an `exp.Star`; a **qualified** one, `c.*`, is an
-            # `exp.Column` whose `this` is a Star. Re-instrumented 2026-08-12 over the
-            # adversarial suite's 115 cases, counting *executions* — every case runs the stack
-            # twice, once through `check()` and once through `prepare()`, so each figure is two
-            # per case: the carve-out `continue` below fires 12 (6 cases), the qualified branch
-            # 2 (`b2_count_qualified_star`) and the bare branch's *refuse* config 2
-            # (`b2_count_distinct_star`). The bare config had **no case at all** when the branches
-            # were first instrumented, which is what `b2_count_distinct_star` was written to
-            # close: `count(DISTINCT *)` parses as `Count(this=Distinct(expressions=[Star()]))`,
-            # so `func.this` is the Distinct and the Star reaches the refusal. Dropping
-            # `and func.this is node` widens the carve-out to that shape and the whole suite
-            # stayed green until that case existed.
+            # A bare star is ``exp.Star``; ``c.*`` is a ``Column`` whose ``this`` is a Star.
+            # ``count(*)`` is carved out only when the Star is the Count's own argument, so
+            # ``count(DISTINCT *)`` — the Star behind Distinct — still refuses.
             for node in _scope_arguments(func, own):
                 if isinstance(node, exp.Star):
-                    # count(*) exactly: the Star must be the Count's own argument, so a Star one
-                    # node further down (behind DISTINCT) is a whole row like any other.
+                    # The Star must be the Count's own argument. One node further down is a whole row.
                     if isinstance(func, exp.Count) and func.this is node:
                         continue
                     return refuse(
@@ -277,7 +240,7 @@ def _columns(
     policy: GovernancePolicy,
     evaluated: list[Layer],
 ) -> CheckResult | None:
-    """Three rules in a fixed order: excluded, suspect, then not allowed."""
+    """Excluded, then suspect, then not allowed. The first match wins."""
     for binding in bound.columns:
         if binding.column_key in excluded:
             return refuse(
@@ -306,7 +269,7 @@ def _tables(
     retrieved_tables: frozenset[str],
     evaluated: list[Layer],
 ) -> CheckResult | None:
-    """A base table must be in the set the turn retrieved_tables."""
+    """A base table must be in this turn's retrieved set."""
     for reference, key in bound.tables.items():
         if key not in retrieved_tables:
             return refuse(
@@ -318,17 +281,13 @@ def _tables(
 
 
 def graded_delivery_eligible(result: CheckResult, policy: GovernancePolicy | None = None) -> bool:
-    """Graded delivery went with the cost layer. No remaining failure is eligible."""
+    """No result is eligible. This function does not choose graded delivery."""
     del result, policy
     return False
 
 
 def _assert_no_write_frame_is_closed() -> None:
-    """Import-time guard: ``READ_ROOTS`` and ``WRITE_NODES`` must not overlap.
-
-    An overlap is a root that is simultaneously a legal read and a write construct,
-    which makes the frame that keeps the denylist vacuous.
-    """
+    """An overlap would be a root that is both a legal read and a write, so the denylist frame would never see it."""
     overlap = [cls for cls in READ_ROOTS if cls in WRITE_NODES]
     if overlap:  # pragma: no cover - import-time guard
         raise AssertionError(f"read roots that are also write nodes: {overlap}")

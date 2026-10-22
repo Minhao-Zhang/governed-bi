@@ -1,9 +1,4 @@
-"""Walk ``channel_scoring`` against the declared channel table.
-
-Judgement lives in ``registry.channels``; this module produces the triples.
-:func:`channels_degraded` for quotability (no ``extra_channel``);
-:func:`channel_anomalies` for diagnostics (includes ``extra_channel``).
-"""
+"""``channels_degraded`` omits ``extra_channel``. ``channel_anomalies`` includes it and must not refuse a run."""
 
 
 from __future__ import annotations
@@ -20,13 +15,9 @@ __all__ = ["channel_observations", "channels_degraded", "channel_anomalies"]
 def channel_observations(
     channel_scoring: Any,
 ) -> tuple[tuple[Stage, Channel, ChannelState], ...]:
-    """Every ``(stage, scoring channel, observed)`` triple a recorded ``channel_scoring`` names.
+    """Empty means the fan-out did not run, not that no channel differed.
 
-    Empty for ``None`` or ``{}`` — the fan-out did not run, which is a stage-conditional
-    absence and **not** "no channel differed"; ``checks.py`` restricts the population first.
-
-    Raises ``ValueError`` on an undeclared channel or channel name: the record and the
-    register disagreeing about what a channel is cannot be answered with "nothing wrong here".
+    An undeclared name raises: the record and the register disagreeing is not "nothing wrong".
     """
     if not isinstance(channel_scoring, Mapping):
         return ()
@@ -50,14 +41,8 @@ def channel_observations(
 
 
 def channels_degraded(channel_scoring: Any) -> bool:
-    """True when some channel ran on fewer channels than ``DECLARED_CHANNELS`` declares.
-
-    The value ``channel_degraded`` carries. ``False`` here means every declared channel of
-    every channel in the record reported ``ran``; on a record with no ``channel_scoring`` at
-    all it also returns ``False``, which is why the field's declared absence is
-    ``not_applicable`` and the finish writes ``None`` rather than calling this on a turn
-    whose fan-out never ran.
-    """
+    """Also ``False`` when ``channel_scoring`` is missing, so finish writes ``None`` instead of calling this on a turn
+    whose fan-out never ran."""
     return any(
         is_degraded(stage, channel, observed)
         for stage, channel, observed in channel_observations(channel_scoring)
@@ -65,12 +50,7 @@ def channels_degraded(channel_scoring: Any) -> bool:
 
 
 def channel_anomalies(channel_scoring: Any) -> dict[str, str]:
-    """``"channel.channel" -> Anomaly`` for every state that differs from its declaration.
-
-    The diagnostic beside :func:`channels_degraded`'s result: ``True`` says the run is not
-    quotable, this says which channel of which channel made it so — and it also names
-    ``extra_channel``, which must be reported and must not refuse a run.
-    """
+    """Names ``extra_channel`` too. Report it; do not refuse the run."""
     out: dict[str, str] = {}
     for stage, channel, observed in channel_observations(channel_scoring):
         anomaly = channel_anomaly(stage, channel, observed)
@@ -80,7 +60,6 @@ def channel_anomalies(channel_scoring: Any) -> dict[str, str]:
 
 
 def _member(enum: Any, raw: Any, what: str) -> Any:
-    """``raw`` as a member of ``enum``, or a ``ValueError`` naming what was declared."""
     try:
         return enum(raw)
     except ValueError:

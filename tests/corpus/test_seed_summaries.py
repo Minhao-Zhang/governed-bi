@@ -1,9 +1,6 @@
-"""The seed composes within the cap instead of slicing at it.
+"""The seed fits whole identifiers under the summary cap.
 
-``corpus/validate.py`` refuses an oversized summary with *"Rewrite it; do not truncate --
-the indexed text is the setting under test"*, and the producer used a bare ``[:250]`` on four asset
-types. The gold layer inherited 26 table and 3 schema summaries at exactly the cap, at least
-one cut mid-identifier.
+An over-cap summary is refused, so the producer must not slice mid-token.
 """
 
 from __future__ import annotations
@@ -36,11 +33,7 @@ def _wide_table(name: str, columns: int) -> IntrospectedTable:
 
 
 def test_no_seeded_summary_ends_mid_identifier() -> None:
-    """The defect: ``Goali…`` and ``avg_…`` are tokens that name nothing.
-
-    They still occupy an entry in a shared scoring space and they split the IDF of the name
-    they were cut out of.
-    """
+    """A summary entry must be a whole identifier. A cut token still occupies the index."""
     introspection = Introspection(
         tables=(_wide_table("wide", 80), _wide_table("also_wide", 40)),
         foreign_keys=(),
@@ -48,8 +41,7 @@ def test_no_seeded_summary_ends_mid_identifier() -> None:
     assets, problems = seed(introspection, schema="probe")
     assert not problems, problems
 
-    # Every identifier the seed could legitimately have written. Anything in a summary's
-    # comma list that is not one of these is a name the composer invented by cutting.
+    # Names the seed could have written. Any other comma-list entry was cut mid-token.
     real_names = {t.physical_name for t in introspection.tables} | {
         c.physical_name for t in introspection.tables for c in t.columns
     }
@@ -108,7 +100,7 @@ def test_a_join_summary_fits_without_slicing() -> None:
 
 
 def test_fit_summary_measures_its_tail() -> None:
-    """Appending the bracket after the fit is how a 250-cap composer returns 251."""
+    """The tail is inside the cap, or the bracket pushes a fitted summary over it."""
     entries = [f"column_number_{i:04d}" for i in range(60)]
     out = fit_summary("t (60 columns: ", entries, tail=")")
     assert len(out) <= CAP

@@ -1,17 +1,4 @@
-"""A two-config run was spent to learn its MDE was 9.6pp -- afterwards.
-
-The setting under test moved a population of 9 questions out of 131. No effect that population could
-produce was detectable, and the run reported "no change" as though that were a measurement of the
-feature rather than of the sample size. This refuses that run up front. The run is
-RyanChenJung/governed-bi-utkuai@12c3e15's, not this repository's; ``eval/power.py``'s docstring
-says so and says why the figures are kept.
-
-``eval/power.py`` holds the check and not the formula: the MDE is
-:func:`governed_bi.measure.stats.mde`, the declared singleton, and ``power.py`` used to restate it
-under a synonym with hardcoded z-constants. These tests therefore anchor the *singleton* against
-that run's published figure and assert that the check built on it still refuses that run's config --
-the two claims a delegation could break independently.
-"""
+"""The MDE formula lives in ``measure.stats.mde``. A float ``discordant`` is a rate and understated the floor."""
 
 from __future__ import annotations
 
@@ -58,13 +45,7 @@ def test_an_adequately_powered_config_passes_silently() -> None:
 
 
 def test_a_discordance_rate_passed_as_a_count_is_refused() -> None:
-    """The check approving the config it exists to refuse. ``discordant`` is a count and ``PLAN.md``
-    documented it as ``baseline_rate``, so ``require_power(n=131, discordant=0.29,
-    hypothesised_effect=0.03)`` passed silently against an MDE of 0.0115 -- one eighth of the
-    true 0.0956. Delegating to ``measure.stats.mde`` does not catch it, because that function
-    takes a rate and 0.29 is a well-formed one, so an explicit refusal is what prevents it.
-
-    All three parameters are positional, so the positional spelling is pinned too."""
+    """A float ``discordant`` is a rate; passing it to ``mde`` understated the floor."""
     with pytest.raises(TypeError, match="count"):
         require_power(n=131, discordant=0.29, hypothesised_effect=0.03)
     with pytest.raises(TypeError, match="count"):

@@ -1,15 +1,7 @@
-"""A "percentage" question whose executed statement never scales by 100 is told so.
+"""A percentage question whose executed statement never scales by 100 is told so.
 
-The unit rules come from the downstream fork ``utkuai/detentai-fork``
-(``tests/serve/test_structured_check.py``), including its own regression: the first version of
-the check matched only ``X * 100`` and fired on already-correct queries written ``100 * X``.
-
-Three claims here are **ours** rather than the fork's, and each is the part a port gets wrong:
-
-* the hint is computed from the **executed** statement, not from the tool argument;
-* it never lands on a reply that no statement produced (the fork's function returns the hint
-  when handed no SQL -- see ``serve/structured_check.py`` for why ours does not);
-* the setting ships **ON**, where the fork ships it off behind an in-process-only HTTP toggle.
+The hint is computed from the executed statement, never from a reply that ran no statement,
+and the setting ships on.
 """
 
 from __future__ import annotations
@@ -25,9 +17,6 @@ from governed_bi.serve.structured_check import percentage_scale_suffix
 from governed_bi.serve.tools import build_tools
 
 PERCENT_QUESTION = "what percentage of customers are active?"
-
-
-# ── the rule itself ────────────────────────────────────────────────────────────
 
 
 def test_no_suffix_when_the_question_does_not_ask_for_a_percentage() -> None:
@@ -62,34 +51,15 @@ def test_no_suffix_when_the_question_is_absent() -> None:
 
 
 def test_no_suffix_when_no_statement_ran() -> None:
-    """Our divergence from the fork, which returns the hint here.
-
-    ``None`` reaches this function only from ``run_query``'s one call site, and only when
-    ``executed_sql`` is ``None`` -- which means a governance refusal or a checker that broke
-    before a result existed. There is no answer to have been mis-scaled, and the reply the
-    model is holding is a result rather than a result.
-    """
+    """No statement ran, so there is no result to decorate with a scale hint."""
     assert percentage_scale_suffix(PERCENT_QUESTION, None) == ""
     assert percentage_scale_suffix(PERCENT_QUESTION, "") == ""
 
 
-# ── the setting ───────────────────────────────────────────────────────────────────
-
-
 def test_the_setting_ships_on_and_is_a_affects_results_key() -> None:
-    """Both halves, and the default is the interesting one.
-
-    The fork registers this ``False`` and turns it on through ``POST /settings/toggles``, whose
-    override its own handoff document records as in-process only with no environment path -- so
-    every fresh server start switched it back off. A default-off setting with nothing to persist it
-    is a feature nobody ever runs. It is a key that affects results because the suffix is agent input:
-    it can change which statement the turn ends on.
-    """
+    """The check ships on, and it is a setting that affects results because the hint is agent input."""
     assert setting_default("enable_structured_percentage_check") is True
     assert "enable_structured_percentage_check" in setting_names()
-
-
-# ── wired to the tool, on the executed statement ───────────────────────────────
 
 
 class _EchoConnector:
@@ -178,12 +148,7 @@ def test_the_setting_switches_it_off_for_the_same_turn() -> None:
 
 
 def test_a_refusal_is_not_decorated_with_engine_advice() -> None:
-    """No statement ran, so there is no result to be mis-scaled — and this reply is a result.
-
-    Appending advice here would change the text of a governance refusal, which other code
-    compares by identity (``_fetch`` against ``OUT_OF_SCOPE_MESSAGE``) and the audit surface
-    shows verbatim.
-    """
+    """A governance refusal is shown verbatim, so the scale hint must not be appended to it."""
     reply = _query("SELECT 1.0 / 2 FROM sales.customers", retrieved_tables="sales.other")
     assert "refused" in reply.lower()
     assert "[structured check]" not in reply
@@ -195,15 +160,7 @@ def test_the_prefix_form_still_suppresses_the_hint_through_the_tool() -> None:
 
 
 def test_the_argument_and_the_executed_statement_are_two_different_strings() -> None:
-    """Why the call site's choice of input is rather than stylistic.
-
-    ``govern.prepare`` rewrites what runs -- here by appending a row cap -- so "the SQL" is two
-    values on this path. The check reads the executed one; reading the argument would produce a
-    hint about a statement no database saw. No question this test can write makes the *choice*
-    itself observable (both spellings carry the same ``* 100``), so what it pins is that the
-    choice exists: the day these two stop differing, the comment at the call site explaining
-    which one is read stops meaning anything.
-    """
+    """``prepare`` rewrites the statement, so the check reads what ran, not the tool argument."""
     assets = _assets()
     state: dict[str, Any] = {
         "question": PERCENT_QUESTION,

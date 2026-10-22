@@ -1,17 +1,4 @@
-"""The wire that makes ``reconcile`` non-vacuous, driven without a database.
-
-``reconcile`` spent its whole life with no caller but its own tests, and when a caller was
-finally added the caller itself had none: ``_reconciliation`` and the ``--config`` startup block
-sat inside ``main``, past a corpus, a dataset, a database and four built models, so a grep of
-``tests/`` found nothing that reached them. That is how a vacuous ``reconcile`` survived being
-"fixed" — the config the control is measured against declared no digest, the guard was skipped,
-and the driver printed *config v3_fold: every row agrees with the profile in configs.toml* about a
-comparison it had not made.
-
-So both decisions are pure functions in ``eval/provenance.py`` now, which is the shape
-``append_refusal`` already established in that file and for the same stated reason: a branch
-left in ``main`` is a branch no test can run.
-"""
+"""Both decisions are pure functions so a test can reach them without a corpus, a database, or a model."""
 
 from __future__ import annotations
 
@@ -28,9 +15,7 @@ from governed_bi.eval.provenance import (
 from governed_bi.registry.config_profiles import ConfigProfile, config_profile
 
 DIGEST = "86ed1dbfef8b325e188061229b665c4918ec8c86c65e39b619a5495b0abab6d5"
-#: The three shipped configs' question set, in the ``question_subset`` setting's format. Measured off
-#: ``runs/eval/proxy_v{3_fold,4,5}_*.jsonl`` on 2026-08-20 and equal to the digest of
-#: ``BIRD-Data-Obfuscation@22fe2a6:eval_dataset/test_final.jsonl``'s 1 351 ids.
+#: The shipped configs' question set, as ``question_subset`` records it.
 SUBSET = "1351:423a3f4b65fb"
 
 
@@ -72,12 +57,7 @@ def test_the_startup_check_reads_the_session_the_way_it_reads_a_row() -> None:
 
 
 def test_the_startup_check_refuses_an_config_that_cannot_be_reconciled() -> None:
-    """The F1 failure, at the wire. A profile with no digest used to sail through here.
-
-    Every shipped config now declares one and the loader refuses a file that does not, so this
-    can only be reached by a profile constructed in code — which is exactly where the last one
-    came from.
-    """
+    """A profile with no digest must refuse. The loader now refuses that file; this reaches the check in code."""
     refusal = config_startup_refusal(_profile(digest=None), {"corpus_content_hash": DIGEST})
 
     assert refusal and "no corpus_content_hash" in refusal
@@ -88,9 +68,7 @@ def test_the_startup_check_refuses_an_config_that_cannot_be_reconciled() -> None
 
 def test_the_report_names_each_disagreement_once_with_a_count() -> None:
     """1 351 copies of one sentence is a wall, not a finding."""
-    # ``settings_resolved`` carries the question set because a modern row does: the writer landed
-    # 2026-08-12 and every row a run produces now records it. A row without one exercises the
-    # artifact-level fallback instead, which is a different test below.
+    # A row that records the question set is not the artifact-level fallback below.
     settings = {"settings_resolved": {"question_subset": SUBSET}}
     rows = [{"corpus_content_hash": "deadbeef", **settings} for _ in range(3)]
     rows.append({"corpus_content_hash": DIGEST, **settings})
@@ -163,14 +141,8 @@ def _legacy_rows(qids, subset_recorded=None):
 
 
 def test_an_artifact_with_no_recorded_question_set_is_checked_against_its_own_ids() -> None:
-    """**The fork's method, encoded so nobody has to invent it twice.**
-
-    ``scope_identity``'s writer landed 2026-08-12, so no row of the three published configs records
-    a ``question_subset`` -- and identifying which questions they ran cost a downstream fork a
-    schema-filtered count across four versions of ``BIRD-Data-Obfuscation``. It need not have:
-    every row carries its own ``question_id``, so the set is *in* the artifact. ``reconcile``
-    cannot make this call, because one row names one question; the artifact-level reader can.
-    """
+    """The question ids are in the artifact. An agreement derived from them must not print the same sentence as a
+    recorded set."""
     qids = [f"train_{i}" for i in range(5)]
     subset = derived_question_set(_legacy_rows(qids))
 
@@ -184,8 +156,7 @@ def test_an_artifact_with_no_recorded_question_set_is_checked_against_its_own_id
 
 
 def test_a_legacy_artifact_holding_a_different_question_set_is_caught() -> None:
-    """The 1 351-for-1 351 substitution, on an artifact that records no setting at all. This is the
-    case that used to pass every check: same n, same corpus digest, different population."""
+    """Same count and corpus digest with a different population must still contradict the profile."""
     lines = reconciliation_lines(
         _legacy_rows([f"train_{i}" for i in range(5)]), _profile(subset="5:000000000000")
     )
@@ -225,16 +196,8 @@ def test_the_startup_check_refuses_an_config_that_declares_no_question_set() -> 
 
 
 def test_the_startup_check_refuses_a_session_on_the_wrong_question_set() -> None:
-    """The driver's pre-flight passes a bare identity mapping with no ``settings_resolved``, which
-    is why ``reconcile`` accepts a top-level ``question_subset`` as well.
-
-    **This was a stated gap until 2026-08-20 and is now wired.** The driver's call site sat
-    before ``--dataset`` was loaded, so it passed the corpus alone and this branch was
-    unreachable from there — the question-set check first fired at report time, over the
-    finished artifact, which is after the money is spent. The call moved below ``covered_qids``
-    and supplies both keys; :func:`test_the_driver_supplies_both_locks_to_the_pre_flight` is what
-    keeps it there.
-    """
+    """The pre-flight passes a bare mapping, so a top-level ``question_subset`` counts. Asking after the run is after
+    the money."""
     refusal = config_startup_refusal(
         _profile(), {"corpus_content_hash": DIGEST, "question_subset": "1351:000000000000"}
     )
@@ -243,19 +206,7 @@ def test_the_startup_check_refuses_a_session_on_the_wrong_question_set() -> None
 
 
 def test_the_driver_supplies_both_locks_to_the_pre_flight() -> None:
-    """The driver hands ``config_startup_refusal`` both reconcilable identities, not one.
-
-    **A source assertion because the branch cannot be reached any other way.** ``main`` gets here
-    only after a corpus, a dataset, a database and four models are built, which is the same reason
-    the two decisions were lifted into ``eval/provenance.py`` as pure functions (module docstring).
-    The pure halves are covered above; what no other test can see is whether the *caller* still
-    passes what it used to. It stopped passing the question set for the first eight days the field
-    existed, and the cost of that regression is a paid run whose label is wrong -- caught at report
-    time, after the money.
-
-    Read as an AST rather than a regex on purpose: the mapping spans several lines and a
-    ``re``-based check on it would break on reformatting and pass on a key that had been renamed.
-    """
+    """The caller must pass both identities. The pure halves are covered above; this is the call site."""
     driver = pathlib.Path(__file__).resolve().parents[2] / "tools" / "run_datalake_eval.py"
     tree = ast.parse(driver.read_text(encoding="utf-8"))
 
@@ -275,12 +226,6 @@ def test_the_driver_supplies_both_locks_to_the_pre_flight() -> None:
         f"the pre-flight compares {sorted(keys)}; an identity it does not pass is an identity "
         "nothing checks until the artifact is finished"
     )
-    # No `settings_resolved`, which is the shape `recorded_question_subset` falls through for. A
-    # nested mapping here would send it down the setting branch and read `None` -- the pre-flight
-    # would pass on every dataset and say nothing about it.
-    #
-    # `corpus_release` joined the set on 2026-08-23 and is flat for that reason. A real row carries
-    # it inside the setting mapping, where `recorded_corpus_release` reads it from; this identity is
-    # not a row, and nesting one key to be faithful to a row's shape would risk the defect above
-    # for the sake of it.
+    # No ``settings_resolved``: a nested mapping would take the setting branch and read ``None``.
+    # ``corpus_release`` stays flat here. This mapping is not a row.
     assert "settings_resolved" not in keys

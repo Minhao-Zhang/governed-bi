@@ -69,8 +69,6 @@ _ENV_NAMES: Final[Mapping[str, str]] = {
 
 @dataclass(frozen=True, slots=True)
 class Setting:
-    """One setting: the name the record uses, its default, and its variable."""
-
     name: str
     default: Any
     env_var: str
@@ -156,12 +154,10 @@ def setting_names() -> frozenset[str]:
 
 
 def defaults() -> Mapping[str, Any]:
-    """Every setting at its declared default. ``UNSET`` values remain ``UNSET``."""
     return {k.name: k.default for k in SETTING_REGISTER}
 
 
 def setting_default(name: str) -> Any:
-    """One setting's declared default. ``UNSET`` stays ``UNSET``. Raises if undeclared."""
     for setting in SETTING_REGISTER:
         if setting.name == name:
             return setting.default
@@ -169,12 +165,11 @@ def setting_default(name: str) -> Any:
 
 
 def env_overrides() -> Mapping[str, str]:
-    """``{setting name -> environment variable}`` for every setting."""
     return {k.name: k.env_var for k in SETTING_REGISTER}
 
 
 def _coerce(setting: Setting, raw: str) -> Any:
-    """Parse ``raw`` as the type of ``setting``'s default. Blank is not a value."""
+    """Blank is not a value."""
     text = str(raw).strip()
     if text == "":
         return _MISSING
@@ -213,7 +208,6 @@ def _coerce(setting: Setting, raw: str) -> Any:
 
 
 def env_override(name: str, environ: Mapping[str, str] | None = None) -> Any | None:
-    """What ``name``'s variable says, or ``None`` when it is unset or blank."""
     env = os.environ if environ is None else environ
     for setting in SETTING_REGISTER:
         if setting.name != name:
@@ -239,7 +233,6 @@ def _jsonable(value: Any) -> Any:
 
 
 def config_hash(values: Mapping[str, Any]) -> str:
-    """SHA-256 of the effective settings. ``config_hash`` itself is not an input."""
     body = {key: _jsonable(value) for key, value in values.items() if key != "config_hash"}
     blob = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
@@ -250,7 +243,7 @@ def _recorded_default(setting: Setting) -> Any:
 
 
 def resolve_settings(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """Defaults overlaid with ``GOVERNED_BI_*`` from ``environ``. Does not read ``.env``."""
+    """Does not read ``.env``."""
     env = os.environ if environ is None else environ
     resolved: dict[str, Any] = {}
     for setting in SETTING_REGISTER:
@@ -265,7 +258,6 @@ def resolve_settings(environ: Mapping[str, str] | None = None) -> dict[str, Any]
 
 
 def bind_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
-    """Remember one resolution for the rest of this process, until :func:`reset_settings`."""
     global _BOUND
     bound = dict(settings)
     _BOUND = bound
@@ -273,13 +265,11 @@ def bind_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def reset_settings() -> None:
-    """Drop the bound resolution so the next read sees the process environment again."""
     global _BOUND
     _BOUND = None
 
 
 def effective_settings() -> dict[str, Any]:
-    """The bound resolution, or a fresh one from the process environment."""
     if _BOUND is not None:
         return dict(_BOUND)
     return resolve_settings(os.environ)

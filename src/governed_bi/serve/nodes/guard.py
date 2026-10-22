@@ -1,21 +1,7 @@
-"""Pre-model input guard node (ADR 0005 §3.3 / ADR 0006 §6).
+"""Pre-model guard. Policy is not msgpack-serialisable, so it rides on configurable.
 
-Writes only ``guard``. The graph conditions on ``guard["outcome"] == "blocked"``
-to refuse — this node does not set ``path_kind``.
-
-**Integrator contract.** Pass a
-:class:`~governed_bi.govern.policy.GovernancePolicy` as
-``config["configurable"]["policy"]`` (not in state — it is not msgpack-serialisable
-for the checkpointer). ``guard_rules_enabled`` must be an explicit mapping.
-
-**Two checks, one result.** The five deterministic rules live in ``govern/guard.py`` and are
-pure. The sixth — *is this a BI question at all?* — needs a model, and ``govern/`` must stay
-importable with no model, no settings and no I/O, so the call is here and only the rule id is
-declared there. Both produce the same :class:`~governed_bi.govern.guard.GuardResult`: the
-record has one ``guard`` field, and a second shape would be a second vocabulary for it.
-
-The deterministic rules run **first** because they are free, and a question that trips one
-should not cost a model call to refuse.
+Deterministic rules run first: they are free. The scope question needs a model.
+See ADR 0005 §3.3 and ADR 0006 §6.
 """
 
 import re
@@ -44,9 +30,8 @@ _SCHEMAS_SLOT = "{schemas}"
 def scope_catalogue(assets: Iterable[Any]) -> str:
     """One line per schema asset, ``- name: summary``, sorted by name.
 
-    The scope check's picture of the deployment. Schema assets rather than tables because there
-    is one per namespace with a written summary, which keeps the prompt near 45 tokens a schema
-    instead of growing with the table count.
+    Schema assets, not tables: one summary per namespace, about 45 tokens, instead of a line
+    per table.
     """
     lines = []
     for asset in assets:
@@ -75,36 +60,20 @@ def _words(text: str) -> list[str]:
 
 
 def _clears_scope(answer: str) -> bool:
-    """Whether the judge said yes, and only yes.
+    """True only when the first word is yes and the reply does not also say no.
 
-    ``answer.startswith("yes")`` was the rule, and it fails **open** on a whole class: any reply
-    that merely *begins* with the affirmative clears. Probed against the live parser, ``YES/NO``,
-    ``Yes and no``, ``yes or no?`` and the prompt's own instruction echoed back
-    (``YES if it is in scope, NO if it is not.``) all cleared the check. That direction is the
-    dangerous one -- ``detail`` is ``None`` on the clear branch and carries the reply on
-    ``blocked``, so a wrongly *blocked* turn can be diagnosed afterwards and a wrongly *cleared*
-    one leaves no trace at all.
-
-    The rule now: the first word is the affirmative **and** the reply does not also name the
-    negative. A message containing both is an echo of the format or a hesitation about it, not an
-    answer. An affirmative that goes on to explain itself still clears, which is what
-    ``test_an_affirmative_with_punctuation_still_clears`` is for -- demanding exact equality would
-    refuse every well-behaved model.
+    ``startswith("yes")`` clears ``YES/NO`` and the prompt echoed back. A cleared turn leaves
+    no ``detail``; an affirmative that explains itself still clears.
     """
     words = _words(answer)
     return bool(words) and words[0] == _IN_SCOPE and _OUT_OF_SCOPE not in words
 
 
 async def guard_node(state: dict, config: RunnableConfig) -> dict:
-    """Screen ``state["question"]`` with the policy from runnable config.
+    """Screen the question. Read policy through :func:`~governed_bi.serve.runtime.configurable`.
 
-    Reads through :func:`~governed_bi.serve.runtime.configurable` and never subscripts
-    ``config["configurable"]``: that reader is the one place that can refuse a request's attempt
-    to name a run constant, so a node reaching around it is a node a client can hand its own
-    ``policy`` to.
-
-    ``KeyError`` on a missing policy is deliberate — ``guard_rules_enabled`` ships ``UNSET`` and
-    "no policy" must not become "no guard".
+    Subscripting ``config["configurable"]`` would let a client hand in its own policy.
+    ``KeyError`` on a missing policy is deliberate: no policy must not become no guard.
     """
     from governed_bi.govern.guard import guard
     from governed_bi.govern.policy import BI_SCOPE_RULE_ID
@@ -118,13 +87,9 @@ async def guard_node(state: dict, config: RunnableConfig) -> dict:
         return {"guard": result}
     if not policy.guard_rule_enabled(BI_SCOPE_RULE_ID):
         return {"guard": result}
-    # Both branches above return without a usage row because neither called a model.
-    #
-    # **The utility model, not the agent's**: a one-word classification in front of every turn,
-    # so its latency is the delay before anything appears. Read without an `or agent_model`
-    # beside it — `Session.configurable` resolves that fallback once, and a second copy here is
-    # a rule six call sites must spell identically. A caller who hand-builds a config with only
-    # `agent_model` gets `error_failed_open`, which is what that sentinel is for.
+    # Utility model, not the agent's: this sits in front of every turn. The session resolves
+    # the agent fallback once; a config with only `agent_model` gets `error_failed_open`.
+    # The branches above called no model, so they return no usage row.
     model = cfg.get("utility_model")
     result, usage = await _bi_scope(
         state["question"],
@@ -146,27 +111,10 @@ async def _bi_scope(
     variants: Mapping[str, str] | None = None,
     catalogue: str = "",
 ) -> tuple[Any, dict | None]:
-    """Ask a model whether the question is in scope. Returns ``(GuardResult, usage row)``.
+    """Ask whether the question is in scope. Returns ``(GuardResult, usage)``.
 
-    The usage row is why this returns a pair: without it a turn the check refused records
-    ``usage: []`` and ``cost_est_usd: None`` having really spent ~136 tokens. ``None`` when no
-    model call happened, which keeps "spent nothing" distinct from "spent and did not say".
-
-    **Enabled with no model is ``error_failed_open``, not ``clear``**, and so is a model error
-    — the question goes through either way, as ADR 0006 §1 has a raising deterministic rule do,
-    because this check is about *scope* and not safety. The sentinel is countable, which is what
-    keeps a check that was never wired up from passing for one that never fired.
-
-    It is **not** gated. The ``guard`` field in ``registry/record.py`` carries no ``check=``, so
-    ``measure/checks.py`` has no implementation reading it and a config in which this check was
-    enabled and errored on every turn is still fully quotable. The sibling field one row down
-    (``negative``) *is* gated, which is what the wording here used to claim for this one. Inert
-    while every eval config passes ``guard_rules_enabled={}``; a trap for the first config that does
-    not. See ``tests/serve/test_guard_bi_scope.py``.
-
-    ``catalogue`` fills a variant's ``{schemas}`` slot. A variant that has the slot and a corpus
-    with no schema asset is ``error_failed_open``: a judge shown an empty list refuses every
-    question, which would turn a missing corpus into a check that blocks all traffic.
+    No model, an empty schema list, or a model error is ``error_failed_open``, not ``clear``
+    (ADR 0006 §1). ``guard`` has no quotability ``check=``, so an error can still be quoted.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 

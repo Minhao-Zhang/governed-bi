@@ -1,31 +1,7 @@
-"""Risk-coverage curves and the operating points a caller can stand on.
+"""A plane of curves, not a confidence model. Ties are averaged, never split by row order.
 
-The engine already declines: v4 delivers 1,278 of 1,351 turns and withholds 73. That
-is *one point* on the coverage/accuracy plane, and a single point is all the README
-quotes. This module draws the rest of the plane -- one curve per signal in
-:data:`~.signals.SIGNALS` -- so the engine's mechanical policy can be read against the
-alternatives instead of alone.
-
-It is deliberately not a confidence model. ``git-history:docs/analysis/risk-coverage-v4.md``
-(cited below by its bare name; it is not in this tree) §4
-measured every structural signal on this artifact and capped them at OOF AUC 0.721,
-and §6 measured an LLM critic reading the SQL at 0.597. The object is therefore
-a plane with several curves on it, one of which is the engine's -- not a score.
-
-Three rules the caller cannot opt out of, each from a defect already shipped here:
-
-* **Ties are averaged, never resolved by row order.** ``n_attempts`` takes 8 distinct
-  values over 1,278 delivered turns, so a curve that walks tied rows in artifact order
-  reports the order the driver happened to write them in. Every point inside a tie
-  group is the expectation under uniform tie-breaking, and
-  :meth:`RiskCoverage.policy_at_most` will not realise a set that splits one.
-* **Two things are only compared through** :func:`~.stats.mcnemar`. Subtracting two rates
-  is not a result, and
-  E1-E3 are three tools that did it anyway.
-* **Declines are priced in**:mod:`.abstention`, **not here.** The two questions --
-  how well a ranking separates right from wrong, and what the engine's own declines
-  would have been worth -- have different denominators, and §4.1's is a subset the
-  dataset selected rather than the config.
+Two policies are compared only through ``mcnemar``. Declines are priced in ``abstention``, where the denominator is
+different.
 """
 
 from __future__ import annotations
@@ -55,37 +31,13 @@ __all__ = [
     "compare_policies",
 ]
 
-#: Smallest delivered count at which :meth:`RiskCoverage.coverage_for` will name an
-#: operating point. ``risk-coverage-v4.md`` §2 already reports its 0.95 target as
-#: "never (max over k >= 50 is 0.9059)" for the same reason: the largest ``k`` whose
-#: accuracy clears a high target is, at small ``k``, a run of luck at the top of the
-#: ranking rather than a policy anyone can operate.
+# Below this, the largest k that clears a high accuracy target is a run of luck
+# at the top of the ranking, not a policy anyone can operate.
 MIN_OPERATING_POINT = 50
 
-#: Outcomes in which the engine declined to answer. ``crashed`` is deliberately absent:
-#: a crash is our bug, not a decision, and counting one as an abstention flatters
-#: exactly the claim this module exists to test. :func:`graded` drops them and says so.
-#:
-#: ``no_sql`` **is** here, and it moves a measured rate. Coverage is the share of turns that got
-#: an answer, and this module's subject is *governed* answers, so a turn that executed no
-#: statement did not get one — whether it declined in prose, read the answer off the delivered
-#: context, or was the no-model stub. Before the taxonomy split those turns arrived as
-#: ``answered`` with ``correct=False``, i.e. in the **delivered** bucket as guaranteed misses:
-#: they inflated coverage and deflated delivered accuracy. Both figures move now, in opposite
-#: directions, by the ``no_sql`` share of the config — 23 of 9,459 rows (0.24%) on the artifacts on
-#: disk, which carry the old label and are therefore **not** recomputable across the boundary.
-#:
-#: The alternative was to drop them the way :func:`graded` drops crashes. Rejected: an
-#: exclusion hides the behaviour, and an engine answering without querying is the behaviour a
-#: risk-coverage curve is supposed to price. It abstained from the governed path; that is a
-#: decision, even when the record cannot say which of the three took it.
-#:
-#: ``clarification`` covers two endings and both belong here, which is why the set did not change
-#: when the second one arrived: a turn that paused on ``ask_user`` and a turn whose reader
-#: declined fail-closed (``registry/stages.Outcome``) each delivered no answer, so each is
-#: withheld coverage. :func:`_split` is what would have caught a member added for the second —
-#: it raises on an outcome that is in neither set, so a coverage figure cannot acquire a
-#: third kind of ending.
+# ``crashed`` is absent: a crash is a bug, not a decision. ``no_sql`` is included:
+# a turn with no statement did not get a governed answer, and dropping it hides that.
+# ``clarification`` covers a pause and a decline; ``_split`` rejects any other ending.
 DECLINED: frozenset[str] = frozenset(
     {
         Outcome.refused.value,
@@ -97,20 +49,10 @@ DECLINED: frozenset[str] = frozenset(
 
 
 def graded(config: Population) -> Population:
-    """The population every figure in this module is computed over.
+    """One function, so the headline and the comparison share a row set.
 
-    One function, so a driver cannot compute the headline over one row set and the
-    comparison over another (L-R3). Two filters, in a fixed order so two calls produce
-    populations :func:`~.stats.mcnemar` accepts as the same population:
-
-    * **crashed turns are dropped**, because a crash is an instrument failure and not a
-      decision to decline. Folding them into the abstentions would credit the engine
-      with declining on purpose when it fell over;
-    * **turns the grader could not judge are dropped**, because ``correct is None``
-      means there was no gold to compare against, and coercing it to wrong is the L-R1
-      defect ``docs/measurement.md`` names outright: propagate it, do not coerce it.
-
-    Both are recorded in ``filtered_by``, so ``describe()`` carries them to any report.
+    Crashed turns are dropped: a crash is not a decision to decline. ``correct is None`` is dropped too: it is not
+    wrong.
     """
     return config.restrict(
         lambda r: r.get("outcome") != Outcome.crashed.value, "excluded crashed turns"
@@ -120,7 +62,6 @@ def graded(config: Population) -> Population:
 
 
 def _split(config: Population) -> tuple[tuple[TurnRow, ...], tuple[TurnRow, ...]]:
-    """Delivered rows and declined rows, refusing on an outcome that is neither."""
     delivered = tuple(r for r in config.rows if r.get("outcome") == Outcome.answered.value)
     declined = tuple(r for r in config.rows if r.get("outcome") in DECLINED)
     if len(delivered) + len(declined) != config.n:
@@ -142,21 +83,13 @@ def _split(config: Population) -> tuple[tuple[TurnRow, ...], tuple[TurnRow, ...]
 
 @dataclass(frozen=True)
 class OperatingPoint:
-    """One (coverage, accuracy) pair with both of its denominators on the object.
-
-    ``correct`` is a float, not an int: inside a tie group the curve reports the
-    expectation under uniform tie-breaking, which is the only value when the
-    signal cannot tell the tied turns apart.
-    """
+    """``correct`` is a float: inside a tie the curve reports the expectation under uniform tie-breaking."""
 
     label: str
-    #: Every turn in the graded population -- the denominator of coverage.
     n: int
-    #: Turns delivered at this point -- the denominator of accuracy.
     delivered: int
     correct: float
     population: str
-    #: Non-empty when no such point exists. Both rates then report this reason.
     why_absent: str = ""
 
     @property
@@ -184,11 +117,7 @@ class OperatingPoint:
 
 @dataclass(frozen=True)
 class DeliveryPolicy:
-    """A realised decision about which turns to answer, over a named population.
-
-    A *set*, not a threshold: two policies are comparable only if each names the exact
-    turns it delivered, and a threshold on a tied signal does not.
-    """
+    """A set of turns, not a threshold. A threshold on a tied signal does not name the turns."""
 
     label: str
     population: Population
@@ -205,18 +134,11 @@ class DeliveryPolicy:
 
     @property
     def useful(self) -> int:
-        """Delivered *and* correct -- what a reader of the answers receives."""
         by_unit = self.population.by_unit()
         return sum(1 for u in self.delivered if bool(by_unit[u].get("correct")))
 
     def point(self) -> OperatingPoint:
-        """Where this policy sits on the plane.
-
-        A policy that delivers nothing still has a coverage: it is zero, and zero is a
-        measurement. Its *accuracy* is unmeasured, because a rate over no answers is not
-        a rate of zero. The two are kept apart rather than collapsed into an absent
-        point, since "this signal can only express delivering nothing" is a finding.
-        """
+        """A policy that delivers nothing still has coverage zero. Its accuracy is unmeasured, not a rate of zero."""
         return OperatingPoint(
             label=self.label,
             n=self.population.n,
@@ -226,12 +148,7 @@ class DeliveryPolicy:
         )
 
     def as_population(self) -> Population:
-        """One row per turn carrying ``useful_answer``, for :func:`compare_policies`.
-
-        ``filtered_by`` is carried over from the source rather than reset, so two
-        policies built off differently-filtered configs are refused by
-        :func:`~.stats.mcnemar` instead of compared.
-        """
+        """``filtered_by`` is carried over, so two differently filtered configs are refused by ``mcnemar``."""
         rows = [
             {
                 "question_id": unit,
@@ -244,7 +161,6 @@ class DeliveryPolicy:
 
 
 def engine_policy(config: Population) -> DeliveryPolicy:
-    """What the engine did: answer the answered turns, withhold the rest."""
     delivered, _ = _split(config)
     return DeliveryPolicy(
         label="engine (governance + attempt cap)",
@@ -255,24 +171,14 @@ def engine_policy(config: Population) -> DeliveryPolicy:
 
 @dataclass(frozen=True)
 class RiskCoverage:
-    """One signal's curve over one config.
-
-    ``ranked`` holds the delivered turns best-first under the signal's declared
-    direction. Declined turns sit below every score, because the engine already withheld
-    them and no ranking can un-withhold one -- which is why every curve here passes
-    through the engine's own operating point, and why no signal can beat the engine at
-    the engine's coverage. Every gain costs coverage.
-    """
+    """Declined turns sit below every score: no ranking can un-withhold one, so every gain costs coverage."""
 
     signal: str
     direction: Direction
     population: Population
-    #: ``(question_id, score, wrong)`` for delivered turns, best-ranked first.
     ranked: tuple[tuple[str, float, bool], ...]
-    #: Cumulative expected wrong answers after delivering ``k`` turns, for ``k = 1..n``.
     errors: tuple[float, ...]
     n_declined: int
-    #: Non-empty when the config does not carry this signal on every delivered turn.
     unavailable: str = ""
 
     @property
@@ -281,12 +187,8 @@ class RiskCoverage:
 
     @property
     def aurc(self) -> Measured[float]:
-        """Mean selective risk over every coverage level ``k/n``. Lower is better.
-
-        Averaged over ``k`` rather than integrated over coverage, so the number does not
-        depend on an interpolation choice. Read it beside :func:`oracle` and
-        :func:`no_ranking`: an AURC on its own has no scale.
-        """
+        """Averaged over ``k``, not integrated over coverage, so the number does not depend on an interpolation. An AURC
+        alone has no scale."""
         if self.unavailable:
             return Measured.unmeasured(self.unavailable)
         return Measured.rate(
@@ -297,22 +199,12 @@ class RiskCoverage:
 
     @property
     def auc(self) -> Measured[float]:
-        """Rank AUC for predicting ``correct`` on delivered turns, **raw direction**.
-
-        Raw, so it is directly comparable to ``risk-coverage-v4.md`` §4, where below 0.5
-        means higher value -> more likely wrong. **It is deliberately not re-signed to
-        the declared direction**, and that is what makes it worth printing beside the
-        AURC: for a ``lower_first`` signal the mechanism claim holds only when this lands
-        *below* 0.5, and a curve built from the claim cannot show the claim failing --
-        it would simply produce a bad AURC that looks like a weak signal rather than a
-        wrong one.
-        """
+        """Left in the raw score direction. Re-signing it would turn a wrong claim into a weak curve."""
         if self.unavailable:
             return Measured.unmeasured(self.unavailable)
         return _rank_auc([(score, not wrong) for _, score, wrong in self.ranked])
 
     def accuracy_at(self, coverage: float) -> OperatingPoint:
-        """Selective accuracy when ``floor(coverage * n)`` turns are delivered."""
         if self.unavailable:
             return self._absent(f"cov {coverage}", self.unavailable)
         k = math.floor(coverage * self.n)
@@ -325,12 +217,7 @@ class RiskCoverage:
     def coverage_for(
         self, accuracy: float, *, min_delivered: int = MIN_OPERATING_POINT
     ) -> OperatingPoint:
-        """The most turns this signal can deliver at or above ``accuracy``.
-
-        Largest ``k``, not the first: the buyer's question is how much of the workload
-        survives the quality bar, and the first ``k`` to clear it is usually three
-        answers at the very top of the ranking. See :data:`MIN_OPERATING_POINT`.
-        """
+        """Largest ``k``, not the first. The first ``k`` to clear the bar is usually a handful of turns at the top."""
         if self.unavailable:
             return self._absent(f"acc {accuracy}", self.unavailable)
         best = 0
@@ -346,38 +233,22 @@ class RiskCoverage:
         return self._point(f"{self.signal} @ acc {accuracy}", best)
 
     def policy_at_most(self, coverage: float, *, label: str = "") -> DeliveryPolicy:
-        """The largest **realisable** delivery set within ``coverage``.
-
-        Realisable means the cut falls between two distinct scores. A set that splits a
-        tie group is not a policy the signal can express -- it is a coin flip among
-        turns the signal cannot tell apart -- so the cut moves down to the boundary
-        below it, and the achieved coverage is on the returned object rather than
-        assumed. An empty set is a legitimate answer, and it is the answer for every
-        ledger-derived signal here: they take 5 to 8 distinct values over 1,278 turns.
-        """
+        """The cut falls between distinct scores. A set that splits a tie is not a policy this signal can express, so
+        the cut moves down."""
         limit = math.floor(coverage * self.n)
         cut = 0
         for index in range(1, min(limit, len(self.ranked)) + 1):
             if index == len(self.ranked) or self.ranked[index][1] != self.ranked[index - 1][1]:
                 cut = index
         return DeliveryPolicy(
-            # `label` is presentation only, and a caller may pass a rounded coverage
-            # here that this method must not round itself -- number formatting in
-            # ``src/`` is ``Measured.render``'s alone.
+            # Presentation only. This method does not round; formatting belongs to Measured.render.
             label=label or f"{self.signal} <= cov {coverage}",
             population=self.population,
             delivered=frozenset(unit for unit, _, _ in self.ranked[:cut]),
         )
 
     def realisable_coverages(self) -> tuple[float, ...]:
-        """Every coverage this signal can express, ascending.
-
-        One entry per tie-group boundary. It is the measure of a signal's
-        resolution, and it is why ``cuts`` belongs beside every AURC in a report: an
-        AURC computed by averaging through tie groups describes a curve whose interior
-        points no policy can stand on. Five boundaries over 1,278 turns is a signal that
-        can be asked three questions, not a dial.
-        """
+        """One entry per tie boundary. An AURC averaged through ties describes points no policy can stand on."""
         if self.unavailable:
             return ()
         out: list[float] = []
@@ -407,7 +278,6 @@ class RiskCoverage:
 
 
 def _rank_auc(scored: list[tuple[float, bool]]) -> Measured[float]:
-    """Mann-Whitney AUC with mid-ranks for ties, in the raw score direction."""
     order = sorted(scored, key=lambda pair: pair[0])
     ranks = [0.0] * len(order)
     start = 0
@@ -433,7 +303,6 @@ def _rank_auc(scored: list[tuple[float, bool]]) -> Measured[float]:
 def _curve_from_scores(
     config: Population, name: str, direction: Direction, score: Callable[[TurnRow], float | None]
 ) -> RiskCoverage:
-    """Rank the delivered turns, average inside tie groups, append the declines."""
     delivered, declined = _split(config)
     scores = [score(row) for row in delivered]
     blind = sum(1 for value in scores if value is None)
@@ -453,8 +322,7 @@ def _curve_from_scores(
         for value, row in zip(scores, delivered)
         if value is not None
     ]
-    # Stable, so tied turns keep artifact order. Nothing downstream may depend on that
-    # order: the averaging below and `policy_at_most` both work on whole tie groups.
+    # Stable sort. Nothing downstream may depend on artifact order inside a tie.
     ranked = tuple(sorted(scored, key=lambda entry: sign * entry[1]))
 
     errors: list[float] = []
@@ -466,14 +334,12 @@ def _curve_from_scores(
             stop += 1
         size = stop - start + 1
         wrong = sum(1 for _, _, is_wrong in ranked[start : stop + 1] if is_wrong)
-        # The expectation under uniform tie-breaking: a group of `size` turns holding
-        # `wrong` errors contributes `wrong/size` per turn, whatever order they are in.
+        # Uniform tie-breaking: wrong/size per turn, whatever order the group is in.
         for step in range(1, size + 1):
             errors.append(cumulative + wrong * step / size)
         cumulative += wrong
         start = stop + 1
-    # Every declined turn is graded wrong (`docs/measurement.md`: an engine that would
-    # not commit to a statement gets no credit for it), so the tail rises by one a turn.
+    # A declined turn gets no credit, so the tail rises by one a turn.
     errors.extend(cumulative + step for step in range(1, len(declined) + 1))
     return RiskCoverage(
         signal=name, direction=direction, population=config, ranked=ranked,
@@ -482,12 +348,11 @@ def _curve_from_scores(
 
 
 def risk_coverage(config: Population, signal: Signal) -> RiskCoverage:
-    """The curve for one declared signal over one graded config."""
     return _curve_from_scores(config, signal.name, signal.direction, signal.read)
 
 
 def oracle(config: Population) -> RiskCoverage:
-    """The ceiling: rank by the grade itself. Reads gold, and is named for it."""
+    """Reads the grade. Named so a caller cannot mistake it for an artifact signal."""
     return _curve_from_scores(
         config, "oracle (reads the grade)", Direction.lower_first,
         lambda row: 0.0 if row.get("correct") else 1.0,
@@ -495,44 +360,22 @@ def oracle(config: Population) -> RiskCoverage:
 
 
 def no_ranking(config: Population) -> RiskCoverage:
-    """The null: one score for every turn, so buying coverage back buys nothing.
-
-    Not the same as "accuracy = EX". The engine's abstentions still sit below every
-    delivered turn, so this curve holds at the delivered base rate until coverage
-    exceeds what the engine answered. That is the null for a *ranking*, and
-    ``risk-coverage-v4.md`` §1 makes the same correction in prose.
-    """
+    """Not "accuracy equals the base rate". Abstentions still sit below every delivered turn."""
     return _curve_from_scores(config, "no ranking", Direction.lower_first, lambda _row: 0.0)
 
 
 @dataclass(frozen=True)
 class NestedPolicies:
-    """Two policies where one delivers a subset of the other's turns. **Not a test.**
+    """Not a test. When one delivery set contains the other, one discordant cell is 0 by arithmetic.
 
-    When ``b.delivered`` is a subset of ``a.delivered`` over the same population, neither
-    policy changes any turn's ``correct``, so ``useful_b`` is a subset of ``useful_a`` **by
-    construction**. The McNemar cell ``only_b`` is then 0 as arithmetic rather than as an
-    observation, and the p-value is a deterministic function of ``only_a`` alone: any
-    coverage below the wider policy's yields "decisive, in the wrong direction", however
-    good or bad the ranking is. The engine-versus-ranked-policy comparison on ``v4`` was
-    published as ``delta -0.1199, MDE 0.0264, p = 3.4e-49`` on exactly this shape.
-
-    The substantive claim survives and is worth making: the trade costs 162 right answers.
-    That is a count, and this object reports it as one. What is dropped is the inferential
-    dress, because a reader who sees a p-value is entitled to think a null was tested.
-    E1-E3 name the neighbouring defect -- two rates
-    subtracted and called a result -- and this is its mirror image: a real test performed
-    on a comparison that could not have come out any other way.
+    The finding is the count of useful answers lost. A p-value would restate the subset.
     """
 
-    #: The wider policy: every turn ``narrower`` delivers, and generally more.
     wider_label: str
     narrower_label: str
     n_pairs: int
-    #: Delivered-and-correct under each. ``lost`` is the difference and the whole finding.
     useful_wider: int
     useful_narrower: int
-    #: Turns the wider policy delivers that the narrower does not.
     withheld: int
 
     @property
@@ -541,7 +384,7 @@ class NestedPolicies:
 
     @property
     def is_decisive(self) -> bool:
-        """Never. There is no inference here to be decisive about."""
+        """There is no inference here to be decisive about."""
         return False
 
     def render(self) -> str:
@@ -556,24 +399,10 @@ class NestedPolicies:
 
 
 def compare_policies(a: DeliveryPolicy, b: DeliveryPolicy) -> McNemarResult | NestedPolicies:
-    """Paired comparison of two policies on ``useful_answer``, via the one McNemar.
+    """The outcome is delivered and correct, so a withheld answer costs.
 
-    The outcome is *delivered and correct*, which is what the reader gets: it prices a
-    policy's abstentions at zero rather than excusing them, so a ranking that trades
-    coverage for accuracy has to pay for the answers it withheld. Read ``is_decisive``
-    and ``minimum_detectable`` before the delta -- ``open-work.md`` §3.12 puts this
-    engine's floor near 2.3pp on EX, and a coverage trade is measured on the same turns.
-
-    **Nested policies get :class:`NestedPolicies` instead**, and that is a refusal, not a
-    convenience. Every risk-coverage trade on this instrument is nested by construction --
-    a ranking reorders the turns the engine already agreed to answer and cannot
-    un-withhold one -- so running a hypothesis test on the engine against any cut of any
-    signal asks a question whose answer was fixed before the data were read. The genuine
-    paired comparisons on the same page (two *different* signals at one coverage: ``a=17,
-    b=3, p=0.0026``) are not nested and still go through ``mcnemar``.
-
-    The population guards stay with ``mcnemar``: a mismatched pair raises there, before
-    the nesting is examined, so a subset relation cannot excuse comparing two configs.
+    Nested delivery sets return ``NestedPolicies``: the engine against a cut of its own answers has an answer fixed
+    before the data. Population mismatches still raise in ``mcnemar``.
     """
     left, right = a.as_population(), b.as_population()
     if (
@@ -582,9 +411,7 @@ def compare_policies(a: DeliveryPolicy, b: DeliveryPolicy) -> McNemarResult | Ne
         or left.units != right.units
     ):
         return mcnemar(left, right, "useful_answer")  # raises, with its own diagnosis
-    # ``<=`` and not ``<``: two policies delivering the same set are the same policy, and
-    # testing one against itself is ``open-work.md`` §3.9's "assert a constant equals itself"
-    # with a p-value of 1.0 attached to make it look like evidence.
+    # ``<=`` not ``<``: the same delivery set tested against itself is a p-value of 1.
     if b.delivered <= a.delivered:
         return _nested(a, b)
     if a.delivered <= b.delivered:

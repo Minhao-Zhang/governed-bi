@@ -1,9 +1,4 @@
-"""Persistent vector cache across process restarts.
-
-One store per vector width; keys carry embedder identity via
-:func:`~governed_bi.retrieve.semantic.cache_key`. Lives in ``retrieve/`` so
-``api``, ``serve``, and eval can share it under the import layering.
-"""
+"""One store per width. Keys carry embedder identity via ``cache_key``. See ADR 0005."""
 
 
 from __future__ import annotations
@@ -16,41 +11,23 @@ from .vectors import MEMORY_URI, VectorStore
 
 __all__ = ["VECTOR_CACHE_VAR", "VectorCache", "vector_cache_from_environment"]
 
-#: Persistent cache directory (env override). One LanceDB DB per model, table per width.
 VECTOR_CACHE_VAR = "GOVERNED_BI_VECTOR_CACHE"
 
-#: Characters no path component may contain on Windows. NTFS reads ``name:stream`` as an
-#: alternate data stream, so ``mkdir`` raises rather than creating a directory. POSIX reserves
-#: only ``/``; the stricter set is applied on both so one cache has one name everywhere.
+#: Illegal in a Windows path. The same set is used on every platform so one cache has one name.
 _UNSAFE_IN_PATH = '<>:"/\\|?*'
 
 
 def _directory_name(model: str) -> str:
-    """``model`` reduced to something that can be a single path component.
+    """Replace only characters that cannot be a directory, so an existing store keeps its name.
 
-    Some model ids contain a colon, and that is not a legal directory name on Windows:
-    ``mkdir`` raises ``NotADirectoryError`` (WinError 267). The server then cannot boot,
-    and the traceback names the store rather than the model id.
-
-    Only illegal characters are replaced, so every name that already works is byte-identical
-    and ``text-embedding-3-large`` keeps resolving to the directory already holding its rows.
-
-    **Not** :func:`corpus.identity.slug`, though the layering would allow it. That function is
-    injective by construction because an asset id keys the retrieval index, and its charset
-    excludes ``-``, so it would rename the existing store instead of leaving it alone. The
-    contract here is the opposite: this directory is *not* the identity. ``cache_key`` is
-    ``model|dimensions|text`` over the provider-qualified id with the colon intact, so two ids
-    that sanitise alike share a directory and still cannot read each other's rows.
+    Not ``corpus.identity.slug``: its charset excludes ``-`` and would rename the store. The cache key still has the
+    original id, so a shared directory cannot mix rows.
     """
     return "".join("_" if ch in _UNSAFE_IN_PATH else ch for ch in model)
 
 
 class VectorCache:
-    """Cache keys to vectors, persistent, across every width an embedder produces.
-
-    A router over :class:`VectorStore` — one per width, opened on first use. Holds no
-    vectors itself, which is what lets ``VectorStore`` keep "one width" as an invariant.
-    """
+    """One ``VectorStore`` per width. This object holds no vectors."""
 
     def __init__(self, *, uri: str | Path = MEMORY_URI) -> None:
         self._uri = str(uri)
@@ -58,29 +35,23 @@ class VectorCache:
 
     @property
     def uri(self) -> str:
-        """Where the rows are. Printed by the server so "the cache worked" is checkable."""
         return self._uri
 
     @property
     def opened_with(self) -> int:
-        """Rows already present at open, over the widths touched."""
         return sum(store.opened_with for store in self._stores.values())
 
     @property
     def written(self) -> int:
-        """Rows this process added; zero is what the reload loop depends on."""
         return sum(store.written for store in self._stores.values())
 
     def __len__(self) -> int:
         return sum(len(store) for store in self._stores.values())
 
     def keys(self) -> list[str]:
-        """Every key, over the widths touched. A width nobody asked for is never opened,
-        so it is not counted: this reports what the run consulted."""
         return [key for store in self._stores.values() for key in store.keys()]
 
     def at_width(self, dimensions: int) -> VectorStore:
-        """The store for ``dimensions``, opened or created on first use."""
         store = self._stores.get(int(dimensions))
         if store is None:
             store = VectorStore(dimensions, uri=self._uri)
@@ -89,19 +60,7 @@ class VectorCache:
 
 
 def vector_cache_from_environment(*, model: str) -> VectorCache:
-    """The persistent cache the server, the CLI and the eval driver share.
-
-    One database directory per model, one table per width inside it. The key already carries
-    both, so the layout is defence in depth rather than the mechanism.
-
-    ``model`` is the **requested** name, never ``Embedder.model``: reading that property on a
-    cold ``OpenAIEmbedder`` issues a network probe, and a directory name is not worth a
-    request at boot.
-
-    The name is passed through :func:`_directory_name` because a model id may contain a
-    colon, which is not a legal directory on Windows. Sanitising here keeps the server, the
-    CLI and the eval driver pointing at one directory per model.
-    """
+    """``model`` is the requested name. Reading ``Embedder.model`` on a cold client probes the network."""
     from governed_bi.registry.settings import effective_settings
 
     configured = str(effective_settings()["vector_cache"])

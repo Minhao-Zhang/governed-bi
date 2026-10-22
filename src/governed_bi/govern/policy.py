@@ -1,9 +1,4 @@
-"""``GovernancePolicy``: the security configuration of one turn.
-
-Mostly a typed view of the settings in ``registry.settings``. Defaults are read,
-never restated. ``guard_rules_enabled`` stays ``UNSET`` until a caller sets it.
-``Unset.__bool__`` raises; use the explicit accessor.
-"""
+"""Defaults come from ``registry.settings``. ``guard_rules_enabled`` stays ``UNSET``. ``Unset.__bool__`` raises."""
 
 from __future__ import annotations
 
@@ -15,19 +10,14 @@ from .functions import PERMITTED_FUNCTIONS
 
 __all__ = ["GovernancePolicy", "DEFAULT_DIALECT"]
 
-#: The dialect assumed when a caller does not thread one from its connector.
-#:
-#: Not a setting: ``ports.Connector.dialect`` is where the real value comes from.
-#: Postgres because the bypass list is Postgres-specific, so it is the stricter
-#: default of the two.
+#: Not a setting: the connector owns the real dialect. Postgres is the default because
+#: the bypass list is Postgres-specific, so it is the stricter of the two.
 DEFAULT_DIALECT = "postgres"
 
 
-#: The five deterministic rule ids :mod:`.guard` dispatches, as **vocabulary**. The predicates
-#: live in ``guard.py``; only the names live here, because the set of legal keys for
-#: :attr:`GovernancePolicy.guard_rules_enabled` belongs with the field, and ``guard.py``
-#: already imports this module. ``guard.py`` asserts at import that its mapping's keys are
-#: exactly this set, so the two cannot drift.
+#: Names :func:`guard` dispatches. Predicates live in ``guard.py``; names live here because
+#: legal keys belong with the field, and ``guard.py`` imports this module. Import asserts
+#: the two sets match.
 GUARD_RULE_IDS: frozenset[str] = frozenset({
     "g_encoding",
     "g_length",
@@ -36,25 +26,19 @@ GUARD_RULE_IDS: frozenset[str] = frozenset({
     "g_tool_forgery",
 })
 
-#: The sixth rule id, which is **not** in :data:`GUARD_RULE_IDS` because it is not a
-#: deterministic predicate: it asks a model whether the question is a BI task at all, and
-#: ``govern/`` must stay importable with no model, no settings and no I/O. The check runs in
-#: ``serve/nodes/guard.py``. Re-exported from ``guard.py``, where it used to live, so the
-#: eight call sites that import it from there keep working.
+#: Not in :data:`GUARD_RULE_IDS`: it asks a model whether the question is a BI task, and
+#: this package stays importable with no model. The check runs in ``serve/nodes/guard.py``.
+#: Re-exported from ``guard.py`` so existing imports keep working.
 BI_SCOPE_RULE_ID = "g_bi_scope"
 
-#: Every id ``guard_rules_enabled`` may name. Both consumers read one mapping over two
-#: disjoint namespaces — ``guard()`` iterates :data:`GUARD_RULE_IDS`, ``serve/nodes/guard.py``
-#: reads :data:`BI_SCOPE_RULE_ID` — and until 2026-09-18 nothing checked the union.
+#: Every id ``guard_rules_enabled`` may name. ``guard()`` and the scope check read disjoint
+#: subsets; a key in neither dispatches nothing.
 KNOWN_GUARD_RULE_IDS: frozenset[str] = GUARD_RULE_IDS | {BI_SCOPE_RULE_ID}
 
 
 @dataclass(frozen=True, slots=True)
 class GovernancePolicy:
-    """The security configuration of one turn. Immutable for the turn's duration."""
-
-    #: The positive function allowlist, as canonical names. Defaults to the
-    #: committed list in :mod:`.functions`, whose digest is what the
+    #: Canonical names. Defaults to :mod:`.functions`, whose digest is what the
     #: ``permitted_functions`` setting carries into the config hash.
     permitted_functions: frozenset[str] = field(default_factory=lambda: PERMITTED_FUNCTIONS)
     hard_block_suspect: bool = field(default_factory=lambda: setting_default("hard_block_suspect"))
@@ -62,35 +46,15 @@ class GovernancePolicy:
     run_query_attempt_cap: int = field(default_factory=lambda: setting_default("run_query_attempt_cap"))
     max_rows: int = field(default_factory=lambda: setting_default("max_rows"))
     g_length_max_chars: int = field(default_factory=lambda: setting_default("g_length_max_chars"))
-    #: ``UNSET`` ⇒ no rule has both of its numbers yet (ADR 0006 OQ3), so
-    #: :func:`~governed_bi.govern.guard.guard` refuses to run rather than choosing
-    #: between shipping uncalibrated rules and shipping no guard while claiming one.
+    #: ``UNSET`` until both calibration numbers exist per rule (ADR 0006 OQ3). ``guard``
+    #: then refuses to run: all-on ships uncalibrated rules, all-off claims a guard that
+    #: is not running.
     guard_rules_enabled: Mapping[str, bool] | Unset = field(
         default_factory=lambda: setting_default("guard_rules_enabled")
     )
 
     def __post_init__(self) -> None:
-        """Refuse a ``guard_rules_enabled`` key that names no rule.
-
-        **The defect this closes.** ``api/graph_app.py`` shipped
-        ``guard_rules_enabled={BI_SCOPE_RULE_ID: True}``, which reads as "the guard is on" and
-        means "five of the six rules are off": :func:`~governed_bi.govern.guard.guard` iterates
-        :data:`GUARD_RULE_IDS`, ``g_bi_scope`` is not a member, and
-        :meth:`guard_rule_enabled`'s ``.get(rule_id, False)`` turns every absent id into a
-        silent ``False``. So the served surface ran **zero** deterministic predicates from the
-        day the scope check was added, and the only test that read the shipped mapping pinned it
-        with ``==`` — it would have failed on the fix and passed on the regression.
-
-        Validating *keys* and not *coverage*: an empty mapping stays legal, because
-        :func:`~governed_bi.govern.guard.guard` distinguishes "nothing enabled" from ``UNSET``
-        and 44 test sites say the former deliberately. What is refused is a key that dispatches
-        nothing — a typo, a retired id, or an id from the other namespace. Coverage is a
-        deployment decision and is asserted against the *shipped* policy in
-        ``tests/conformance/``, not here.
-
-        Raises at construction rather than at ``guard()``, so all 71 construction sites in the
-        tree — tests included — are checked, and a misconfiguration cannot wait for a turn.
-        """
+        """Unknown keys raise here. An empty mapping stays legal; shipped-policy coverage is a conformance assertion."""
         if isinstance(self.guard_rules_enabled, Unset):
             return
         unknown = sorted(set(self.guard_rules_enabled) - KNOWN_GUARD_RULE_IDS)
@@ -103,7 +67,7 @@ class GovernancePolicy:
             )
 
     def guard_rule_enabled(self, rule_id: str) -> bool:
-        """Whether ``rule_id`` is enabled. Raises while the setting is ``UNSET``."""
+        """Raises while ``UNSET``. There is no default. See ADR 0006."""
         if isinstance(self.guard_rules_enabled, Unset):
             raise TypeError(
                 "guard_rules_enabled is UNSET. ADR 0006 OQ3 requires red-team recall and "
@@ -115,7 +79,7 @@ class GovernancePolicy:
 
 
 def _assert_policy_tracks_the_register() -> None:
-    """Import-time: ``guard_rules_enabled`` stays uncalibrated until a caller sets it."""
+    """``guard_rules_enabled`` stays uncalibrated until a caller sets it."""
     policy = GovernancePolicy()
     if not isinstance(policy.guard_rules_enabled, Unset):  # pragma: no cover
         raise AssertionError("guard_rules_enabled has acquired a default; see OQ3.")

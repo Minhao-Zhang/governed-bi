@@ -1,4 +1,4 @@
-"""Terminal path nodes — refuse / decline — before ``finish``."""
+"""Refuse and decline, before ``finish``. Public refuse text never carries rule detail."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ __all__ = ["refuse_node", "decline_node"]
 
 
 def refuse_node(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Guard refusal. Public text never leaks rule detail."""
     reason = state.get("terminal_reason")
     if not reason:
         reason = "guard"
@@ -23,7 +22,6 @@ def refuse_node(state: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def decline_node(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Retrieval / connect decline. ``terminal_reason`` carries the refused_by value."""
     reason = state.get("terminal_reason") or "no_schema_matched"
     return {
         "path_kind": "decline",

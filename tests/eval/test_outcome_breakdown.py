@@ -1,15 +1,4 @@
-"""``correct / clarified / refused`` — three buckets over one denominator.
-
-From RyanChenJung/governed-bi-utkuai@12c3e15, where two deployment plans asked for this scorecard
-format by name.
-
-``project_turn`` already derives a five-way ``outcome`` (answered / refused / clarification /
-capped / crashed) and grades every non-answered outcome ``correct=False`` -- but nothing stored
-*which* non-answered reason a row was, as a field ``measure.population.Population.rate()`` can
-aggregate. A run where 6 of 50 questions needed a live clarification and 4 were refused reports
-"44/50 correct" with no way to tell the two failure classes apart in the summary. They are not the
-same result: one asked a person a question, the other declined to answer.
-"""
+"""Clarification and refusal are different results; both would otherwise read as not correct."""
 
 from __future__ import annotations
 

@@ -107,9 +107,8 @@ def _curves(config: Population) -> dict[str, RiskCoverage]:
 def _print_coincidence(engine: DeliveryPolicy, curves: dict[str, RiskCoverage]) -> None:
     """Every curve meets the engine at the engine's coverage. Printed, not assumed.
 
-    It is a structural fact -- a ranking only reorders the turns the engine already
-    agreed to answer -- and it is the single most important thing on the page, because
-    it says no signal here improves on the engine without withholding more.
+    A ranking only reorders turns the engine already agreed to answer, so no signal
+    here improves on the engine without withholding more.
     """
     at = engine.point().coverage.or_else(1.0)
     values = {
@@ -122,13 +121,10 @@ def _print_coincidence(engine: DeliveryPolicy, curves: dict[str, RiskCoverage]) 
 
 
 def _cell(point) -> str:
-    """One curve cell: the accuracy and **the k it was read at**.
+    """One curve cell: the accuracy and the k it was read at.
 
-    The k is not decoration. A requested coverage of 0.70 on 1 351 turns is
-    ``floor(0.7 * 1351) = 945`` for the curve and 944 for the largest realisable policy,
-    and those give 0.7952 and 0.7956. Both are correct under their own rule and the two
-    were published on one page with the second's consequence attached to the first's
-    number. Printing k makes them visibly different quantities.
+    Coverage 0.70 is ``floor(0.7 * n)`` on the curve and one less on the largest
+    realisable policy, and those accuracies differ. Printing k keeps the two apart.
     """
     if point.why_absent:
         return "-"
@@ -187,14 +183,10 @@ def _print_targets(curves: dict[str, RiskCoverage], accuracies: list[float]) -> 
 def _print_partial(
     config: Population, curves: dict[str, RiskCoverage], coverages: list[float]
 ) -> None:
-    """Signals the config carries on *some* delivered turns, re-run over just those.
+    """Signals present on only some delivered turns, re-run over just those.
 
-    ``measure.selective`` refuses a curve when a signal is missing on any delivered
-    turn, which is right: an AURC over 1,268 turns and one over 1,270 are not the same
-    number, and putting them in one table invites the subtraction. Opting into the
-    smaller population is the caller's decision to make out loud, so it happens here,
-    the restriction is recorded in the population line, and ``mcnemar`` will refuse to
-    compare these against anything in the table above.
+    A missing value refuses the curve: two population sizes are not one number.
+    The smaller set is chosen here and is not compared with the table above.
     """
     partial = [name for name, c in curves.items() if c.unavailable and name in SIGNALS]
     printed = False
@@ -249,10 +241,9 @@ def _print_trades(
     ledger = curves.get("n_failed_attempts")
     if ledger is None or ledger.unavailable:
         return
-    # The ledger takes five values, so it cannot be asked for 70% coverage. Comparing it
-    # at a coverage it cannot express would compare it against delivering nothing, which
-    # is a fact about its resolution and not about its ranking. So both signals are read
-    # at the coarser one's own best cut below the engine's coverage.
+    # The ledger takes five values, so it cannot be asked for 70% coverage.
+    # Both signals are read at the coarser one's best cut below the engine's coverage.
+    # A cut the ledger cannot express would compare it with delivering nothing.
     ceiling = engine.point().coverage.or_else(1.0)
     options = [c for c in ledger.realisable_coverages() if c < ceiling]
     if not options:

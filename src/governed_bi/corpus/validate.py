@@ -1,8 +1,6 @@
-"""Rules an asset must satisfy, and the record of one that does not.
+"""Asset rules. Bounds and tag rules are read from the register, not copied here.
 
-Thresholds and tag rules are read from ``register`` (not restated). Summary
-bounds are correctness (shared scoring space), not style. No ``body`` rule (I2).
-Identifier-in-summary applies only to types the register names.
+There is no body-length rule. Identifier-in-summary follows the types the register names.
 """
 
 
@@ -19,11 +17,7 @@ __all__ = ["Problem", "TAG_RULE_FIELDS", "problems_with"]
 
 @dataclass(frozen=True, slots=True)
 class Problem:
-    """One problem with one item: ``where`` names the file, ``reason`` the rule.
-
-    ``fatal=True``: id/key integrity (duplicate, unloadable, dangling ref) — not servable.
-    ``fatal=False``: degradation (recorded, servable, counted). ADR 0008 D9.
-    """
+    """``fatal`` is id integrity and is not servable. Otherwise the problem is recorded. See ADR 0008."""
 
     where: str
     reason: str
@@ -33,15 +27,8 @@ class Problem:
         return f"{self.where}: {self.reason}"
 
 
-#: How each tag rule is satisfied: the field the index will read, and whether that field is
-#: **required** (``True`` ⇒ a missing value is a problem). A predicate table, **not** a copy of
-#: the register — the register says which rule a type uses, this says what makes that rule
-#: answerable. Closed at import against :class:`~governed_bi.registry.assets.TagRule`, which
-#: declares seven, so an eighth rule cannot be added without deciding what satisfies it.
-#:
-#: The two optional entries are values, not oversights: an unbound term and a system-wide
-#: negative example are **untagged**, which is a state — no vote in ``route``, but carried
-#: into pass two unconditionally. Requiring a schema on either deletes a legitimate class.
+#: Field, and whether a missing value is a problem. Closed against ``TagRule`` at import.
+#: ``binding`` and ``own_schema_or_global`` are optional: those assets may stay untagged.
 TAG_RULE_FIELDS: Mapping[TagRule, tuple[str, bool]] = {
     TagRule.itself: ("name", True),
     TagRule.own_schema: ("schema", True),
@@ -54,11 +41,7 @@ TAG_RULE_FIELDS: Mapping[TagRule, tuple[str, bool]] = {
 
 
 def _bounds() -> tuple[int, int]:
-    """The inclusive summary length bounds, read from the setting register.
-
-    The values come from ``registry/settings.py``; what lives here is the refusal to accept an
-    ``UNSET`` bound, so an uncalibrated setting cannot become a threshold nobody chose.
-    """
+    """Inclusive summary bounds. An unset bound is refused, so a threshold nobody chose cannot apply."""
     low, high = setting_default("summary_min_chars"), setting_default("summary_max_chars")
     if isinstance(low, Unset) or isinstance(high, Unset):
         raise ValueError(
@@ -69,12 +52,7 @@ def _bounds() -> tuple[int, int]:
 
 
 def problems_with(asset: object) -> list[str]:
-    """Every rule ``asset`` breaks, as reasons a reader can act on. Empty means valid.
-
-    Each reason **names the asset**, so a caller reporting the bare strings still produces
-    something actionable. Never raises for a malformed asset — an object with no ``summary``
-    reports that as a problem — because the loader calling it must not raise for a bad item.
-    """
+    """Reasons ``asset`` breaks. Never raises: a bad item is a problem, not a crash."""
     asset_type = getattr(asset, "asset_type", None)
     if not isinstance(asset_type, AssetType):
         return [f"{_name(asset)}: asset_type is {asset_type!r}, not one of the eight"]
@@ -135,10 +113,7 @@ def problems_with(asset: object) -> list[str]:
 
     physical = getattr(asset, "physical_name", None)
     if physical is not None:
-        # The **slug** is what becomes a path component, not the physical name (ADR 0008
-        # D1: a key is not a name). Validating the raw identifier here is what made
-        # `airline."Air Carriers"` unrepresentable -- the charset rejected it, so the table
-        # had no asset while 24 few-shots cited it.
+        # Check the slug, not the engine name: the slug is the path component (ADR 0008).
         from .identity import UnsafeName, slug, validate_path_component
 
         try:
@@ -159,20 +134,12 @@ def _name(asset: object) -> str:
 
 
 def _bare(value: str) -> str:
-    """The last dot-separated segment of an identifier.
-
-    So a producer storing ``left_table`` qualified (``beer_factory.customers``) and one
-    storing it bare (``customers``) both satisfy "the identifier appears in summary"; ADR
-    0005 does not settle which a join carries. Per decision #6, the qualifier comes from the
-    tag rule, not from prose, so spending the 250-char budget on it buys nothing.
-    """
+    """Last segment only, so a qualified id and a bare one both count as present in the summary."""
     return value.rsplit(".", 1)[-1]
 
 
 def _assert_every_tag_rule_has_a_predicate() -> None:
-    """Import-time closure. A tag rule with no predicate here is silently skipped: the rule
-    exists, something iterates the enum, and the missing row becomes a check that never
-    runs (the ``budgets.get(cls, 0)`` shape)."""
+    """A tag rule missing here would be a check that never runs."""
     missing = sorted(rule.value for rule in TagRule if rule not in TAG_RULE_FIELDS)
     if missing:  # pragma: no cover - import-time guard
         raise AssertionError(f"TAG_RULE_FIELDS has no predicate for: {missing}")

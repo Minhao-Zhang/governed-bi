@@ -1,14 +1,4 @@
-"""Internals the bypass contract does not reach: the rule table, layer order, binding.
-
-Authoring rules applied throughout:
-
-* **Every test drives the real check.** None re-derives a rule's arithmetic.
-* **Assert the effect, not the presence of a constant**, and **never assert a module
-  against its own constant** — that passes for an empty tuple.
-* **Test the negative case.** A guard that only leaves a trace when it fires cannot
-  afterwards be told from one that was never wired up, so every refusal here has a
-  paired statement that must pass.
-"""
+"""Drive the real check. Pair every refusal with a statement that must pass."""
 
 from __future__ import annotations
 
@@ -51,13 +41,7 @@ def layer():
     ],
 )
 def test_every_refusal_reports_a_declared_rule_and_its_own_layer(check, sql) -> None:
-    """The rule id **derives** the layer, so this asserts the pair, not one constant.
-
-    ``failed_layer`` is looked up from ``RULES`` inside the constructor. A caller
-    cannot name a rule and a layer separately, which is the property that makes two
-    tables unable to drift — and this is the test that the lookup is real rather than
-    a second literal beside it.
-    """
+    """The rule id derives the layer, so the pair is one lookup rather than two literals."""
     from governed_bi.govern.layers import GUARDRAIL_ERROR, PASSED, RULES
 
     result = check(sql, retrieved_tables=CUSTOMERS)
@@ -82,13 +66,7 @@ def test_a_passing_result_has_no_layer_and_the_control_still_binds(check) -> Non
 
 
 def test_first_failure_wins_and_the_order_is_the_enum_order(check, layer) -> None:
-    """Reaching layer N proves 1..N-1 passed — the property graded delivery rests on.
-
-    One statement that violates the function layer **and** the table layer reports
-    ``FUNCTIONS``; repair only the function and the same statement reports ``TABLES``.
-    Two results from one pair of statements, so a stack that evaluated in a different
-    order could not produce both.
-    """
+    """One statement that violates two layers reports the earlier one, then the later one once that is repaired."""
     both = check("SELECT pg_sleep(nope.x) FROM nope", retrieved_tables=CUSTOMERS)
     assert both["failed_layer"] is layer.FUNCTIONS
 
@@ -113,12 +91,7 @@ def test_a_layer_that_did_not_run_has_no_entry(check, layer) -> None:
 
 
 def test_an_exception_inside_check_blocks_and_is_countable(check, monkeypatch) -> None:
-    """ADR 0006 §12's chain: a ``NameError`` in a layer walk turns every turn into a
-    refusal, ``crash_rate == 0``, every register key present, run declared quotable.
-
-    So the result must block **and** be distinguishable from a governance decision.
-    The negative half is the second assertion: an ordinary refusal must not count.
-    """
+    """A crash must block and stay distinguishable from a governance decision. See ADR 0006."""
     from importlib import import_module
 
     from governed_bi.govern.layers import GUARDRAIL_ERROR
@@ -182,13 +155,7 @@ def test_a_bare_name_in_a_mixed_base_and_derived_scope_refuses(check, layer) -> 
 
 
 def test_a_cte_named_after_a_base_table_shadows_it(check) -> None:
-    """Per-scope resolution, not a query-wide name map.
-
-    The table ``customers`` has an **excluded** ``id``. The statement never reads it:
-    ``customers`` here is the CTE. A flat name map said otherwise, and that is how v1
-    deferred a real table's excluded column onto a reference that never touched it —
-    the same map would refuse this statement for a column it does not read.
-    """
+    """The CTE shadows the base table. A query-wide name map would refuse a column this statement does not read."""
     result = check(
         "WITH customers AS (SELECT 1 AS id) SELECT id FROM customers",
         retrieved_tables=frozenset(),
@@ -212,12 +179,7 @@ def test_a_bare_having_reference_is_column_checked(check, layer) -> None:
 
 
 def test_using_keys_are_column_checked_on_both_sides(check, layer) -> None:
-    """``USING (col)`` keys are not ``Column`` nodes, so a ``find_all(exp.Column)``
-    sweep never sees them — an excluded column was usable as a join key.
-
-    The pair matters: the same statement passes once **both** sides' keys are allowed,
-    which is what distinguishes "the key is checked" from "USING always refuses".
-    """
+    """``USING`` keys are not ``Column`` nodes. The same statement passes once both sides are allowed."""
     both = frozenset({"customers.cid", "orders.cid"})
     result = check(
         "SELECT c.cid FROM customers c JOIN orders o USING (cid)",
@@ -235,19 +197,7 @@ def test_using_keys_are_column_checked_on_both_sides(check, layer) -> None:
 
 
 def test_a_sibling_cte_is_not_a_source_this_scope_can_bind_to(check, layer) -> None:
-    """A CTE is *visible* everywhere; a bare name binds only to this scope's ``FROM``.
-
-    ``scope.sources`` merges every visible CTE into every scope, so the outer select below
-    counted three derived sources where Postgres sees one — and the exactly-one-derived
-    branch became unreachable for any statement with more than one CTE. Every multi-CTE
-    statement carrying a single unqualified column refused ``r_ambiguous_reference``:
-    measured on the served thread of 2026-08-19, 6 of 16 ``run_query`` attempts.
-
-    The pair is the point. Narrowing to the selected set must not narrow to *nothing*, so
-    the genuine two-base ambiguity next door
-    (``test_a_bare_name_in_a_mixed_base_and_derived_scope_refuses``) still refuses, and the
-    reference this change newly rejects is asserted below.
-    """
+    """A CTE is visible everywhere; a bare name binds only to this scope's ``FROM``."""
     result = check(
         "WITH pm AS (SELECT c.id AS pid FROM customers c), "
         "cm AS (SELECT c.id AS cid FROM customers c), "
@@ -261,12 +211,7 @@ def test_a_sibling_cte_is_not_a_source_this_scope_can_bind_to(check, layer) -> N
 
 
 def test_a_cte_outside_this_scopes_from_cannot_even_be_qualified_against(check, layer) -> None:
-    """The other half of "visible is not selectable", and the stricter half.
-
-    ``pm`` is defined and in scope, and the reference names it explicitly — but this select
-    reads ``customers``, so Postgres has no ``pm`` to resolve against and neither may we.
-    Under the old mapping this bound happily.
-    """
+    """Naming a CTE this select does not read still refuses."""
     result = check(
         "WITH pm AS (SELECT c.id AS pid FROM customers c) SELECT pm.pid FROM customers",
         retrieved_tables=CUSTOMERS,
@@ -277,14 +222,7 @@ def test_a_cte_outside_this_scopes_from_cannot_even_be_qualified_against(check, 
 
 
 def test_two_sources_answering_to_one_name_refuse(check, layer) -> None:
-    """Postgres rejects the statement; the old mapping bound it two wrong ways.
-
-    Measured on sqlglot 30.16.0, ``FROM customers AS a, orders AS a`` produced
-    ``{"a": customers, "orders": orders}``: ``a.id`` resolved to whichever source came
-    first, and ``orders.id`` resolved through a name the statement hides behind an alias.
-    Both are bindings nobody wrote. The pair distinguishes this from "two sources always
-    refuse".
-    """
+    """Postgres rejects two sources that answer to one name. Binding one of them would invent a name the alias hides."""
     result = check(
         "SELECT a.id FROM customers AS a, orders AS a",
         retrieved_tables=frozenset({"customers", "orders"}),
@@ -315,14 +253,8 @@ def test_count_star_is_the_carve_out_and_every_other_star_argument_is_not(check)
 
 
 def test_a_permitted_aggregate_over_a_bare_alias_still_refuses(check) -> None:
-    """B2 through a function any analytic allowlist would permit: the *name* is fine
-    and the argument is a whole row.
-
-    Two paths reach the same answer, and both are asserted because they refuse for
-    different reasons. With no column authorization the reference has nothing to be
-    allowed against; with a corpus that declares no column called ``t``, it is
-    positively identified as a whole-row reference and refuses one layer earlier.
-    """
+    """The function name is permitted and the argument is a whole row. Empty authorization and a corpus with no such
+    column refuse for different reasons."""
     assert check("SELECT max(t) FROM customers t", retrieved_tables=CUSTOMERS)["passed"] is False
     informed = check(
         "SELECT max(t) FROM customers t",
@@ -365,12 +297,7 @@ def test_hard_block_suspect_is_a_setting_with_both_settings_live(check) -> None:
 
 
 def test_absent_column_authorization_refuses_and_present_authorization_passes(check, layer) -> None:
-    """G1 at the column layer, with the negative half.
-
-    An empty analyst corpus authorises no columns, so a reference is refused. The
-    second assertion is what stops that from being read as "this statement is bad":
-    the identical statement passes once the authorization exists.
-    """
+    """An empty corpus refuses the reference. The same statement passes once the authorization exists."""
     sql = "SELECT c.id FROM customers c"
     absent = check(sql, retrieved_tables=CUSTOMERS)
     assert absent["failed_layer"] is layer.COLUMNS
@@ -420,15 +347,8 @@ def test_a_column_key_without_a_table_is_a_caller_error(check) -> None:
 
 
 def test_a_bare_source_name_in_a_projection_is_a_whole_row_read(check, layer) -> None:
-    """B2 without a function at all: in Postgres ``SELECT c FROM customers c`` returns
-    the whole row as a composite value.
-
-    No function layer to catch it, and zero ``Column`` nodes for the columns it emits —
-    so the only thing standing between it and the analyst is that the bare name binds to
-    a *column* key that the allowlist does not contain. The pair is the case where the
-    engine's own resolution differs: if a real column shares the alias's name, Postgres
-    reads the column, and so do we.
-    """
+    """``SELECT c FROM customers c`` is the whole row. If a real column shares that name, both Postgres and this code
+    read the column."""
     composite = check(
         "SELECT c FROM customers c", retrieved_tables=CUSTOMERS, allowed_columns=frozenset({"customers.id"})
     )

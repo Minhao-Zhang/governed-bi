@@ -1,18 +1,7 @@
-"""A broken ``check()`` is our bug, and the record has to say so.
+"""A swallowed exception inside ``check()`` records ``outcome: crashed``, not ``refused``.
 
-``Outcome``'s docstring is the rule: *"``crashed`` vs ``refused`` must stay separate: a crash is
-our bug, a refusal is the product working."* Before the 2026-08-10 audit (C3), a turn whose every
-attempt ended in a swallowed exception inside ``check()`` recorded ``outcome: refused`` — the same
-value as a turn the layer stack legitimately objected to.
-
-``govern.layers.GUARDRAIL_ERROR`` had already written down what that costs: *"a systematically
-broken ``check()`` otherwise presents as a config that refuses everything, with ``crash_rate == 0``
-and every register key present."* The count existed (``guardrail_errors``, derived by
-``execution_from_attempts``) and was gated; ``outcome`` contradicted it, and a reader comparing the
-two fields could not tell which to trust.
-
-Nothing in the suite covered this path — the whole suite stayed green through the fix, which is why
-these tests exist rather than an amendment to an existing file.
+A crash is our bug and a refusal is the product working. ``guardrail_errors`` already counts
+the exception; ``outcome`` has to agree with that count.
 """
 
 from __future__ import annotations
@@ -75,14 +64,11 @@ def test_a_layer_refusal_is_still_a_refusal() -> None:
 
 
 def test_the_two_outcomes_are_different() -> None:
-    """Guards the pair above against a future change that collapses them again — including one
-    that collapses them the *other* way, by making a plain refusal crash too."""
+    """A plain refusal and a swallowed ``check()`` exception stay different outcomes."""
     assert _finish(GUARDRAIL_ERROR)["outcome"] != _finish("r_table_not_retrieved")["outcome"]
 
 
 def test_the_crash_vocabulary_carries_the_producer() -> None:
-    """``CRASH_REFUSED_BY``'s other member, ``model_error``, has no producer in ``src/``. This
-    asserts the one that does is declared, and that ``layers.py``'s import-time guard has a stage
-    to check against — a crash refusal with no stage is attributed to nothing."""
+    """``GUARDRAIL_ERROR`` is a declared crash reason with a stage, so it is attributable."""
     assert GUARDRAIL_ERROR in CRASH_REFUSED_BY
     assert REFUSED_BY_TO_STAGE[GUARDRAIL_ERROR] is Stage.check

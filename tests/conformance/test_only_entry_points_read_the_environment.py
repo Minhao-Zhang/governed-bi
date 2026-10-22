@@ -1,20 +1,4 @@
-"""Only the entry points may read ``.env``.
-
-``credentials`` reads ``.env`` and fills ``os.environ``. A library that does that decides its
-own configuration behind its caller's back, so the rule is that only the two processes which
-*are* the caller may import it: ``api/graph_app.py`` and ``serve/__main__.py``. Everything else
-under ``src/`` takes a DSN or a client.
-
-**This test exists because the previous way of expressing the rule was geography, and geography
-did not hold.** ``credentials.py`` lived in ``tools/`` and its docstring said "Never for
-``src/``" — while both entry points imported it anyway, by putting ``tools/`` on ``sys.path``
-first. The rule was broken in the only two places it could be broken, and nothing said so. It
-also put an unpackaged directory on an installed package's runtime path and made a module named
-``credentials`` importable from anywhere in the process.
-
-Layering answers "what may this module import". The rule here is the other direction — who
-may import *it*.
-"""
+"""Only listed modules may import ``credentials``, which reads ``.env``. The rule is who may import it."""
 
 from __future__ import annotations
 
@@ -76,11 +60,7 @@ def test_no_module_outside_the_entry_points_imports_credentials():
 
 @pytest.mark.parametrize("rel", sorted(ALLOWED))
 def test_each_allowed_entry_point_exists_and_still_imports_it(rel):
-    """An allowlist naming a module that no longer imports it is an allowlist nobody prunes.
-
-    Both halves matter. A stale entry silently widens the rule the day someone adds that import
-    back for another reason.
-    """
+    """A listed module that does not import ``credentials`` is an entry nobody prunes."""
     path = SRC / rel
     assert path.exists(), f"{rel} is on the allowlist and does not exist"
     assert _imports_credentials(

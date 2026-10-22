@@ -1,13 +1,4 @@
-"""Unified retrieval index over ``summary`` only (ADR 0005 §2.2).
-
-One entry per asset; the indexed text is that asset's ``summary``. Schema tags
-are computed at build (or accepted precomputed) so ``route`` can aggregate
-before ``resolve``. Lexical postings come from :class:`.lexical.BM25` — that
-module must exist. Semantic vectors live in a :class:`~.vectors.VectorStore`
-when an embedder is supplied; this module does not call a provider SDK.
-
-Requires ``retrieve.lexical.BM25``.
-"""
+"""One entry per asset; the indexed text is ``summary``. Schema tags are fixed at build. See ADR 0005."""
 
 from __future__ import annotations
 
@@ -22,9 +13,8 @@ from .lexical import BM25
 from .semantic import cache_key
 
 if TYPE_CHECKING:
-    # Imported for real inside ``build_index``, and only when an embedder is passed:
-    # ``import lancedb`` costs ~1.1 s that every no-embedder caller (most test builds, and
-    # every ``langgraph dev`` reload) would otherwise pay for a store it never opens.
+    # Imported inside ``build_index`` only when an embedder is passed.
+    # Importing the store costs about a second that no-embedder callers would pay.
     from .vector_cache import VectorCache
     from .vectors import VectorStore
 
@@ -38,27 +28,19 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class IndexEntry:
-    """One indexed asset. ``summary`` is the only text that enters either channel."""
+    """``summary`` is the only text either channel indexes."""
 
     id: str
     summary: str
     asset_type: AssetType
-    #: Schema this entry votes for in ``route``. ``None`` = untagged (ADR §2.2).
+    #: ``None`` means this entry does not vote in ``route``.
     schema_tag: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class UnifiedIndex:
-    """Both channels over the same entry set. IDF is global; vectors optional.
-
-    ``vectors`` is keyed on asset id (safe within one build). The persistent
-    ``vector_cache`` key carries ``(model, dimensions, text)`` via
-    :func:`~governed_bi.retrieve.semantic.cache_key`.
-    """
-
     entries: Mapping[str, IndexEntry]
     lexical: BM25
-    #: This index's vectors by asset id. ``None`` means no embedder was configured.
     vectors: VectorStore | None
     embedder_model: str | None = None
     embedder_dimensions: int | None = None
@@ -74,10 +56,6 @@ def schema_tag_for(
     binding_schema: str | None = None,
     left_table_schema: str | None = None,
 ) -> str | None:
-    """Derive the index-time schema tag from :class:`~governed_bi.registry.assets.TagRule`.
-
-    The declared table in function form — the one answer to which schema an asset votes for.
-    """
     rule = ASSET_REGISTER[asset_type].tag_rule
     if rule is TagRule.itself:
         return name
@@ -96,29 +74,15 @@ def schema_tag_for(
     raise ValueError(f"unknown tag rule: {rule!r}")
 
 
-#: How alike two embeds of one text must be to be the same vector space.
-#:
-#: Deliberately **not** a register setting. A setting is a dial that affects results — a value a config might
-#: legitimately want set differently, recorded so two runs can be told apart. This one only ever
-#: decides whether a corrupt store raises, so a config choosing its own value is a config choosing
-#: not to be checked. The margin is wide in both directions: one model embedding one text twice
-#: agrees to better than 0.9999, and two different models occupy unrelated subspaces of the same
-#: width, so they agree at roughly the cosine of two arbitrary vectors.
+#: Not a setting. A config that picks this number is choosing not to be checked.
+#: Same-model repeats agree past 0.9999; different models in one width do not.
 _SAME_SPACE_COSINE = 0.99
 
-#: How many cached corpus rows to probe when the canary is being written for the first time.
-#:
-#: More than one because a *partly* re-embedded store holds rows from both spaces and a single probe
-#: landing on a new row reports "fine". **Three is not a defence against a small partial re-embed
-#: and the comment here used to imply it was**: at ``1 - (1 - p)**3``, a 1% contamination of the
-#: 14,613-row store is caught 3% of the time. What three probes reliably catch is a *whole*-store
-#: move, which is the shape a repointed gateway produces, and the canary catches that on
-#: its own. The ends and the middle rather than three from one neighbourhood.
+#: Three probes, at the ends and the middle. One probe can land on a new-space row.
+#: This sample catches a whole-store move. A tiny partial re-embed can still slip through.
 _SPACE_PROBES = 3
 
-#: The canary's text. Short, so the call costs a handful of tokens, and fixed, so its row is the
-#: same row in every store this repository writes. Content-keyed like every other row, which is
-#: what lets it live in the same table without a schema change.
+#: Fixed text, content-keyed like every other row, so the check needs no schema change.
 _SPACE_CANARY_TEXT = "governed-bi vector space canary"
 
 def _refuse_a_mixed_vector_space(
@@ -128,71 +92,16 @@ def _refuse_a_mixed_vector_space(
     *,
     embedder: Embedder,
 ) -> None:
-    """Refuse to build from a store whose existing rows came from a different embedder.
+    """Refuse rows from another embedder behind the same model id.
 
-    **The cache key cannot catch this** (audit I9). It is ``model|dimensions|text``, so a gateway
-    repointed at a different model behind the same id — a self-hosted gateway that keeps the
-    id and changes the weights — produces cache *hits* on every old row while anything new is embedded by
-    the new model. Width matches, ``corpus_content_hash`` does not move, ``embedder_model`` reads
-    the same string, and one index then holds two vector spaces in which cosine between them is
-    noise. That is the v1 incident this file's sealed contract opens with, in the one form the key
-    it prescribes cannot see.
-
-    **The check is a canary row, and the first version of it was in the wrong place.** It ran only
-    when there were misses to write, on the reasoning that a build reusing every row is a build
-    that mixes nothing. That is exactly backwards: repoint the gateway and leave the corpus alone —
-    the *most likely* shape of this incident — and there are no misses at all, so the check never
-    ran, the index was built entirely from old-space vectors, and serve then queried it with
-    new-space question vectors. The docstring sold that case as a cost saving and a test asserted
-    the probe stayed unmade. Caught in review.
-
-    So: one small embed per process, memoised per store, on every build whose store already held
-    rows when this process opened it. The canary text is fixed, so its stored vector is a direct
-    statement of which space wrote this store, and the bootstrap probes are sampled from the
-    **store's own rows under this embedder's prefix** — not from what this build happens to reuse.
-
-    ``opened_with > 0`` selects the canary path. It is **not** a proof that a store this process
-    created is safe, and a previous version of this docstring said it was, on the reasoning that
-    another embedder's rows sit under another key. That reasoning is circular: the incident is a
-    gateway repointed behind an *unchanged* id. The cold path therefore probes too, and what
-    bounds it is the sealed ``tests/model/test_embedder_contract.py``, which asserts a warm rebuild
-    by the same embedder makes **zero** embedding calls. That forbids a probe on the one remaining
-    case, not information theory — see the limit below.
-
-    The corpus-row probes cover the case the canary cannot: a store written **before** the canary
-    existed, where minting one would otherwise legitimise whatever model is current. Those rows are
-    checked at the moment the canary is minted, sampled at the ends and the middle.
-
-    **Stated limit, and it is a contract, not a law.** One case is unchecked: a repoint inside a
-    single process, against a store that same process created, where the later build hits every row.
-    A probe target *does* exist — ``keys()`` carries every row's plaintext — so this is not
-    "information-theoretically undetectable", which an earlier version of this claimed. It is
-    forbidden by ``tests/model/test_embedder_contract.py``'s assertion that a warm rebuild by the
-    same embedder embeds nothing, and that contract is sealed. Bounded: the next process to open the
-    store compares its canary and refuses. Separately, the memo means a long-lived server that never
-    rebuilds its index will not notice a mid-life repoint.
-
-    An embed failure here is **not** swallowed: this function's whole job is to be the check, and
-    a check that passes when it could not run is worse than no check.
+    The key is model, dimensions, and text, so a repointed gateway still hits. A canary row names the space that wrote
+    the store. A same-process repoint that hits every row stays unchecked until the next process opens the store.
     """
     reused = sorted(text for text, key in keys.items() if key not in absent)
     if cached.opened_with == 0:
-        # **A store this process created still needs one check, and the reasoning that said
-        # otherwise was circular.** It read: rows written by another embedder in this process are
-        # under a different key, since the key carries the model. True — and irrelevant, because
-        # the incident is a gateway repointed *behind the same id*, which is why `_Counted` in the
-        # test file reports a fixed one. So: cold store, build with A, repoint, build again with A'
-        # where some rows hit and some miss. Demonstrated in review: two spaces, no refusal.
-        #
-        # What is available here is a probe of a reused row, and only when this build also has
-        # misses — because a build with none makes no call at all, so there is no new-space vector
-        # to compare against and the mix is undetectable at zero cost. That is a real limit and it
-        # is stated in the docstring rather than papered over.
-        #
-        # No canary is minted on this path. `tests/model/test_embedder_contract.py` is sealed and
-        # asserts both `embedded == [summary]` and `len(cache) == 2`, so a cold store may neither
-        # embed nor store anything extra. Its builds never hit this branch: they either miss
-        # everything (different model, so different keys) or hit everything (no misses).
+        # A same-id repoint is not a different cache key. Probe a reused row when
+        # this build also has misses. No canary here: a cold store may not store
+        # an extra row, and a full hit has no new vector to compare.
         if reused and absent:
             probe = [reused[0]]
             fresh = embedder.embed(probe)
@@ -203,8 +112,6 @@ def _refuse_a_mixed_vector_space(
                 what="a summary this process embedded earlier",
             )
         return
-    # `VectorStore.space_is_verified` and not a module-level set: `MEMORY_URI` gives every ephemeral
-    # store the same uri, so a process-wide key would let one in-memory store answer for another.
     identity = (str(embedder.model), int(embedder.dimensions))
     if cached.space_is_verified(identity):
         return
@@ -217,19 +124,9 @@ def _refuse_a_mixed_vector_space(
     to_embed = [_SPACE_CANARY_TEXT]
     probes: list[str] = []
     if minting:
-        # Bootstrap: this store predates the canary, so its rows have never been checked against
-        # anything. **Sampled from the store, not from this build's reused set**, which is the
-        # second thing review had to correct here. Keyed on `reused`, two holes were open: a build
-        # that reuses nothing — a corpus rewrite, which this repository has just done — minted the
-        # canary in the *new* space having examined none of the pre-existing rows and then stamped
-        # the store verified forever; and `reused[0]` alone is the alphabetically-first row, which
-        # is exactly the blind spot `_SPACE_PROBES` exists to close.
-        #
-        # A target always exists: `cache_key` is `model|dimensions|text`, so `keys()` — already
-        # read once per build — carries the plaintext of every row. Only rows under **this
-        # embedder's own prefix** are eligible, because a row under another model's prefix is not
-        # a space this build can mix with, and because probing one would break the sealed
-        # `tests/model/test_embedder_contract.py`, whose second build sees only the first's rows.
+        # Sample the store's own rows, not this build's reused set. A build that
+        # reuses nothing would otherwise mint the canary having examined none.
+        # Only this embedder's prefix: another model's rows are a different space.
         prefix = f"{embedder.model}|{int(embedder.dimensions)}|"
         mine = sorted(k for k in cached.keys() if k.startswith(prefix) and k != canary_key)
         if mine:
@@ -269,11 +166,9 @@ def _assert_one_space(
     embedder: Embedder,
     what: str,
 ) -> None:
-    """``fresh`` must agree with the row already under ``key``, or this is two spaces."""
     similarity = dict(cached.search(list(fresh), keys=[key])).get(key)
     if similarity is None:
-        # It was reported present a moment ago. A store that loses a row between `missing` and
-        # `search` is not a store this build can reason about.
+        # Present a moment ago. A row that disappears between the two reads is not a store to build on.
         raise ValueError(f"cached vector for {key[:80]!r}... vanished between `missing` and `search`")
     if similarity < _SAME_SPACE_COSINE:
         raise ValueError(
@@ -293,20 +188,11 @@ def build_index(
     embedder: Embedder | None = None,
     vector_cache: VectorCache | None = None,
 ) -> UnifiedIndex:
-    """Build the unified index from summary-bearing entries.
-
-    Blank summaries refused (I1). Lexical always built. With ``embedder``, look up
-    ``vector_cache`` by :func:`~.semantic.cache_key` (model + dimensions + text),
-    embed misses once, write back. Cache without embedder raises. Vectors copied
-    from the store in Arrow; ephemeral store if no cache supplied.
-    """
     by_id: dict[str, IndexEntry] = {}
     docs: list[tuple[str, str]] = []
-    #: id → the one text that enters **both** channels. The lexical side indexed
-    #: ``summary.strip()`` while the cache key was built from the unstripped ``summary``, so the
-    #: two channels scored different strings and a curation pass that changed only surrounding
-    #: whitespace re-embedded an asset whose BM25 postings were byte-identical (audit I8). One
-    #: variable, read by both, is the only shape in which they cannot drift again.
+    # One string for both channels. Strip on one side and not the other made
+    # them score different text, and a whitespace-only edit re-embedded an
+    # asset whose lexical postings had not changed.
     indexed_text: dict[str, str] = {}
     for entry in entries:
         text = entry.summary.strip()
@@ -318,8 +204,7 @@ def build_index(
         indexed_text[entry.id] = text
         docs.append((entry.id, text))
 
-    # `k` from the register, not `BM25`'s own default. The two agreed at 1.2, which is why
-    # nobody noticed `lexical_saturation_k` shipping UNSET while this line ran a literal.
+    # ``k`` comes from the register. A literal here can drift from ``lexical_saturation_k``.
     lexical = BM25(docs, k=float(setting_default("lexical_saturation_k")))
 
     if vector_cache is not None and embedder is None:
@@ -337,13 +222,12 @@ def build_index(
         from .vectors import VectorStore
 
         model, dims = embedder.model, embedder.dimensions
-        # One store per width. A wrong-width row cannot reach it: the column type is
-        # `fixed_size_list[dims]`, so storage refuses what a dict cache had to check by hand.
+        # One store per width. The column type refuses a wrong-width row.
         cached = (VectorCache() if vector_cache is None else vector_cache).at_width(dims)
 
-        # One cache key per distinct summary. Content-keyed, not id-keyed, because curation
-        # rewrites summaries in place under the same id (ADR 0005 §2.2). Keyed on the **indexed**
-        # text, so the string BM25 has postings for is the string that was embedded (audit I8).
+        # Content-keyed, not id-keyed: curation rewrites a summary under the same id
+        # (ADR 0005). Keyed on the indexed text, so the embedded string is the one
+        # with lexical postings.
         keys: dict[str, str] = {}
         for entry in by_id.values():
             text = indexed_text[entry.id]
@@ -351,12 +235,9 @@ def build_index(
 
         absent = set(cached.missing(list(keys.values())))
         missing = [text for text, key in keys.items() if key in absent]
-        # **Outside `if missing:`, which is where it belongs.** A build that reuses *every* row is
-        # the most dangerous one, not the safest: it is what a repointed gateway looks like when the
-        # corpus has not changed. Memoised per store, so this is one small embed call, and only on a
-        # store that already held rows when this process opened it, plus one probe on a cold store
-        # whose build both reuses and misses. What bounds the case that stays open is the sealed
-        # `tests/model/test_embedder_contract.py`, not an absence of anything to check.
+        # Before the miss check. A build that reuses every row is what a repointed
+        # gateway looks like when the corpus has not changed, and it must still
+        # be checked. Memoised per store.
         _refuse_a_mixed_vector_space(cached, keys, absent, embedder=embedder)
         if missing:
             embedded = embedder.embed(missing)

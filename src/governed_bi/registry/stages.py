@@ -1,10 +1,4 @@
-"""Stage and outcome vocabulary for where a turn went and how it ended.
-
-Text and pure functions only: no I/O, settings, or non-stdlib imports. Two axes:
-:class:`Outcome` (turn ending) and :class:`Stage` (pipeline position).
-Gradeability is orthogonal and does not live here. ADR 0005 and ADR 0006 stages
-share one enum.
-"""
+"""Gradeability does not live here. ADR 0005 and ADR 0006 stages share one enum."""
 
 from __future__ import annotations
 
@@ -27,82 +21,64 @@ __all__ = [
 
 
 class Stage(str, Enum):
-    """A position in the pipeline, named as the live event stream names it.
+    """Declared-but-unemitted members stay, so instrumentation does not invent a second name.
 
-    Declared-but-unemitted members are kept so instrumentation does not invent a
-    second name. Absent keys in ``by_failed_stage`` mean not observed, not zero.
+    Absent keys in ``by_failed_stage`` mean not observed, not zero.
     """
 
-    # ── Graph nodes, in execution order (ADR 0005 §3.1) ──
-    #: Derives a turn from the conversation when the caller sends only a message.
-    #: Optional: `START -> accept -> guard` on a server; `START -> guard` otherwise.
+    #: Optional. A server goes start, accept, guard; otherwise start, guard.
     accept = "accept"
-    #: Rule-based input check. ADR 0006 §6 owns the rules; this owns the name.
+    #: ADR 0006 owns the rules; this owns the name.
     guard = "guard"
-    #: Follow-up rewritten into a self-contained question (multi-turn only).
     rewrite = "rewrite"
 
-    # ── The five channels, concurrent ──
-    # Named individually: "which channel degraded" is a quotability input.
+    # Named individually: which channel degraded is a quotability input.
     channel_schema = "channel_schema"
     channel_term = "channel_term"
     channel_metric = "channel_metric"
     channel_entity = "channel_entity"
     channel_example = "channel_example"
 
-    # ── Post-fan-in, deterministic ──
-    #: Schema selection plus the second retrieval pass.
     route = "route"
-    #: Reference closure. A total function of the hit set.
+    #: A total function of the hit set.
     resolve = "resolve"
-    #: Steiner connectivity. A choice among paths, and therefore bounded.
+    #: A choice among paths, and therefore bounded.
     connect = "connect"
-    #: Context rendering only.
     assemble = "assemble"
 
-    # ── The agent loop ──
-    # No `run_query` member: a passing query already emits `check` + `execute`.
+    # No `run_query` member: a passing query already emits `check` and `execute`.
     agent_core = "agent_core"
-    #: Retrieve ``body`` of assets that rendered structure-only.
     read_body = "read_body"
     inspect_schema = "inspect_schema"
     sample_rows = "sample_rows"
     ask_user = "ask_user"
 
-    # ── Execution governance (ADR 0006) ──
-    #: The layer stack. A block here is a governance decision, never a crash.
+    #: A block here is a governance decision, never a crash.
     check = "check"
-    #: A statement reached the database.
     execute = "execute"
-    #: Re-executed after a passing recheck, delivered marked unverified.
+    #: Delivered marked unverified.
     graded_delivery = "graded_delivery"
-    #: Attempt cap terminated the turn. Distinct from crash and model refusal.
+    #: Distinct from crash and model refusal.
     cap = "cap"
 
-    #: The declared abstention policy (ADR 0013), between ``assemble`` and ``agent_core``.
-    #: It decides, and it sits before the agent: deciding after five ``run_query``
-    #: attempts is a report on a turn, not a decision about one.
+    #: Sits before the agent (ADR 0013). Deciding after five attempts is a report, not a decision.
     abstain = "abstain"
 
-    #: Turns the turn into a sentence. Adopts the agent's closing text when present;
-    #: generates only when the loop ended without prose.
+    #: Generates only when the loop ended without prose.
     narrate = "narrate"
 
-    # ── Terminals ──
     refuse = "refuse"
     decline = "decline"
-    #: Writes an ``Answer``. Every terminal path funnels here.
+    #: Every terminal path funnels here.
     finish = "finish"
 
-    # ── Attributed after the fact by the offline analyser ──
+    #: Attributed after the fact. Not a live stage.
     table_select = "table_select"
     sql_generate = "sql_generate"
 
-    # ── Declared, not yet emitted ──
     repair = "repair"
 
 
-#: Channel stages in fan-out order.
 CHANNEL_STAGES: tuple[Stage, ...] = (
     Stage.channel_schema,
     Stage.channel_term,
@@ -111,45 +87,15 @@ CHANNEL_STAGES: tuple[Stage, ...] = (
     Stage.channel_example,
 )
 
-#: Stages that end a turn. ``finish`` is not one: every terminal passes through it.
+#: ``finish`` is not one: every terminal passes through it.
 TERMINAL_STAGES: frozenset[Stage] = frozenset({Stage.refuse, Stage.decline, Stage.cap})
 
 
 class Outcome(str, Enum):
-    """How a turn ended, from the measurement's point of view.
-
-    ``crashed`` vs ``refused`` must stay separate: a crash is our bug, a refusal is
-    the product working, and ``capped`` is neither (ADR 0006 §5). Graded delivery is
-    not an outcome — the turn ``answered``.
-
-    :attr:`no_sql` is the fourth thing none of those three is, and it must stay apart from
-    :attr:`answered` for the reason the class exists: **the turn executed no governed
-    statement.** For an engine whose claim is grounded answers that is the distinction that
-    matters — an answer with no auditable statement is not a governed answer — and folding it
-    into ``answered`` is what made a model declining in prose ("these terms are not defined in
-    the provided schemas") record ``outcome: answered`` beside ``ledger: no_sql`` and
-    ``generated_sql: null``, live, on 2026-08-18.
-
-    It is deliberately **not** narrower than that. Three live paths produce exactly these
-    signals and the record cannot separate them: the no-model stub
-    (``agent_core._stub``), a genuine answer read off the delivered context ("which tables are
-    available?"), and a prose decline. Naming the member after the one property all three share
-    is the only claim the ledger can back; a "does this prose look like a refusal" heuristic
-    would be a declaration with no enforcer, which is what this register exists to refuse.
-
-    :attr:`clarification` is **one member over two endings**, and that is a deliberate limit on
-    what it may be used for. The engine asked the reader something and got no usable answer,
-    either because the turn paused on ``ask_user`` and nothing resumed it — no node ever wrote
-    that turn — or because the reader declined or cancelled and ``ask_user`` failed closed, which
-    ends the agent loop and *does* reach ``finish`` with a full record. Both are the same fact
-    about delivery (no governed answer ran, and the reader owes one), so they are counted together
-    by ``measure/selective.DECLINED``, ``eval/grade.grade_turn`` and ``eval/projection``'s
-    ``clarified`` — splitting the member would split those three counts for no measurement
-    question, and would put a value in the artifacts that ``ui/lib/schemas.ts``'s closed outcome
-    enum drops on the floor. What the member therefore **cannot** answer is whether the row was
-    written. A consumer needing that must read a field ``finish`` writes;
-    ``measure/checks._paused_before_finish`` is the one that does, and carries the write-up of what
-    reading the outcome instead cost. The two writers are named in :func:`classify_outcome`.
+    """``crashed``, ``refused``, and ``capped`` stay apart (ADR 0006).
+    Graded delivery is ``answered``. ``no_sql`` names only that no governed
+    statement ran. ``clarification`` counts a pause and a decline together.
+    Whether the row was written is a field ``finish`` writes.
     """
 
     answered = "answered"
@@ -157,48 +103,24 @@ class Outcome(str, Enum):
     clarification = "clarification"
     capped = "capped"
     crashed = "crashed"
-    #: Spelled exactly as ``govern.ledger.ExecutionRecord``'s ``terminal`` word, and
-    #: ``govern/ledger.py`` asserts the two agree at import. ``finish`` derives this member
-    #: *from* that field rather than from ``path_kind``, the same way it reads the ledger's
-    #: result for ``capped``, so ``outcome`` and ``ledger`` cannot disagree; a second spelling
-    #: here would be a second answer to one question.
+    #: Same spelling as the ledger ``terminal`` word; ``finish`` derives this member from that field.
     no_sql = "no_sql"
 
 
-#: The abstention policy's closed vocabulary — **the reason the engine decided to withhold**,
-#: as opposed to the rule a layer happened to refuse under.
-#:
-#: Declared here rather than in ``serve/`` because that is what makes it closed: two import-time
-#: guards (:func:`_assert_refusal_tables_are_closed` below and
-#: ``serve/abstention.py::_assert_the_policy_speaks_the_declared_vocabulary``) are
-#: bidirectional across this module and the policy, so a reason cannot arrive as a bare string in
-#: ``serve/``. Order is **not** encoded here; which rule wins when two fire is the policy's
-#: judgement, in ``serve/abstention.py``. (Both were ``serve/nodes/abstain.py`` until 2026-08-25,
-#: when the policy split from its graph adapter; the adapter keeps the node's name.)
-#:
-#: Why the vocabulary rather than a score, what the guards structurally cannot see, and the
-#: ``unattributed`` bucket that covers that gap: ADR 0013 §2.
+# Closed vocabulary of why the engine withheld, not which rule a layer refused under.
+# Order is the policy's, in ``serve/abstention.py``. Why a vocabulary rather than a
+# score, and the unattributed bucket: ADR 0013.
 ABSTENTION_REASONS: frozenset[str] = frozenset({
-    #: A channel channel that was configured to run, ran, and errored. The shortlist this turn
-    #: worked from was produced by a retriever that is not the declared one.
     "retrieval_channel_failed",
-    #: The turn retrieved_tables no table. No statement it writes can clear Layer 6, so the five
-    #: ``run_query`` attempts are spent discovering what ``connect`` already knew.
     "nothing_retrieved",
-    #: The rendered context is empty. The model has been handed nothing to work from.
     "empty_context",
-    #: The char budget dropped a whole retrieved table before the model saw it, so the turn is
-    #: asking for SQL over a relation it did not show.
     "retrieved_table_dropped",
 })
 
-#: Where each ``refused_by`` value was decided. Inventory of legal values for
-#: :func:`classify_outcome`.
 REFUSED_BY_TO_STAGE: Mapping[str, Stage] = {
     "guard": Stage.guard,
     "no_schema_matched": Stage.route,
-    # `resolve` runs inside the connect parcel and has no stage of its own; its decline is
-    # attributed where the closure it refused would have been used.
+    # `resolve` has no stage of its own; its decline is attributed to connect.
     "over_resolve_bounds": Stage.connect,
     "missing_join_path": Stage.connect,
     "over_connect_bounds": Stage.connect,
@@ -209,26 +131,17 @@ REFUSED_BY_TO_STAGE: Mapping[str, Stage] = {
     **{reason: Stage.abstain for reason in sorted(ABSTENTION_REASONS)},
 }
 
-#: ``refused_by`` values that mean our bug (crash wearing a refusal finish).
-#:
-#: Spelled as literals, not imported: ``register`` sits below ``govern``, so
-#: ``govern.layers.GUARDRAIL_ERROR`` cannot be referenced here and ``layers.py`` asserts at
-#: import that the two agree. Do not "fix" this into an import.
-#:
-#: ``model_error`` has no producer in ``src/`` and stays a declared value.
-#:
-#: Why ``guardrail_error`` belongs here rather than under ``refused``: ADR 0005 §3.2 and
-#: ``govern.layers.GUARDRAIL_ERROR``'s docstring, which name what it looked like when it did not
-#: (a config refusing everything at ``crash_rate == 0`` with every register key present).
+# Literals, not an import: this package sits below ``govern``, and ``layers.py`` asserts they agree.
+# ``model_error`` has no producer in ``src/`` and stays declared.
+# Why ``guardrail_error`` is a crash: ADR 0005.
 CRASH_REFUSED_BY: frozenset[str] = frozenset({"model_error", "guardrail_error"})
 
-#: Attempt-cap ``refused_by``. Named so rename stays in step with the table.
 ATTEMPT_CAP_REFUSED_BY = "attempt_cap"
 
-#: Grader could not finish — harness failure; turn is ``crashed``.
+#: Harness failure; the turn is ``crashed``.
 INFRA_ERROR_PREFIX = "infra_error:"
 
-#: Grader error prefixes that describe an answer, not a crash.
+#: These describe an answer, not a crash.
 GRADER_ANSWER_PREFIXES: frozenset[str] = frozenset({"gold_unusable:", "exec_error:"})
 
 
@@ -240,27 +153,10 @@ def classify_outcome(
     clarification_requested: bool = False,
     terminal: str | None = None,
 ) -> Outcome:
-    """Map terminal signals onto exactly one :class:`Outcome`.
-
-    Precedence: infra error → crash refused_by → attempt cap → clarification →
-    other refused_by → SQL present ⇒ answered → the ledger's own ``no_sql`` ⇒
-    :attr:`Outcome.no_sql`, else crashed.
-
-    ``clarification_requested`` reaches this function on exactly one path — a reader who declined
-    or cancelled a question ``ask_user`` asked — and the branch below traces the writer, says why
-    it sits where it does, and names the one ``refused_by`` it outranks. A turn that *paused* on
-    ``ask_user`` never calls this function.
-
-    ``terminal`` is ``govern.ledger.ExecutionRecord``'s field, and it is read in the **last two
-    lines only**. That ordering is: a guard-blocked or declined turn also carries
-    an empty ledger, so ``terminal == "no_sql"`` is true of it, and reading the ledger any
-    earlier would relabel a refusal as a turn that merely ran no statement.
-    :func:`_assert_refusal_tables_are_closed` asserts the precedence over the whole declared
-    vocabulary rather than leaving it to this docstring.
-
-    An **absent** ``terminal`` still falls through to ``crashed``. A turn with no statement whose
-    ledger says nothing at all has not been observed ending, and that is what a crash is; the
-    caller has to hand over the ledger's result to get :attr:`Outcome.no_sql`.
+    """Precedence: infra error, crash ``refused_by``, cap, clarification,
+    other refusal, SQL, then ``no_sql``, else crashed. ``terminal`` is read
+    last, because a refusal also carries an empty ledger. A pause never calls
+    this function. An absent ``terminal`` stays ``crashed``.
     """
     if error and error.startswith(INFRA_ERROR_PREFIX):
         return Outcome.crashed
@@ -269,15 +165,8 @@ def classify_outcome(
     if refused_by == ATTEMPT_CAP_REFUSED_BY:
         return Outcome.capped
     if clarification_requested:
-        # Reaching here means the engine asked and the reader *declined* — a written turn with a
-        # full record. A live pause never reaches this function at all; it raises
-        # ``GraphInterrupt``. So this member is **not** a evidence of "never reached ``finish``",
-        # and reading it as one is a live defect this project has already shipped once.
-        #
-        # Tested before the general ``refused_by`` on purpose, which masks exactly one pair
-        # (``guardrail``). The precedence rule, why the decline outranks the layer refusal, and
-        # what that costs ``eval/report.refusal_histogram``: `docs/architecture.md`, "Outcome
-        # precedence, and the one pair it masks".
+        # A decline, not a pause: a pause raises GraphInterrupt and never arrives.
+        # Before the general ``refused_by`` branch, so it outranks ``guardrail``.
         return Outcome.clarification
     if refused_by:
         return Outcome.refused
@@ -288,14 +177,7 @@ def classify_outcome(
     return Outcome.crashed
 
 
-# ``classify_row`` was here and is gone (audit §10): zero callers, and it was a second
-# entry point to one decision (read the written ``outcome`` if it parses, else re-derive)
-# that would have disagreed exactly when the finish was wrong. One derivation, no fallback:
-# a row whose ``outcome`` does not parse is a broken row, not a row to guess about.
-
-
 def _assert_refusal_tables_are_closed() -> None:
-    """Import-time: refusal tables closed; cap key maps to Stage.cap."""
     bad_stage = sorted(k for k, v in REFUSED_BY_TO_STAGE.items() if not isinstance(v, Stage))
     if bad_stage:  # pragma: no cover - import-time guard
         raise AssertionError(f"refused_by values mapping to a non-Stage: {bad_stage}")
@@ -343,13 +225,9 @@ def _assert_refusal_tables_are_closed() -> None:
             "the product working; `Outcome` requires it stay apart from our own bugs."
         )
 
-    # Every declared refusal outranks an empty ledger. A guard-blocked turn, a decline and an
-    # abstention all reach `finish` with `attempts: []`, so `execution.terminal` is `"no_sql"` on
-    # each of them -- and `Outcome.no_sql` is the one member that reads that field. Tested over
-    # the whole vocabulary rather than trusted to `classify_outcome`'s line order, because the
-    # failure is silent: the refusal keeps its `refused_by`, its `terminal_reason` and its stage,
-    # and only `outcome` stops saying a decision was taken. `refusal_histogram` counts `refused`
-    # rows, so the reasons would simply leave the histogram.
+    # Every declared refusal outranks an empty ledger: a blocked turn also has
+    # terminal "no_sql", and only Outcome.no_sql reads that field. Checked over the
+    # vocabulary, because a silent miss would drop the reason from the histogram.
     leaked = sorted(
         reason
         for reason in REFUSED_BY_TO_STAGE

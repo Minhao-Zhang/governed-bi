@@ -19,7 +19,6 @@ _SPLIT = pathlib.Path(__file__).resolve().parent.parent / "docs" / "data" / "db-
 
 
 def load_halves(path: pathlib.Path = _SPLIT) -> dict[str, str]:
-    """``{db_id: dev|holdout}`` from the committed split."""
     out: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines()[1:]:
         if not line.strip() or "," not in line:

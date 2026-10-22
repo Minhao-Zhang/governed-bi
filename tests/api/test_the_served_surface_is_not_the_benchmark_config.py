@@ -1,24 +1,7 @@
-"""The served surface runs production's suspect policy; the benchmark keeps its own.
+"""``serve_policy`` soft-warns on suspect columns; the benchmark default still refuses.
 
-``hard_block_suspect`` ships ``True`` and its ``why`` says that is "development and the
-benchmark", with production soft-warning instead. Until 2026-08-19 ``api/graph_app.py``
-constructed its ``GovernancePolicy`` without the field, so the *served* surface — a real
-deployment answering real questions — silently ran the benchmark's config.
-
-**What it cost, on the live corpus.** ``plant_run_hour_readings.tag_description`` is marked
-``suspect``, and the same column's body states it is the only bridge from a historian tag to
-an asset. Asked which chillers ran the most hours, the agent reached for ``sample_rows`` on
-that column — the right tool for the question — and was refused at COLUMNS. It fell back to
-reading bare tag names (``BOP_HMI_DFP4_TOT_RT``, ``BOP_HMI_OPI_B1_GAS_RT``) out of which no
-equipment type can be recovered, spent all five ``run_query`` attempts probing, and hit the
-cap with no answer. The descriptions settle the question outright: 81 tags, all boilers and
-pumps across two steam plants, not one chiller. The turn read as a model that could not
-budget its attempts; it was a model denied the one column that carried the meaning.
-
-**These tests pin the difference, not just the value.** Asserting only that serve is ``False``
-would pass if someone "fixed" the setting default and made the benchmark soft-warn too — which
-would let a measured number rest on a column the corpus says not to trust. The benchmark half
-is the half.
+Asserting only that serve is false would pass if the default were relaxed too, and a measured
+number could then rest on a suspect column.
 """
 
 from __future__ import annotations
@@ -32,7 +15,6 @@ _SUSPECT = frozenset({"main.readings.tag_description"})
 
 
 def _result(policy: GovernancePolicy) -> dict:
-    """One statement reading one suspect column, judged under ``policy``."""
     return check(
         "SELECT r.tag_description FROM main.readings r",
         retrieved_tables=_RETRIEVED_TABLES,
@@ -42,7 +24,6 @@ def _result(policy: GovernancePolicy) -> dict:
 
 
 def test_the_served_policy_soft_warns_on_a_suspect_column() -> None:
-    """Production semantics, reached through the boundary the server uses."""
     from governed_bi.api.graph_app import serve_policy
 
     policy = serve_policy()
@@ -55,10 +36,9 @@ def test_the_served_policy_soft_warns_on_a_suspect_column() -> None:
 
 
 def test_the_benchmark_still_hard_blocks_a_suspect_column() -> None:
-    """The other half. ``eval/configs.py`` and the ``tools/`` drivers build their own policy and
-    pass no ``hard_block_suspect``, so they inherit the ``True`` default — and must keep it.
-    A measured number resting on a column the corpus marks unreliable is the thing this setting
-    exists to prevent, so relaxing the *default* to fix the server would be the wrong repair.
+    """Benchmark configs omit the flag and inherit the refusing default.
+
+    Relaxing that default is the wrong repair.
     """
     result = _result(GovernancePolicy())
 
@@ -70,18 +50,7 @@ def test_the_benchmark_still_hard_blocks_a_suspect_column() -> None:
 
 
 def test_the_served_policy_runs_every_guard_rule_and_the_benchmark_runs_none() -> None:
-    """The served surface enables every rule; a benchmark config enables nothing. Pin the gap.
-
-    **This assertion used to be ``== {BI_SCOPE_RULE_ID: True}`` and that was the bug's
-    accomplice.** An exact-equality pin on a dict literal cannot tell a fix from a
-    regression: enabling the five deterministic rules — the fix — failed it, and so would
-    deleting the scope check. The suite's only opinion about the shipped guard configuration
-    was "it must be exactly this", in a file whose own docstring says these tests pin *the
-    difference, not the value*. Two subset assertions say the same thing and survive a fix.
-
-    The gap is the point, as it is for ``hard_block_suspect`` above: a config measures what the
-    layer stack is worth with governance off, and the served surface is where it is on.
-    """
+    """Subset checks, not dict equality: an exact pin fails when enabling a new rule, which is the fix."""
     from governed_bi.api.graph_app import serve_policy
 
     policy = serve_policy()
@@ -106,13 +75,7 @@ def test_the_served_policy_runs_every_guard_rule_and_the_benchmark_runs_none() -
 
 
 def test_the_served_policy_blocks_a_textbook_prompt_injection() -> None:
-    """The configuration assertion above, as behaviour. It is the one that would have failed.
-
-    ``test_..._changes_nothing_else`` compared a dict to a dict and never called ``guard()``,
-    so five rules that are 100% line-covered by ``tests/govern/`` could be — and were —
-    dispatched on no served turn at all. Coverage said the rules were exercised; nothing said
-    the shipped policy exercised them.
-    """
+    """Dict equality never called ``guard``, so line-covered rules could be off on the served policy."""
     from governed_bi.api.graph_app import serve_policy
     from governed_bi.govern.guard import guard
 

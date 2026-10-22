@@ -1,9 +1,6 @@
-"""Corpus on disk: YAML in, typed assets out, one bad item at a time.
+"""YAML on disk to typed assets. A bad item is one problem; ``load`` does not raise for it.
 
-:func:`load` returns ``(assets, problems)`` and never raises for a bad item.
-One file ⇒ at most one problem entry (may list multiple rules). Absorbs YAML 1.1
-``on:`` bool aliasing, ``utf-8-sig``, and treats ``UnicodeDecodeError`` as
-``ValueError``.
+``.yml`` is reported, not skipped. YAML 1.1 ``on`` stays a string.
 """
 
 
@@ -28,20 +25,14 @@ from .validate import Problem, problems_with
 
 __all__ = ["SUFFIX", "load", "load_file", "write"]
 
-#: The one suffix a corpus asset file has.
 SUFFIX = ".yaml"
 
-#: Suffixes :func:`load` looks at. ``.yml`` is included **so it can be reported**: it is
-#: the one near-miss that is almost certainly a typo, and a file the loader ignores in
-#: silence is an asset the corpus lost. Other files (D9's markdown) are not asset files.
+#: ``.yml`` is listed so a near-miss suffix is reported. Other files are not asset files.
 _LOOKED_AT: tuple[str, ...] = (SUFFIX, ".yml")
 
 
 def _loader_class() -> type:
-    """YAML loader with YAML 1.1 bool aliases removed so ``on`` stays a string.
-
-    Prefers ``CSafeLoader`` when available.
-    """
+    """YAML loader with the 1.1 bool aliases removed, so a join key ``on`` stays a string."""
     try:
         base: type = yaml.CSafeLoader  # type: ignore[attr-defined]
     except AttributeError:  # pragma: no cover - depends on the libyaml build
@@ -67,11 +58,7 @@ _LOADER = _loader_class()
 def load(
     root: Path | str, *, schemas: Sequence[str] | None = None
 ) -> tuple[list[Asset], list[Problem]]:
-    """Every asset under ``root``, plus one problem per item that could not load.
-
-    ``schemas`` is the manifest (those subtrees + ``_shared``); missing dirs are
-    reported. ``schemas=None`` means the tree is the manifest.
-    """
+    """Assets plus one problem per bad item. ``schemas=None`` means the tree is the manifest."""
     base = Path(root)
     problems: list[Problem] = []
     if not base.is_dir():
@@ -107,11 +94,7 @@ def load(
 
 
 def load_file(path: Path, *, where: str | None = None) -> tuple[list[Asset], list[Problem]]:
-    """One file. Never raises.
-
-    ``where`` overrides the label in a problem so a caller can report a corpus-relative
-    path; an absolute one differs per machine and makes problem diffs incomparable.
-    """
+    """One file. Never raises. ``where`` is the problem label, so the text does not depend on the machine."""
     label = where or str(path)
     try:
         text = path.read_text(encoding="utf-8-sig")
@@ -135,14 +118,7 @@ def load_file(path: Path, *, where: str | None = None) -> tuple[list[Asset], lis
 
 
 def _one(raw: Any, *, where: str) -> tuple[list[Asset], list[str]]:
-    """One raw mapping into its asset, plus any inline columns.
-
-    **Construct, then validate — two steps, no sanitize step** (ADR 0005 §1.6). The corpus
-    is trusted and the question is not, so injection is checked at the analyst's input by
-    ``govern.guard``. Re-adding a sanitizer here would also break setting under test identity:
-    it changes what reaches the model while ``corpus_content_hash``, taken over the files
-    on disk, does not move. Validation therefore bounds exactly the text that is indexed.
-    """
+    """Construct, then validate. A sanitizer would change indexed text without moving the file hash. See ADR 0005."""
     if not isinstance(raw, Mapping):
         return [], [f"expected a mapping, got {type(raw).__name__}"]
     if "asset_type" not in raw:
@@ -171,16 +147,7 @@ def _one(raw: Any, *, where: str) -> tuple[list[Asset], list[str]]:
 def _split_inline_columns(
     raw: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
-    """A table's inline columns into their own raw mappings, with derived ids.
-
-    On disk a column lives inline under its table; in memory it is its own asset with its
-    own index entry, so that columns are ranked at all. ``columns`` on the parent becomes
-    the derived ids, so a column has exactly one representation.
-
-    **Identity is derived, never read** (ADR 0005 §1.2): a file supplying an ``id``, or a
-    ``parent_table``/``schema`` disagreeing with the table it is stored under, is a problem
-    rather than an override.
-    """
+    """Inline columns become their own assets. Identity is derived; a disagreeing field is an error. See ADR 0005."""
     if raw.get("asset_type") != "table" or "columns" not in raw:
         return raw, [], []
     inline = raw.get("columns")
@@ -204,10 +171,7 @@ def _split_inline_columns(
             "asset_type": "column",
             "id": derive_column_id(table_id, name),
             "schema": schema,
-            # The table's **id**, not its bare physical name (ADR 0008 D4): a reference
-            # field names an asset exactly, and a bare physical name is unambiguous only
-            # inside one schema -- the defect that cost 25% of the corpus's joins when 57
-            # schemas were pooled (decision #47, pre-2026-08-05).
+            # Parent is the table id, not the physical name: a reference names one asset (ADR 0008).
             "parent_table": table_id,
         }
         clashes = sorted(k for k, v in derived.items() if k in column and column[k] != v)
@@ -225,18 +189,7 @@ def _split_inline_columns(
 
 
 def write(root: Path | str, asset: Asset, *, namespace: str | None = None) -> Path:
-    """Persist one asset, and **raise** on anything unsafe or invalid.
-
-    Not error-isolated, unlike :func:`load`: a bad item on the read path is a degradation to
-    survive, an unsafe path component on the write path is a security control. v1's
-    ``asset.schema`` escaped the corpus root because the write directory was derived from it
-    while the only validator nearby guarded the asset *id*.
-
-    ``namespace`` is required for the three types with no ``schema`` field (``join``,
-    ``metric``, ``term``): ADR 0005 does not say where such a file lives, so this refuses to
-    guess rather than inventing a default that must then be reconciled with the tag rule.
-    Pass :data:`~governed_bi.corpus.identity.SHARED_NAMESPACE` for a global asset.
-    """
+    """Raise on an invalid asset. Types with no ``schema`` need ``namespace``; the directory is not guessed."""
     reasons = problems_with(asset)
     if reasons:
         raise ValueError("; ".join(reasons))
@@ -252,12 +205,7 @@ def write(root: Path | str, asset: Asset, *, namespace: str | None = None) -> Pa
 
     target = Path(root) / directory / f"{asset.id}{SUFFIX}"
     target.parent.mkdir(parents=True, exist_ok=True)
-    # An explicit LF and not the platform default: ``corpus/hash.py`` digests ``read_bytes()``,
-    # so without it the same asset written on Windows and on Linux produces two different
-    # ``corpus_content_hash`` values for identical content. ``../BIRD-corpus/.gitattributes``
-    # already defends the *checkout* against exactly this (``* -text``, with a nine-line header
-    # about it); this line defeated that defence from the write side. Every config digest in
-    # ``registry/configs.toml`` is keyed on that hash.
+    # LF, not the platform newline: the content hash reads bytes.
     target.write_text(
         yaml.safe_dump(to_mapping(asset), sort_keys=False, allow_unicode=True),
         encoding="utf-8",
@@ -267,11 +215,9 @@ def write(root: Path | str, asset: Asset, *, namespace: str | None = None) -> Pa
 
 
 def _namespace(asset: Asset) -> str | None:
-    """The subtree this asset belongs in, or ``None`` when its type declares none.
+    """Subtree for this asset, or ``None`` when the type has no schema field.
 
-    Two explicit cases, not an attribute sweep: ``MetricAsset`` and ``TermAsset`` also have
-    a ``name``, and it is a *business* name — a metric called ``revenue`` would land in a
-    directory called ``revenue``.
+    A metric or term ``name`` is a business name, so it is not the directory.
     """
     if isinstance(asset, SchemaAsset):
         return asset.name or None
@@ -280,13 +226,7 @@ def _namespace(asset: Asset) -> str | None:
 
 
 def _assert_column_ids_are_derived_the_same_way() -> None:
-    """Import-time guard on the one identity this module computes.
-
-    :func:`_split_inline_columns` and the seed both mint column ids through
-    :func:`~governed_bi.corpus.identity.derive_column_id`. If its shape changes, the index,
-    ``resolve``'s closure and the budget key on different strings for one column, with
-    nothing raising. This asserts the shape the loader relies on.
-    """
+    """The loader and the seed must keep one column-id spelling."""
     probe = derive_column_id("beer_factory.customers", "email")
     if not probe.startswith("beer_factory.customers") or probe.rsplit(".", 1)[-1] != "email":
         raise AssertionError(  # pragma: no cover - import-time guard

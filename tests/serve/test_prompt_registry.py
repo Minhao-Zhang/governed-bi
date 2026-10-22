@@ -1,15 +1,4 @@
-"""``prompt_set_hash`` must cover every prompt the engine sends (``registry/prompts.py``).
-
-**The defect this file exists to prevent has a measured precedent.** ``prompt_set_hash`` was
-``_digest(SYSTEM_PROMPT)`` — one prompt — and the engine is gaining a guard check, five channel
-rewriters and a narrator. Two runs whose guard prompt differed would then have reported the same
-hash, and the shared-settings check would have cleared the pair the second run existed to isolate. That is
-not hypothetical: ``registry/settings.py`` records two v1 ladders that differed **only** in
-``llm_reasoning_effort``, which was recorded nowhere, and effort moved the baseline config +2.5pp
-against a 2.3pp detection threshold.
-
-So the assertion that matters is :func:`test_the_hash_moves_when_any_prompt_moves` — every
-registered prompt, one at a time. A registry with a prompt the hash does not reach fails there.
+"""``prompt_set_hash`` covers every prompt the engine sends, not only the system prompt.
 """
 
 from __future__ import annotations
@@ -48,13 +37,7 @@ def test_every_prompt_states_why_it_exists() -> None:
 
 
 def test_the_hash_moves_when_any_prompt_moves(monkeypatch: pytest.MonkeyPatch) -> None:
-    """**The test.** Every registered prompt, one at a time.
-
-    A prompt the hash does not reach is a setting under test the run cannot report, which is the whole
-    failure. Parametrising over the live registry rather than a hand-written list is deliberate
-    here — unlike the stage vocabulary, where a hand-written list is what catches the *code*
-    being wrong, this property is about coverage of whatever happens to be registered.
-    """
+    """**The test.** Every registered prompt, one at a time."""
     baseline = prompt_set_hash()
     for name, prompt in PROMPT_REGISTRY.items():
         edited = Prompt(
@@ -74,12 +57,7 @@ def test_the_hash_moves_when_any_prompt_moves(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_the_hash_covers_the_variant_not_only_the_text(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two variants that happen to be identical today must still be distinguishable.
-
-    Hashing only text would collapse them and then silently diverge, so a run could not say
-    which one it asked for. Hashing only names would make an edit to ``v1``'s wording invisible.
-    The hash does both.
-    """
+    """Two variants that happen to be identical today must still be distinguishable."""
     twin = Prompt(
         name="analyst",
         stage="agent_core",
@@ -134,16 +112,7 @@ def test_the_engine_sends_the_registered_text() -> None:
 
 
 def test_a_selected_variant_reaches_the_analyst() -> None:
-    """The whole point of the setting, and the way it would fail: silently.
-
-    ``analyst_prompt`` was ``SYSTEM_PROMPT = prompt_text("analyst")``, bound at import. A run
-    selecting ``v1`` would have recorded ``v1``'s ``prompt_set_hash`` and sent ``v2`` — an
-    artifact naming a setting under test it never received, which is worse than having no setting, because
-    a later reader has no way to tell.
-
-    Uses ``v1`` because it is a real registered variant that differs from the default; the test
-    is about the wire, not about which wording wins.
-    """
+    """The whole point of the setting, and the way it would fail: silently."""
     from governed_bi.serve.tools import analyst_prompt
 
     default = analyst_prompt()
@@ -172,13 +141,7 @@ def test_ask_first_is_selectable_and_is_not_the_default() -> None:
 
 
 def test_the_session_hashes_the_variants_it_also_sends() -> None:
-    """The hash and the configurable must come from **one** selection.
-
-    ``session.py`` once computed ``_digest(SYSTEM_PROMPT)``; it now computes
-    ``prompt_set_hash(prompt_variants)``. Asserted on behaviour rather than on source text —
-    the previous version of this test grepped for a literal call expression, which passes for
-    any code that contains the string and says nothing about what the session publishes.
-    """
+    """The hash and the configurable must come from **one** selection."""
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve.session import Session
 

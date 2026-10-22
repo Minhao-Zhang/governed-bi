@@ -25,21 +25,14 @@ __all__ = ["Result", "CheckResult", "CHECK_IMPLEMENTATIONS", "evaluate", "quotab
 
 
 class Result(str, Enum):
-    """Three-valued on purpose; see the module docstring."""
-
-    #: The condition held over a population large enough to have failed.
+    #: Not a pass. The check did not happen, so the comparison is not quotable.
     passed = "pass"
-    #: The condition was violated.
     failed = "fail"
-    #: The inputs were not there. **Not a pass.** A comparison with a
-    #: ``cannot_evaluate`` check is not quotable, because the check did not happen.
     cannot_evaluate = "cannot_evaluate"
 
 
 @dataclass(frozen=True)
 class CheckResult:
-    """One check's outcome, with everything needed to audit it."""
-
     field: str
     condition: str
     result: Result
@@ -55,7 +48,6 @@ class CheckResult:
         )
 
 
-#: A check takes the config's turn records and returns its result.
 CheckFn = Callable[[Population], CheckResult]
 
 
@@ -77,11 +69,7 @@ def _result(
 
 
 def _zero_count_check(field: str, counter: str) -> CheckFn:
-    """A check of the form "``counter`` is zero across the config".
-
-    Factored because most checks have this shape, and each hand-written copy is another
-    chance to invert the comparison.
-    """
+    """Factored so each copy is not another chance to invert the comparison."""
 
     def check(config: Population) -> CheckResult:
         counted = config.count(counter)
@@ -104,17 +92,14 @@ def _zero_count_check(field: str, counter: str) -> CheckFn:
 
 
 def _outcome_check(config: Population) -> CheckResult:
-    """No turn classified ``crashed``.
+    """A crash counted as a refusal moves each config's delta by a different amount.
 
-    A crash counted as a refusal contaminates every config-to-config delta by a *different*
-    amount, since configs do not crash at the same rate. Gated on the classification, never
-    on an error string.
+    Judged from the classification, never from an error string.
     """
     return _zero_count_check("outcome", "crashed")(config)
 
 
 def _with_stored_names(config: Population) -> Population:
-    """Read old eval files under their current field names. A new row is left as it is."""
     if not any(any(old in row for old in OLD_KEY.values()) for row in config.rows):
         return config
 
@@ -127,13 +112,9 @@ def _with_stored_names(config: Population) -> Population:
 
 
 def _channel_channels_check(config: Population) -> CheckResult:
-    """No channel state differs from its declared expectation — on turns that ran.
+    """An empty ``channel_scoring`` is not "no channel differed".
 
-    Not a ``_zero_count_check``: ``channel_scoring`` is stage-conditional (a guard-blocked
-    turn never runs the fan-out), so under a naive rate an empty ``channel_scoring`` reads
-    as "no channel differed" on a turn where no channel ran. The denominator is therefore
-    turns where the fan-out ran, published; zero such turns is
-    :attr:`Result.cannot_evaluate`, never a pass.
+    The denominator is turns whose fan-out ran. Zero such turns is ``cannot_evaluate``, not a pass.
     """
     config = _with_stored_names(config)
     ran = config.restrict(lambda r: r.get("channel_scoring") not in (None, [], {}), "fan-out ran")
@@ -152,16 +133,7 @@ def _channel_channels_check(config: Population) -> CheckResult:
 
 
 def _drift(config: Population) -> str:
-    """Which channel's which channel differed, for a check that has already failed.
-
-    Naming only — the result comes from the written ``channel_degraded`` counter. Judged
-    through :func:`~.degradation.channel_anomalies`, which is *not* the function
-    ``serve.finish`` decides the counter with (that is
-    :func:`~.degradation.channels_degraded`). The two share
-    :func:`~.degradation.channel_observations`, so they read the same observations, and they
-    differ on purpose: ``extra_channel`` is included here and excluded there.
-    ``extra_channel`` is included: it is drift, and it did not refuse this run.
-    """
+    """Names drift only. ``extra_channel`` is included here and excluded from the written counter."""
     seen: dict[str, int] = {}
     unjudgeable = 0
     why = ""
@@ -184,27 +156,13 @@ def _drift(config: Population) -> str:
 
 
 def _context_hash_check(config: Population) -> CheckResult:
-    """The delivery check's single-config half: every turn carries a ``context_hash``. L-R2.
+    """On ``context_hash``, not ``delivery_hash``: the latter moves when the model chooses different tools.
 
-    On ``context_hash`` and not ``delivery_hash``, because the latter depends on which tool
-    calls the model chose, conflating "the setting under test differs" with "the model behaved
-    differently".
-
-    **This check does not test that the setting under test differed, and nothing does it by hash any
-    more.** The cross-config half used to be a >= 95% distinctness threshold in
-    ``eval/report.context_hashes_distinct``; audit D9 retired it, because retrieval is
-    nondeterministic and the hashes differ whether or not the setting under test did — it passed at
-    0.9993 on a pair differing only by a random seed. That function is now an existence check
-    over the shared questions, and the declared setting under test is judged from settings by
-    ``eval/report.settings_comparable``. What one config can answer is only this: a turn with no
-    ``context_hash`` assembled no context, so no later comparison against it holds.
+    This does not test that the setting under test differed. A turn with no hash assembled no context.
     """
     coverage = config.coverage("context_hash")
-    # Three states, not two. **Never recorded**: the config is not instrumented, nothing to judge
-    # (`cannot_evaluate`). **Recorded on some turns and not others**: the instrumentation exists
-    # and is dropping turns, so the setting under test cannot be identified and no later comparison
-    # against this config holds (`failed`). Collapsing the two either excuses broken
-    # instrumentation or fails a config for not having any.
+    # Never recorded is cannot_evaluate. Recorded on only some turns is failed.
+    # Collapsing the two either excuses broken instrumentation or fails a config that has none.
     if not coverage.is_measured or coverage.value == 0.0:
         return _result(
             "context_hash",
@@ -235,42 +193,17 @@ def _context_hash_check(config: Population) -> CheckResult:
     )
 
 
-#: The **other** setting under test identity, used as the evidence that ``finish`` ran on a row.
-#:
-#: Both hashes are declared ``Absence.never`` and owned by ``Stage.finish``, and ``Session``
-#: mints the pair together, so a row carrying neither was never written and a row carrying one
-#: but not the other is the partial-instrumentation failure the check exists to fail. Using the
-#: gated field itself as its own denominator test would be circular — every config would pass over
-#: the rows that already have it — which is why the evidence has to be a different field.
-#: :func:`_assert_the_finish_evidence_is_still_a_finish_field` holds the premise.
+# Evidence that finish ran, and not the field being checked: using that field as
+# its own denominator would pass every row that already has it. Both are written
+# by finish together, or neither is.
 _FINISH_EVIDENCE_FIELD = "prompt_set_hash"
 
 
 def _paused_before_finish(row: TurnRow) -> bool:
-    """Did this row end at ``ask_user`` **without** reaching ``finish``?
+    """``clarification`` is both a pause and a written decline. The outcome alone cannot tell them apart.
 
-    Two conditions, and the conjunction is the whole point. ``outcome: clarification`` has meant
-    two different endings since ``ask_user`` learned to fail closed (see
-    ``registry/stages.Outcome``): a turn that paused and was never resumed, which no node ever
-    wrote, and a turn whose reader declined or cancelled, which *is* written and carries every
-    field ``finish`` writes. The first must leave the corpus check's denominator and the second
-    must not, and the outcome alone cannot tell them apart.
-
-    So the second condition asks the row directly: a turn that reached ``finish`` names its prompt
-    set, because that is written by the same node from the same ``Session`` identity as the corpus
-    hash. Measured over ``runs/eval/`` on 2026-08-20: on the five instrumented artifacts every row
-    with a null ``corpus_content_hash`` is a clarification whose ``prompt_set_hash`` is null too
-    (6, 8, 4, 13 and 5 rows), and no other row has either null — so this predicate selects exactly
-    the rows the outcome test used to, and stops selecting the one case it was wrong about. On the
-    two runs of the null replicate neither key exists at all, so their clarifications drop and the
-    remaining 2 688 rows keep the configs at ``cannot_evaluate``, unchanged.
-
-    **What it still cannot see:** a written decline in a run that recorded *neither* identity.
-    That row is dropped, and its null corpus hash with it. Every field the drop could have been
-    keyed on is written by the same node in the same dict, so no row-local test separates "never
-    written" from "written by a run that recorded no identity at all"; what does is
-    ``registry/config_profiles.reconcile``, which the driver runs against the config's declared digest
-    before the first paid question.
+    A row that reached ``finish`` has ``prompt_set_hash``. A written decline that recorded neither identity is dropped;
+    ``reconcile`` is what sees that case.
     """
     return (
         str(row.get("outcome")) == Outcome.clarification.value
@@ -279,44 +212,10 @@ def _paused_before_finish(row: TurnRow) -> bool:
 
 
 def _corpus_content_hash_check(config: Population) -> CheckResult:
-    """One corpus per config, and it is named. D7.
+    """One corpus per config, and it is named. Two configs over different corpora cannot be judged from one config.
 
-    ADR 0007 calls the corpus the setting under test identity of every
-    measurement, and until 2026-08-10 no check read it. Two consequences were live at once: a config
-    whose rows carry no corpus hash passed every check (both runs of the designated null replicate
-    are in that state, 1351/1351 null), and two configs measured over *different* corpora also
-    passed, because nothing compared the field across them.
-
-    Single-config half only, like :func:`_context_hash_check`: every row present and all rows equal.
-    Two configs carrying *different* single hashes is the desired case for a corpus intervention and
-    the disqualifying case for everything else, so which one it is cannot be decided from one config.
-
-    **And nothing decides it.** ``eval/report.comparison_quotable`` runs two cross-config checks,
-    ``context_hashes_distinct`` (an existence check on ``context_hash``) and
-    ``settings_comparable`` (over ``setting_names()``, which does not contain
-    ``corpus_content_hash`` — it is a ``RecordField``, not a setting). So the second consequence
-    named above, two configs measured over different corpora both passing, is still live for the
-    cross-config case; only the within-config case is closed here. What exists instead is
-    ``registry/config_profiles.reconcile``, which the driver runs before the first paid question
-    and which checks one config's rows against the digest that config's profile declares.
-
-    Three-valued for the same reason as ``context_hash``: a config predating the field is not
-    instrumented (``cannot_evaluate``), whereas a config that records it on some turns and not
-    others, or that changed corpus mid-run, cannot be identified (``failed``).
-
-    **Stage-conditional, like ``channel_scoring``.** ``finish`` is what writes this field, and a
-    turn that paused on ``ask_user`` and was never resumed never reaches it — so such a row
-    legitimately carries no corpus hash. Judging those as missing instrumentation would fail
-    every config that ever asked a question, which is a check nobody can keep green and therefore a
-    preference rather than a check. The denominator is turns that reached ``finish``, published;
-    zero such turns is ``cannot_evaluate``, never a pass.
-
-    Which rows those are is :func:`_paused_before_finish`'s question, **not**
-    ``outcome == clarification``'s. This check read the outcome alone until 2026-08-20 under the
-    label "reached finish", and that stopped being the same fact when ``ask_user`` gained a
-    fail-closed decline: such a turn ends the agent loop, *reaches* ``finish``, is written
-    ``outcome: clarification`` and carries a full record — so the outcome test dropped a row that
-    both belongs in the denominator and would have failed it if its hash were null.
+    Turns that paused before ``finish`` leave the denominator. ``clarification`` alone is the wrong test: a fail-closed
+    decline reaches ``finish``. Zero finished turns is ``cannot_evaluate``, not a pass.
     """
     field = "corpus_content_hash"
     config = config.restrict(
@@ -371,11 +270,7 @@ def _corpus_content_hash_check(config: Population) -> CheckResult:
 
 
 def _settings_resolved_check(config: Population) -> CheckResult:
-    """Every row in one config ran under the same settings.
-
-    Absent ``settings_resolved`` is unmeasured, not passing. A row resolving ``route_top_n``
-    to 3 beside one resolving it to 5 is not one config.
-    """
+    """Absent settings are unmeasured, not a pass. Two resolutions are not one config."""
     config = _with_stored_names(config)
     keys = setting_names()
     seen: dict[tuple[tuple[str, str], ...], int] = {}
@@ -426,7 +321,6 @@ def _settings_resolved_check(config: Population) -> CheckResult:
 
 
 def _differing_keys(seen: Mapping[tuple[tuple[str, str], ...], int]) -> set[str]:
-    """Which setting names differ, so a failure names them rather than the count."""
     per_key: dict[str, set[str]] = {}
     for signature in seen:
         for name, value in signature:
@@ -445,23 +339,16 @@ CHECK_IMPLEMENTATIONS: Mapping[str, CheckFn] = {
 
 
 def evaluate(config: Population) -> tuple[CheckResult, ...]:
-    """Run every declared check over one config, in declaration order."""
     return tuple(CHECK_IMPLEMENTATIONS[field](config) for field in sorted(CHECK_CONDITIONS))
 
 
 def quotable(config: Population) -> tuple[bool, tuple[CheckResult, ...]]:
-    """Whether this config's numbers may be quoted, and every check's result.
-
-    Both, because a bare ``False`` hides which check refused and a bare ``True`` hides that
-    some could not run. **``cannot_evaluate`` blocks quotation**: a check that did not
-    happen is not a check that passed.
-    """
+    """``cannot_evaluate`` blocks quotation: a check that did not happen is not a pass."""
     results = evaluate(config)
     return all(r.result is Result.passed for r in results), results
 
 
 def _assert_every_declared_check_is_implemented() -> None:
-    """Import-time closure: declared CHECK_CONDITIONS <-> CHECK_IMPLEMENTATIONS."""
     declared, implemented = set(CHECK_CONDITIONS), set(CHECK_IMPLEMENTATIONS)
     if declared != implemented:  # pragma: no cover - import-time guard
         raise AssertionError(
@@ -473,16 +360,8 @@ def _assert_every_declared_check_is_implemented() -> None:
 
 
 def _assert_the_finish_evidence_is_still_a_finish_field() -> None:
-    """Import-time: :data:`_FINISH_EVIDENCE_FIELD` and the gated field are one node's writes.
-
-    :func:`_paused_before_finish` drops rows from the corpus check's denominator on the strength of
-    one claim — that ``finish`` writes both setting under test identities or neither. That claim lives in
-    ``registry/record.py`` as a pair of ``RecordField`` declarations, so it can be read here
-    instead of restated: if either field stops being ``Absence.never`` or stops being owned by
-    ``Stage.finish``, the evidence evidence nothing and the drop becomes a silent exclusion. The
-    version of this rule that shipped before was a sentence in a docstring, which is how a
-    written clarification came to be dropped from the denominator without anything noticing.
-    """
+    """Both fields must stay ``Absence.never`` and owned by ``Stage.finish``, or a null hash stops meaning the turn
+    never finished."""
     declared = {f.name: f for f in RECORD_REGISTER}
     for name in (_FINISH_EVIDENCE_FIELD, "corpus_content_hash"):
         field = declared.get(name)

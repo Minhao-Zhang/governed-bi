@@ -18,12 +18,7 @@ __all__ = ["EvictionWouldHang", "run_config", "run_comparison", "project_turn"]
 
 
 class EvictionWouldHang(RuntimeError):
-    """Raised when the only remaining way to evict a thread would block the config forever.
-
-    Named rather than swallowed because a hang is the worst failure a measurement run has: no
-    rows, no traceback, no partial output, and ``except Exception`` cannot see it. See
-    :func:`_evict`.
-    """
+    """The only eviction left would block forever. A hang writes no rows and no traceback."""
 
 
 def run_config(
@@ -38,22 +33,8 @@ def run_config(
     connector_factory: Any | None = None,
     on_row: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Run every question under one config; return graded turn rows, **in input order**.
-
-    ``session`` is how a **quotable** run is produced: every id and run constant is minted by
-    ``Session.turn``. Without it turns come from :func:`_base_turn`, which fabricates
-    ``corpus_content_hash`` — fine for a fixture, forged for a real corpus, because two runs
-    over different corpora then compare equal.
-
-    ``workers`` > 1 gives **each worker its own graph and connector**, and raises without a
-    ``connector_factory``. ``psycopg`` connections are not thread-safe and this harness runs
-    SQL twice per row (prediction and gold); sharing one interleaves result sets on a socket
-    and surfaces as a *grading* mismatch, indistinguishable from a wrong answer.
-
-    ``on_row(index, row)`` fires in completion order so a long run is crash-safe — a driver
-    that writes only at the end is one interruption away from having measured nothing. The
-    return value stays in input order.
-    """
+    """In input order. A fabricated corpus hash equates different corpora. Each worker needs its own connector, or a
+    mixed result looks like a wrong answer."""
     order_sensitive_qids = order_sensitive_qids or frozenset()
     run_id = run_id or f"run-{uuid4().hex[:12]}"
     base_cfg = config.build_configurable()
@@ -62,9 +43,7 @@ def run_config(
         connector = base_cfg.get("connector")
         if connector is None:
             raise ValueError("oracle config requires connector in configurable")
-        # Row by row with ``on_row``, like every other config: a list comprehension here would
-        # ignore ``on_row`` and let one unexecutable gold discard every row already computed.
-        # ``oracle_grade`` records an execution failure as a crashed row.
+        # Row by row so ``on_row`` runs. One unexecutable gold must not drop rows already computed.
         rows: list[dict[str, Any]] = []
         for index, question in enumerate(questions):
             row = oracle_grade(question, connector, order_sensitive_qids=order_sensitive_qids)
@@ -86,8 +65,7 @@ def run_config(
         )
 
     if workers == 1:
-        # A caller-supplied graph is the caller's to close; one we make here is ours. Durable so
-        # that `HARNESS_DB` -- not the conversation store -- carries the config's threads.
+        # A caller-supplied graph is the caller's to close. Durable keeps threads out of the conversation store.
         compiled = graph if graph is not None else compile_durable()
         ours = graph is None
         out: list[dict[str, Any]] = []
@@ -106,8 +84,7 @@ def run_config(
                 if on_row is not None:
                     on_row(index, row)
         finally:
-            # `getattr`: a caller-supplied graph and the test doubles that stand in for one are
-            # not required to be closeable, and housekeeping must not turn into the config's error.
+            # A caller-supplied graph need not be closeable. Closing must not become the config's error.
             if ours:
                 close = getattr(compiled, "close", None)
                 if close is not None:
@@ -138,11 +115,7 @@ def _run_one(
     order_sensitive_qids: frozenset[str],
     connector: Any | None = None,
 ) -> dict[str, Any]:
-    """One question, start to graded row.
-
-    Shared by the serial and concurrent paths so there is one answer to what a measured turn
-    is, rather than two implementations that must agree.
-    """
+    """One question through to a graded row, for both the serial and concurrent paths."""
     qid = str(question["question_id"])
     conf = dict(base_cfg)
     if connector is not None:
@@ -155,35 +128,30 @@ def _run_one(
     conf["thread_id"] = thread_id
 
     if session is not None:
-        # The session mints ids and run constants. The eval's own ``question_id`` stays in
-        # the measurement row and deliberately cannot enter the turn: `Session.turn` digests
-        # the question text for ``question_id`` so a re-serve is recognisable.
+        # The session mints ids. The eval question id stays on the row: `Session.turn`
+        # digests the question text, so a re-serve stays recognisable.
         turn = session.turn(
             str(question.get("question") or question.get("utterance") or qid),
             turn_index=1,
             thread_id=thread_id,
-            # Passing evidence is the BIRD condition for EX. The grader departs from BIRD on
-            # purpose (`eval/grade.results_match`: numeric tolerance, text never a number). An
-            # config that wants the harder no-hint condition omits the key from the question dict.
+            # Evidence is the benchmark condition. Omitting the key is the no-hint condition.
             evidence=question.get("evidence"),
         )
-        # ``Session.turn`` writes the session's own settings, so a driver that set a per-question
-        # override (``tools/run_datalake_eval.py --top-n``) had it silently replaced and the
-        # run served the register default under a header announcing the override. The
-        # no-session path below has always honoured the question; these now agree.
+        # `Session.turn` writes its own settings. A per-question override would
+        # otherwise be replaced, and the run would serve the default under a
+        # header that announced the override.
         settings = _turn_settings(question, session)
         if settings is not None:
             turn["settings_resolved"] = settings
     else:
         turn = _base_turn(question, run_id=run_id, config=config.name)
-    # Inject route hits when no index so answered path can reach agent.
+    # No index: inject a route hit so the answered path can reach the agent.
     if conf.get("index") is None and "channel_route_hits" not in turn:
         db = str(question.get("db_id") or "fixture")
         turn["channel_route_hits"] = [("channel_schema", db, 1.0)]
 
-    # After `Session.turn`, which resets this channel with every other per-turn key. Only
-    # present when `--replay-routing` attached one; a question the artifact did not cover is
-    # left to route live and is counted as unpinned by `attach_pinned_routing`.
+    # After `Session.turn`, which resets this channel. Absent means the question
+    # routes live and is counted as unpinned.
     if question.get(PINNED_SCHEMAS_KEY):
         turn[PINNED_SCHEMAS_KEY] = list(question[PINNED_SCHEMAS_KEY])
 
@@ -201,11 +169,7 @@ def _run_one(
 
 
 def _turn_settings(question: Mapping[str, Any], session: Any) -> dict[str, Any] | None:
-    """The configuration this question runs under: its own override, else the session's.
-
-    ``None`` when neither carries one — absent, not ``{}``, because an empty mapping reads to
-    ``measure.checks`` as "one configuration whose every setting is None".
-    """
+    """``None`` when neither has settings. ``{}`` would read as a configuration whose every setting is missing."""
     for source in (artifact_get(question, "settings_resolved"), getattr(session, "settings_resolved", None)):
         if isinstance(source, Mapping):
             return dict(source)
@@ -213,25 +177,11 @@ def _turn_settings(question: Mapping[str, Any], session: Any) -> dict[str, Any] 
 
 
 def _evict(compiled: Any, thread_id: str) -> None:
-    """Drop this question's checkpoints. Raises only where the alternative is a hang.
-
-    A worker holds one compiled graph for the whole config and nothing else empties its saver —
-    roughly 100 KB of checkpoint per question (``usage`` and ``answer`` accumulate and every
-    superstep re-serialises them), retained until the process exits for state no later
-    question reads.
-
-    Called **after** the row is projected: a resumed clarification does read the checkpoint,
-    so evicting earlier would trade a memory bound for a lost measurement. Per *thread*, not
-    a blunt clear — with ``workers > 1`` several questions share the saver.
-
-    A saver that *fails* to evict is swallowed: that is a leak, not a failed turn. A saver that
-    would **block forever** is not, and :class:`EvictionWouldHang` says why.
-    """
+    """After the row is projected. A failed eviction is a leak. A sync delete that would block forever raises."""
     saver = getattr(getattr(compiled, "_app", compiled), "checkpointer", None)
     if saver is None:
         return
-    # The durable saver is async-only in practice, so prefer the async method, driven on the
-    # graph's own pinned loop -- the only loop its connection will answer on.
+    # Prefer the async delete on the graph's own loop: that is the loop its connection answers.
     run_coro = getattr(compiled, "run_coro", None)
     adelete = getattr(saver, "adelete_thread", None)
     if run_coro is not None and adelete is not None and getattr(compiled, "_loop", None) is not None:
@@ -240,16 +190,9 @@ def _evict(compiled: Any, thread_id: str) -> None:
         except Exception:  # noqa: BLE001 — a saver that cannot evict is a leak, not a failed turn
             return
         return
-    # No config reaches this today -- `run_config` compiles durable and takes the branch above. It is
-    # the *designated* fallback, and on a loop-bound saver it is a trap:
-    # `AsyncSqliteSaver.delete_thread` is a sync bridge -- `run_coroutine_threadsafe(...).result()`
-    # onto `self.loop` -- and `_SyncApp`'s loop is not running between calls, so the call never
-    # resolves and never raises (probed at `langgraph-checkpoint-sqlite` 3.1.1: still blocked after
-    # 5 s). An older comment here claimed it raised `NotImplementedError`; `aio.py` contains no
-    # `NotImplementedError` at all -- those are on the *sync* `SqliteSaver`'s *async* methods
-    # (`langgraph/checkpoint/sqlite/__init__.py:592,608,624`). So the trap is refused by name:
-    # `except Exception` cannot catch a hang, and a config that hangs on question one produces no
-    # output, no traceback and no partial rows.
+    # No config reaches this. On a loop-bound saver, sync `delete_thread` blocks
+    # forever and does not raise. Refuse it by name: `except Exception` cannot
+    # catch a hang.
     if getattr(saver, "loop", None) is not None:
         raise EvictionWouldHang(
             f"{type(saver).__name__} carries its own event loop, so its synchronous "
@@ -281,24 +224,13 @@ def _run_concurrently(
     connector_factory: Any,
     on_row: Any | None,
 ) -> list[dict[str, Any]]:
-    """``workers`` threads, one graph and one connector each, results in input order.
-
-    Thread-local rather than a pool of pre-built pairs, so a short run does not open
-    ``workers`` connections it never uses.
-
-    A question that raises is recorded as a **crashed row** rather than ending the config, with
-    the question and exception named — a systematic failure must be visible as a count, not
-    as a shorter file.
-    """
+    """One graph and one connector per worker. A raised question is a crashed row, not a shorter file."""
     import threading
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     local = threading.local()
-    # Every graph this pool builds, so `finally` can close them all. A durable saver binds its
-    # `aiosqlite` connection to the loop that opened it, so each worker gets its **own** graph,
-    # loop and connection -- sharing one across threads would drive it from a loop it will not
-    # answer on. They contend on one SQLite file as writers; that is the cost of durability here,
-    # and `workers` defaults to 1.
+    # Every graph this pool builds, closed in `finally`. Each worker needs its
+    # own graph: a shared connection answers only the loop that opened it.
     built: list[Any] = []
     built_lock = threading.Lock()
 
@@ -329,10 +261,9 @@ def _run_concurrently(
                 "question_id": str(question.get("question_id")),
                 "config": config.name,
                 "run_id": run_id,
-                # The config's configuration and the question's gold schema are known whether or
-                # not the turn reached ``finish``. Omitting them here would make one crash turn
-                # the whole config's settings check ``cannot_evaluate`` and drop the row out of the
-                # funnel's routing stage, for a reason that has nothing to do with either.
+                # Settings and the gold schema are known even when the turn did not
+                # finish. Omitting them makes one crash fail the settings check
+                # and drop the row from routing.
                 "settings_resolved": _turn_settings(question, session),
                 "db_id": question.get("db_id"),
                 "outcome": Outcome.crashed.value,
@@ -350,10 +281,9 @@ def _run_concurrently(
     results: dict[int, dict[str, Any]] = {}
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            # `as_completed`, not `pool.map`: `map` yields in *input* order, so one hung provider
-            # request holds back every finished row behind it and the crash-safe writer goes
-            # quiet. The returned list is still ordered -- callers index it -- but `on_row` now
-            # fires when the row is done.
+            # `as_completed`, not `map`. `map` yields in input order, so one hung
+            # request holds back finished rows and the writer stalls. The
+            # returned list is still ordered.
             futures = [pool.submit(run_index, i) for i in range(len(questions))]
             for future in as_completed(futures):
                 index, row = future.result()
@@ -361,8 +291,7 @@ def _run_concurrently(
                 if on_row is not None:
                     on_row(index, row)
     finally:
-        # Not housekeeping: an unclosed `aiosqlite` connection holds a non-daemon thread, and
-        # CPython joins those *before* `atexit`, so a config that leaves one open never exits.
+        # An unclosed connection holds a non-daemon thread, and the process waits for it.
         for compiled in built:
             close = getattr(compiled, "close", None)
             if close is not None:
@@ -377,7 +306,6 @@ def run_comparison(
     order_sensitive_qids: frozenset[str] | None = None,
     run_id: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Run each config; return ``{config_name: turn_rows}``."""
     run_id = run_id or f"run-{uuid4().hex[:12]}"
     return {
         config.name: run_config(

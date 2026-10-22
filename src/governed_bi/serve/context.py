@@ -1,21 +1,8 @@
 """Render retrieval context for the USER message (ADR 0005 §3.6).
 
-Hit ⇒ full structural line + body. Pulled-in ⇒ **identifier and type**, and only
-the further facts an asset is unusable without. ``summary`` never enters the
-prompt. Field newlines are escaped losslessly (``\\n``).
-
-The pulled-in side is narrow because reference closure is a correctness rule and
-not a relevance one: measured on the gold semantic layer (5 schemas, 923 assets,
-``route_top_n = 1``), a turn hit 8 assets, the closure dragged in 77, and the 70
-pulled-in **columns**' fully-qualified names were 4 179 of the block's 7 973
-characters. So a pulled-in column is written under the table that carries it,
-spelling schema and table once per group, and the descriptive extras I3 does not
-require (table ``grain`` / ``row_count``, join ``cardinality``, term
-``synonyms``) are dropped. What stays is everything I3 names — physical name,
-logical type, ``role``, ``reliability.suspect`` — plus the one fact per type that
-makes the asset spellable: a join's ON clause (§2.8.1), a metric's expression, a
-term's binding. §3.6: *"or the prompt shows a join the model cannot spell"*.
-"""
+Newlines in fields are escaped so they cannot open a section.
+On the gold layer (5 schemas, 923 assets, ``route_top_n = 1``) closure added
+70 columns whose qualifiers were 4 179 of 7 973 characters."""
 
 from __future__ import annotations
 
@@ -51,15 +38,10 @@ def render_context(
     budget_chars: int = DEFAULT_CONTEXT_BUDGET,
     evicted: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
-    """Return ``(context_block, context_hash)`` — sha256 hex of UTF-8 block.
+    """``(context_block, context_hash)``.
 
-    ``evicted`` is an **out-parameter**, filled only when the budget bit: the caller
-    needs a fact the return value has no room for. Without it, a table that was routed,
-    retrieved, retrieved_tables and then evicted for space is indistinguishable in every artifact from
-    one that was rendered — a blind spot sitting exactly between "table selection" and
-    "generation", the two stages any attribution of the remaining loss has to tell apart.
-    :func:`_assemble_and_evict` also returns over-budget text when the ladder is exhausted.
-    """
+    The optional dict is filled only when the budget drops something, so a dropped table
+    is not identical, in every artifact, to one that was shown."""
     pieces = _build_pieces(retrieved, assets_by_id, schemas)
     block = _assemble_and_evict(pieces, budget_chars, evicted=evicted)
     if not block.strip():
@@ -94,9 +76,7 @@ def _build_pieces(
     for type_key in (*_STRUCTURAL, "few_shot"):
         for aid in by_type.get(type_key) or ():
             _add(str(aid))
-    # Sorted because `resolve` and `connect` build `pulled_in` by walking sets, so its insertion
-    # order follows `PYTHONHASHSEED`; `_collect_rules` keeps first-seen order, so two pulled-in
-    # tables that carry rules would otherwise render them in a different order per process.
+    # Sorted: ``pulled_in`` is built from sets, so insertion order follows ``PYTHONHASHSEED``.
     for aid in sorted(pulled_in, key=str):
         _add(str(aid))
 
@@ -115,8 +95,7 @@ def _build_pieces(
         at = _asset_type(asset)
         if at not in _STRUCTURAL:
             continue
-        # A hit that is also in ``pulled_in`` is a hit: ``connect_node`` adds every join the
-        # question hit to ``pulled_in`` after the fact, and letting that win would drop the body.
+        # A hit also listed in ``pulled_in`` stays a hit. Letting the list win drops the body.
         is_hit = aid in hit_ids or aid in by_type_ids
         rows.append((aid, asset, is_hit, _score_for(aid, selected, retrieved)))
     rows.sort(key=lambda r: (_STRUCTURAL.index(_asset_type(r[1])), r[0]))
@@ -130,9 +109,7 @@ def _build_pieces(
             continue
         at = _asset_type(asset)
         line = _structural_line(asset, terse=not is_hit)
-        # ``struct_text`` — what survives when the budget drops a body — carries the roster
-        # too, because a column the model is never shown does not exist to it (I3) and the
-        # eviction ladder is not allowed to reintroduce that.
+        # Body drops must keep the roster. A column never shown does not exist to the model (ADR 0005, I3).
         tail = "\n" + "\n".join(roster[aid]) if aid in roster else ""
         body = _field(asset, "body") if is_hit else None
         if body:
@@ -192,18 +169,9 @@ def _piece(kind: str, text: str) -> dict[str, Any]:
 def _fold_pulled_in_columns(
     rows: Sequence[tuple[str, Any, bool, float]],
 ) -> tuple[dict[str, list[str]], set[str]]:
-    """``(table id -> roster lines, the column ids those lines replace)``.
+    """Roster lines for pulled-in columns, and the column ids those lines replace.
 
-    A pulled-in column is in the prompt because its table is, and its table is on the line
-    above, so re-spelling ``schema.table.`` per column buys nothing — on the measured turns
-    that prefix was the single largest thing in the block. The roster keeps everything I3
-    requires (physical name, logical type, ``role``, ``reliability.suspect``).
-
-    **A hit column is never folded**: it keeps its own line and its body, which is the
-    distinction this render is built on. A column whose parent table is *not* among the
-    rendered rows keeps its own line too, so a failed reference closure leaves it namable
-    rather than disappearing it into a table that is not there.
-    """
+    A hit column keeps its own line. A column with no rendered parent keeps its own line."""
     table_ids = {aid for aid, asset, _, _ in rows if _asset_type(asset) == "table"}
     roster: dict[str, list[str]] = {}
     folded: set[str] = set()
@@ -219,42 +187,20 @@ def _fold_pulled_in_columns(
 
 
 def rendered_closure_chars(table: Any, columns: Sequence[Any]) -> tuple[int, int]:
-    """``(the table's own cost, the cost of the roster its columns fold into)``, in characters.
-
-    **What one table costs this block**, asked of the renderer that does the delivering.
-    Conformance rule V16 bounds it (``conform/rules_tree.py::check_delivery_closure``) and reached
-    through to ``_structural_line`` and ``_roster_entry`` to compute it, which is a rule holding a
-    copy of an arithmetic it claims to bound: either function could change its output and the cap
-    would silently start measuring something else. This is the same two numbers, computed here.
-
-    Two numbers rather than one because the finding names both -- a table over cap because of its
-    own body and a table over cap because it carries 156 columns are different defects, and the
-    second is a fact about a schema rather than something a writer can rewrite.
-
-    The ``+ 1`` per roster entry is the newline it is joined with. A *hit* column keeps its own
-    body instead of folding, so the true worst case is slightly above this; that gap cannot be
-    computed without a query, which a conformance rule does not have.
-    """
+    """Character counts conformance bounds, so a second copy of this arithmetic cannot drift."""
     own = len(_structural_line(table, terse=False)) + len(str(_field(table, "body") or ""))
     roster = sum(len(_roster_entry(column)) + 1 for column in columns)
     return own, roster
 
 
 def _roster_entry(asset: Any) -> str:
-    """One pulled-in column, named relative to the table line it sits under."""
     parts = [f"- {escape_field(str(_field(asset, 'physical_name') or _field(asset, 'id') or ''))}"]
     parts.extend(_column_facts(asset))
     return " ".join(parts)
 
 
 def _parent_table_id(asset: Any, table_ids: Set[str]) -> str | None:
-    """The rendered table this column belongs to, or ``None``.
-
-    ``parent_table`` is a physical name that a corpus may spell bare (``customers``) or
-    schema-qualified (``address.country``) — ``retrieve/structure.py`` declines to settle
-    which. Both are tried against the tables being rendered; an unmatched parent returns
-    ``None`` and the column keeps its own line rather than being guessed at.
-    """
+    """Bare or schema-qualified ``parent_table``. A miss stays ``None`` so the column keeps its own line."""
     parent = _field(asset, "parent_table")
     if not parent:
         return None
@@ -291,12 +237,7 @@ def _collect_rules(
 
 
 def _collect_caveats(ids: Sequence[str], assets_by_id: Mapping[str, Any]) -> list[str]:
-    """Suspect columns, named the way the context block names them.
-
-    This keyed the prohibition on the **asset id** while the context block composed a
-    qualified name, so a corpus whose two spellings differ published "do NOT use X" about a
-    column it had shown as Y. :func:`column_qualifier` is the single answer for both.
-    """
+    """Suspect columns, spelled with :func:`column_qualifier` so the caveat matches the context line."""
     lines: list[str] = []
     for aid in sorted(ids):
         asset = assets_by_id.get(aid)
@@ -317,12 +258,7 @@ def _collect_caveats(ids: Sequence[str], assets_by_id: Mapping[str, Any]) -> lis
 def _assemble_and_evict(
     pieces: list[dict[str, Any]], budget: int, *, evicted: dict[str, Any] | None = None
 ) -> str:
-    """The two-rung eviction ladder, with a record of what it dropped.
-
-    ``evicted`` accumulates ``bodies_dropped``, ``tables_dropped``, ``dropped_ids`` and
-    ``over_budget`` — the last because the final ``return text`` hands back an **over-budget**
-    block when both rungs are exhausted.
-    """
+    """``over_budget`` is set when both rungs are exhausted and the text can still exceed the budget."""
     active = [dict(p) for p in pieces]
     text = _join(active)
     if len(text) <= budget:
@@ -398,19 +334,7 @@ def _join(pieces) -> str:
 
 
 def _structural_line(asset: Any, *, terse: bool = False) -> str:
-    """One asset as a line. ``terse`` is the pulled-in form: identifier and type.
-
-    One function rather than two, because an asset's identifier must have exactly one
-    spelling and the ``## Reliability caveats`` block names the same columns. ``terse``
-    therefore omits fields; it never re-words one.
-
-    ``terse`` omits a table's ``grain`` / ``row_count``, a join's ``cardinality`` and a
-    term's ``synonyms``: none changes how an asset the question did not hit is *written*,
-    and synonyms exist for retrieval, which has already happened. It keeps what I3 requires
-    (physical name, logical type, ``role``, ``reliability.suspect``) plus whatever §3.6
-    needs to make the asset spellable — the join's ON clause, the metric's expression, the
-    term's binding target.
-    """
+    """``terse`` drops fields and never rewords them (ADR 0005 §3.6)."""
     at = _asset_type(asset)
     if at == "schema":
         return f"schema {escape_field(str(_field(asset, 'name') or _field(asset, 'id') or ''))}"
@@ -462,19 +386,7 @@ def _structural_line(asset: Any, *, terse: bool = False) -> str:
 
 
 def _tool_key(asset: Any, spelled: str) -> list[str]:
-    """``id=<asset id>`` when the engine's spelling is not the key the tools accept.
-
-    **A key is not a name** (ADR 0008 D1). The context renders ``physical_name`` because that
-    is what a ``SELECT`` must say, while ``bounds.may_inspect_schema`` / ``may_sample`` /
-    ``may_read_body`` test membership of ``retrieved_tables`` and ``readable_assets``, which hold
-    **asset ids**. Wherever ``slug()`` fired the two diverge — ``table airline.Air Carriers``
-    rendered, ``airline.Air_Carriers_66c534`` retrieved_tables — so every tool call on the rendered
-    spelling returned ``OUT_OF_SCOPE_MESSAGE``, deliberately indistinguishable from "not
-    retrieved_tables" (``bounds.py``).
-
-    Emitted only on divergence, so the 655 of 656 gold tables whose id and name agree keep
-    their ``context_hash``.
-    """
+    """``id=`` only when the spelling is not the tool key, so an agreeing id keeps its hash (ADR 0008)."""
     asset_id = str(_field(asset, "id") or "")
     if not asset_id or asset_id == spelled:
         return []
@@ -482,25 +394,14 @@ def _tool_key(asset: Any, spelled: str) -> list[str]:
 
 
 def table_qualifier(asset: Any) -> str:
-    """How the model must spell this table: ``{schema}.{physical_name}``.
-
-    Public because an asset must have exactly one spelling, like :func:`column_qualifier`.
-    """
+    """One spelling, shared with :func:`column_qualifier`."""
     schema = _field(asset, "schema") or ""
     phys = _field(asset, "physical_name") or _field(asset, "id") or ""
     return f"{schema}.{phys}" if schema else str(phys)
 
 
 def column_qualifier(asset: Any) -> str:
-    """How the model must spell this column, and how the caveats block already spells it.
-
-    ``parent_table`` may be bare or schema-qualified (``retrieve/structure.py`` binds both
-    and declines to settle which). This prefixed ``schema`` unconditionally, so a corpus with
-    qualified parents rendered ``column address.address.CBSA.metro_id`` while
-    ``## Reliability caveats`` said ``address.CBSA.metro_id: suspect ... Do NOT use it`` —
-    one column, two names, and the prohibition used the other one. The prefix is added only
-    when it is not already there.
-    """
+    """Prefix ``schema`` only when ``parent_table`` is not already qualified."""
     schema = _field(asset, "schema") or ""
     parent = _field(asset, "parent_table") or ""
     phys = _field(asset, "physical_name") or ""
@@ -513,12 +414,7 @@ def column_qualifier(asset: Any) -> str:
 
 
 def _column_facts(asset: Any) -> list[str]:
-    """The I3 fields of a column: logical type, ``role``, ``reliability.suspect``.
-
-    **No ``terse`` parameter**: I3 names all three as always-render, so there is no pulled-in
-    form to select between. Shared by the full line and the roster entry so a folded column
-    cannot come to say something different about itself from an unfolded one.
-    """
+    """``nullable`` stays: ``COUNT``, ``NOT IN``, and inner joins depend on it."""
     parts: list[str] = []
     logical, physical = _field(asset, "logical_type"), _field(asset, "physical_type")
     type_val = getattr(logical, "value", logical) if logical is not None else physical
@@ -527,10 +423,6 @@ def _column_facts(asset: Any) -> list[str]:
     role = _field(asset, "role")
     if role is not None:
         parts.append(f"role={escape_field(str(getattr(role, 'value', role)))}")
-    # NULL semantics decide whether `COUNT(col)` and `COUNT(*)` agree, whether
-    # `NOT IN (subquery)` returns the empty set, and whether an inner join silently drops
-    # rows — three standard ways an answer comes out wrong while the SQL reads correctly.
-    # Populated on every seeded column, and previously reachable only via `inspect_schema`.
     nullable = _field(asset, "nullable")
     if nullable is not None:
         parts.append(f"nullable={'true' if nullable else 'false'}")

@@ -1,8 +1,6 @@
-"""``corpus_content_hash`` over a tree with one file's bytes substituted.
+"""``corpus_content_hash`` with one file's bytes substituted.
 
-The digest is a walk of relative path plus file content, so a post-edit hash is computable
-before the file is written: same walk, one file replaced. ``overrides`` is a parameter on
-the one hash function, because two digest implementations would disagree about sameness.
+``overrides`` sits on the one hash function, so two implementations cannot disagree.
 """
 
 from __future__ import annotations
@@ -37,20 +35,12 @@ def _corpus(root: Path) -> Path:
 
 
 def test_an_override_gives_the_hash_the_tree_would_have_after_the_write(tmp_path: Path) -> None:
-    """The whole claim: predicted before the write equals measured after it.
-
-    This is what makes `landed_verified` mean something. Without it the exporter can only record
-    "these assets carry the text I expected", which is `landed_matched` -- true of a corpus where
-    three other bundles also landed.
-    """
     root = _corpus(tmp_path / "corpus")
     target = root / "shop" / "tables" / "tbl_shop_orders.yaml"
     edited = _TABLE.replace("Grain is one order.", "Grain is one placed order.")
 
-    # `write_bytes`, not `write_text`. On Windows `write_text` translates LF to CRLF, so the same
-    # string produces different bytes on disk than in memory -- and the digest reads bytes. The
-    # contract is therefore "the bytes that will exist on disk", which is what `git apply` writes:
-    # a caller passing a str it then writes in text mode would predict a hash the commit never has.
+    # ``write_bytes``, not ``write_text``: text mode can turn LF into CRLF, and the digest reads bytes.
+    # The override is the bytes that will sit on disk.
     payload = edited.encode("utf-8")
     predicted = corpus_content_hash(root, overrides={target: payload})
     target.write_bytes(payload)
@@ -58,8 +48,7 @@ def test_an_override_gives_the_hash_the_tree_would_have_after_the_write(tmp_path
 
 
 def test_an_override_that_changes_nothing_changes_no_hash(tmp_path: Path) -> None:
-    """Substituting a file's own bytes is the identity, which is the sanity check that the override
-    is applied at the same point in the walk rather than appended to it."""
+    """Same bytes must not change the digest, so the override replaces a walk entry instead of appending one."""
     root = _corpus(tmp_path / "corpus")
     target = root / "shop" / "tables" / "tbl_shop_orders.yaml"
     assert corpus_content_hash(root, overrides={target: target.read_bytes()}) == (
@@ -68,17 +57,13 @@ def test_an_override_that_changes_nothing_changes_no_hash(tmp_path: Path) -> Non
 
 
 def test_an_override_naming_a_file_outside_the_corpus_is_refused(tmp_path: Path) -> None:
-    """A path that is not under ``root`` cannot be in the walk, so honouring it would produce a
-    digest of a tree that cannot exist. Silently ignoring it would produce the *unedited* hash and
-    report `superseded` on a landing that went perfectly."""
+    """A path outside ``root`` is not in the walk. Ignoring it would return the unedited digest."""
     root = _corpus(tmp_path / "corpus")
     with pytest.raises(ValueError, match="not under"):
         corpus_content_hash(root, overrides={tmp_path / "elsewhere.yaml": b"x"})
 
 
 def test_a_schema_filter_still_applies_to_an_override(tmp_path: Path) -> None:
-    """``schemas`` restricts the digest to named subtrees, and an override must not smuggle a file
-    back in: a config's setting under test identity covers exactly the schemas it served."""
     root = _corpus(tmp_path / "corpus")
     (root / "warehouse" / "tables").mkdir(parents=True)
     other = root / "warehouse" / "tables" / "tbl_warehouse_orders.yaml"

@@ -1,28 +1,7 @@
-"""A turn that executed no governed statement must not record ``outcome: answered``.
+"""A turn that executed no governed statement records ``outcome: no_sql``, not ``answered``.
 
-Observed live on 2026-08-18. Asked something the corpus does not cover, the model wrote *"Could
-you clarify what you mean by 'assets', 'actively maintained', and 'PM task'? These terms are not
-defined in the provided schemas, so I can't form a reliable governed query."* — and the record
-said::
-
-    outcome answered terminal_reason None generated_sql None
-    execution {"attempts": [], "terminal": "no_sql", "guardrail_errors": 0}
-
-``finish._path_signals``'s ``path_kind == "answered"`` branch fell through to
-``return None, None, None, None, True`` — ``has_sql`` **hardcoded**, ``state["generated_sql"]``
-never read — and ``classify_outcome``'s ``if has_sql: return Outcome.answered`` did the rest.
-
-The ``True`` was rather than a typo, which is why the fix is a new
-:class:`~governed_bi.registry.stages.Outcome` member and not a deleted line: with ``has_sql=False``
-and no ``refused_by`` the classifier's last line returned ``crashed``, and a turn that produced
-prose is not a crash. So the four tests below are a *pair of pairs*. Two pin the outcome on either
-side of the statement question (:func:`test_a_prose_decline_with_no_statement_is_not_answered`,
-:func:`test_a_turn_with_a_governed_statement_is_still_answered`), and two pin the things it must
-not be mistaken for — the stub, which shares every signal, and a crash.
-
-The three paths that reach here cannot be told apart from the record and this file does not try:
-``Outcome.no_sql``'s docstring names all three, and a "does this prose look like a refusal"
-heuristic would be a declaration with no enforcer.
+``has_sql`` follows the ledger. An empty ledger with no refusal is ``no_sql``; a turn nothing
+observed ending is still ``crashed``, and a guard refusal outranks the empty ledger.
 """
 
 from __future__ import annotations
@@ -62,12 +41,7 @@ def _turn(**overrides: Any) -> dict[str, Any]:
 
 
 def test_a_prose_decline_with_no_statement_is_not_answered() -> None:
-    """The live turn, replayed. The two assertions are not the same assertion.
-
-    ``!= answered`` is the defect; ``is no_sql`` is the fix. Kept apart so a change that makes
-    the turn ``crashed`` — the other thing the old fall-through was protecting against — fails
-    the second line and not the first, and says which of the two went wrong.
-    """
+    """``!= answered`` and ``== no_sql`` are separate: a crash is the other wrong outcome."""
     answer = finish(
         _turn(
             execution={"attempts": [], "terminal": "no_sql", "guardrail_errors": 0},
@@ -121,19 +95,7 @@ def test_a_turn_with_a_governed_statement_is_still_answered() -> None:
 
 
 def test_the_no_model_stub_records_no_statement_too() -> None:
-    """``agent_core._stub`` writes no ``execution`` at all, and that is the trap.
-
-    ``_path_signals`` used to read ``state["execution"]`` directly, where the stub's update leaves
-    ``None``; deriving the outcome from a raw ``None`` would have classified the stub ``crashed``.
-    ``serve/outcome.py``'s ``_execution`` is the one place that substitutes
-    ``execution_from_attempts(())``, and since 2026-08-25 it is reached only through
-    :meth:`~governed_bi.serve.outcome.OutcomeInputs.from_state` — so the derivation has no raw
-    channel left to read, and the ledger it sees is the one the record carries.
-
-    Driven through ``_stub``'s own update rather than a hand-written dict, so the shape under test
-    is the shape the node returns — the ``--no-model`` CLI path (``python -m
-    governed_bi.serve --no-model``) reproduces it end to end.
-    """
+    """The stub writes no ledger; the outcome is derived from an empty attempt list, not a raw ``None``."""
     from governed_bi.serve.nodes.agent_core import STUB_ANSWER, _stub
 
     update = _stub({"turn_index": 1})
@@ -156,14 +118,7 @@ def test_the_no_model_stub_records_no_statement_too() -> None:
 
 
 def test_a_turn_with_no_ledger_result_at_all_is_still_a_crash() -> None:
-    """The case the hardcoded ``True`` was protecting, kept protected.
-
-    ``classify_outcome`` returns :attr:`Outcome.no_sql` only when the caller hands over the
-    ledger's own result. A turn nothing marked and nothing wrote a ledger for has not been
-    observed ending, and ``crashed`` is what this repository calls that — collapsing it into
-    ``no_sql`` would give every dropped turn a benign name, which is the 2026-07-25 defect
-    (a crash counted as a refusal) in the other direction.
-    """
+    """``no_sql`` needs the ledger's own empty result; an unmarked turn is still a crash."""
     assert (
         classify_outcome(error=None, refused_by=None, has_sql=False, terminal=None)
         is Outcome.crashed
@@ -172,15 +127,7 @@ def test_a_turn_with_no_ledger_result_at_all_is_still_a_crash() -> None:
 
 
 def test_a_refusal_outranks_an_empty_ledger() -> None:
-    """A guard block carries ``attempts: []``, so its ledger also says ``no_sql``.
-
-    ``registry/stages._assert_refusal_tables_are_closed`` asserts this over the whole declared
-    vocabulary at import; this is the end-to-end half, through ``finish``, because the import guard
-    compares declarations to declarations and never to a written turn. If the ledger were consulted
-    before ``refused_by``, the refusal would keep its reason and its stage and only ``outcome``
-    would stop saying a decision was taken — and ``eval/report.refusal_histogram`` counts
-    ``refused`` rows, so the reason would silently leave the histogram.
-    """
+    """A guard refusal outranks an empty ledger, so the outcome stays ``refused``."""
     answer = finish(
         _turn(
             path_kind="refuse",

@@ -1,10 +1,5 @@
-"""One scope traversal, shared by the function and binding layers (ADR 0006 §4).
-
-Per-scope via ``traverse_scope`` / :func:`scope_nodes` — not a query-wide name
-map, not ``scope.columns`` (misses bare ``HAVING``), not ``find_all`` on the
-outer select. Every node is yielded by exactly one scope. Nothing here refuses;
-classification stays separate from judgement so layer order stays a proof.
-"""
+"""One scope traversal for the function and binding layers. See ADR 0006. ``scope.columns`` misses bare ``HAVING``. This
+module classifies; it does not refuse."""
 
 from __future__ import annotations
 
@@ -18,19 +13,17 @@ from .identifiers import fold
 
 __all__ = ["ScopeView", "scope_nodes", "iter_scopes", "SCOPE_BOUNDARY_NODES"]
 
-#: Node types that start a new scope. Pruning at these is what makes the walk local.
-#: ``Subquery`` and ``CTE`` wrap an inner ``Select`` that is its own scope; ``Union``
-#: owns its two sides. Anything not listed belongs to the scope containing it.
+#: Node types that start a new scope. Pruning here is what makes the walk local.
+#: Anything not listed belongs to the scope that contains it.
 SCOPE_BOUNDARY_NODES: tuple[type[exp.Expr], ...] = (
     exp.Select, exp.Union, exp.Subquery, exp.CTE,
 )
 
 
 def scope_nodes(scope: Scope) -> Iterator[exp.Expr]:
-    """Every node belonging to ``scope`` itself, nested scopes excluded.
+    """Nodes that belong to ``scope`` itself, nested scopes excluded.
 
-    Depth-first; prune at boundary nodes other than the root. Uses
-    ``iter_expressions()`` (arg names move between sqlglot releases).
+    ``iter_expressions()`` rather than named args: those names move between sqlglot releases.
     """
     root = scope.expression
     stack: list[exp.Expr] = [root]
@@ -48,10 +41,9 @@ class ScopeView:
 
     scope: Scope
     nodes: tuple[exp.Expr, ...]
-    #: Folded alias for every source, plus the bare table name where a base source is
-    #: not aliased. What the whole-row argument rule (§2, closing B2) tests bare
-    #: function arguments against: ``json_agg(t)`` names a *source*, not a column, and
-    #: nothing else in the AST distinguishes it from a column reference.
+    #: Folded alias of every source, plus the bare table name when a base source is not
+    #: aliased. ``json_agg(t)`` names a source, not a column, and nothing else in the AST
+    #: distinguishes that from a column reference.
     source_names: frozenset[str]
 
     @property
@@ -59,51 +51,20 @@ class ScopeView:
         return self.scope.expression
 
     def columns(self) -> Iterator[exp.Column]:
-        """Every ``Column`` node in this scope, including bare ``HAVING`` ones."""
+        """Every ``Column`` in this scope, including bare ``HAVING`` ones ``scope.columns`` omits."""
         for node in self.nodes:
             if isinstance(node, exp.Column):
                 yield node
 
     def functions(self) -> Iterator[exp.Func]:
-        """Every function node in this scope: typed subclasses **and** ``Anonymous``.
-
-        Matching only ``exp.Anonymous`` and matching all ``exp.Func`` are different
-        allowlists (``CASE``/``CAST`` are typed nodes), and ``Anonymous`` is a subclass
-        of ``Func``, so this is deliberately the wider of the two. ADR 0006 §2.
-        """
+        """Typed subclasses and ``Anonymous``. Matching only ``Anonymous`` omits ``CASE`` and ``CAST``."""
         for node in self.nodes:
             if isinstance(node, exp.Func):
                 yield node
 
     def output_aliases(self) -> frozenset[str]:
-        """Folded output names this scope's ``ORDER BY`` may reference.
-
-        Two scope shapes, because Postgres answers the question differently in each.
-
-        A ``Select`` contributes its **explicit** aliases only. A projection spelled without
-        ``AS`` is a ``Column`` that already binds to a source in this same scope, so the
-        binding layer resolves it there and gets the column layer's authorization check with
-        it; naming it here as well would route it to ``opaque`` and skip that.
-
-        A **set operation** contributes its whole output list. There is no FROM at that level,
-        and Postgres resolves ``ORDER BY`` after a ``UNION`` against the output names — the
-        leftmost branch's, per ``named_selects``, which recurses for nested operations — and
-        against nothing else. So an output name is not merely *allowed* in that position, it is
-        the only legal spelling, and unlike the ``Select`` case it must include names that
-        carry no ``AS``: ``SELECT code FROM a UNION SELECT code FROM b ORDER BY code`` outputs
-        ``code`` without ever aliasing it.
-
-        **This used to return ``frozenset()`` for anything that is not a ``Select``**, so the
-        ``ORDER BY <alias>`` branch could never fire for the one construct where an output name
-        is all there is. Measured 2026-08-19: a two-branch ``UNION ALL ... ORDER BY side,
-        bldg_code`` was refused twice on the served surface, the agent recovered by deleting
-        the ``ORDER BY``, and the turn cost 5 attempts and 142s to return 755 unordered rows.
-        ``exp.SetOperation`` and not ``exp.Union``, or ``EXCEPT`` and ``INTERSECT`` keep failing.
-
-        Widening it no further is the point: a name absent from the output list still has
-        nothing to bind to and still refuses, which is what keeps the position governed rather
-        than exempt.
-        """
+        """Explicit aliases on a ``Select``. A set operation lists every output name, aliased or not: Postgres resolves
+        that ``ORDER BY`` against the output list alone."""
         expression = self.scope.expression
         if isinstance(expression, exp.SetOperation):
             return frozenset(fold(name) for name in expression.named_selects if name)
@@ -127,12 +88,7 @@ def _source_names(scope: Scope) -> frozenset[str]:
 
 
 def iter_scopes(tree: exp.Expr) -> tuple[ScopeView, ...]:
-    """Every scope in ``tree``, innermost first, each with its own nodes.
-
-    ``traverse_scope`` order: children before parents. Callers resolving against
-    ancestor scopes (correlated subqueries) must build the whole map first, which is
-    why :mod:`.binding` runs two passes.
-    """
+    """Innermost first. Children precede parents, which is why binding runs two passes."""
     return tuple(
         ScopeView(scope=scope, nodes=tuple(scope_nodes(scope)), source_names=_source_names(scope))
         for scope in traverse_scope(tree)

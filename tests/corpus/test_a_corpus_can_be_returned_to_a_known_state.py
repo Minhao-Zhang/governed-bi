@@ -1,12 +1,7 @@
-"""``corpus_content_hash`` says a corpus changed. It cannot say what it was before.
+"""Save a corpus tree and put that copy back.
 
-Taken from RyanChenJung/governed-bi-utkuai@12c3e15, where a control config was built by copying a
-tree by hand and confirming with ``diff -rq``. That worked once, and stopped working when a setting
-of theirs began writing drafts into the corpus mid-run -- a live config mutating its own setting under test
-identity. **No path in this repository writes to a corpus during a run**, so what is being taken
-is the capability and its three destructive-guard defects already found, not a fix for a live
-defect here. The reason to hold it now is that the hash is unforgiving: adding a single file inside
-``corpus_root`` moves it, which is what any future write path will do on its first turn.
+The content hash detects a change. It does not restore the previous tree. ``restore`` also deletes files the snapshot
+never had.
 """
 
 from __future__ import annotations
@@ -43,7 +38,6 @@ def test_a_write_after_the_snapshot_is_visible_as_drift(tmp_path: Path) -> None:
 
 
 def test_restore_returns_the_tree_to_the_captured_hash(tmp_path: Path) -> None:
-    """The half ``diff -rq`` never gave us: not detecting the change, undoing it."""
     root = _corpus(tmp_path / "corpus")
     captured = snapshot(root, tmp_path / "snap")
     (root / "b.yaml").write_text("id: b\nkind: term\n")
@@ -55,8 +49,7 @@ def test_restore_returns_the_tree_to_the_captured_hash(tmp_path: Path) -> None:
 
 
 def test_restore_removes_a_file_the_snapshot_did_not_have(tmp_path: Path) -> None:
-    """A draft written mid-run is a *new* file. A restore that only overwrites would leave it
-    behind and the next config would inherit the previous config's setting under test."""
+    """An overwrite-only restore would leave a new file in place."""
     root = _corpus(tmp_path / "corpus")
     snapshot(root, tmp_path / "snap")
     (root / "draft.yaml").write_text("id: draft\nkind: term\nstatus: proposed\n")
@@ -66,18 +59,8 @@ def test_restore_removes_a_file_the_snapshot_did_not_have(tmp_path: Path) -> Non
     assert not (root / "draft.yaml").exists()
 
 
-# ── the guards on the two operations here that can destroy data ────────────────
-#
-# This header used to say "three guards on the one operation", and the count and the number of
-# operations were both wrong: ``snapshot`` removes ``dest`` too, and until 2026-08-23 it did so
-# behind nothing but the nesting check.
-
-
 def test_restore_refuses_a_directory_that_is_not_a_corpus(tmp_path: Path) -> None:
-    """``restore`` deleted whatever path it was handed. Measured: a directory holding only
-    ``IMPORTANT.txt`` and no corpus at all was silently removed, then replaced with the
-    snapshot's contents. Hashing is not the check that prevents this -- ``corpus_content_hash``
-    succeeds on any directory -- so the tree must be identifiable as a corpus."""
+    """A content hash succeeds on any directory, so a tree with no YAML asset is refused."""
     snap = _corpus(tmp_path / "snap")
     victim = tmp_path / "my_documents"
     victim.mkdir()
@@ -91,14 +74,7 @@ def test_restore_refuses_a_directory_that_is_not_a_corpus(tmp_path: Path) -> Non
 
 
 def test_snapshot_refuses_a_destination_that_is_not_a_corpus(tmp_path: Path) -> None:
-    """The same hole as ``restore``'s, in the function whose docstring implied it was covered.
-
-    ``_identify_corpus`` guarded ``restore`` only, so ``snapshot`` reached ``shutil.rmtree(dest)``
-    behind nothing but the nesting check. Measured 2026-08-23: pointed at a scratch directory of
-    unrelated files, it deleted them. The worked case that made this urgent is a trial corpus whose
-    scratch path comes from an environment variable -- ``GOVERNED_BI_TRIAL_SCRATCH`` set to the
-    repository root passes the nesting check against a sibling corpus.
-    """
+    """``snapshot`` deletes ``dest``, so a destination that is not a corpus is refused too."""
     root = _corpus(tmp_path / "corpus")
     victim = tmp_path / "my_documents"
     victim.mkdir()
@@ -115,8 +91,7 @@ def test_snapshot_refuses_a_destination_that_is_not_a_corpus(tmp_path: Path) -> 
 
 
 def test_snapshot_replaces_a_destination_that_is_itself_a_corpus(tmp_path: Path) -> None:
-    """The guard must not break the reason the function exists: snapshotting twice into the same
-    scratch path. The second call's ``dest`` is the first call's output, which *is* a corpus."""
+    """A second snapshot into the same path is allowed: that destination is itself a corpus."""
     root = _corpus(tmp_path / "corpus")
     snapshot(root, tmp_path / "snap")
     (root / "b.yaml").write_text("id: b\nkind: term\n")
@@ -128,9 +103,7 @@ def test_snapshot_replaces_a_destination_that_is_itself_a_corpus(tmp_path: Path)
 
 
 def test_snapshot_accepts_an_empty_destination_directory(tmp_path: Path) -> None:
-    """Allowed where ``restore`` would refuse, and the asymmetry is the point: an empty directory
-    holds nothing to lose, and a caller that ``mkdir``s its scratch path first should not be
-    refused for tidiness."""
+    """An empty directory is allowed here because it holds nothing to lose."""
     root = _corpus(tmp_path / "corpus")
     dest = tmp_path / "snap"
     dest.mkdir()
@@ -142,7 +115,7 @@ def test_snapshot_accepts_an_empty_destination_directory(tmp_path: Path) -> None
 
 
 def test_snapshot_refuses_a_destination_that_is_an_existing_file(tmp_path: Path) -> None:
-    """``rmtree`` on a file raises three frames down with a message about the wrong thing."""
+    """A file is refused here, rather than by ``rmtree``."""
     root = _corpus(tmp_path / "corpus")
     dest = tmp_path / "snap"
     dest.write_text("i am a file")
@@ -154,9 +127,7 @@ def test_snapshot_refuses_a_destination_that_is_an_existing_file(tmp_path: Path)
 
 
 def test_a_snapshot_may_not_live_inside_the_corpus_it_snapshots(tmp_path: Path) -> None:
-    """``snapshot(root, root / "snap")`` was accepted, which puts the only backup inside the tree
-    ``restore`` later deletes -- so the operation that exists to make a change undoable made it
-    unrecoverable instead. Both nesting directions are refused, and so is the same path twice."""
+    """A snapshot inside the tree is removed when the tree is replaced."""
     root = _corpus(tmp_path / "corpus")
 
     with pytest.raises(ValueError, match="nested"):
@@ -172,12 +143,7 @@ def test_a_snapshot_may_not_live_inside_the_corpus_it_snapshots(tmp_path: Path) 
 
 
 def test_restore_copies_before_it_deletes(tmp_path: Path) -> None:
-    """Delete-then-copy leaves a window with the corpus in neither place, and the interruption
-    that lands in it is unrecoverable. Copy-then-swap means the replacement exists in full before
-    anything is removed, so an interruption leaves ``root`` or ``root.replaced`` intact.
-
-    Driven by making the swap itself fail: the staged copy must already be complete, and the
-    original must still be readable, at the moment the operation dies."""
+    """The staged copy is complete before ``root`` is renamed, so a failed swap leaves the original."""
     root = _corpus(tmp_path / "corpus")
     snapshot(root, tmp_path / "snap")
     (root / "b.yaml").write_text("id: b\nkind: term\n")
@@ -187,8 +153,7 @@ def test_restore_copies_before_it_deletes(tmp_path: Path) -> None:
     seen: dict[str, str] = {}
 
     def explode(self: Path, target: object) -> None:
-        # Fires on the first rename, which is `root -> root.replaced`. By then the staged copy
-        # must be complete: that is the property this test exists to pin.
+        # First rename is ``root`` to ``root.replaced``. The staged copy must already be complete.
         staged = tmp_path / "corpus.restoring"
         seen["staged_hash"] = corpus_content_hash(staged)
         seen["root_hash"] = corpus_content_hash(root)

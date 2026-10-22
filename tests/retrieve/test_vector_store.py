@@ -1,24 +1,7 @@
-"""What LanceDB does differently from a Python dict, and must not be allowed to.
+"""The store's cosine must match the reference, and its silences must not look like a measurement.
 
-The semantic channel scored an in-memory ``dict[str, list[float]]`` by
-``retrieve/semantic.py::cosine`` until 2026-08-04. It now scores a LanceDB table, and the
-storage change is invisible from every existing test: the old ones assert *rankings*, and a
-store that returned a different number for the same pair of vectors would still
-produce a plausible ranking. So this file asserts the two things the swap could break and
-nothing else was watching:
-
-* **the arithmetic** — LanceDB's ``1 - _distance`` is our ``cosine``, on the same vectors,
-  to float32 precision, and it orders them identically;
-* **the silences** — a stored zero vector is *dropped* from a cosine result and a zero query
-  vector returns ``[]``, both with no error. ``cosine`` raises on both, and
-  ``model/deterministic_embedder.py`` keeps a zero-norm fallback *because* it raises.
-  Turning either raise into an empty result would convert "this vector is degenerate" into
-  "this asset was not a candidate", which is the absence-reads-as-zero shape this repository
-  retires numbers over.
-
-Plus the two ranking invariants that are properties of the *caller* and would survive any
-amount of storage-layer correctness: ties break by asset id, and an empty candidate set is a
-different observation from an unconfigured channel.
+A stored zero and a zero query are errors in the reference definition. Ties break by asset id. An empty candidate set is
+a measurement; a missing embedder is not.
 """
 
 from __future__ import annotations
@@ -62,12 +45,7 @@ def _entries(corpus: list[tuple[str, str]] | None = None) -> list:
 
 
 def _stored(store, key: str) -> list[float]:
-    """The vector the store holds, read back through the same Arrow path ``load_from`` uses.
-
-    Deliberately not a ``__getitem__`` on ``VectorStore``: nothing in ``src/`` needs to read
-    one vector back, and a method that only tests call is the declared-but-unwired shape this
-    repository treats as a defect.
-    """
+    """Read back through Arrow. A getter that only tests call is a method nothing in the program needs."""
     arrow = store.to_arrow()
     return arrow.column("vector")[arrow.column("key").to_pylist().index(key)].as_py()
 
@@ -84,19 +62,7 @@ def _built(width: int = WIDTH, corpus: list[tuple[str, str]] | None = None):
 
 
 def test_the_store_scores_and_orders_exactly_as_cosine() -> None:
-    """The oracle. If LanceDB's cosine ever stops being our cosine, this is what says so.
-
-    Three separate claims, because they fail separately:
-
-    1. every returned similarity equals ``cosine(query, stored vector)`` — the conversion
-       ``1 - _distance`` is exact and the metric really is cosine. Forgetting
-       ``distance_type("cosine")`` yields *squared L2*, which is a plausible-looking ranking
-       and is not this;
-    2. the store's order equals the order that same ``cosine`` produces — the property every
-       downstream assertion depends on;
-    3. the order is unchanged by float32 storage, i.e. it also matches the order computed
-       from the embedder's own float64 output. Storage precision costs ~6.6e-08 on a 3072-dim
-       cosine, and this is the check that says the cost is precision and not rank.
+    """Forgetting cosine distance yields squared L2, which still looks like a ranking. Float32 storage must not reorder.
     """
     from governed_bi.retrieve.semantic import cosine
 
@@ -145,13 +111,8 @@ def test_the_store_scores_and_orders_exactly_as_cosine() -> None:
 
 
 def test_a_candidate_restriction_returns_the_same_scores_as_no_restriction() -> None:
-    """The prefilter is an *optimisation* and must not be a second definition of the score.
-
-    Two code paths reach a score: a ``key IN (...)`` prefilter for a candidate set smaller
-    than the table, and a full scan filtered in Python when it is not (measured: at full
-    coverage the ``IN`` costs 451 ms against 244 ms). A restriction that changed a number
-    would be invisible — every caller looks at one path per call.
-    """
+    """The prefilter must not be a second definition of the score. A candidate set that covers the table takes the scan
+    path."""
     index, embedder = _built()
     store = index.vectors
     assert store is not None
@@ -168,13 +129,7 @@ def test_a_candidate_restriction_returns_the_same_scores_as_no_restriction() -> 
 
 
 def test_a_zero_vector_is_refused_at_write_rather_than_dropped_at_read() -> None:
-    """Measured: three rows in a table, ``limit(100)``, ``distance_type("cosine")``, and the
-    zero-vector row simply **is not in the result** — no error, no NaN. It comes back
-    normally under ``l2``. ``cosine`` says *"cosine of a zero vector is undefined"*.
-
-    So the refusal moves to write time, which is also earlier and louder: the store cannot
-    contain a row that a search would then silently omit.
-    """
+    """A stored zero disappears from a cosine result with no error. Refuse it at write."""
     from governed_bi.retrieve.vectors import VectorStore
 
     store = VectorStore(4)
@@ -230,15 +185,8 @@ def test_ties_break_by_asset_id_and_not_by_insertion_order() -> None:
 
 
 def test_an_empty_candidate_set_ran_and_an_unconfigured_channel_did_not() -> None:
-    """Four states arrive from LanceDB as the same ``[]``: no candidates, a filter that
-    matched nothing, an empty table, and a zero query. They are different facts, so each is
-    decided in Python before the store is asked anything.
-
-    ``ran`` over an empty ranking is a *measurement* — "nothing of these types is a
-    candidate". ``not_configured`` is the absence of an instrument. Collapsing them is how
-    "the channel found nothing" and "the channel was never wired up" became one observation,
-    which is the shape half this repository's retired numbers have.
-    """
+    """An empty candidate set is a measurement. A missing embedder is the absence of an instrument. Both arrive as
+    ``[]``."""
     from governed_bi.registry.channels import ChannelState
     from governed_bi.retrieve.index import build_index
     from governed_bi.retrieve.semantic import semantic_search
@@ -260,25 +208,14 @@ def test_an_empty_candidate_set_ran_and_an_unconfigured_channel_did_not() -> Non
 
 
 def test_keys_does_not_read_the_vector_column() -> None:
-    """``keys()`` said "without reading a single vector" while calling ``to_arrow()``.
-
-    Asserted by **removing** the full read and by inspecting the projection asked for, not
-    by timing: a benchmark in a test suite is a flake, and the claim is not "this is fast", it is
-    "this does not touch the vectors". Measured on the real 14,613-row store, the projected scan
-    returns the same keys in 1.77 MB against 181.3 MB for the whole table, and a 2 ms sampler
-    catches the full read as a +407 MB working-set transient. ``missing()`` calls this once per
-    index build.
-    """
+    """``keys`` projects the key column. A full-table read stays green if the assertion watches a different scan."""
     from governed_bi.retrieve.vectors import VectorStore
 
     store = VectorStore(4)
     store.add({"a": [1.0, 0.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0, 0.0]})
 
-    # **Asserted on the projection `keys()` itself asks for.** Two earlier versions of this were
-    # green against the defect: the first patched `store._table.to_arrow`, which `keys()` does not
-    # call, and the second built its own projected scan and asserted on *that* — so dropping
-    # `.select([...])` from `keys()` changed nothing either time. Both caught by
-    # `tools/mutate.py`'s `p1-keys-scan-drops-the-projection`, which is why it is declared.
+    # Asserted on the projection ``keys()`` asks for. Patching ``to_arrow`` or a separate scan
+    # stays green when ``keys()`` drops ``.select``, so both the spy and the refusing patch are here.
     class _Spy:
         def __init__(self, real):
             self._real = real
@@ -326,23 +263,7 @@ def test_keys_does_not_read_the_vector_column() -> None:
 
 
 def test_replace_reconnects_rather_than_reusing_the_connection() -> None:
-    """Overwriting a table on a retained LanceDB connection leaks committed pages.
-
-    Measured over 200 iterations at a 12.3 MB payload: **43.9 MB of private commit per call**,
-    linear and payload-independent, with working set growing 12.4 MB per call beside it — so about a
-    quarter is commit-only, not all of it as first claimed.
-
-    **What that is worth on the real path is almost nothing, and this docstring said otherwise.**
-    ``build_index`` constructs a fresh ``VectorStore`` before every ``load_from``, so ``_replace``
-    runs once per store and nothing retains one: 0.226 MB per build before, 0.201 MB after, in
-    isolated processes. The claim here was "~50 GB across a 1,351-question run", which described a
-    loop no caller performs — caught in review, and the missing step was ``grep load_from src/``.
-    The test stays because the mechanism is real and cheap to keep true.
-
-    Asserted on the connection object and on the *order*, not on a counter: a commit-charge
-    assertion in a test suite is a flake, and reconnecting after the overwrite would satisfy the
-    object check while leaving the leak entirely in place.
-    """
+    """Overwriting on a retained connection leaks committed pages. Reconnect before the overwrite, on every call."""
     from governed_bi.retrieve.vectors import VectorStore
 
     source = VectorStore(4)
@@ -354,23 +275,9 @@ def test_replace_reconnects_rather_than_reusing_the_connection() -> None:
     assert target._db is not before, "the table was overwritten on the retained connection"
     assert target.keys() == ["t1"], "the reconnect must not lose the rows it just wrote"
 
-    # **The order matters and the first version of this test could not see it.** Reconnecting
-    # *after* `create_table` leaves the leak fully in place while still satisfying "the connection
-    # object changed", so the assertion above is not sufficient on its own. Caught in review.
-    # **Every call, and in the right order.** A substring search over `inspect.getsource` was the
-    # first attempt and a comment mentioning `lancedb.connect` satisfied it; one `load_from` also
-    # cannot see a reconnect that happens only on the first call — which is precisely the retained
-    # store this line is kept for. So: call it repeatedly and require a new connection each time.
-    #
-    # Asserted on **which connection performs the overwrite**, because "the connection object
-    # changed" is satisfied by reconnecting *after* `create_table`, which leaves the leak entirely
-    # in place. So: mark the old connection's `create_table` and require that it is never the one
-    # called. Repeated, because a reconnect that fires only on the first call is invisible to a
-    # single `load_from` — and a retained store is the only scenario the line is kept for.
-    # **The objects, not their ids.** `seen = {id(...)}` was the first version and it flaked once in
-    # four full-suite runs: CPython recycles `id()` once the old connection is collected, so a
-    # new object can report an id already in the set. Holding the objects both prevents the
-    # recycling and makes the comparison exact.
+    # Reconnect before the overwrite. A reconnect after ``create_table`` still changes the
+    # object and leaves the leak. Hold the connection objects: ``id()`` is recycled once the
+    # old one is collected.
     seen = [target._db]
     for attempt in range(3):
         stale = target._db
@@ -401,22 +308,8 @@ def test_replace_reconnects_rather_than_reusing_the_connection() -> None:
 
 
 def test_load_from_hands_the_writer_a_reader_and_never_a_whole_table() -> None:
-    """Audit P2. The **write** path is what the saving came from, so that is what is asserted.
-
-    Two earlier versions of this test were green against the defect. The first patched
-    ``source._table.to_arrow`` — but ``_batches()`` goes through ``_table.search()``, a different
-    attribute, so an implementation reading the whole table through the neighbouring API passed.
-    The second added ``assert 2500 > 1024``, which compares two literals.
-
-    What is asserted now is the shape that earned the measured win: ``create_table`` receives a
-    ``RecordBatchReader``, the source is consumed through ``_batches()``, and more than one batch is
-    yielded. Reversed: an implementation that collects ``list(source._batches())`` into a table
-    fails, and so does one that materialises the source.
-
-    **The memory numbers are measured, not asserted** — +944 → +318 MB net and +1,473 → +566 MB peak
-    on the real 14,613-row store — and they live in ``load_from``'s docstring and the P2 row. A
-    memory assertion in a test suite is a flake; what a test can pin is the mechanism.
-    """
+    """The write is a reader, not a materialised table. Patch ``connect``, because ``_replace`` reconnects before it
+    overwrites."""
     from governed_bi.retrieve.vectors import VectorStore
 
     source = VectorStore(4)
@@ -476,15 +369,7 @@ def test_load_from_hands_the_writer_a_reader_and_never_a_whole_table() -> None:
 
 
 def test_every_asset_gets_its_own_vector() -> None:
-    """The rewrite's whole purpose is re-keying, and nothing in its own tests checked the pairing.
-
-    Review demonstrated it: reversing ``take`` inside each yielded batch — so every asset receives
-    another asset's vector — passed all three tests added with the rewrite. A pre-existing test
-    caught it, which made it a coverage gap rather than an open hole, but the gap was exactly on the
-    property the change is about.
-
-    Each vector below is one-hot, so a mispairing is a cosine of 0.0 rather than a near miss.
-    """
+    """Reversing the pairing inside a batch still returned rows. Each vector here is one-hot so a swap is obvious."""
     from governed_bi.retrieve.vectors import VectorStore
 
     width = 8
@@ -531,13 +416,8 @@ def test_two_assets_sharing_one_summary_both_get_the_vector() -> None:
 
 
 def test_a_missing_source_key_raises_before_anything_is_written() -> None:
-    """The check moved to the front, and it had to.
-
-    It used to fall out of the ``row_of`` lookup, which a streaming writer cannot do: by the time
-    a generator discovers a missing key, ``create_table`` has already consumed batches. So
-    membership is checked against ``keys()`` up front — 1.77 MB on the real store — and the target
-    must be left exactly as it was.
-    """
+    """Membership is checked before any batch. A streaming writer cannot discover a missing key once the table write has
+    started."""
     from governed_bi.retrieve.vectors import VectorStore
 
     source = VectorStore(4)
@@ -554,14 +434,8 @@ def test_a_missing_source_key_raises_before_anything_is_written() -> None:
 
 
 def test_the_row_count_comes_from_the_table_and_not_from_the_caller() -> None:
-    """A regression the streaming rewrite introduced, found in review.
-
-    ``_replace`` took ``count`` as an argument, but with a ``RecordBatchReader`` what gets written is
-    decided by a generator *after* that number was passed. A reader yielding nothing left
-    ``len(store) == 5`` against a table holding 0 rows — and ``search`` uses ``limit = self._rows``,
-    so a store with an inflated count silently returns a subset of the rows it does have. ``add``
-    already counted from the table, so ``count`` was a second writer of one field.
-    """
+    """The caller's count can disagree with a reader. ``search`` limits by the stored count, so an inflated count
+    returns a subset."""
     from governed_bi.retrieve.vectors import VectorStore, _schema
 
     store = VectorStore(4)

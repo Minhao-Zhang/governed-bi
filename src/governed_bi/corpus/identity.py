@@ -1,7 +1,6 @@
-r"""Ids and paths: where a corpus name becomes a filesystem path.
+"""Ids and paths. A path component is checked where it becomes a path.
 
-Validate path components where used as paths (``\A``/``\Z``). Column ids are
-derived, never authored (ADR 0005 §1.2).
+Column ids are derived, never authored. See ADR 0005.
 """
 
 
@@ -32,43 +31,27 @@ __all__ = [
 
 
 class UnsafeName(ValueError):
-    """A name that must not reach the filesystem.
-
-    A ``ValueError`` so a loader's ``except Exception`` catches it as a per-item problem,
-    but raised rather than returned: on the write path this is a security control, not a
-    degradation (``store.py::write`` raises where ``store.py::load`` isolates).
-    """
+    """A name that must not reach the filesystem. A ``ValueError``, so a loader records it per item."""
 
 
-#: Directory for assets whose type declares no ``schema`` field (``join``, ``metric``,
-#: ``term`` — each one's namespace is a fact held by another asset). ADR 0005 does not say
-#: where such a file lives, so :func:`~governed_bi.corpus.store.write` requires an explicit
-#: namespace; this is what a caller passes when the asset really is system-wide.
+#: Directory for join, metric, and term assets, which have no schema field.
+#: ``write`` will not guess one; pass this when the asset is system-wide.
 SHARED_NAMESPACE = "_shared"
 
-#: Directory names that are a tool's bookkeeping, never corpus content — see :func:`_is_tooling`.
+#: Tool directories, never corpus content. See ``_is_tooling``.
 _NON_CORPUS_DIRS = frozenset(
     {".git", ".hg", ".svn", "__pycache__", ".ipynb_checkpoints", ".github", ".conformance"}
 )
 
-#: A directory component: a bare identifier. It names a corpus subtree **and** a
-#: live SQL namespace, so separators, dots and ``..`` are all rejected.
+#: One path component: a bare identifier, also a SQL namespace.
 _COMPONENT_RE = re.compile(r"\A[A-Za-z0-9_]+\Z")
 
-#: An asset id. Dots are permitted (``beer_factory.customers.email``); separators, spaces
-#: and control characters are not, because an id becomes a filename.
-#:
-#: The security property only, deliberately **not** a per-type shape check: ADR 0005 §1.2
-#: gives a format for joins (``join_{schema}_{left}_{right}_{digest}``) while other ids are
-#: dotted, so a regex enforcing either convention would reject the other.
+#: An asset id that can be a filename. Dots are allowed; ``..`` is rejected in code.
+#: Not a per-type shape: join ids and dotted ids would reject each other. See ADR 0005.
 _ID_RE = re.compile(r"\A[A-Za-z0-9_][A-Za-z0-9_.:-]*\Z")
 
 
 def validate_path_component(value: object, *, what: str) -> str:
-    """``value`` as a safe single path component, or raise :class:`UnsafeName`.
-
-    ``what`` names the field, so the failure says which of an asset's string fields it was.
-    """
     if not isinstance(value, str) or not _COMPONENT_RE.match(value):
         raise UnsafeName(
             f"{what}={value!r} is not a bare identifier ([A-Za-z0-9_]+). It names a "
@@ -79,7 +62,6 @@ def validate_path_component(value: object, *, what: str) -> str:
 
 
 def validate_asset_id(value: object) -> str:
-    """``value`` as a safe asset id, or raise :class:`UnsafeName`."""
     if not isinstance(value, str) or not _ID_RE.match(value) or ".." in value:
         raise UnsafeName(
             f"id={value!r} is not a safe asset id. An id becomes a filename, so it "
@@ -89,28 +71,10 @@ def validate_asset_id(value: object) -> str:
 
 
 def slug(physical_name: str) -> str:
-    """The id component for an engine identifier. **A key is not a name** (ADR 0008 D1).
+    """Id component for an engine identifier. A key is not the name. See ADR 0008.
 
-    ``physical_name`` holds the engine's identifier verbatim and is the only string that may
-    reach Postgres; this is the derived component that names a file and keys an index.
-    Deriving the key from the raw name instead left ``airline."Air Carriers"`` with no
-    ``TableAsset`` at all while 24 few-shots cited it, and widening the charset is not the
-    fix because ``"Air Carriers".yaml`` is illegal on Windows.
-
-    Returns ``physical_name`` unchanged when it is already a bare identifier — 655 of 656
-    tables and 5,946 of 5,947 columns of the shipped BIRD corpus (57 schemas, 13,304 assets),
-    so almost nothing existing moves. The two that do are the last two worked examples below —
-    a table in ``airline`` and a column of ``soccer_2016.saison``, both real assets in that
-    corpus and the reason this function exists. Otherwise unsafe characters become ``_`` and a
-    six-hex digest of the *exact* name is appended:
-
-        ``CBSA``          → ``CBSA``
-        ``Air Carriers``  → ``Air_Carriers_66c534``
-        ``orange_trophäe``→ ``orange_troph_e_b763be``
-
-    The digest is what makes it injective: ``a b`` and ``a_b`` sanitise alike and must not
-    collide. Deliberately **not** lowercased — Postgres distinguishes quoted ``"CBSA"`` from
-    ``"cbsa"``, and a corpus that cannot describe that cannot describe the lake.
+    A bare identifier is kept. Anything else is sanitised plus a six-hex digest of the exact name, so ``a b`` and
+    ``a_b`` do not collide. Not lowercased: quoted identifiers differ by case.
     """
     if not isinstance(physical_name, str) or not physical_name:
         raise UnsafeName(f"physical_name={physical_name!r} is not a non-empty string")
@@ -122,35 +86,22 @@ def slug(physical_name: str) -> str:
 
 
 def table_id(schema: str, physical_name: str) -> str:
-    """Table id in ``schema`` (ADR 0005 §2.8.2, ADR 0008 D1).
-
-    Single spelling shared by seed, join reconciliation, and retrieved_tables lookups.
-    """
+    """``schema`` plus :func:`slug`. One spelling for the seed, joins, and lookups. See ADR 0005."""
     return f"{schema}.{slug(physical_name)}"
 
 
 def derive_column_id(table_id: str, physical_name: str) -> str:
-    """The id of a column stored inline under ``table_id``.
-
-    One function for the loader and the seed both: the retrieval index, ``resolve``'s
-    closure and the budget all key on this string, so two spellings is two columns.
-    """
+    """Column id under ``table_id``. One spelling for the loader and the seed."""
     return f"{table_id}.{slug(physical_name)}"
 
 
 def _qualified_operand(node: exp.Expression) -> str:
-    """Lowercased SQL spelling of one side of an equality. Order-insensitive later."""
     return node.sql(dialect="postgres").casefold()
 
 
 def on_digest(on: str) -> str:
-    """Canonical digest of a join ON clause (ADR 0005 §1.2).
-
-    Equality operands are unordered within a predicate; conjuncts are unordered
-    within the clause; case and whitespace are ignored. The digest identifies the
-    **relationship**, not the text — without it, two edges between the same table
-    pair collapse and the last write wins.
-    """
+    """Digest of the relationship, not the ON text. Operand order, conjunct order, case, and whitespace do not count.
+    See ADR 0005."""
     if not isinstance(on, str) or not on.strip():
         raise ValueError("on_digest requires a non-empty ON clause")
     try:
@@ -174,18 +125,13 @@ def on_digest(on: str) -> str:
 
 
 def join_id(schema: str, left: str, right: str, on: str) -> str:
-    """``join_{schema}_{left}_{right}_{digest[:8]}`` — one id per relationship."""
     left_name = left.rsplit(".", 1)[-1]
     right_name = right.rsplit(".", 1)[-1]
     return f"join_{schema}_{left_name}_{right_name}_{on_digest(on)[:8]}"
 
 
 def namespace_of(root: Path, path: Path) -> str:
-    """The schema subtree ``path`` sits in, relative to ``root``; ``""`` at the root.
-
-    Used to apply the manifest, so a schema dropped from one attempt cannot leave its YAML
-    behind and go on competing as a router candidate (ADR 0005 §2.2).
-    """
+    """First directory under ``root``, or empty at the root. See ADR 0005."""
     parts = path.relative_to(root).parts
     return parts[0] if len(parts) > 1 else ""
 
@@ -196,15 +142,9 @@ def corpus_files(
     schemas: Sequence[str] | None = None,
     suffixes: Iterable[str] | None = None,
 ) -> list[Path]:
-    """Every corpus file under ``root``, sorted, filtered by manifest and suffix.
+    """Corpus files under ``root``, sorted by relative path.
 
-    Sorted by relative path: the loader's output order and the content hash both depend on
-    two runs over the same tree reading it identically.
-
-    ``schemas=None`` means **the tree is the manifest** — right for a single-schema tree,
-    wrong for a pooled root. Given a manifest, a file not under a named subtree (or under
-    ``_shared``) is not read at all, including one loose at the root, so a schema dropped
-    from an attempt cannot leave anything behind.
+    ``schemas=None`` treats the whole tree as the manifest. A named manifest also keeps ``_shared``.
     """
     if not root.is_dir():
         return []
@@ -222,33 +162,10 @@ def corpus_files(
 
 
 def _is_tooling(root: Path, path: Path) -> bool:
-    """Is this a tool's bookkeeping rather than corpus content?
+    """True when any path component is a tool directory.
 
-    Matters only once a corpus is version-controlled: with ``schemas=None`` the tree is the
-    manifest, so without this ``corpus_content_hash`` digests ``.git/`` and the setting under test
-    identity changes on every commit, fetch and ``git gc``.
-
-    The rule: a **directory a tool owns** is excluded, everything else is content. VCS
-    (``.git``, ``.hg``, ``.svn``), the interpreter (``__pycache__``, ``.ipynb_checkpoints``), CI
-    configuration (``.github``) and a lint's state (``.conformance``). Nothing is excluded by
-    filename — a ``README.md`` at the corpus root is *not* dropped: ``corpus_content_hash`` counts
-    everything in the selected subtrees, and a caller wanting assets alone passes ``schemas``.
-
-    ``.github`` is not optional. Without it a corpus repository cannot be given CI at all: adding
-    ``.github/workflows/*.yml`` moves the setting under test identity, so would editing a workflow, and an
-    identity that moves when the build script does is not one.
-
-    ``.conformance`` is the general form of the same defect, measured. An untracked
-    ``.conformance-pins.txt`` sitting at the root of ``../BIRD-corpus`` on 2026-08-23 hashed the
-    tree to ``8bb37531cff9155a…`` where the same content without it hashed ``6e5c7b4be83d5682…`` —
-    a lint's bookkeeping had already moved the value ADR 0015 pins. A directory rather than a
-    filename because this function checks path *parts*, so the next tool gets a subdirectory
-    instead of another entry here.
-
-    **The last component is checked too, because ``.git`` is not always a directory.** In a
-    ``git worktree`` it is a *file* holding a pointer, and that pointer embeds an absolute
-    path — so digesting it gave the same commit a different identity in every worktree, and a
-    different one again in a clone. Measured: three checkouts of one commit, three hashes.
+    Filenames are kept, so prose beside the assets still counts. ``.git`` is matched as a component because a worktree
+    stores it as a file, and that file embeds an absolute path.
     """
     parts = path.relative_to(root).parts
     return not _NON_CORPUS_DIRS.isdisjoint(parts)

@@ -1,16 +1,7 @@
-"""The pending-clarification queue, against a fake client.
+"""The queue has no store of its own: an unanswered question exists only as interrupt state.
 
-**What is being pinned, and why it needs a test at all.** The queue's whole claim is that it needs
-no store of its own: a question nobody answered writes nothing to state (``serve/tools.py`` writes
-``clarifications_by_call`` on the far side of ``interrupt()``), so the only record of it is the
-platform's interrupt state. That makes the reader's correctness entirely a matter of *how it asks* —
-``status="interrupted"`` and ``select=["...", "interrupts", ...]`` — and a fake that ignored either
-one would let a broken query pass. So :class:`_FakeThreads` below honours both, and one test asserts
-the query itself rather than only its result.
-
-The fixtures use the real id shape (``clar-{turn_id}-{digest}``, both hex) because
-``turn_of_clarification`` is the join back to the turn and a test on a made-up shape would pin
-nothing.
+``_FakeThreads`` honours ``status`` and ``select``. A fake that ignored either would let a broken query pass.
+Ids use the real ``clar-{turn_id}-{digest}`` shape, because a made-up shape pins nothing.
 """
 
 from __future__ import annotations
@@ -46,7 +37,6 @@ def _interrupt(
     basis: str = "data_definition",
     digest: str = "0123456789ab",
 ) -> dict[str, Any]:
-    """One raised interrupt, in the shape ``_patch_interrupt`` yields: ``{"id", "value"}``."""
     return {
         "id": f"int-{turn_id}",
         "value": {
@@ -80,11 +70,7 @@ def _thread(
 
 
 class _FakeThreads:
-    """Enough of ``ThreadsClient.search`` to hold the reader to its query.
-
-    ``status`` and ``select`` are *enforced*, not accepted and ignored: they are the two things the
-    queue's no-new-storage claim rests on.
-    """
+    """``status`` and ``select`` are enforced. Ignoring either would let a broken query pass."""
 
     def __init__(self, threads: list[dict[str, Any]]) -> None:
         self._threads = threads
@@ -143,16 +129,8 @@ def _queue(threads: list[dict[str, Any]]) -> tuple[PendingClarifications, _FakeC
     return PendingClarifications(client_factory=lambda: client), client
 
 
-# ── the query itself ─────────────────────────────────────────────────────────────────────────
-
-
 def test_the_queue_asks_for_interrupted_threads_and_selects_the_interrupts() -> None:
-    """The two arguments, asserted on the call rather than inferred from the result.
-
-    Dropping ``status`` would page the whole store and call every idle thread pending; dropping
-    ``interrupts`` from ``select`` would return rows with nothing in them. Both would still
-    "work" against a lenient fake, which is why this asserts the request.
-    """
+    """Asserted on the call. A lenient fake would still return rows if ``status`` or ``select`` were dropped."""
     queue, client = _queue([_thread("t-1", "2026-08-19T10:00:00Z", {"task-1": [_interrupt(TURN_A, "which rating?")]})])
     queue.pending()
 
@@ -175,7 +153,6 @@ def test_the_queue_asks_for_interrupted_threads_and_selects_the_interrupts() -> 
 
 
 def test_the_queue_is_oldest_first_because_it_is_a_work_queue() -> None:
-    """Ascending, unlike ``list_turns``. The row that waited longest is the one to answer."""
     queue, client = _queue(
         [
             _thread("t-new", "2026-08-19T12:00:00Z", {"k": [_interrupt(TURN_B, "newer")]}),
@@ -188,15 +165,8 @@ def test_the_queue_is_oldest_first_because_it_is_a_work_queue() -> None:
     assert [row["question"] for row in page.rows] == ["older", "newer"]
 
 
-# ── what a row carries ───────────────────────────────────────────────────────────────────────
-
-
 def test_a_row_carries_the_question_and_links_back_to_its_turn() -> None:
-    """``clarification_id`` embeds ``turn_id``, so the link needs no separate field.
-
-    The fork that first built this surface had to add the turn link in a later commit; here it
-    falls out of the id ``serve/tools.py`` already mints.
-    """
+    """The turn link falls out of the id ``serve/tools.py`` mints, so there is no separate field."""
     queue, _ = _queue(
         [
             _thread(
@@ -237,11 +207,7 @@ def test_two_open_questions_on_one_thread_are_two_rows() -> None:
     assert page.threads_scanned == 1
 
 
-# ── what it refuses to report ────────────────────────────────────────────────────────────────
-
-
 def test_an_idle_thread_is_not_in_the_queue() -> None:
-    """Belt for the ``status`` filter: an answered conversation is not an open question."""
     queue, _ = _queue(
         [
             _thread("t-idle", "2026-08-19T10:00:00Z", {"k": [_interrupt(TURN_A, "answered")]}, status="idle"),
@@ -253,11 +219,7 @@ def test_an_idle_thread_is_not_in_the_queue() -> None:
 
 
 def test_an_interrupt_of_another_kind_is_not_reported_as_a_question() -> None:
-    """Nothing else calls ``interrupt()`` today; if something does, it is not a pending question.
-
-    Rendering an unknown shape as a clarification would put a payload the client's
-    ``z.literal("clarification")`` cannot parse into an operator's queue.
-    """
+    """An unknown shape rendered as a clarification is a payload the client's literal cannot parse."""
     queue, _ = _queue(
         [
             _thread(
@@ -288,11 +250,8 @@ def test_a_malformed_or_empty_interrupt_map_yields_no_rows(interrupts: Any) -> N
     assert queue.pending().rows == []
 
 
-# ── the truncation contract ──────────────────────────────────────────────────────────────────
-
-
 def test_a_short_page_says_it_is_short() -> None:
-    """A silently truncated queue reads as "nobody is waiting"."""
+    """A truncated queue that does not say so reads as nobody waiting."""
     threads = [_thread(f"t-{i}", f"2026-08-19T{i:02d}:00:00Z", {"k": [_interrupt(TURN_A, f"q{i}")]}) for i in range(5)]
     queue, _ = _queue(threads)
 
@@ -313,9 +272,6 @@ def test_offset_pages_through_without_claiming_truncation_at_the_end() -> None:
     last = queue.pending(limit=2, offset=2)
     assert [r["question"] for r in last.rows] == ["q2"]
     assert last.truncated is False, "the final page is not truncated"
-
-
-# ── the id parser ────────────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -364,15 +320,8 @@ def test_a_foreign_clarification_id_leaves_the_row_unlinked_rather_than_dropping
     assert row["clarification_id"] == "not-our-shape"
 
 
-# ── the route ────────────────────────────────────────────────────────────────────────────────
-
-
 def _app_client(threads: list[dict[str, Any]]) -> Any:
-    """The real app over a real reader over a fake store.
-
-    Not a fake reader: the point of these two tests is the wire wrapper, and a stub reader would
-    let a route that dropped `truncated` still pass.
-    """
+    """A stub reader would let a route that dropped ``truncated`` still pass."""
     from fastapi.testclient import TestClient
 
     from governed_bi.api.routes import make_app
@@ -394,11 +343,7 @@ def test_the_route_serves_the_queue_with_its_columns() -> None:
 
 
 def test_the_route_puts_truncation_on_the_wire() -> None:
-    """The count a caller did not get travels beside the ones it did.
-
-    Without this the queue reports "one person is waiting" when five are, and it reports it in
-    exactly the same shape as the truthful answer.
-    """
+    """Without the flag, one waiting and five waiting are the same response shape."""
     threads = [_thread(f"t-{i}", f"2026-08-19T{i:02d}:00:00Z", {"k": [_interrupt(TURN_A, f"q{i}")]}) for i in range(5)]
     client = _app_client(threads)
 
@@ -413,8 +358,7 @@ def test_the_route_puts_truncation_on_the_wire() -> None:
 
 
 def test_the_route_refuses_a_nonsense_window_rather_than_clamping_silently() -> None:
-    """``limit`` is bounded by ``Query(ge=1, le=500)``, so FastAPI answers 422 rather than
-    letting an unbounded page reach a reader that pages the store."""
+    """``Query(ge=1, le=500)`` answers 422. Clamping would page the store without bound."""
     client = _app_client([])
     assert client.get("/clarifications/pending?limit=0").status_code == 422
     assert client.get("/clarifications/pending?limit=9999").status_code == 422
@@ -452,15 +396,8 @@ def test_an_unanswered_definition_interrupt_stays_pending() -> None:
     assert row["basis"] == "data_definition"
 
 
-# ── the declared row ─────────────────────────────────────────────────────────────────────────
-
-
 def test_the_route_returns_every_interrupt_once_when_they_exceed_one_page() -> None:
-    """More interrupted threads than one search page, paged on the HTTP route.
-
-    ``_THREAD_PAGE`` is 50. Fifty-one threads forces a second search, and a limit of 20
-    forces several response pages. Each clarification id comes back once.
-    """
+    """``_THREAD_PAGE`` is 50, so 51 threads force a second search. Each id comes back once."""
     n = 51
     threads = [
         _thread(
@@ -490,7 +427,6 @@ def test_the_route_returns_every_interrupt_once_when_they_exceed_one_page() -> N
 
 
 def test_every_declared_column_is_present_on_an_interrupt_row() -> None:
-    """A declared column is present, never absent."""
     queue, _ = _queue([_thread("t-1", "2026-08-19T10:00:00Z", {"k": [_interrupt(TURN_A, "which?")]})])
     (row,) = queue.pending().rows
     assert set(PENDING_FIELDS) <= set(row), (
@@ -499,17 +435,10 @@ def test_every_declared_column_is_present_on_an_interrupt_row() -> None:
     assert row["source"] == "interrupt"
     assert row["interrupt_id"] and row["task_id"], "a resume needs both, so both are carried"
 
-# ── used outside the Agent server ────────────────────────────────────────────────────────────
-
-
 def test_with_no_server_module_the_reader_refuses_by_name_and_registers_no_transport(
     monkeypatch: Any,
 ) -> None:
-    """``get_client(url=None)`` would register an ``app=None`` transport that only server startup
-    drains, then fail with a bare ``TypeError``. The list's length is asserted because the
-    exception alone would pass on the leaky version. ``sys.modules[...] = None`` because whether
-    the import succeeds depends on what other tests configured.
-    """
+    """The exception alone would pass on the leaky version, so the transport list's length is asserted."""
     monkeypatch.setitem(sys.modules, "langgraph_api.server", None)
     before = len(_registered_transports)
     reader = PendingClarifications()
@@ -534,10 +463,7 @@ def test_the_import_window_is_refused_too_rather_than_deferred(monkeypatch: Any)
 
 
 def test_an_imported_server_that_is_not_running_is_refused_as_well(monkeypatch: Any) -> None:
-    """Importable is not running: only a started server sets ``langgraph_api.asyncio._MAIN_LOOP``.
-
-    The server module is stubbed because importing it for real needs runtime configuration.
-    """
+    """Only a started server sets ``_MAIN_LOOP``. The module is stubbed: a real import needs runtime configuration."""
     import langgraph_api.asyncio as server_loop
 
     stub = ModuleType("langgraph_api.server")
@@ -567,9 +493,9 @@ def test_the_client_is_built_once_for_the_life_of_the_reader() -> None:
 
 
 def test_a_cached_client_survives_the_next_fresh_event_loop() -> None:
-    """``_blocking`` opens a new ``asyncio.run`` per call, so the cached client is used from a loop
-    that did not exist when it was built. Pinned for the real objects, since a fake would pass
-    whether or not it were true.
+    """Each call opens a new loop, so the client is used from a loop that did not exist when it was built.
+
+    A fake would pass either way.
     """
 
     async def app(scope: Any, receive: Any, send: Any) -> None:

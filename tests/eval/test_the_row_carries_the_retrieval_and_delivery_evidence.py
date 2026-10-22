@@ -1,22 +1,4 @@
-"""Nine declared record fields reached ``finish`` and stopped there.
-
-Same defect as ``reflect_result`` (see the test beside this one): ``finish`` projects the field
-into the turn record, ``eval/harness.project_turn`` builds the measurement row from a fixed key
-list, and the field is not on it — so the config that would have used the evidence produced an
-artifact without it. The nine were ``schema_ranking``, ``channel_hits``, ``lexical_coverage``,
-``guard``, ``crossings``, ``pulled_in``, ``delivery_hash``, ``tool_delivered`` and
-``latency_sec``; the last means none of the 1351-row configs in ``runs/eval/`` records wall clock
-at all.
-
-**Every test asserts a value the test supplied**, never that the key is present: `None` is
-present, and a row carrying a constant `None` satisfies `"latency_sec" in row` forever. Eight
-tests in this repository were found asserting a constant against itself in one sweep.
-
-Three of the nine are carried as summaries rather than copies, because the full values run
-59 KB / 7.0 KB / 2.0 KB per turn against a 6.4 KB row. Those tests assert the summary was
-computed from the supplied value — a rank located in a list, a count taken before truncation —
-which no constant can satisfy either.
-"""
+"""Assert a supplied value, not key presence: a constant ``None`` satisfies ``in row``."""
 
 from __future__ import annotations
 

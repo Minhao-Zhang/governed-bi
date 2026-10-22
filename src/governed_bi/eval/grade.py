@@ -1,18 +1,8 @@
-"""Per-row EX grading against gold **results** (ADR 0005 §4.1).
+"""Per-row grading against gold results, not SQL strings (ADR 0005).
 
-Compares executed result sets, not SQL strings. Order-insensitive by default;
-order-sensitive question ids keep row order.
-
-**The comparison is BIRD-Obfuscation's ``normalise_result``, transcribed** — the same
-function, so a fingerprint produced here and one from ``pipeline/_db.py``'s
-``hash_normalised_result`` are the same 64 hex characters for the same rows. Why it had to
-be transcribed rather than approximated is in :func:`_coerce_cell`.
-
-**The result is not the fingerprint.** A hash cannot carry a tolerance, and BIRD's normaliser
-reads ``'00123'`` as ``123`` and compares floats exactly. So ``correct`` comes from
-:func:`results_match` whenever both row sets are in hand: numbers compare with a relative
-tolerance of :data:`REL_TOL`, and a text cell never equals a number. The fingerprint is still
-recorded, and is the comparison only when the gold exists as a published digest alone.
+Order-insensitive unless the question id is order-sensitive. ``correct`` is
+the tolerant row comparison when both results are in hand. The fingerprint
+matches BIRD's normaliser and is used only when gold is a published digest.
 """
 
 from __future__ import annotations
@@ -34,19 +24,16 @@ __all__ = [
     "REL_TOL",
 ]
 
-#: Relative tolerance when either cell is fractional, float or ``numeric``. Two plans computing
-#: ``1/3`` differ around the 16th significant digit, and Postgres ``numeric`` division keeps 16 to
-#: 20 digits depending on its inputs, so 1e-9 absorbs both while ``1234.568`` against ``1234.567``
-#: (8e-7 apart) stays wrong. Whole numbers on both sides compare exactly: 1e-9 would still grade
-#: a count of 10,000,000,001 correct against 10,000,000,000.
+#: Relative tolerance for fractional numbers. 1e-9 covers plan and numeric
+#: noise; ``1234.568`` against ``1234.567`` stays wrong. Whole numbers compare
+#: exactly, so a large count is not absorbed.
 REL_TOL = Decimal("1e-9")
-#: Floor for values near zero, where a relative tolerance shrinks to nothing: ``0.1+0.2-0.3`` is
-#: 5.5e-17, not 0.
+#: Floor near zero, where a relative tolerance shrinks to nothing.
 ABS_TOL = Decimal("1e-12")
 
 
 class GradeResult(dict):
-    """``correct``, ``gold_fingerprint``, ``pred_fingerprint``, ``detail``."""
+    pass
 
 
 def result_fingerprint(
@@ -55,21 +42,8 @@ def result_fingerprint(
     *,
     order_sensitive: bool = False,
 ) -> str:
-    """Canonical sha256 of a result set for EX comparison.
-
-    Byte-identical to ``hash_normalised_result`` in BIRD-Obfuscation's ``pipeline/_db.py``
-    when ``order_sensitive`` is false — same normaliser, same
-    ``json.dumps(..., separators=(",", ":"), ensure_ascii=False)``, same digest. That is
-    what lets a ``gold_fingerprint`` from the benchmark's own pipeline be compared here
-    instead of re-executing every gold statement.
-
-    ``columns`` is accepted and **not hashed**; see :func:`_normalise`.
-
-    ``order_sensitive=True`` skips the sort and is therefore *stricter* than BIRD, whose
-    comparators always sort. Deliberate — the dataset ships ``order_sensitive_qids.json``
-    — but those fingerprints are not BIRD-comparable, so a benchmark-pipeline gold
-    fingerprint must not be used for those question ids.
-    """
+    """sha256 of the normalised rows, column names omitted. Same bytes as BIRD when order is ignored. An order-sensitive
+    digest is not BIRD-comparable."""
     body = _normalise(columns, rows, order_sensitive=order_sensitive)
     blob = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
@@ -83,7 +57,6 @@ def grade_results(
     gold_rows: Sequence[Sequence[Any]],
     order_sensitive: bool = False,
 ) -> GradeResult:
-    """EX: the predicted rows match the gold rows under :func:`results_match`."""
     gold_fp = result_fingerprint(gold_columns, gold_rows, order_sensitive=order_sensitive)
     pred_fp = result_fingerprint(pred_columns, pred_rows, order_sensitive=order_sensitive)
     same = results_match(pred_rows, gold_rows, order_sensitive=order_sensitive)
@@ -105,18 +78,7 @@ def grade_turn(
     gold_fingerprint: str | None = None,
     order_sensitive: bool = False,
 ) -> GradeResult:
-    """Grade one serve turn. ``correct`` is ``True``, ``False``, or ``None`` for *unmeasured*.
-
-    Crashes, refusals, caps and statement-less turns are **incorrect**, never collapsed into
-    each other — ``correct=False`` with ``detail`` naming the outcome. Only ``answered`` turns
-    with a comparable result can be ``correct=True``.
-
-    **Three values, not two.** A missing *gold* is ``None`` — the instrument had nothing to
-    compare against — while a missing *prediction* stays ``False``, because the model
-    produced SQL that would not execute. Callers must propagate the ``None`` rather than
-    coerce it; ``bool(None)`` is ``False``, the collapse
-    :meth:`~governed_bi.measure.population.Population.count` refuses downstream.
-    """
+    """``correct`` is true, false, or ``None``. A missing gold is ``None``; do not coerce it to ``False``."""
     if outcome == "crashed":
         return GradeResult(
             correct=False,
@@ -132,11 +94,9 @@ def grade_turn(
             detail="refused",
         )
     if outcome == "clarification":
-        # Both endings the member covers, on purpose: a turn that paused on `ask_user` and one a
-        # reader declined fail-closed, which reaches `finish` (`registry/stages.Outcome`). Neither
-        # delivered a governed answer and neither has a prediction, so both are `False` with the
-        # same `detail` — the distinction between them is about instrumentation, not about score,
-        # and the consumer that needs it reads a written field (`measure/checks`).
+        # Both endings score the same: a paused `ask_user` and a fail-closed
+        # decline delivered no answer. The split between them is a written
+        # field, not this score.
         return GradeResult(
             correct=False,
             gold_fingerprint=gold_fingerprint,
@@ -151,13 +111,8 @@ def grade_turn(
             detail="capped",
         )
     if outcome == "no_sql":
-        # `False`, like every other non-answer, and **not** `None`: `None` is reserved for the
-        # instrument having nothing to compare against, and here the gold is fine — the engine
-        # ran no statement. The EX arithmetic is unchanged by the taxonomy split, deliberately:
-        # before it, these turns arrived as `answered` with no `generated_sql`, so the harness
-        # executed nothing, `pred_columns` stayed `None` and `grade_turn` returned
-        # `correct=False, detail="missing_prediction"`. Same score, and `detail` now says which
-        # of the two it was rather than describing a prediction that was never attempted.
+        # `False`, not `None`. `None` means the instrument had no gold. Here the
+        # gold is fine and the engine ran no statement.
         return GradeResult(
             correct=False,
             gold_fingerprint=gold_fingerprint,
@@ -175,10 +130,9 @@ def grade_turn(
     have_gold_rows = gold_columns is not None and gold_rows is not None
     if gold_fingerprint is None:
         if not have_gold_rows:
-            # ``None``, not ``False``: no gold is the instrument failing, not the model. A gold
-            # that will not execute (connection blip, moved schema) recorded as ``False`` is
-            # indistinguishable in the artifact from a real mistake and deflates EX silently —
-            # ``Population.count``'s "absent is not negative" rule, one layer upstream of it.
+            # ``None``, not ``False``: no gold is the instrument, not the model.
+            # Recording it as ``False`` is indistinguishable from a real miss
+            # and deflates the rate.
             return GradeResult(
                 correct=None,
                 gold_fingerprint=None,
@@ -216,14 +170,7 @@ def results_match(
     *,
     order_sensitive: bool = False,
 ) -> bool:
-    """Whether two result sets hold the same rows, as a multiset unless ``order_sensitive``.
-
-    Cells compare by :func:`_typed_cell` and :func:`_numbers_match`: two whole numbers exactly,
-    any fractional number within :data:`REL_TOL`, text folded as BIRD folds it, and never a
-    number against text or a boolean. Unordered sets are sorted by
-    :func:`_typed_key` and paired row by row; two gold values within the tolerance of each other
-    in one column can pair crosswise, and that errs toward ``False``.
-    """
+    """Same rows, as a multiset unless order is kept. Text never equals a number. Close values err toward ``False``."""
     if len(pred_rows) != len(gold_rows):
         return False
     pred = [[_typed_cell(v) for v in row] for row in pred_rows]
@@ -244,13 +191,7 @@ def results_match(
 
 
 def _numbers_match(p: float | Decimal, g: float | Decimal) -> bool:
-    """Exact when both are whole numbers held exactly, otherwise within the tolerance.
-
-    Compared in ``Decimal``, which holds every finite float exactly, so a ``numeric`` against a
-    ``numeric`` gets the same tolerance as one against a float. A float that :func:`_typed_cell`
-    left as a float is either fractional or above 2**53, where it is not an exact count, so it
-    always takes the tolerance.
-    """
+    """Exact for whole ``Decimal`` counts; otherwise within tolerance. A float past 2**53 is not exact."""
     dp, dg = Decimal(p), Decimal(g)
     if isinstance(p, Decimal) and isinstance(g, Decimal) and _is_whole(dp) and _is_whole(dg):
         return dp == dg
@@ -262,16 +203,11 @@ def _is_whole(value: Decimal) -> bool:
 
 
 class _Text(str):
-    """A folded text cell, typed so it can never compare equal to a number's spelling."""
+    """Folded text. Its type cannot equal a number's spelling."""
 
 
 def _typed_cell(value: Any) -> Any:
-    """``None``, ``bool``, exact ``Decimal``, ``float`` for any other number, or folded :class:`_Text`.
-
-    ``bool`` is kept apart because ``True == 1.0`` in Python and a flag is not a count. Integers
-    and whole-number floats become ``Decimal`` so they compare exactly with Postgres ``numeric``.
-    NaN and infinities become :class:`_NonFinite`, since ``math.isclose`` never equates NaN.
-    """
+    """Bool stays apart because ``True == 1.0``. NaN is its own type. A whole float below 2**53 is that int."""
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, (int, Decimal)):
@@ -282,29 +218,24 @@ def _typed_cell(value: Any) -> Any:
         if math.isnan(number) or math.isinf(number):
             return _non_finite(number)
         if number.is_integer() and abs(number) < _EXACT_FLOAT_LIMIT:
-            # A whole-number float (`SUM`, `COUNT` cast by a driver) is a count, and the tolerance
-            # would accept 1,000,001.0 against 1,000,000. Below 2**53 the float is that integer.
             return Decimal(int(number))
         return number
     return _Text(str(value).strip().lower())
 
 
-#: Every integer up to this magnitude is exactly one float, so a whole-number float below it can be
-#: compared as that integer. Above it, adjacent floats are more than 1 apart and the tolerance holds.
+#: Every integer up to here is exactly one float. Above it the tolerance holds.
 _EXACT_FLOAT_LIMIT = 2**53
 
 
 class _NonFinite(str):
-    """NaN or an infinity. Its own type, so no text cell can spell one."""
+    """NaN or an infinity, so no text cell can spell one."""
 
 
 def _non_finite(number: float) -> _NonFinite:
-    """One marker per non-finite value, whether it arrived as a float or a ``Decimal``."""
     return _NonFinite("nan" if math.isnan(number) else "inf" if number > 0 else "-inf")
 
 
 def _typed_key(value: Any) -> tuple[int, float, str]:
-    """A total order over typed cells: ``None``, bools, numbers, text."""
     if value is None:
         return (0, 0.0, "")
     if isinstance(value, bool):
@@ -320,25 +251,7 @@ def _normalise(
     *,
     order_sensitive: bool,
 ) -> list[list[Any]]:
-    """``normalise_result`` from BIRD-Obfuscation's ``pipeline/_db.py``, as a list of lists.
-
-    **Column names are deliberately not part of the fingerprint.** BIRD's EX compares result
-    *values*, so hashing names made this grader stricter than the benchmark it implements:
-    ``SELECT COUNT(*) AS paper_count`` graded wrong against a gold ``SELECT COUNT(*)``
-    returning the same ``100``. How often that happened was counted through the old grader and
-    is retired (``register/citations.py``); the mismatch itself is mechanical.
-
-    ``columns`` stays in the signature because the *count* still matters implicitly: an extra
-    column produces longer row tuples and a different fingerprint, which is how
-    over-answering is caught.
-
-    Element order **within** a row is significant, matching BIRD — ``(url, 2028)`` and
-    ``(2028, url)`` answer different questions. Only row order is relaxed.
-
-    The sort key is BIRD's ``cell_key``, not ``json.dumps`` of the row: the latter is
-    deterministic, so it is adequate for self-comparison while producing a different byte
-    string from the benchmark's for the same rows.
-    """
+    """Column names are not hashed: ``COUNT(*) AS paper_count`` matched the same values and graded wrong."""
     body = [[_coerce_cell(v) for v in row] for row in rows]
     if not order_sensitive:
         body = sorted(body, key=lambda row: tuple(_cell_key(c) for c in row))
@@ -346,22 +259,8 @@ def _normalise(
 
 
 def _coerce_cell(value: Any) -> Any:
-    """One cell, BIRD's way: a number if it can be read as one, else a folded string.
-
-    ``float(value)`` **first**, not ``isinstance(value, (int, float))`` with a
-    ``str(value)`` fallback: ``Decimal`` is neither, so that spelling compared every
-    Postgres ``numeric`` cell as a string and graded ``Decimal('100.00')`` against
-    ``Decimal('100.0')`` as ``result_mismatch``. Every EX this repo produced before
-    2026-08-06 is a retired underestimate of unknown size, and since the size scales with a
-    schema's numeric-column density the cross-schema comparisons do not hold either.
-
-    Two consequences of following BIRD exactly rather than "sensibly", both looser than one
-    would design from scratch — but a grader stricter than its benchmark does not report the
-    benchmark's number (``normalise_result_strict`` tags types; BIRD's EX does not use it):
-
-    * ``float("1e5")`` succeeds, so the *string* ``"1e5"`` compares equal to ``100000.0``.
-    * ``float(True)`` is ``1.0``, so ``True`` compares equal to ``1``.
-    """
+    """``float`` first, else folded text. ``Decimal`` is not an int, and ``float`` also equates the string 1e5 with
+    100000 and ``True`` with 1."""
     if value is None:
         return None
     try:
@@ -376,11 +275,7 @@ def _coerce_cell(value: Any) -> Any:
 
 
 def _cell_key(value: Any) -> tuple[int, float, str]:
-    """BIRD's ``cell_key``: a total order over ``None`` / float / str, in that order.
-
-    Typed rather than lexicographic because ``sorted`` on mixed cells raises, and a sort that
-    raises on one result set and not another is a grader that is a function of the data.
-    """
+    """Total order over ``None``, float, str. A lexicographic sort raises on mixed cells."""
     if value is None:
         return (0, 0.0, "")
     if isinstance(value, float):

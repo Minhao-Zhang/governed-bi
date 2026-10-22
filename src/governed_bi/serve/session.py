@@ -1,9 +1,6 @@
-"""Run constants for a served turn, built once (ADR 0005 §2.8.2.2).
+"""Run constants for a served turn, built once. See ADR 0005 §2.8.2.2.
 
-Run-constant vs per-turn: index, structure, corpus, connector, policy, model, settings,
-and hashes live on :class:`Session`. Entry points: :meth:`Session.configurable` and
-:meth:`Session.turn`. Ids are minted here, never accepted from a caller.
-"""
+Ids are minted here, never accepted from a caller."""
 
 from __future__ import annotations
 
@@ -36,29 +33,23 @@ from .runtime import model_id
 from .state import PER_TURN_RESET
 
 if TYPE_CHECKING:
-    # Type-only, so importing a session does not pull in ``lancedb`` (~1.1 s) for the
-    # callers that build no vectors at all — which is every test that builds a corpus.
+    # Importing this module must not load ``lancedb`` (~1.1 s).
     from ..retrieve.vector_cache import VectorCache
 
 __all__ = ["Session", "from_corpus_dir", "from_live_schema", "visible_assets"]
 
-#: Asset types whose file needs an explicit namespace on write, because they declare no
-#: ``schema`` field of their own. ``store.write`` raises without one; the namespace is a fact
-#: held by another asset (a join's is its left endpoint's), so the seeder knows it and the
-#: writer cannot derive it.
+#: ``store.write`` needs a namespace these types do not declare; the seeder supplies the left endpoint's.
 _NEEDS_NAMESPACE = frozenset({"join", "metric", "term"})
 
 
 def _digest(*parts: object) -> str:
-    """A short stable digest. Used for ids that must be reproducible across a resume."""
+    """Short stable digest so ids survive a resume."""
     joined = "\x1f".join(str(p) for p in parts)
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass(frozen=True, slots=True)
 class Session:
-    """Everything constant for one run, plus the two ways to use it."""
-
     index: UnifiedIndex
     structure: CorpusStructure
     assets_by_id: Mapping[str, Asset]
@@ -71,23 +62,18 @@ class Session:
     db_id: str
     run_id: str
     agent_model: Any | None = None
-    #: Model for guard + channel rewriters. Falls back to :attr:`agent_model`.
+    #: Guard and channel rewrites. Falls back to :attr:`agent_model`. See ADR 0011.
     utility_model: Any | None = None
-    #: ``{prompt name -> variant}`` this run selected; empty means every prompt at its default.
-    #: Reaches the nodes through :meth:`configurable` and **must** be the same mapping
-    #: :attr:`prompt_set_hash` was computed from, or the run records a setting under test it did not send.
+    #: Variants this run selected. Must be the mapping :attr:`prompt_set_hash` was computed from.
     prompt_variants: Mapping[str, str] = field(default_factory=dict)
     embedder: Embedder | None = None
     problems: tuple[Any, ...] = ()
     corpus_root: Path | None = None
     _turns: list[str] = field(default_factory=list, repr=False, compare=False)
 
-    # ── the two ways in ───────────────────────────────────────────────────────
-
     def configurable(self, *, question: str | None = None) -> dict[str, Any]:
-        """Run constants as ``{"configurable": {...}}``. Optional ``question`` adds ``query_vector``."""
+        """Run constants. ``thread_id`` stays with the caller: it is per conversation."""
         conf: dict[str, Any] = {
-            # No thread_id — that is per conversation, supplied by the caller.
             "policy": self.policy,
             "index": self.index,
             "structure": self.structure,
@@ -116,10 +102,10 @@ class Session:
         thread_id: str | None = None,
         evidence: str | None = None,
     ) -> dict[str, Any]:
-        """Turn dict with required record fields. Mints ids; clears :data:`PER_TURN_RESET` channels."""
+        """Mint ids and clear :data:`PER_TURN_RESET` so a prior turn's channels do not carry."""
         if not question or not question.strip():
             raise ValueError("a turn needs a question; an empty one has no answer to record")
-        # Thread is part of turn identity so two conversations don't collide on turn_id.
+        # ``thread_id`` is part of ``turn_id``, so two conversations do not collide.
         thread = thread_id or self.run_id
         turn_id = _digest(self.run_id, thread, turn_index, question)
         self._turns.append(turn_id)
@@ -142,24 +128,18 @@ class Session:
             "usage": [],
         }
 
-    # ── what the caller must look at before serving ───────────────────────────
-
     @property
     def fatal_problems(self) -> tuple[Any, ...]:
-        """Problems that must stop a serve. Decided by ``Problem.fatal`` (ADR 0008 D9)."""
+        """Problems that must stop a serve, decided by ``Problem.fatal`` (ADR 0008)."""
         return tuple(p for p in self.problems if getattr(p, "fatal", True))
 
     @property
     def degradations(self) -> tuple[Any, ...]:
-        """Problems recorded but not blocking a serve."""
         return tuple(p for p in self.problems if not getattr(p, "fatal", True))
 
 
-# ── construction ──────────────────────────────────────────────────────────────
-
-
 def _index_entries(assets: Sequence[Asset], structure: CorpusStructure) -> list[Any]:
-    """Assets as index entries, tagged from the same ``CorpusStructure`` resolution as the edges."""
+    """Tag entries from this ``CorpusStructure``, the same resolution as the edges."""
     from ..retrieve.index import IndexEntry
 
     return [
@@ -177,14 +157,8 @@ def _is_excluded(asset: Any) -> bool:
     return bool(getattr(getattr(asset, "governance", None), "excluded", False))
 
 
-#: The references a type **cannot lose**. ``build_structure`` records a *fatal* problem when one
-#: of these fails to resolve, so an asset whose required reference is excluded has to leave with
-#: it — otherwise honouring a governance flag produces a corpus that refuses to serve.
-#:
-#: Read against ``retrieve/structure.py``, not invented here: these are exactly the endpoints
-#: whose ``Problem`` takes the default ``fatal=True``. ``few_shot.sql`` is absent on purpose —
-#: :func:`~governed_bi.retrieve.structure._link_few_shot` passes ``fatal=False``, so a few-shot
-#: citing an excluded table degrades rather than stops (see :func:`visible_assets`).
+#: References ``build_structure`` treats as fatal. An excluded one takes the referrer with it.
+#: ``few_shot.sql`` is non-fatal, so that asset degrades. See :func:`visible_assets`.
 _REQUIRED_TABLE_REFS: Mapping[AssetType, tuple[str, ...]] = {
     AssetType.column: ("parent_table",),
     AssetType.join: ("left_table", "right_table"),
@@ -193,29 +167,13 @@ _REQUIRED_TABLE_REFS: Mapping[AssetType, tuple[str, ...]] = {
 
 
 def _excluded_closure(assets: Sequence[Asset]) -> frozenset[str]:
-    """Ids that must leave the served set: the ones a person marked, plus their dependents.
+    """Marked ids plus assets whose required reference binds into that set.
 
-    Endpoints are resolved with :func:`~governed_bi.retrieve.structure.bind_endpoint` rather
-    than compared as strings, because ``left_table``/``base_table``/``parent_table`` may be any
-    of four spellings — asset id, ``table_id``, bare ``physical_name``, or the engine's
-    ``{schema}.{physical_name}``. A string test would miss the three that are not the id and let
-    the fatal problem back in.
-
-    The lookup is built over **every** table including the excluded ones, so an endpoint binds
-    to its real target and is then tested for exclusion. Binding against the survivors instead
-    would make an ambiguous bare name resolve to whichever table happened to remain.
-
-    ``scope`` reproduces structure.py's three call sites in one expression: only ``column``
-    declares a ``schema`` field, so ``join`` and ``metric`` get ``None`` — which is what
-    ``_link_join`` and ``_link_metric`` pass.
-
-    A fixpoint rather than one pass. Today no required reference points at a join or a metric,
-    so a single round would do; a bounded loop cannot be wrong when one is added.
-
-    ``asset_type`` is read inline: ``structure.py`` already owns ``_type_of``.
-    """
+    :func:`bind_endpoint`, not string equality: a reference has four spellings."""
+    # Includes excluded tables, so a bare name cannot rebind to a survivor.
     lookup = table_lookup({a.id: a for a in assets if a.asset_type is AssetType.table})
     out = {asset.id for asset in assets if _is_excluded(asset)}
+    # Fixpoint: a required reference may point at a join or a metric, not only a table.
     for _ in range(len(assets) + 1):
         before = len(out)
         for asset in assets:
@@ -227,9 +185,7 @@ def _excluded_closure(assets: Sequence[Asset]) -> frozenset[str]:
                     lookup,
                     scope=getattr(asset, "schema", None),
                 )
-                # `bound is None` means the corpus was already broken or ambiguous there.
-                # Leave it: `build_structure` reports it exactly as it does today, and
-                # inventing an exclusion would hide a curation defect behind a policy flag.
+                # Leave an unresolved reference: inventing an exclusion would hide a curation defect.
                 if bound is not None and bound in out:
                     out.add(asset.id)
                     break
@@ -239,15 +195,8 @@ def _excluded_closure(assets: Sequence[Asset]) -> frozenset[str]:
 
 
 def _without_excluded_refs(asset: Asset, excluded: frozenset[str]) -> Asset:
-    """``asset`` with its **optional** references to excluded ids removed.
-
-    The collections and the one nullable binding. Dropping a member costs recall; dropping the
-    whole asset would withhold text that stands on its own — a term still glosses business
-    vocabulary once its binding is gone, which ``_link_term`` treats as a state rather than a
-    defect ("an unbound term is a state, not a defect").
-    """
-    # ``isinstance`` rather than ``asset_type`` here: ``Asset`` is a union of the eight
-    # dataclasses, and narrowing is what lets ``replace`` type-check per field.
+    """Drop optional references into the excluded set. An unbound term is a state, not a defect."""
+    # ``isinstance`` so ``replace`` can narrow. ``asset_type`` does not.
     if isinstance(asset, TableAsset):
         columns = tuple(c for c in asset.columns if c not in excluded)
         return replace(asset, columns=columns) if len(columns) != len(asset.columns) else asset
@@ -261,38 +210,11 @@ def _without_excluded_refs(asset: Asset, excluded: frozenset[str]) -> Asset:
 
 
 def visible_assets(assets: Sequence[Asset]) -> list[Asset]:
-    """``assets`` minus everything ``governance.excluded`` reaches (D6).
+    """Drop what ``governance.excluded`` reaches. Index, ``assets_by_id``, and structure share this set.
 
-    ``Governance.excluded`` is documented as removing an asset "from everything the analyst
-    sees, in every environment", but only :func:`for_analyst` honoured it. The index was built
-    from the full set, so an excluded column still scored in both channels, still spent one of
-    the 30 column slots, and still rendered once the reference closure pulled it in from its
-    parent table — three ways for an asset nobody may query to crowd out one they need.
-    Filtering here makes the index, ``assets_by_id`` and the structure agree; ``for_analyst``
-    still receives the **whole** list, because it needs the excluded columns' keys to make
-    ``check()`` refuse SQL that names one.
-
-    **Dropping an asset is not enough on its own, and the first version of this shipped that
-    way.** Removing an asset leaves every reference to it dangling, and a dangling *required*
-    reference is a ``fatal`` problem — so ``serve/__main__.py`` refuses to serve and
-    ``/routes`` reports ``servable: false``. Measured on the two shapes the corpus 
-    has: excluding one column left its parent table still declaring the id in ``columns``
-    (``TableAsset.columns`` holds derived ids), and excluding one table left every join on it
-    unbindable. Withholding a decoy — the whole point of the flag — made the corpus unloadable.
-
-    So exclusion propagates two ways, split on what structure.py treats as required:
-
-    * a **required** reference to an excluded asset excludes the referrer too
-      (:data:`_REQUIRED_TABLE_REFS`, via :func:`_excluded_closure`);
-    * an **optional** one is pruned in place (:func:`_without_excluded_refs`).
-
-    One thing is deliberately *not* handled: a ``few_shot`` whose ``sql`` names an excluded
-    table still ships, because that reference is non-fatal and pruning it would mean parsing
-    SQL here. It teaches the model a query over a withheld table, which is a curation question
-    rather than a loading one — worth deciding, not worth guessing at inside this function.
-    """
+    :func:`for_analyst` still receives the full list so ``check()`` can refuse an excluded column."""
     if not any(_is_excluded(asset) for asset in assets):
-        return list(assets)  # the path every existing corpus takes: nothing is copied
+        return list(assets)  # the usual path: nothing is copied
     excluded = _excluded_closure(assets)
     return [
         _without_excluded_refs(asset, excluded) for asset in assets if asset.id not in excluded
@@ -300,23 +222,14 @@ def visible_assets(assets: Sequence[Asset]) -> list[Asset]:
 
 
 def _model_name(model: Any) -> str:
-    """The id to record for ``model``. One derivation, used by every model setting.
-
-    Three call sites wrote this expression out; ``chat_model`` and ``llm_utility_model``
-    disagreeing about what "the model" means is not a thing anyone should be able to
-    introduce by editing one of them.
-    """
+    """One recorded id for both model settings."""
     return (
         model_id(model) or getattr(model, "_llm_type", None) or type(model).__name__
     )
 
 
 def _resolved_settings(policy: Any) -> dict[str, Any]:
-    """Every declared setting, with ``UNSET`` written as ``None``. No key is omitted.
-
-    The policy overlays the two settings it owns. ``sqlglot_version`` is resolved from
-    the installed package. The environment is already applied by ``effective_settings``.
-    """
+    """Every declared setting. ``UNSET`` is written as ``None``, and no key is omitted."""
     from ..govern.functions import sqlglot_version
     from ..registry.settings import UNSET, effective_settings
 
@@ -345,39 +258,20 @@ def from_assets(
     corpus_root: Path | None = None,
     prompt_variants: Mapping[str, str] | None = None,
 ) -> Session:
-    """Session over an in-memory asset set. The other constructors funnel here."""
-    # `visible_assets` for the three views the analyst can reach; the full list for `for_analyst`,
-    # which turns the excluded columns into `check()` refusals rather than silent absences.
+    """Session over an in-memory asset set. The other constructors call this."""
     visible = visible_assets(assets)
     structure, structure_problems = build_structure(visible)
     entries = _index_entries(visible, structure)
     index = build_index(entries, embedder=embedder, vector_cache=vector_cache)
     settings = _resolved_settings(policy)
-    # The variant of every prompt this run selected -- exactly the "resolved variant per
-    # stage" the setting is declared to hold. `registry/prompts.select()` computed it all along
-    # and no caller wrote it down, so `prompt_set` was null on v2, v3, v4 and v5, the four
-    # configs whose entire setting under test is a prompt variant. They were still *distinguishable*,
-    # because `prompt_set_hash` is on the row and does differ; they were not *nameable* --
-    # nothing in an artifact said which variant produced which digest.
-    #
-    # Here rather than in the driver, and from the same `prompt_variants` argument
-    # `prompt_set_hash` is computed from two lines below: a second setting-resolution site is
-    # the defect this repository keeps paying for, and resolving it in the harness would
-    # leave the served path null. `select` raises on an undeclared prompt name, which is the
-    # same refusal `prompt_set_hash` already makes on the same input.
+    # The map the hash uses. A second resolution would leave one of the two unset.
     settings["prompt_set"] = selected_variants(prompt_variants)
     if embedder is not None:
-        # One resolution of the embedder's identity that affects results. It was duplicated here
-        # (audit §10), and two copies is how one drifts from `setting_names()`.
+        # One resolution of the embedder identity, so it cannot drift from `setting_names()`.
         settings.update(embedding_settings(embedder))
     resolved_utility = utility_model or agent_model
     if agent_model is not None:
-        # The agent model itself, under the name the register declares. `llm_model` used to be
-        # written here beside it and is gone: `SETTING_REGISTER` never declared it, so it sat
-        # outside `setting_names()` -- and on run1, run2, v3-pinned and v3-fold it was the
-        # ONLY field carrying the model, which meant the one value that could have told those
-        # configs apart was outside the set of settings that affect results. One spelling, and it is the declared
-        # one.
+        # `chat_model` is the declared name. A second spelling would fall outside `setting_names()`.
         settings["chat_model"] = _model_name(agent_model)
         effort = reasoning_effort_of(agent_model)
         settings["llm_reasoning_effort"] = str(effort) if effort else None
@@ -389,8 +283,7 @@ def from_assets(
             if value is not None:
                 settings[setting] = cast(value)
     if resolved_utility is not None:
-        # Written even when it falls back to the agent model, per the setting's note: "shared one
-        # model" and "split them" are two settings under test.
+        # Written even when it falls back to the agent model: shared and split are different settings (ADR 0011).
         settings["llm_utility_model"] = _model_name(resolved_utility)
         utility_effort = reasoning_effort_of(resolved_utility)
         settings["llm_utility_reasoning_effort"] = str(utility_effort) if utility_effort else None
@@ -422,12 +315,7 @@ def from_assets(
 
 
 def from_corpus_dir(root: Path | str, *, schemas: Sequence[str] | None = None, **kwargs: Any) -> Session:
-    """A session over a curated corpus on disk.
-
-    ``schemas`` is the manifest, and passing one matters for more than scope: it restricts the
-    content hash to the subtrees served, so a leftover subtree from another attempt
-    enters neither the load nor the digest.
-    """
+    """A corpus on disk. ``schemas`` limits both the load and the content hash."""
     root = Path(root)
     assets, problems = load_corpus(root, schemas=schemas)
     digest = corpus_content_hash(root, schemas=schemas)
@@ -438,12 +326,7 @@ def from_corpus_dir(root: Path | str, *, schemas: Sequence[str] | None = None, *
 
 
 def from_live_schema(schema: str, *, connector: Any, corpus_root: Path | str, **kwargs: Any) -> Session:
-    """Seed a corpus from a live schema, **write it**, and load it back.
-
-    The write is what makes this uniform with :func:`from_corpus_dir` — one load path, one
-    digest. ``corpus_content_hash`` needs a tree, and reporting a seeded corpus's identity as
-    "no digest" would be an absence that compares equal to every other absence.
-    """
+    """Seed, write, and load through :func:`from_corpus_dir`, so the digest has a tree."""
     from ..corpus.seed import seed
 
     root = Path(corpus_root)
@@ -457,5 +340,5 @@ def from_live_schema(schema: str, *, connector: Any, corpus_root: Path | str, **
     return session
 
 
-#: Dataclass field names for rebuilding a session with one field replaced.
+#: Public fields, so a rebuilt session does not copy private state.
 _FIELDS = tuple(f for f in Session.__dataclass_fields__ if not f.startswith("_"))

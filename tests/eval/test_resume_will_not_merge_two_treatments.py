@@ -1,19 +1,4 @@
-"""``--resume`` refuses an artifact that was measured under a different setting under test.
-
-The artifact filename carries ``--model``, ``--effort``, ``--top-n``, ``--embed``, the provider,
-``--prompt-variant`` and (since 2026-08-11) ``--replay-routing``, so a renamed tag already
-aborts. It carries **no** corpus and no dataset, and an explicit ``--out`` bypasses the tag
-entirely. Pull ``../BIRD-corpus``, resume, and one artifact holds two corpora: every check passes
-and the driver prints ``ALL CHECKS PASS -- these numbers are quotable as a single config``.
-
-The guard reads three things back off the rows the resume intends to keep — the two setting under test
-hashes and every setting that affects results — because the hashes alone do not move with ``--top-n``,
-``--embed``, ``--reflect`` or the model id, and those are the settings an ``--out`` run can change
-with no tag to stop it.
-
-These tests drive :func:`resume_identity_problem` rather than ``main``: it is the only part of
-the resume decision that needs no corpus, no dataset, no database and no model.
-"""
+"""Resume reads identity off the rows, not the filename. The filename has no corpus, and ``--out`` bypasses the tag."""
 
 from __future__ import annotations
 
@@ -116,13 +101,7 @@ def test_a_row_predating_the_field_warns_but_does_not_refuse() -> None:
 
 
 def test_a_clarification_that_never_routed_is_counted_and_not_warned_about() -> None:
-    """open-work 3.6a: a turn that abstains before routing carries no setting under test identity.
-
-    Every ``corpus_content_hash: None`` row in the 2026-08-09 artifacts is one of these — 6 of
-    6 in v3-fold, 4 of 4 in v4, 5 of 5 in v5 — so the old guard's "cannot prove they are the
-    same setting under test" fired on **every legitimate resume**, which is the shape that teaches a
-    reader to ignore a warning. Reported as a count instead, in words that are not a caution.
-    """
+    """A turn that abstains before routing has no setting identity. Warning on it fired on every legitimate resume."""
     rows = _rows(5) + _rows(
         2, corpus=None, prompt=None, outcome="clarification", retrieved_tables=(), first_qid=6
     )
@@ -192,13 +171,7 @@ def test_a_run_covering_more_questions_than_the_artifact_still_resumes() -> None
 
 
 def test_a_second_run_without_resume_refuses_rather_than_appending(tmp_path) -> None:
-    """The other half of the artifact hole, and the one that produced a *printed number*.
-
-    The driver opened its output in ``"a"`` mode unconditionally, so re-running without
-    ``--resume`` duplicated every question and ``_report`` printed EX over the doubled
-    population. ``Population.of`` does raise on the repeated ids — afterwards, which is too
-    late for a number already on the screen.
-    """
+    """Appending without resume doubled the population and printed a rate over it."""
     path = tmp_path / "config.jsonl"
     path.write_text('{"question_id": "q1"}\n{"question_id": "q2"}\n', encoding="utf-8")
 
@@ -216,19 +189,11 @@ def test_a_second_run_without_resume_refuses_rather_than_appending(tmp_path) -> 
     )
 
 
-# ── the destructive branch, which used to be unreachable from a test ──────────
+# ── the destructive branch ──
 
 
 def test_only_truncate_destroys_an_artifact_and_it_says_how_much(tmp_path) -> None:
-    """``--force-fresh`` must not delete a paid run, and ``--truncate`` must say what it takes.
-
-    ``--force-fresh`` was documented as relaxing the *sibling-artifact* abort -- a path where
-    the output file does not exist -- and then acquired ``out_path.write_text("")`` in
-    ``main``, where no test could reach it. An config on this dataset is hours of paid model calls.
-
-    The regression this pins: a driver in which ``--force-fresh`` truncates makes the first
-    assertion fail, because the notice would be non-empty for it.
-    """
+    """Only ``--truncate`` destroys rows, and it says how many. ``--force-fresh`` must not."""
     path = tmp_path / "config.jsonl"
     path.write_text('{"question_id": "q1"}\n{"question_id": "q2"}\n', encoding="utf-8")
 
@@ -251,15 +216,7 @@ def test_only_truncate_destroys_an_artifact_and_it_says_how_much(tmp_path) -> No
 
 
 def test_keeping_the_artifact_and_discarding_it_are_refused_together() -> None:
-    """Opposite instructions about one file, refused rather than resolved either way.
-
-    Driven as the pure decision rather than through ``main``. Driving ``main`` was tried and
-    is actively unsafe: with the guard mutated away the driver runs on into credential
-    resolution, model construction and a database connection, so the mutation that proves the
-    guard works instead hangs the test -- and on a machine that *has* credentials it would get
-    further than that. The branch has to be reachable without starting the driver, which is the
-    same argument ``append_refusal`` is built on.
-    """
+    """Resume and truncate are opposite instructions. The decision is reachable without starting the driver."""
     conflict = flag_conflict(resume=True, truncate=True)
     assert conflict and "--truncate" in conflict and "--resume" in conflict
 
@@ -269,11 +226,7 @@ def test_keeping_the_artifact_and_discarding_it_are_refused_together() -> None:
 
 
 def test_an_unpinned_run_refuses_an_artifact_whose_routing_was_replayed() -> None:
-    """``--replay-routing`` is a setting under test and had neither a tag segment nor a readable row.
-
-    Only the reliable direction is asserted, and the docstring on the guard says why the other
-    one is not: a pinned run whose kept rows all abstained before routing carries no ``True``
-    either, so the absence of one proves nothing.
+    """Only one direction is asserted: rows that abstained before routing carry no ``True``, so absence proves nothing.
     """
     refusal, _ = check(_rows(4, routing_pinned=True), replay_routing=False)
     assert "--replay-routing" in refusal
@@ -284,17 +237,7 @@ def test_an_unpinned_run_refuses_an_artifact_whose_routing_was_replayed() -> Non
 
 
 def test_a_setting_the_writer_reshapes_is_not_a_second_under_test() -> None:
-    r"""The defect that refused **every** resume of every config ever written.
-
-    ``asset_budgets`` is a ``tuple`` of ``tuple``\ s in the register and a ``list`` of
-    ``list``\ s once it has been through ``json.dump``. The guard compared ``repr`` of the
-    in-memory value against ``repr`` of the read-back one, so it reported a setting under test change
-    on a value that had not changed -- and the refusal it printed tells the reader to "Rename
-    the artifact and start a new one", discarding hours of paid model calls.
-
-    Found by resuming a three-row smoke on 2026-09-20. One of the 62 ``setting_names``
-    is affected and it is on every row, so the resume path was dead for every config.
-    """
+    """JSON turns a tuple of tuples into a list of lists. Comparing ``repr`` reported a change that had not happened."""
     from governed_bi.registry.settings import defaults, setting_names
 
     assert "asset_budgets" in setting_names()
@@ -314,12 +257,7 @@ def test_a_setting_the_writer_reshapes_is_not_a_second_under_test() -> None:
 
 
 def test_a_string_and_the_number_it_spells_are_still_two_under_tests() -> None:
-    """The distinction :func:`_as_recorded` must not collapse while fixing the one above.
-
-    ``3`` and ``"3"`` survive the writer's encoding as an ``int`` and a ``str``, so they still
-    refuse. A fix that compared decoded values loosely -- or stringified both sides -- would
-    buy the resume back by reporting drift as agreement.
-    """
+    """``3`` and the string ``3`` still refuse. A looser compare would report that drift as agreement."""
     refusal, _ = check(
         _rows(3, settings={"route_top_n": "3"}),
         settings_resolved={"route_top_n": 3},

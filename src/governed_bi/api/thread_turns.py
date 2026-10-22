@@ -1,9 +1,5 @@
-"""The pending-clarification reader, over the platform's interrupt state.
-
-Reads go through the in-process client (``get_client(url=None)``), which LangGraph mounts at
-``/noauth`` and so sees every thread with no credential. That avoids a second checkpointer handle
-or a loopback HTTP call to ourselves. It only resolves inside the Agent server; outside it,
-:class:`InProcessServerRequired` is raised.
+"""Interrupt state via ``get_client(url=None)``, which LangGraph mounts at ``/noauth``.
+Outside the server, raise rather than register a transport nothing drains.
 """
 
 from __future__ import annotations
@@ -30,7 +26,6 @@ _MAX_THREADS = 1000
 #: Stands for "this server exposes no such attribute", which is not the same as ``None``.
 _UNCHECKED = object()
 
-#: List-view columns for the pending queue, in display order. ``meta.columns`` names them.
 PENDING_FIELDS: tuple[str, ...] = (
     "asked_at",
     "question",
@@ -42,28 +37,17 @@ PENDING_FIELDS: tuple[str, ...] = (
     "basis",
 )
 
-#: The only ``source`` this queue writes: a live ``ask_user`` interrupt.
 PENDING_SOURCE_INTERRUPT = "interrupt"
 
-#: Prefix ``serve/tools.py`` builds a clarification id with: ``f"clar-{turn_id}-{digest}"``.
 _CLARIFICATION_PREFIX = "clar-"
 
 
 class InProcessServerRequired(RuntimeError):
-    """This reader was used outside the Agent server process, where it cannot work.
-
-    Raised instead of calling ``get_client``, which on the same failure appends an ``app=None``
-    transport to an SDK module global that only server startup drains, then fails later with a
-    bare ``TypeError``.
-    """
+    """Raised instead of ``get_client``: that call appends an ``app=None`` transport only server startup drains."""
 
 
 class PendingPage(NamedTuple):
-    """One page of the queue, plus what it could not show.
-
-    ``truncated`` is set when the window or the ``_MAX_THREADS`` walk cut rows off, because a
-    silently short list reads as "nobody is waiting". ``threads_scanned`` counts threads read.
-    """
+    """``truncated`` when the window or the walk stops early: a short list would read as nobody waiting."""
 
     rows: list[dict[str, Any]]
     truncated: bool
@@ -71,11 +55,7 @@ class PendingPage(NamedTuple):
 
 
 def turn_of_clarification(clarification_id: str) -> str | None:
-    """The ``turn_id`` inside a clarification id, or ``None`` when the shape is not one we mint.
-
-    ``turn_id`` is a hex digest with no ``-``, so partitioning on the last ``-`` is exact. Returns
-    ``None`` rather than guessing, so a foreign id leaves the row unlinked instead of mislinked.
-    """
+    """``turn_id`` is a hex digest with no ``-``, so the last ``-`` splits exactly. A foreign id stays unlinked."""
     text = str(clarification_id or "")
     if not text.startswith(_CLARIFICATION_PREFIX):
         return None
@@ -87,13 +67,8 @@ def turn_of_clarification(clarification_id: str) -> str | None:
 
 
 class PendingClarifications:
-    """Questions the engine asked and nobody has answered, across every conversation.
+    """Unanswered clarifications write nothing, so the queue is ``threads.search(status="interrupted")``."""
 
-    An unanswered clarification writes nothing until it is resumed, so the queue is the
-    platform's interrupt state: ``threads.search(status="interrupted")``.
-    """
-
-    #: Read off the instance by the route to build ``meta.columns``.
     PENDING_FIELDS = PENDING_FIELDS
 
     def __init__(self, client_factory: Any | None = None) -> None:
@@ -101,18 +76,13 @@ class PendingClarifications:
         self._client: Any | None = None
 
     def pending(self, *, limit: int = 50, offset: int = 0) -> PendingPage:
-        """Oldest question first: a work queue, so the row that waited longest comes first."""
         wanted = max(1, int(limit))
         start = max(0, int(offset))
         return _pending(limit=wanted, offset=start, client=self._client_once())
 
     def _client_once(self) -> Any:
-        """The one client this reader uses, built on first read.
-
-        One, because each ``get_client()`` builds an ``httpx.AsyncClient`` nothing closes. Lazy,
-        because the app is constructed while ``langgraph_api.server`` is half-imported. Safe across
-        ``asyncio.run`` calls because an ASGI transport binds no loop at construction.
-        """
+        """One client: each ``get_client()`` opens an ``httpx.AsyncClient`` nothing closes.
+        Lazy while ``langgraph_api.server`` is half-imported; an ASGI transport binds no loop."""
         if self._client is None:
             factory = self._client_factory or _in_process_client
             self._client = factory()
@@ -120,7 +90,6 @@ class PendingClarifications:
 
 
 def _in_process_client() -> Any:
-    """``langgraph_sdk``'s in-process client, or a named refusal -- never a leak."""
     reason: str | None = None
     # LangGraph sets this while importing the app, before a request can arrive.
     if os.environ.get("__LANGGRAPH_DEFER_LOOPBACK_TRANSPORT") == "true":
@@ -131,8 +100,7 @@ def _in_process_client() -> Any:
         except Exception as exc:  # noqa: BLE001 -- `get_client` catches Exception here as well
             reason = f"{type(exc).__name__}: {exc}"
         else:
-            # Importable is not running: only server startup sets `_MAIN_LOOP`, which the
-            # transport dispatches onto. Older servers lack the attribute and need no such loop.
+            # Importable is not running. Only server startup sets `_MAIN_LOOP`. Older servers lack it.
             from langgraph_api import asyncio as server_loop
 
             if getattr(server_loop, "_MAIN_LOOP", _UNCHECKED) is None:
@@ -153,11 +121,7 @@ def _in_process_client() -> Any:
 
 
 def _blocking(coro: Any) -> Any:
-    """Drive an async client call from a sync route handler.
-
-    Starlette runs a sync handler in a worker thread with no running loop, so ``asyncio.run`` is
-    safe. From an async handler it must be awaited instead.
-    """
+    """Starlette runs a sync route in a worker thread with no loop, so ``asyncio.run`` is safe."""
     return asyncio.run(coro)
 
 
@@ -166,10 +130,7 @@ def _pending(*, limit: int, offset: int, client: Any) -> PendingPage:
 
 
 async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage:
-    """One row per unanswered clarification, from interrupted threads only.
-
-    The window is over rows, not threads, because one thread can hold more than one interrupt.
-    """
+    """The window is over rows, not threads: one thread can hold more than one interrupt."""
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -180,11 +141,7 @@ async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage
         extract: dict[str, str] | None,
         rows_of: Callable[[Any], list[dict[str, Any]]],
     ) -> bool:
-        """Page one population into ``rows``. ``True`` iff the walk stopped on the bound.
-
-        A store exhausted at exactly the bound also reports ``True``: over-reporting "you may not
-        have everything" is the safe direction for this flag.
-        """
+        """``True`` when the walk hits the bound, including a store that ends exactly on it."""
         page_offset = 0
         while page_offset < _MAX_THREADS:
             page = await client.threads.search(
@@ -222,11 +179,7 @@ async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage
 
 
 def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
-    """One row per open clarification on ``thread``, or ``[]``.
-
-    ``asked_at`` is the thread's ``updated_at``, a proxy: for an interrupted thread the runtime
-    finishes it in the same update that writes ``interrupts``, and nothing has run since.
-    """
+    """``asked_at`` is the thread ``updated_at``: the runtime writes ``interrupts`` in that same update."""
     if not isinstance(thread, Mapping):
         return []
     interrupts = thread.get("interrupts")
@@ -255,7 +208,6 @@ def _open_questions_of(thread: Any) -> list[dict[str, Any]]:
                     "thread_id": thread_id,
                     "source": PENDING_SOURCE_INTERRUPT,
                     "basis": value.get("basis"),
-                    # What a resume would have to name.
                     "interrupt_id": item.get("id"),
                     "task_id": task_id,
                 }

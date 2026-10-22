@@ -1,8 +1,6 @@
-"""`/capabilities` must report the model each surface resolved.
+"""A client whose only id attribute is ``model_id`` must not publish the class name.
 
-``chat_model`` and ``llm_utility_model`` are recorded settings. A client that spells
-its id only as ``model_id`` used to fall through to the class name, so two models
-published one value and the drift check compared them equal. This test is that probe.
+Two models publishing one value makes the drift check compare them equal.
 """
 
 from __future__ import annotations
@@ -20,10 +18,7 @@ _DSN = "host=127.0.0.1 port=5432 dbname=facilities user=facilities password=supe
 
 
 class _IdOnly:
-    """A client that spells the id ``model_id`` and nothing else.
-
-    A fake that also offered ``model_name`` would pass while that client failed.
-    """
+    """Also offering ``model_name`` would pass while this client failed."""
 
     model_id = "gpt-6-luna"
     _llm_type = "chat-class-name"
@@ -39,7 +34,6 @@ def test_model_id_reads_the_id_attribute() -> None:
 
 
 def test_model_name_does_not_fall_back_to_the_class_name() -> None:
-    """The `_llm_type` branch must not be reached when an id is available."""
     assert _model_name(_IdOnly()) == "gpt-6-luna"
     assert _model_name(_IdOnly()) != "chat-class-name"
 
@@ -81,12 +75,7 @@ def test_models_reports_all_three_surfaces() -> None:
 
 
 def test_embedding_id_keeps_its_provider_qualifier() -> None:
-    """The qualifier is cache-key identity, and the id itself contains a colon.
-
-    Splitting on ``:`` would yield ``vendor.embed-text`` and lose the ``0``, which is a
-    different model id. The qualifier is part of the cache key
-    (``retrieve.semantic.cache_key`` is ``model|dimensions|text``).
-    """
+    """Splitting on ``:`` drops the version. The qualifier is part of the cache key."""
     embedding = models_for(_Session())["embedding"]
     assert embedding["id"] == "openai:vendor.embed-text:0"
     assert embedding["provider"] == "openai"
@@ -101,12 +90,7 @@ def test_capabilities_carries_models_and_keeps_the_legacy_model_field() -> None:
 
 
 def test_models_reports_none_rather_than_omitting_a_surface() -> None:
-    """An offline profile resolves no chat model. The keys must still be there.
-
-    Omission is what made three settings *absent* rather than null from 8,106 measurement rows,
-    where a missing key compares equal to itself and the drift check passes on a configuration it
-    never saw (`serve/session.py::_resolved_settings`). Same hazard, same rule, one surface over.
-    """
+    """A missing key compares equal to itself. Omission hid three settings across 8,106 rows."""
 
     class _Offline(_Session):
         agent_model = None
@@ -118,9 +102,6 @@ def test_models_reports_none_rather_than_omitting_a_surface() -> None:
     assert models["embedding"] == {"id": None, "provider": None, "dimensions": None}
 
 
-# ── the connection projection: it must identify the warehouse and never the credential ──
-
-
 def test_postgres_endpoint_identifies_the_database() -> None:
     assert PostgresConnector(_DSN).endpoint == {
         "host": "127.0.0.1",
@@ -130,11 +111,7 @@ def test_postgres_endpoint_identifies_the_database() -> None:
 
 
 def test_postgres_endpoint_never_carries_the_credential() -> None:
-    """The assertion. `user` and `password` are not parsed out at all.
-
-    Asserted over the serialized form, not key-by-key: a future field that happened to embed the
-    DSN would pass an `assert "password" not in endpoint` and fail this.
-    """
+    """Serialized, not key-by-key: a new field embedding the DSN would pass a check on one key."""
     endpoint = PostgresConnector(_DSN).endpoint
     serialized = repr(endpoint)
     assert "super_secret_pw" not in serialized
@@ -168,7 +145,6 @@ def test_connection_for_merges_dialect_with_the_endpoint() -> None:
 
 
 def test_connection_survives_a_connector_with_no_endpoint() -> None:
-    """`capabilities_for` is documented as callable with a partial session; keep it true."""
     assert connection_for(_Session()) == {"dialect": "postgres"}
 
 

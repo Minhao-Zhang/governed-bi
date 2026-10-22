@@ -29,7 +29,6 @@ sys.path.insert(0, str(REPO / "src"))
 
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset" / "test_final.jsonl"
 
-#: Content-word window for containment / n-gram checks.
 NGRAM = 5
 
 #: ``few_shot`` summaries are train questions; exempt from containment, stricter provenance instead.
@@ -53,9 +52,8 @@ def windows(tokens: list[str], n: int) -> set[tuple[str, ...]]:
 def corpus_texts(root: pathlib.Path) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """``(authored_texts, provenance_texts)``, both as ``(where, text)``. Never raises.
 
-    Kept apart because they are checked differently: authored prose against question wording,
-    ``audit`` against question *ids* and file names — an id in ``audit.evidence`` is the normal
-    case and exactly where a leak announces itself.
+    Authored prose is checked against question wording; ``audit`` against ids and file
+    names. An id in ``audit.evidence`` is where a leak names itself.
     """
     from governed_bi.corpus.store import load
 
@@ -97,7 +95,6 @@ def _plain(value: object) -> object:
 
 
 def scan(root: pathlib.Path, questions: list[dict]) -> dict:
-    """The three checks over one corpus."""
     authored, provenance = corpus_texts(root)
 
     held_out_ids = {str(q.get("question_id")) for q in questions}
@@ -235,8 +232,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # Argument sanity before data availability. Checked second, the refusal was unreachable in
-    # any environment without the benchmark repository checked out.
+    # Before the dataset is opened: a self-comparison must fail even when the
+    # benchmark checkout is absent.
     if args.control and _same_tree(args.corpus, args.control):
         print(
             f"the control and the corpus under test are the same tree ({args.corpus!r}). "

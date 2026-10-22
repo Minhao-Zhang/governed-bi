@@ -1,41 +1,8 @@
-"""``docs/openapi.json`` against the bodies the server sends.
+"""Real payloads against the hand-written ``docs/openapi.json`` components.
 
-**Nothing generated the spec's response shapes and nothing checked them.** Every handler under
-``api/`` is annotated ``-> dict[str, Any]``, so FastAPI infers no response model and
-``app.openapi()`` emits *zero* response schemas — all of the spec's components are hand-written.
-An ``app.openapi()`` diff, the obvious check, therefore compares the routes (which were exact)
-and is blind to the part that drifted: on 2026-08-22 an audit found ``/capabilities`` missing
-the whole of ``models`` and ``connection``, the pending row missing ``interrupt_id`` and
-``task_id``, and two fields declared non-nullable that the server sends as null.
-A generated diff passes on every one of them.
-
-So this compares the spec against **real payloads**: the real app (``routes.make_app``) over
-in-memory dependencies through a ``TestClient``, each body checked against the component its own
-operation declares. Three checks, and the second is the one that catches a spec falling behind a
-handler — every ``required`` property present; every property the server sends *declared*; every
-value matching its declared type, ``anyOf`` alternatives and ``enum``.
-
-**The readers are the engine's.** The pending queue is the production ``PendingClarifications``
-over a fake LangGraph client, so its rows are shaped by the code that ships.
-
-**No ``jsonschema``.** It is not declared in ``pyproject.toml`` (it arrives transitively under
-the LangGraph stack, which is not the same thing) and this file must not add a dependency. The
-subset the spec uses — ``$ref``, ``anyOf``, ``allOf``, ``type``, ``properties``, ``required``,
-``items``, ``enum``, ``additionalProperties`` — is walked below, which is also what lets a failure name the
-route, the JSON path, the component and which side is missing the field.
-
-**What this does NOT cover, and none of it is incidental:**
-
-* **Request bodies and query parameters.** Nothing here validates a request body.
-* **Most error paths.** ``/readyz`` 503 is checked. Other 404 and 422 responses are not.
-* **Query-parameter variants.** Each route is called once, with its default window.
-* **The streamed transport.** A turn is served over ``/runs/stream``, which this spec does not
-  describe at all (ADR 0007 §7), as are the platform's own ``/threads`` and ``/runs``.
-* **Declared-but-unsent optional fields.** A property the server never emits here is tolerated,
-  not validated. ``connection.host``/``port``/``database`` and the pending row's
-  ``interrupt_id``/``task_id`` are exercised on purpose for that reason; others are not.
-* **Descriptions.** Prose is unchecked, and one of the six defects this file was written for was
-  a description naming a setting that does not exist.
+Handlers return ``dict[str, Any]``, so ``app.openapi()`` emits no response schemas and a generated
+diff cannot see a drifted component. No ``jsonschema`` dependency: the subset the spec uses is
+walked here. Request bodies, most errors, and ``/runs/stream`` are out of scope (ADR 0007).
 """
 
 from __future__ import annotations
@@ -53,9 +20,6 @@ THREAD = "t-spec-conformance"
 TURN_ID = "a1b2c3d4e5f60718"
 
 
-# ── the structural comparison ────────────────────────────────────────────────
-
-
 def _resolve(schema: Any, spec: dict[str, Any]) -> dict[str, Any]:
     """Follow ``$ref`` until the schema is inline. Local refs only, which is all this spec has."""
     for _ in range(50):
@@ -71,11 +35,7 @@ def _resolve(schema: Any, spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _kind(value: Any) -> str:
-    """The JSON type name of ``value``, so a message can say what arrived.
-
-    ``bool`` is resolved before ``int`` deliberately: ``True`` is an ``int`` in Python and is not
-    an integer on the wire, so a spec declaring ``integer`` for a flag is wrong and is told so.
-    """
+    """``bool`` before ``int``: ``True`` is an ``int`` in Python and is not an integer on the wire."""
     for name, kinds in (("null", type(None)), ("boolean", bool), ("integer", int),
                         ("number", float), ("string", str), ("object", dict), ("array", list)):
         if isinstance(value, kinds):
@@ -92,16 +52,9 @@ def _matches(value: Any, name: str) -> bool:
 
 
 def _flattened(schema: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
-    """``allOf`` merged into one object schema.
+    """``allOf`` is merged so an extension does not copy properties that would drift.
 
-    Needed because one component extends another with ``allOf``, and the
-    alternative to merging is copying the base properties into a second component,
-    where they would drift. The merge is shallow and one level deep, which is all the spec uses:
-    ``properties`` union and ``required`` union, with the branch's own keys taking precedence.
-
-    An extending schema must NOT re-declare a property its base declares differently. Nothing here
-    detects that, and the failure would be silent, so it is a rule about writing the spec rather
-    than one this walker enforces.
+    Shallow, one level: that is all the spec uses. A re-declared property that disagrees with its base is not detected.
     """
     if "allOf" not in schema:
         return schema
@@ -177,7 +130,6 @@ def _violations(value: Any, schema: Any, spec: dict[str, Any], at: str) -> list[
 
 
 def _declared(spec: dict[str, Any], method: str, path: str, status: str) -> Any:
-    """The response schema ``docs/openapi.json`` declares for one operation."""
     operation = (spec["paths"].get(path) or {}).get(method.lower())
     assert operation is not None, f"{method} {path} is not in docs/openapi.json"
     response = (operation.get("responses") or {}).get(status)
@@ -187,16 +139,8 @@ def _declared(spec: dict[str, Any], method: str, path: str, status: str) -> Any:
     return schema
 
 
-# ── the fixtures ─────────────────────────────────────────────────────────────
-
-
 class _FakeThreads:
-    """Enough of ``ThreadsClient.search`` for the production readers, honouring their projections.
-
-    ``ids``, ``status``, ``select`` and ``extract`` are applied rather than accepted and ignored.
-    ``extract`` in particular is what puts a channel under ``extracted``, and a fake returning
-    ``values`` whole would hide a reader that stopped projecting.
-    """
+    """``select`` and ``extract`` are applied. Whole ``values`` would hide a reader that stopped projecting."""
 
     def __init__(self, threads: list[dict[str, Any]]) -> None:
         self._threads = threads
@@ -228,7 +172,6 @@ class _FakeThreads:
 
 
 def _session(connector: Any) -> Any:
-    """Four assets over one schema, with a real index and structure. As ``test_http_contract``'s."""
     from governed_bi.corpus.schema import (
         AssetType,
         Binding,
@@ -262,16 +205,9 @@ def _session(connector: Any) -> Any:
 
 @pytest.fixture(scope="module")
 def wire() -> dict[str, Any]:
-    """The app, the spec and the turn id the tests address. Built once; the graph run is the cost.
+    """Built once. A second thread omits ``question``.
 
-    One thread carries an unanswered ``ask_user`` question, which contributes
-    ``interrupt_id`` and ``task_id``.
-
-    A **second, degenerate thread** exists to make the server send ``null`` where it can: it has
-    no ``thread_id`` and an interrupt with no ``question``, the two values the handler passes
-    through with ``.get()``. Mutation-checked on 2026-08-22 — reverting ``question`` to
-    non-nullable passed until this thread existed, because a nullability fix is unfalsifiable
-    against a fixture that never produces the null.
+    Nullability is unfalsifiable against a fixture that never sends null.
     """
     from fastapi.testclient import TestClient
 
@@ -327,13 +263,7 @@ CASES: list[tuple[str, str, str]] = [
 def test_the_spec_declares_every_field_the_server_sends(
     wire: dict[str, Any], method: str, path: str, url: str
 ) -> None:
-    """One route's real 200 body against the component its own operation declares.
-
-    The *undeclared property* direction is the one that matters most. A hand-written spec drifts
-    by the handler growing a field, and every other check passes while it does — the required
-    properties are all still there and all still the right type. That is how ``/capabilities``
-    lost ``models`` and ``connection``, the newest and largest addition to the route.
-    """
+    """An undeclared property still has every required field present and correctly typed."""
     response = wire["client"].request(method, url)
     assert response.status_code == 200, f"{method} {url} -> {response.status_code}: {response.text}"
     schema = _declared(wire["spec"], method, path, "200")
@@ -342,11 +272,7 @@ def test_the_spec_declares_every_field_the_server_sends(
 
 
 def test_the_pending_queue_carries_interrupt_ids_and_a_null_question(wire: dict[str, Any]) -> None:
-    """interrupt_id and task_id are on the wire, and a payload can omit question.
-
-    A nullability declaration is unfalsifiable unless some row carries the null.
-    The degenerate thread in the fixture is that row.
-    """
+    """A nullability declaration is unfalsifiable unless some row carries the null."""
     rows = wire["client"].get("/clarifications/pending").json()["rows"]
     assert rows, "the fixture queued no interrupt"
     assert all(row["source"] == "interrupt" for row in rows)
@@ -357,7 +283,6 @@ def test_the_pending_queue_carries_interrupt_ids_and_a_null_question(wire: dict[
 
 
 def test_the_spec_declares_the_not_ready_body(wire: dict[str, Any]) -> None:
-    """``/readyz``'s 503, driven by a session that cannot be built."""
     from fastapi.testclient import TestClient
 
     from governed_bi.api.routes import _build_app
@@ -373,12 +298,7 @@ def test_the_spec_declares_the_not_ready_body(wire: dict[str, Any]) -> None:
 
 
 def test_every_operation_in_the_spec_is_exercised_here() -> None:
-    """The check's own coverage, so a route added to the spec is not silently ungated.
-
-    Without this, the way to make every assertion above pass is to add an operation to
-    ``docs/openapi.json`` and no case to :data:`CASES` — the failure mode this file exists to
-    close, one level up.
-    """
+    """Adding an operation to the spec with no case here would leave that route unchecked."""
     spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
     declared = {
         (method.upper(), path)

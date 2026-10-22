@@ -1,10 +1,4 @@
-"""``tools/smoke_api.py``, run against assets in memory.
-
-The script is a live-stack tool that is not in CI, so its checks live in ``run_checks``, which
-takes a client, and this file runs them over an in-memory session with no database, model or
-credential. It proves the script still calls routes that exist and asserts what it says; it is not
-a substitute for running it against the real corpus.
-"""
+"""``run_checks`` over an in-memory session. Not a substitute for the live corpus."""
 
 from __future__ import annotations
 
@@ -22,7 +16,7 @@ REPO = Path(__file__).resolve().parent.parent.parent
 
 @pytest.fixture(scope="module")
 def smoke_api():
-    """The script as a module. Imported by path, because ``tools/`` is not a package."""
+    """Imported by path: ``tools/`` is not a package."""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -35,7 +29,6 @@ def smoke_api():
 
 
 def _session() -> Any:
-    """One table, its column and a term: enough for the session to resolve with no fatal problem."""
     from governed_bi.corpus.schema import (
         AssetType,
         Binding,
@@ -75,11 +68,7 @@ def _session() -> Any:
 
 
 def test_every_check_the_script_makes_still_passes(smoke_api) -> None:
-    """The whole of ``run_checks``, over the four routes of an app built from :func:`_session`.
-
-    Asserts the failure list is empty **and** that every check ran: a ``run_checks`` that returned
-    early would report no failures.
-    """
+    """An early return reports no failures, so the check count is asserted too."""
     from fastapi.testclient import TestClient
 
     from governed_bi.api.routes import make_app
@@ -97,10 +86,7 @@ def test_every_check_the_script_makes_still_passes(smoke_api) -> None:
 
 
 class _Pending:
-    """What ``make_app`` asks of the pending-question reader: nothing is waiting.
-
-    The queue itself is pinned in ``tests/api/test_the_pending_queue_reads_interrupt_state.py``.
-    """
+    """Nothing is waiting. The queue itself is pinned in the interrupt-state tests."""
 
     PENDING_FIELDS: tuple[str, ...] = ("asked_at", "question")
 

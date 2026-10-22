@@ -1,10 +1,4 @@
-"""Binding: one positive rule (ADR 0006 §4).
-
-Every ``Column`` node, every ``USING``/``NATURAL`` join key, and every ``FROM``
-source must bind to **exactly one** base source in its own scope (or a named
-ancestor for correlated refs). Zero or more than one ⇒ refuse. Allowlist
-membership is not binding. Downstream layers read this binding as their only input.
-"""
+"""Each reference binds to one source in its scope, or a named ancestor. An allowlist is not a binding. See ADR 0006."""
 
 from __future__ import annotations
 
@@ -25,24 +19,21 @@ __all__ = ["BoundSource", "ColumnBinding", "LayerRefusal", "Bindings", "bind"]
 class BoundSource:
     """One source a reference can bind to."""
 
-    #: How the statement names it: the alias, or the (possibly qualified) table name.
+    #: Alias, or the table name when there is no alias.
     reference: str
-    #: ``"base"`` (a real table), ``"derived"`` (a subquery or CTE), or ``"unresolvable"``
-    #: (a FROM source with no Identifier to license -- a table-valued function). The third
-    #: value is not a corner: :func:`bind` collects it and refuses ``r_table_function``.
+    #: ``base``, ``derived``, or ``unresolvable`` (a table-valued function: no Identifier).
+    #: ``bind`` collects the third and refuses ``r_table_function``.
     kind: str
     schema: str | None = None
     name: str | None = None
-    #: :func:`~governed_bi.govern.identifiers.table_key`'s output —
-    #: ``{schema}.{slug(physical_name)}``, folded. Base sources only. The ``slug()`` is not a
-    #: detail: the set this is compared against is keyed on asset ids, and a docstring that
-    #: dropped it from a key shape is what made a bound in ``govern/bounds.py`` fail open.
+    #: :func:`~governed_bi.govern.identifiers.table_key` output. Base sources only. The slug
+    #: stays: the set this is compared with is keyed on asset ids. See ADR 0008.
     key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ColumnBinding:
-    """A column reference and the exactly-one base source it bound to."""
+    """A column reference and the one base source it bound to."""
 
     reference: str
     table_key: str
@@ -52,7 +43,7 @@ class ColumnBinding:
 
 @dataclass(frozen=True, slots=True)
 class LayerRefusal:
-    """A rule id and its detail. The layer comes from ``layers.RULES``."""
+    """A rule id and its detail. The layer comes from ``layers.RULES``, not from here."""
 
     rule_id: str
     detail: str
@@ -65,13 +56,12 @@ class Bindings:
     #: reference → table key, for the table layer.
     tables: dict[str, str] = field(default_factory=dict)
     columns: tuple[ColumnBinding, ...] = ()
-    #: References that bound to something that is **not** a base column: a derived
-    #: source, or a projection alias. Recorded because an unrecorded reference is
+    #: Derived source or projection alias. Recorded: an unrecorded reference is
     #: indistinguishable from one the walk never reached.
     opaque: dict[str, str] = field(default_factory=dict)
 
     def as_bound(self) -> dict[str, str]:
-        """The result's ``bound`` map: every reference → the source it bound to."""
+        """Every reference to the source it bound to, including opaque ones."""
         out = dict(self.tables)
         out.update({binding.reference: binding.table_key for binding in self.columns})
         out.update(self.opaque)
@@ -79,13 +69,7 @@ class Bindings:
 
 
 def _in_order_by(node: exp.Expr, root: exp.Expr) -> bool:
-    """Whether ``node`` sits under this scope's ``ORDER BY``.
-
-    The one place a bare name may mean a projection alias rather than a column:
-    Postgres resolves ``ORDER BY`` against output names first. ``GROUP BY`` and
-    ``HAVING`` are excluded on purpose — there Postgres prefers the *input* column,
-    so reading the name as an alias would skip the column check on a real column.
-    """
+    """``ORDER BY`` resolves output names first. ``GROUP BY`` and ``HAVING`` stay column checks."""
     current: exp.Expr | None = node
     while current is not None and current is not root:
         if isinstance(current, exp.Order):
@@ -95,7 +79,7 @@ def _in_order_by(node: exp.Expr, root: exp.Expr) -> bool:
 
 
 def _lookup(scope: Scope, name: str, sources: Mapping[int, Mapping[str, BoundSource]]) -> BoundSource | None:
-    """Resolve a qualifier in ``scope``, then in its ancestors (correlated refs)."""
+    """This scope, then ancestors. A correlated reference names a source it does not select."""
     current: Scope | None = scope
     while current is not None:
         local = sources.get(id(current))
@@ -108,36 +92,12 @@ def _lookup(scope: Scope, name: str, sources: Mapping[int, Mapping[str, BoundSou
 def _classify_sources(
     view: ScopeView, default_schema: str | None, tables: dict[str, str]
 ) -> dict[str, BoundSource]:
-    """This scope's sources, keyed on the folded name references use.
-
-    An **aliased** table is registered under its alias only, because Postgres hides
-    the table name behind an alias: resolving ``public.customers.id`` against ``FROM
-    public.customers AS cc`` would approve a reference the engine rejects, and the
-    quoting "fix" that follows is B5's shape.
-
-    **``selected_sources`` and not ``scope.sources``, because a CTE is *visible* to every
-    scope in the statement while a reference can only bind to what this scope's own
-    ``FROM``/``JOIN`` brought in.** ``scope.sources`` merges every visible CTE into every
-    scope, so in ``WITH pm AS (...), cm AS (...), j AS (...) SELECT aft FROM j`` the bare
-    ``aft`` counted three derived sources where the engine sees one -- and the
-    exactly-one-derived branch in :func:`_bind_columns` became unreachable for any statement
-    with more than one CTE. Every such statement carrying a single unqualified column refused
-    ``r_ambiguous_reference``; measured on the served thread of 2026-08-19, 6 of 16
-    ``run_query`` attempts, not one of them ambiguous to Postgres, and the rewrite the refusal
-    pushed the model into was a correlated ``EXISTS`` over a 1.2M-row table that ran until the
-    agent wall clock killed the turn.
-
-    Narrowing to the selected set is **not** a relaxation. A qualified reference to a CTE this
-    scope does not select from now refuses ``r_unbound_reference`` -- which is what Postgres
-    does -- and a genuine two-base ambiguity still reaches the refusal below.
-    """
+    """Alias only. ``selected_sources``, not ``scope.sources``, which merges every CTE into every scope."""
     local: dict[str, BoundSource] = {}
-    # ``selected_sources`` values are ``(node, source)``; the node is the FROM/JOIN item that
-    # named it and nothing here needs it.
+    # Values are ``(node, source)``. The node is the FROM item; only the source is used.
     for alias, (_node, source) in view.scope.selected_sources.items():
         if isinstance(source, exp.Table):
-            # A table-valued function parses as exp.Table wrapping a Func: no
-            # Identifier, so no name to license. bind() refuses it, at layer 4.
+            # A table-valued function is exp.Table wrapping a Func: no Identifier to bind.
             if not isinstance(source.this, exp.Identifier):
                 local[fold(alias) if alias else ""] = BoundSource(alias or "", "unresolvable")
                 continue
@@ -154,7 +114,7 @@ def _classify_sources(
 
 
 def _structural_refusal(view: ScopeView) -> LayerRefusal | None:
-    """The shapes that have no binding at all, whatever the corpus says."""
+    """Shapes with no binding, whatever the corpus says."""
     for node in view.nodes:
         if isinstance(node, exp.Join) and str(node.args.get("method") or "").upper() == "NATURAL":
             return LayerRefusal(
@@ -164,10 +124,8 @@ def _structural_refusal(view: ScopeView) -> LayerRefusal | None:
             )
         if isinstance(node, (exp.From, exp.Join)):
             source = node.this
-            # exp.Values is inline literal data: it reads no relation, so there is
-            # nothing to license, and traverse_scope already models it as a derived
-            # source. Refusing it cost 655 of the 6,743 gold statements (9.7%,
-            # measured 2026-08-03) for no confidentiality gain.
+            # ``Values`` is inline data. ``traverse_scope`` already models it as derived.
+            # Refusing it blocks ordinary statements and reads no extra column.
             ok = isinstance(source, (exp.Subquery, exp.Values)) or (
                 isinstance(source, exp.Table) and isinstance(source.this, exp.Identifier)
             )
@@ -252,11 +210,9 @@ def _bind_columns(
         elif len(bases) == 1 and not derived:
             columns.append(_binding(reference, bases[0], parts[0]))
         elif len(candidates) == 1 and not derived:
-            # Exactly one in-scope base declares this column, so there is exactly one
-            # binding — the rule, not a relaxation of it, and it agrees with Postgres,
-            # which raises "column reference is ambiguous" only when two joined tables
-            # declare the name (the branch below). Without it, 79 of 6,743 gold
-            # statements refuse for an ambiguity the corpus resolves (2026-08-03).
+            # One in-scope base declares this column, so there is one binding. Postgres
+            # calls a name ambiguous only when two joined tables declare it. Without this,
+            # the corpus-resolved name refuses.
             columns.append(_binding(reference, candidates[0], parts[0]))
         elif not bases and len(derived) == 1:
             opaque[reference] = f"derived:{derived[0].reference}"
@@ -281,22 +237,8 @@ def _whole_row_refusal(
     known_columns: frozenset[str],
     bases: Sequence[BoundSource],
 ) -> LayerRefusal | None:
-    """B2 with no function in sight: a bare name that means *the whole row*.
-
-    Postgres resolves a bare identifier as a **column** of one of the FROM items, and
-    as the row as a composite value only when no column of that name exists. So
-    ``SELECT max(t) FROM customers t`` reads every column of the row — excluded and
-    suspect included — with no ``Column`` node for any of them. Telling that from
-    ``SELECT avg(price) FROM cars.price`` needs ``known_columns``, which is why the
-    rule lives here and not at the function layer. With no corpus knowledge the test
-    cannot run and the reference falls through to the column layer, which refuses it:
-    fail-closed either way, with the better reason when the information exists.
-
-    Owed: the precedence claim is Postgres's documented resolution, not re-verified
-    against a live server on this branch. One statement settles whether the
-    corpus-informed branch is a fix or a hole; B5 was a rule resting on an unverified
-    engine behaviour.
-    """
+    """A bare source name is the whole row when no in-scope column has that name. Empty ``known_columns`` falls through,
+    and the column layer still refuses."""
     if not known_columns or name not in view.source_names:
         return None
     declares = any(
@@ -324,11 +266,7 @@ def _binding(reference: str, source: BoundSource, column: str) -> ColumnBinding:
 def _bind_join_keys(
     view: ScopeView, local: Mapping[str, BoundSource], columns: list[ColumnBinding]
 ) -> LayerRefusal | None:
-    """``USING (col)`` keys, which are not ``Column`` nodes.
-
-    A ``find_all(exp.Column)`` sweep never sees them, which left an excluded column
-    usable as a join key while unusable in a projection.
-    """
+    """``USING`` keys are not ``Column`` nodes, so a column sweep never sees an excluded join key."""
     bases = [source for source in local.values() if source.kind == "base"]
     derived = [source for source in local.values() if source.kind != "base"]
     for node in view.nodes:
@@ -355,16 +293,7 @@ def bind(
     default_schema: str | None,
     known_columns: frozenset[str] = frozenset(),
 ) -> Bindings | LayerRefusal:
-    """Bind every reference in the statement, or refuse.
-
-    Two passes, forced by ``traverse_scope`` yielding children before parents: a
-    correlated reference cannot resolve until every ancestor's sources exist.
-
-    ``known_columns`` is every column key the corpus declares — allowed, excluded and
-    suspect together. It decides *which* single source a bare name belongs to and
-    authorises nothing (the column layer's job). Empty is the fail-closed default: a
-    bare name in a multi-source scope then has no unique binding and refuses.
-    """
+    """Two passes, because children are yielded first. ``known_columns`` authorises nothing. See ADR 0006."""
     views = tuple(views)
     tables: dict[str, str] = {}
     sources: dict[int, dict[str, BoundSource]] = {}
@@ -372,15 +301,9 @@ def bind(
         try:
             sources[id(view.scope)] = _classify_sources(view, default_schema, tables)
         except OptimizeError:
-            # ``selected_sources`` raises where ``scope.sources`` papered over it: two
-            # sources in one scope answering to one name. Measured on sqlglot 30.16.0,
-            # ``FROM s.orders AS a, s.audit AS a`` yields ``{"a": s.orders, "audit": s.audit}``
-            # -- the first keeps the alias and the second is filed under its *table name*,
-            # which the alias is supposed to hide. So ``a.id`` bound to whichever source came
-            # first, and ``audit.id`` bound through a name the statement does not offer: the
-            # B5 shape this function's opening paragraph refuses, arriving by the back door.
-            # Postgres rejects the statement outright ("table name a specified more than
-            # once"), and refusing is the only answer that does not invent a binding.
+            # Two sources in one scope answer to one name. ``scope.sources`` keeps one alias
+            # and files the other under its table name, which the alias is supposed to hide.
+            # Postgres rejects the statement. Refusing is the answer that does not invent a binding.
             return LayerRefusal(
                 "r_ambiguous_reference",
                 "two sources in this scope answer to the same name, so no reference "

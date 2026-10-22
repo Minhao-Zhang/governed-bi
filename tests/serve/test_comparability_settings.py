@@ -1,16 +1,4 @@
-"""A setting the record publishes must be a setting the turn can be made to use. ADR 0008 D7.
-
-``route_top_n``, ``max_steiner_points`` and ``max_crossings`` are declared
-``a recorded setting`` — they go into ``settings_resolved``, which is what a quotable run
-compares against another run. All three read per-turn ``state`` *only*, with a
-module-level constant beside them for the default, and **no production entry point writes
-those state keys**: only ``eval/harness.py`` and test fixtures do. So the record published
-``route_top_n: 3`` and routing used 3, but only because
-``_DEFAULT_TOP_N = 3`` happened to equal the register's default. Move either one and the
-record reports a value the turn did not use.
-
-That is why the test below is about ``settings_resolved`` rather than about ``state``: the
-state path already worked, and testing it is what let the gap survive.
+"""A setting the record publishes must be one the turn can be made to use. See ADR 0008.
 """
 
 from __future__ import annotations
@@ -34,20 +22,13 @@ def test_state_wins_then_settings_resolved_then_the_register() -> None:
 
 
 def test_a_setting_that_cannot_be_read_raises_rather_than_substituting_a_value() -> None:
-    """Substituting the register default for a setting the caller set to something unusable
-    is the lie about which settings affect results in a smaller costume: the turn runs at 3, the record says 3,
-    and the caller asked for something else entirely.
-
-    ``candidate_depth`` used to swallow exactly this and return its local constant.
-    """
+    """An unreadable setting raises. Substituting the default would hide what the caller asked for."""
     with pytest.raises(ValueError, match="not an integer"):
         int_setting({"route_top_n": "three"}, "route_top_n")
 
     # A setting that ships uncalibrated must not become a threshold nobody chose -- the same
     # refusal `corpus/validate.py` makes for the summary-length bounds.
     # And a typo'd setting name raises out of the register rather than resolving to a
-    # plausible literal no setting backs, which would leave the value outside the
-    # hash of settings that affect results entirely.
     with pytest.raises(KeyError):
         int_setting({}, "route_top_nn")
 
@@ -55,16 +36,7 @@ def test_a_setting_that_cannot_be_read_raises_rather_than_substituting_a_value()
 def test_route_top_n_from_settings_resolved_changes_the_turn(
     two_schema_assets, guard_off_policy
 ) -> None:
-    """The reachability claim, asserted on what the setting controls: how many schemas are
-    shortlisted.
-
-    This test first asserted the *outcome* — the question matches both schemas, the two
-    share no join edge, so at the default of 3 ``connect`` declined and at 1 it answered.
-    That stopped being true the same day, because ``connect_node`` now keeps one
-    :func:`~governed_bi.retrieve.connect.components` group and both settings answer. The
-    surviving assertion is the one: the setting decides the shortlist, and a shortlist
-    of two is observable in ``schemas`` whether or not it changes the result.
-    """
+    """The reachability claim, asserted on what the setting controls: how many schemas are shortlisted."""
     from langchain_core.messages import AIMessage
 
     from governed_bi.serve.graph import compile_graph
@@ -98,10 +70,8 @@ def test_route_top_n_from_settings_resolved_changes_the_turn(
         f"on its own: path_kind={wide.get('path_kind')} reason={wide.get('terminal_reason')!r}"
     )
     # **Both** components stay retrieved_tables, and that is the design rather than laxity.
-    # `connect_node` used to keep one, which was measured to cap reachability at the
     # router's `recall@1` (0.442 on BIRD, against `recall@3` = 0.609) because picking is  [retired]
     # what throws the other candidates away. `retrieved_tables` is a table allowlist; a statement
-    # can only reach a table it names, and `connect` guarantees a join path *per component*.
     retrieved_tables_schemas = {t.split(".", 1)[0] for t in wide.get("retrieved_tables") or []}
     assert retrieved_tables_schemas == {"sales_a", "ops_b"}, (
         f"a shortlisted schema was dropped from licensing: {sorted(retrieved_tables_schemas)}"
@@ -114,9 +84,6 @@ def test_route_top_n_from_settings_resolved_changes_the_turn(
     # **Length, not identity.** This asserted `== ["ops_b"]`, and which of the two wins is not
     # a property anyone designed: the question ("customer account voltage reading device") is
     # built to match both, and the winner is decided by scores over a two-asset synthetic
-    # corpus. It flipped to `sales_a` when `channel_schema` stopped rewriting, failing a test
-    # whose own docstring says it gave up asserting the outcome. The claim is that the setting
-    # reaches routing, which is a count.
     assert len(narrow.get("schemas") or []) == 1, (
         f"settings_resolved['route_top_n'] did not reach routing: {narrow.get('schemas')}. "
         "The record would still publish 1 while the turn routed on 3."
@@ -135,15 +102,7 @@ def test_route_top_n_from_settings_resolved_changes_the_turn(
 
 
 def test_every_declared_ranking_setting_has_a_reader() -> None:
-    """A ``a recorded setting`` setting that cannot change a result is a false claim about a run.
-
-    Four of them shipped that way. ``channel_weight_schema`` and ``channel_weight_other`` were
-    declared while ``retrieve/route.route`` took no weights at all; ``w_lexical`` and
-    ``w_semantic`` were declared while ``serve/runtime.FUSE_WEIGHTS`` was a hardcoded literal.
-    All four entered ``setting_names()`` and ``settings_resolved``, so a run could publish
-    ``w_lexical: 0.9``, move its config hash, and behave identically — the inverse of the
-    defect ``registry/settings.py`` opens by describing.
-    """
+    """A ``a recorded setting`` setting that cannot change a result is a false claim about a run."""
     import inspect
 
     from governed_bi.registry.settings import setting_names
@@ -160,7 +119,6 @@ def test_every_declared_ranking_setting_has_a_reader() -> None:
     # **The setting must be readable from the run, not only from the register** (audit I10). This
     # asserted `FUSE_WEIGHTS["lexical"] == setting_default("w_lexical")` against a module constant
     # built at import, which is true of a value no request can move — the same false claim about a
-    # run, one level up. `channel_scale` resolves through `float_setting`, so state wins.
     from governed_bi.registry.settings import setting_default
 
     assert channel_scale({}).lexical == float(setting_default("w_lexical"))
@@ -192,14 +150,7 @@ def test_a_channel_weight_moves_the_ranking() -> None:
 
 
 def test_the_saturation_constant_is_declared_where_it_is_read() -> None:
-    """``lexical_saturation_k`` shipped ``UNSET`` while ``index.py`` ran the literal 1.2.
-
-    The register therefore said nobody had chosen the constant that sets where the lexical
-    scale sits, and the code chose it anyway. They agreed at 1.2, which is exactly why it
-    survived — ``session._resolved_settings`` dropped the setting from the record while BM25 used a
-    value the record did not mention. Declaring what runs is not the same as fitting it, and
-    the register's note now says so out loud.
-    """
+    """``lexical_saturation_k`` shipped ``UNSET`` while ``index.py`` ran the literal 1.2."""
     from governed_bi.registry.settings import Unset, setting_default
     from governed_bi.retrieve.index import IndexEntry, build_index
 
@@ -216,12 +167,7 @@ def test_the_saturation_constant_is_declared_where_it_is_read() -> None:
 
 
 def test_a_setting_describing_a_feature_that_does_not_exist_is_gone() -> None:
-    """``max_queries_per_channel`` bounded a list built as ``[question]``.
-
-    So the limit could never fire, and it was ``a recorded setting`` — every run published a
-    bound on a per-channel fan-out the code does not have. Deleted rather than wired: wiring it
-    would hand a setting to a feature that does not exist.
-    """
+    """``max_queries_per_channel`` bounded a list built as ``[question]``."""
     from governed_bi.registry.settings import setting_names
     from governed_bi.serve.nodes import channels
 

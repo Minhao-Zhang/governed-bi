@@ -1,25 +1,8 @@
-"""``abstain`` — the graph adapter for the declared abstention policy (ADR 0013).
+"""Graph adapter for the abstention policy. The policy is :mod:`governed_bi.serve.abstention`.
 
-**The boundary, and only that.** The policy itself — its rules, its evidence, its result and the
-argument for every one of them — is:mod:`governed_bi.serve.abstention`, which takes
-:class:`~governed_bi.serve.abstention.AbstentionInputs` and never sees a state dict. This module
-is what LangGraph needs in order to run it.
-
-**Why the adapter is the interesting half.** ``(state, config) -> dict`` is the signature, and
-that signature is the problem this split is about: ``ServeState`` has 47 channels, so "which of
-them does this node read, which does it write, and what clears them" is nowhere in it and has to
-be recovered by reading the body. That is not a small interface, it is an unwritten one — and
-``measure/checks.py`` reading ``Outcome.clarification`` as a evidence of "reached finish" is what it
-costs when a reader guesses wrong. So the node's whole job is to be the boundary: project the state
-dict into ``AbstentionInputs``, call ``apply_policy``, and turn the ``AbstentionPatch`` it gets
-back into the dict the graph expects.
-
-**Registered ``stream=False``** in ``graph.py``, so a disabled policy adds no timeline rows; it
-emits its own single row when it judged something.
-
-**A failure here is a crashed turn, not a silent answer.** No ``try`` swallows anything: unlike
-``reflect``, this node decides, and a policy that fails open on its own exception is a policy
-that stops being one exactly when something is wrong. ``wrap_node`` records the crash.
+Registered ``stream=False``, so a disabled policy adds no timeline rows. No ``try``: a policy
+that fails open stops being one when something is wrong, and ``wrap_node`` records the crash.
+See ADR 0013.
 """
 
 from __future__ import annotations
@@ -35,25 +18,10 @@ __all__ = ["abstain_node"]
 
 
 def abstain_node(state: dict, config: RunnableConfig) -> dict:
-    """Decide whether this turn should be answered, before the agent spends an attempt.
+    """Project state, call :func:`~governed_bi.serve.abstention.apply_policy`, write the update.
 
-    **The adapter, and only that.** LangGraph requires ``(state, config) -> dict``, so this is
-    where the 47-channel dict is turned into the eight facts
-    :class:`~governed_bi.serve.abstention.AbstentionInputs` declares, and where the
-    :class:`~governed_bi.serve.abstention.AbstentionPatch` that comes back is turned into an
-    update and a rail row. It takes no *policy* decision —
-    :func:`~governed_bi.serve.abstention.apply_policy` does — so every branch below is either a
-    translation of one, or the already-ended short-circuit every node in this graph has, which
-    is the one judgement that belongs at the boundary.
-
-    Declares ``config`` so :func:`~governed_bi.serve.wrap.wrap_node` forwards it. The setting is
-    read through :func:`~governed_bi.serve.runtime.bool_setting`, whose precedence is state, then
-    ``settings_resolved``, then the register — inside the projection, which is the one reader of
-    state in the policy.
-
-    **The two channels the projection does not carry**, read here and named here: ``path_kind``
-    for the short-circuit below, and ``turn_id`` — through
-    :func:`~governed_bi.serve.events.rail_event_id` — to key the rail row.
+    Declares ``config`` so the wrapper forwards it. Reads ``path_kind`` and ``turn_id`` here;
+    every other fact goes through :class:`~governed_bi.serve.abstention.AbstentionInputs`.
     """
     # Before the projection, and this order is: `bool_setting` raises on a
     # non-boolean setting, and a turn that already ended must not be crashed by a policy that was
@@ -75,10 +43,6 @@ def abstain_node(state: dict, config: RunnableConfig) -> dict:
     return {
         "abstention": patch.result,
         "path_kind": patch.path_kind,
-        # The reason **is** the terminal reason. One string, in one vocabulary, in the channel
-        # `route` and `connect` already write their declines into — rather than a second field
-        # only a new reader would know to open. Its reader is
-        # `eval/report.py::refusal_histogram`, which had to be built: ADR 0013 §2 claimed three
-        # existing ones and none of them read the vocabulary.
+        # Same channel `route` and `connect` use, so a decline has one vocabulary. See ADR 0013.
         "terminal_reason": patch.result["reason"],
     }

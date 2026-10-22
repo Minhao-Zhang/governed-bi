@@ -1,20 +1,7 @@
 """A turn whose settings were never wired must not be quotable.
 
-Found by the 2026-08-10 audit (C5). ``finish`` substituted ``{}`` for an absent
-``settings_resolved``, and ``{}`` is the one value ``measure.checks`` names as the thing it must
-never be handed: it is a ``Mapping``, so the drift check reads it as a real configuration in
-which all 54 declared keys resolved to ``None``. Every row then shares one signature, and an
-config of empties **passes**.
-
-Two comments in the tree already forbade this and neither was enforced —
-``checks.py::_settings_resolved_check`` ("Absent ``settings_resolved`` is unmeasured, not passing … one
-config of empties would *pass* the check") and ``eval/harness.py`` ("absent stays absent"). The
-writer at the other end of the pipe defeated both, which is why the test lives here rather than
-in ``tests/measure``: pinning the check alone would leave the substitution free to come back.
-
-Paired, per this parcel's authoring rule — the ``{}`` case is kept precisely to show the check
-*would* pass it, so the assertion below cannot be satisfied by the check simply refusing
-everything.
+``finish`` leaves an absent ``settings_resolved`` as ``None``. Substituting ``{}`` hands
+``measure.checks`` a mapping of empty keys, and a config of empties passes the drift check.
 """
 
 from __future__ import annotations

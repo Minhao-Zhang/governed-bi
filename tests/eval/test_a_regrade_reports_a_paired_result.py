@@ -1,21 +1,4 @@
-"""A regrade is the most tightly paired comparison here, and it reported the loosest number.
-
-Audit E1. ``tools/regrade.py`` re-grades one artifact's rows with a changed grader — same
-questions, same run, one variable — and then printed two bare rates. Three things were wrong and
-all pointed the same way, toward a result looking more informative than it is:
-
-* ``sum(1 for r in regraded if r.get("correct"))`` counted a row the regrade **could not judge**
-  as *wrong*, against ``eval/grade.py``'s "callers must propagate the ``None`` rather than coerce
-  it" — and against the comment in ``regrade.py`` itself, which says exactly that about the row
-  while the headline coerced it anyway;
-* the denominator was every row, unmeasured included;
-* no paired test, though ``flips`` already holds the McNemar table (``wrong -> correct`` is
-  ``only_b``, ``correct -> wrong`` is ``only_a``).
-
-Measured on a four-row fixture with one unjudgeable row: the old arithmetic prints
-``EX after: 3/4 = 0.750`` against a before of ``0.500`` — a 25-point improvement invented by a
-row nobody could grade.
-"""
+"""A regrade that counts an unjudgeable row as wrong invents a gain; ``None`` stays unmeasured."""
 
 from __future__ import annotations
 
@@ -89,14 +72,7 @@ def test_the_report_does_not_round_a_rate_into_a_claim() -> None:
 
 @pytest.mark.parametrize("missing_side", ["before", "after"])
 def test_a_unit_present_on_one_side_only_is_refused_rather_than_dropped(missing_side: str) -> None:
-    """A regrade writes every row it read, so a set that moved is a broken run.
-
-    ``mcnemar`` refuses a mismatched unit set where the rival copy in
-    ``tools/query_summary_alignment.py`` silently intersected it — and ``_regrade_report`` must not
-    undo that refusal by reconciling the sets itself. Its first implementation did: it filled a
-    missing ``after`` row from the matching ``before`` row, which made a row the regrade failed to
-    write read as *unchanged*, and it ignored an extra row on the other side. Found by this test.
-    """
+    """Filling a missing after-row from before made a failed write look unchanged."""
     before = _rows(("q1", True), ("q2", False))
     after = _rows(("q1", False), ("q2", True))
     if missing_side == "after":

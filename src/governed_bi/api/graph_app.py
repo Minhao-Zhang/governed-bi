@@ -1,20 +1,5 @@
-"""Graph factory ``langgraph.json`` loads (ADR 0007 §1–§2), and the environment adapter.
-
-Two things, and the split is the point. :func:`build_serve_graph` is the **constructor**: hand
-it a session and a turn log and it returns the compiled topology the server runs — no globals,
-no environment, no credentials. :func:`session_from_environment` and :func:`make_graph` are the
-**adapter** the process entry calls. Settings and secrets are resolved once in
-:func:`resolve_run`. The platform flag at the foot of this file asks whether the
-server is the importer and warms the session eagerly if so.
-
-Before 2026-08-11 there was only the adapter. The served topology was assembled from a
-module-level ``_SESSION`` reached by five modules, so no test could construct it: ``make_graph``
-was verified by splitting its own source string and asserting ``"trust("`` appeared in it, and
-``accept`` was executed by nothing at all.
-
-The factory closes over a :class:`~governed_bi.serve.session.Session` because LangGraph Server
-can only put JSON in ``config.configurable``, so live objects cannot ride the wire. ``accept``
-derives the turn server-side; client provenance fields are ignored.
+"""Factory ``langgraph.json`` loads (ADR 0007). The session is closed over: configurable is JSON only.
+``accept`` derives the turn server-side; client provenance is ignored.
 """
 
 from __future__ import annotations
@@ -60,36 +45,28 @@ SCHEMA_VAR = "GOVERNED_BI_SCHEMA"
 #: Curated corpus on disk; takes precedence over live-schema seeding.
 CORPUS_DIR_VAR = "GOVERNED_BI_CORPUS_DIR"
 
-#: Chat model id. Absent = no model (supported; graph still runs). The name comes from
-#: ``model/provider.py`` because ``serve/__main__.py`` reads the same variable and cannot
-#: import this module -- ``api`` is the outermost layer.
+#: Shared with ``serve/__main__.py``, which cannot import this module. Absent means no model.
 MODEL_VAR = SURFACE_MODEL_VARS["agent"]
 
 #: Model for guard + channel rewriters. Unset → share :data:`MODEL_VAR`.
 UTILITY_MODEL_VAR = SURFACE_MODEL_VARS["utility"]
 
-#: Reasoning effort for the utility model (usually low/unset).
 UTILITY_MODEL_EFFORT_VAR = "GOVERNED_BI_UTILITY_MODEL_EFFORT"
 
 #: Embedding model id. Setting it turns the semantic channel on.
 EMBEDDING_MODEL_VAR = SURFACE_MODEL_VARS["embedding"]
 
-#: Provider SDK retry count. Reaches the agent, the utility model, and the embedder.
+#: One retry count for the agent, the utility model, and the embedder.
 RETRIES_VAR = "GOVERNED_BI_LLM_MAX_RETRIES"
 
-#: Wall clock (seconds) for one agent call.
 TIMEOUT_VAR = "GOVERNED_BI_LLM_TIMEOUT_S"
 
-#: Wall clock for guard, rewriters, and the embedder.
 UTILITY_TIMEOUT_VAR = "GOVERNED_BI_UTILITY_TIMEOUT_S"
 
-#: Reasoning effort for the agent model (setting that affects results).
 MODEL_EFFORT_VAR = "GOVERNED_BI_MODEL_EFFORT"
 
-#: Where a seeded corpus is written when no curated one is given.
 SEED_DIR_VAR = "GOVERNED_BI_SEED_DIR"
 
-#: Drop-in directory for curated corpora (gitignored).
 CORPORA_DIR = "corpora"
 
 
@@ -98,11 +75,7 @@ _SESSION_LOCK = threading.Lock()
 
 
 def session_from_environment() -> Session:
-    """Build the run's session once from the environment and reuse it.
-
-    Locked, because ``/readyz`` and the first requests can arrive together and each would
-    otherwise load and index the corpus. A failed build is not cached, so a probe retries it.
-    """
+    """Build once under a lock. A failed build is not cached, so a probe retries it."""
     if _SESSION is not None:
         return _SESSION
     with _SESSION_LOCK:
@@ -182,11 +155,7 @@ def _build_session_from_environment() -> Session:
 
 
 def serve_policy() -> Any:
-    """The governance policy the served surface runs under: production, not the benchmark.
-
-    Every guard rule is on (they fire on none of the 1,351 benchmark questions), and a suspect
-    column warns in the prompt instead of refusing. The benchmark entry points keep the
-    refusing default so a measured number cannot rest on a suspect column."""
+    """Every rule on (none of 1,351 questions fire); suspect columns warn. The benchmark still refuses."""
     from governed_bi.govern.policy import KNOWN_GUARD_RULE_IDS, GovernancePolicy
 
     return GovernancePolicy(
@@ -220,7 +189,7 @@ def _utility_model(settings: Mapping[str, Any]) -> Any:
 
 
 def _embedder_into(kwargs: dict[str, Any], settings: Mapping[str, Any]) -> Any:
-    """Add ``embedder`` and ``vector_cache`` when configured. Returns the cache (or None)."""
+    """Pass ``requested_model``: reading ``Embedder.model`` on a cold embedder probes the network."""
     model_id = settings["embedding_model"] or None
     if not model_id:
         return None
@@ -240,10 +209,6 @@ def _embedder_into(kwargs: dict[str, Any], settings: Mapping[str, Any]) -> Any:
         max_retries=int(settings["llm_max_retries"]),
         timeout=float(settings["llm_utility_timeout_s"]),
     )
-    # The **requested** name, per that function's contract: reading `Embedder.model` on a cold
-    # embedder issues a network probe, and this only names a directory. Two providers can share
-    # that directory safely — `build_index` keys each entry on the provider-qualified
-    # `embedder.model`, so the keys differ even where the folder does not.
     cache = vector_cache_from_environment(model=embedder.requested_model)
     kwargs["embedder"] = embedder
     kwargs["vector_cache"] = cache
@@ -251,13 +216,8 @@ def _embedder_into(kwargs: dict[str, Any], settings: Mapping[str, Any]) -> Any:
 
 
 def _resolve_corpus_dir(value: str | None, root: Path) -> str | None:
-    """Resolve ``GOVERNED_BI_CORPUS_DIR`` against the **repo root**, not the process's cwd.
-
-    The configured value is ``../BIRD-corpus`` (D13, 2026-08-07), a path that leaves this tree.
-    Left cwd-relative it resolves to whatever sits beside the start directory — usually
-    nothing, failing as "nothing to serve" rather than "you are in the wrong directory".
-    Absolute values are returned untouched.
-    """
+    """Against the repo root, not cwd. Default ``../BIRD-corpus`` leaves the tree.
+    Cwd-relative, a wrong directory fails as "nothing to serve". Absolute paths pass through."""
     if not value:
         return None
     path = Path(value)
@@ -265,7 +225,7 @@ def _resolve_corpus_dir(value: str | None, root: Path) -> str | None:
 
 
 def _dropped_in_corpus(root: Path) -> str | None:
-    """The one curated corpus under ``corpora/``, or ``None``. Ambiguity raises."""
+    """One directory is served. Two would make ``corpus_content_hash`` depend on directory order."""
     base = root / CORPORA_DIR
     if not base.is_dir():
         return None
@@ -283,8 +243,7 @@ def _dropped_in_corpus(root: Path) -> str | None:
 
 
 def _log_dropped_row(state: Any) -> None:
-    """ERROR with the thread and turn when they can be read, and without them when they cannot:
-    the handler runs on a state that already broke once, so reading it must not raise again."""
+    """Log the drop. Reading ids must not raise: this runs on a state that already broke."""
     try:
         raw_answer = state.get("answer")
         raw_record = raw_answer.get("record") if isinstance(raw_answer, Mapping) else None
@@ -296,23 +255,8 @@ def _log_dropped_row(state: Any) -> None:
 
 
 def record_node() -> Any:
-    """The ``record`` node: put the finished turn onto ``ServeState.turns``. Never raises.
-
-    **It takes no sink.** It used to be handed a turn log to append to, and that argument is gone
-    with the log: the turn is returned as state and the checkpointer persists it, so there is one
-    store and nothing to inject. A test observes the node by reading what it returns.
-
-    Sits after ``finish`` and outside ``wrap_node``, so it swallows its own failures: there is
-    nothing after it to receive a ``crashed`` finish, and a turn that answered is not a turn that
-    failed.
-
-    **It writes the record whole and lets the channel bound it.** The row it returns carries the
-    full ``answer["record"]``, because the newest turn is the one an operator opens and
-    ``ServeState.turns``' reducer keeps the newest row verbatim.
-    :func:`~governed_bi.serve.state.keep_turns` is what trims the row on the *next* turn, dedupes
-    on ``turn_id`` and caps the history — so this node has no policy in it and a change to the
-    retention rule is one edit, in the place that owns the channel.
-    """
+    """Never raises; the checkpointer is the store. Outside ``wrap_node``, after ``finish``.
+    Returns the full record; ``keep_turns`` trims it on the next turn."""
 
     def record(state: dict) -> dict:
         from governed_bi.serve.messages import surface_answer_text
@@ -321,25 +265,18 @@ def record_node() -> Any:
             answer = state.get("answer") or {}
             record_dict = answer.get("record") or {}
             if not isinstance(record_dict, Mapping) or not record_dict.get("turn_id"):
-                # A paused turn (``ask_user``) has no record yet. Nothing is appended: an
-                # entry with no ``turn_id`` cannot be upserted by ``keep_turns``.
+                # A paused ``ask_user`` has no ``turn_id`` yet, and ``keep_turns`` cannot upsert one.
                 return {}
             entry: TurnEntry = {
-                # This node is the only place ``asked_at`` is set -- nothing else writes a turn
-                # wrapper.
                 "asked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "question": str(state.get("question") or "") or None,
                 "answer_text": surface_answer_text(answer, state),
-                # ``answer["outcome"]`` is absent on some paths and the record carries its
-                # own, so the fallback is resolved here rather than by a reader: this node is
-                # the only writer, and a reader that re-derived it would be a second answer to
-                # what the turn's outcome was.
+                # ``answer["outcome"]`` can be absent. This is the only writer, so the fallback
+                # is resolved here; a reader re-deriving it would be a second answer.
                 "outcome": (answer.get("outcome") if answer.get("outcome") is not None else record_dict.get("outcome")),
                 "record": dict(record_dict),
             }
         except Exception:  # noqa: BLE001 — a turn that answered is not a turn that failed
-            # Nothing after this node can finish the failure, so the log line is the only trace
-            # that an audit row was lost.
             _log_dropped_row(state)
             return {}
         return {"turns": [entry]}
@@ -348,34 +285,23 @@ def record_node() -> Any:
 
 
 def build_serve_graph(session: Session) -> Any:
-    """The graph ``langgraph.json`` serves: ``accept`` before ``guard``, ``record`` after ``finish``.
-
-    It differs from ``serve.graph.compile_graph`` on purpose, at the trust boundary. ``trust()``
-    is called here, so the server-side constants override whatever a request supplies and a
-    client cannot swap the corpus; it is process-wide. No checkpointer: the server brings one.
-    """
+    """``trust()`` is process-wide, so a request cannot swap the corpus. No checkpointer: the server brings one."""
     trust(dict(session.configurable()["configurable"]))
     return build_graph(accept=accept_node(session), record=record_node()).compile()
 
 
 def configure_logging() -> None:
-    """Root logging for the API entry points, if the host has not configured it.
-
-    ``basicConfig`` does nothing when the root logger already has a handler, so a host that set
-    logging up (``langgraph dev``) keeps its own and bare ``uvicorn`` gets INFO on stderr.
-    """
+    """``basicConfig`` is a no-op once the root logger has a handler, so ``langgraph dev`` keeps its own."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
 def resolve_run() -> dict[str, Any]:
-    """Settings and secrets for this process. The eval driver calls the same boot."""
     from governed_bi.boot import resolve_settings
 
     return resolve_settings()
 
 
 def make_graph() -> Any:
-    """What ``langgraph.json``'s ``graphs.serve`` points at: the environment adapter."""
     configure_logging()
     _warm_imports()
     return build_serve_graph(session_from_environment())

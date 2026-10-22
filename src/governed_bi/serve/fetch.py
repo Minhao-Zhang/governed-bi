@@ -1,20 +1,7 @@
-"""What each governed tool does — the bodies, with no LangGraph in them.
+"""Tool bodies with no LangGraph in them. ``serve/tools.py`` is the adapter.
 
-Each function is of ``(identifiers, bounds, corpus, connector, policy)`` and mentions
-``runtime``, ``Command`` and ``_reply`` exactly zero times; ``serve/tools.py`` is the adapter
-that makes them tools.
-
-Every function returns a **tuple** whose second element is a fact the adapter has to record:
-``read_body`` returns whether the payload counts as a *delivery* (an out-of-scope refusal is
-received by the model and is not one, and ``delivery_hash`` audits what was shown); ``run_query``
-and ``sample_rows`` return the ledger row for the attempt.
-
-Both executing tools take the same route — build a statement, pass it through :func:`prepare`,
-ledger the result. ``sample_rows`` used to call ``connector.sample_values`` directly, reaching
-the database through none of the layers and writing no ledger row, which made
-``guardrail_errors == 0`` hold vacuously for that path and let one policy refuse a suspect
-column in ``run_query`` while returning its values here.
-"""
+An execution returns its ledger row. Both executing tools pass the statement
+through :func:`prepare`. See ADR 0006."""
 
 from __future__ import annotations
 
@@ -49,15 +36,7 @@ __all__ = [
 
 _DEFAULT_READ_BODY_MAX_CHARS = 80_000
 
-#: Ceiling on the number of distinct values ``sample_rows`` returns.
-#:
-#: The old bound was ``max(1, int(limit))`` — clamped from below only, so the row bound was a
-#: model-supplied argument with no ceiling (ADR 0006 §8: a tool that grants privilege must have
-#: a bound the model cannot widen).
-#:
-#: A constant rather than a setting because nothing can set a setting on this surface: ``the retired budget``
-#: ships UNSET and no env var, config key or ``int_setting`` entry can write it, so a setting here
-#: would be a declaration with no writer.
+#: Ceiling ``sample_rows`` cannot widen. Nothing here writes a setting (ADR 0006).
 SAMPLE_ROWS_MAX_VALUES = 20
 
 
@@ -84,12 +63,7 @@ def read_body(
     assets: Mapping[str, Any],
     max_chars: int,
 ) -> tuple[str, bool]:
-    """``(payload, delivered)``.
-
-    The flag is why this is a tuple rather than a string: an out-of-scope refusal is a payload
-    the model receives but **not** a delivery, and ``delivery_hash`` audits what the corpus
-    handed over.
-    """
+    """``(payload, delivered)``. An out-of-scope refusal is not a delivery (ADR 0005 §3.6)."""
     parts: list[str] = []
     used = 0
     for raw_id in asset_ids:
@@ -121,7 +95,6 @@ def inspect_schema(
     bounds: ToolBounds,
     assets: Mapping[str, Any],
 ) -> tuple[str, bool]:
-    """``(payload, delivered)`` — one table's column roster."""
     tid = str(table_id)
     if not bounds.may_inspect_schema(tid):
         return OUT_OF_SCOPE_MESSAGE, False
@@ -165,15 +138,7 @@ def asset_is_table(asset: Any) -> bool:
 def distinct_values_statement(
     *, schema: str, table: str, column: str, limit: int, dialect: str
 ) -> str:
-    """``SELECT DISTINCT c FROM t WHERE c IS NOT NULL ORDER BY c LIMIT n``, as a tree.
-
-    **Built as a syntax tree and rendered, never interpolated.** Postgres has no
-    quote-doubling, so the f-string this replaces let a ``physical_name`` containing ``"``
-    close the quote and turn the rest of the value into SQL — and ``physical_name`` holds the
-    engine's identifier verbatim (any character, any case, any script; ``corpus/validate.py``
-    validates only its slug). Rendering from ``exp.Identifier`` nodes puts the escaping in
-    sqlglot's generator, so the identifier reaches the engine as a *name*.
-    """
+    """A sqlglot tree, so ``physical_name`` cannot close a quoted string (ADR 0006)."""
     col = exp.column(column, table=table, quoted=True)
     query = (
         exp.select(col)
@@ -196,15 +161,9 @@ def sample_rows(
     corpus: Any,
     policy: GovernancePolicy,
 ) -> tuple[str, bool, AttemptRecord | None]:
-    """``(payload, delivered, attempt_row)``. A governed executor path, like ``run_query``.
+    """The ledger row is ``None`` only when no statement was built.
 
-    The ledger row is ``path="sample"``. It is ``None`` only when no statement was ever built:
-    an out-of-scope column id produces no SQL, so there is no governance decision to record.
-
-    Layer coverage is the point: ``check()`` refuses a suspect column at COLUMNS when
-    ``hard_block_suspect`` is on, which closes the bypass where one policy refused a suspect
-    column in ``run_query`` and handed over its values here. ADR 0006 §7 said the
-    exclusion/suspect filter was applied "in the tool"; it was not applied anywhere.
+    Suspect columns are refused in :func:`prepare` (ADR 0006).
     """
     cid = str(column_id)
     if not bounds.may_sample(cid):
@@ -217,20 +176,14 @@ def sample_rows(
     if not is_col:
         return OUT_OF_SCOPE_MESSAGE, False, None
     if connector is None:
-        # G1, same as the corpus check below and for the same reason. This used to manufacture
-        # ``refuse("r_not_a_read")`` — a rule ``layers.py`` assigns to ``Layer.NO_WRITE``, i.e.
-        # "the model proposed a write" — for an unconfigured connector. The ledger row was
-        # indistinguishable from a real governance refusal, which is the failure ``check.py``
-        # states as a doctrine four modules away: *"a security parameter was not wired up …
-        # never a statement's fault."* 2026-08-10 audit (C2).
+        # Missing connector is wiring, not a governance refusal. ``r_not_a_read`` would blame ``Layer.NO_WRITE``.
         raise GovernanceUsageError(
             "sample_rows has no connector: configurable['connector'] is None. A missing "
             "connector is a wiring failure, and recording it as a governance result attributes "
             "our own misconfiguration to the statement."
         )
     if not isinstance(corpus, AnalystCorpus):
-        # G1: a missing corpus is a wiring failure, and refusing on it would record a
-        # governance result for it.
+        # A missing corpus is wiring. Refusing it would record a governance result.
         raise GovernanceUsageError(
             "sample_rows has no AnalystCorpus: configurable['corpus'] is "
             f"{type(corpus).__name__}. The sample path now runs through check(), which "
@@ -240,18 +193,13 @@ def sample_rows(
     table = str(asset_attr(col, "parent_table") or "")
     physical = str(asset_attr(col, "physical_name") or "")
     schema = str(asset_attr(col, "schema") or "")
-    # **The engine's spelling, not the corpus key** (ADR 0008 D1: a key is not a name).
-    # `parent_table.split(".")[-1]` yields the *slug* — `Air_Carriers_66c534` for the table
-    # whose physical name is `Air Carriers` — which is not a relation in any engine, and the
-    # schema was dropped so the connector fell back to `public`. Together they produce 42P01,
-    # which surfaced as a tool error nothing counted.
+    # Engine spelling, not the corpus key. A missing schema makes the connector guess ``public`` (ADR 0008).
     parent = assets.get(table)
     table_name = str(asset_attr(parent, "physical_name") or "") if parent is not None else ""
     if not table_name:
         table_name = table.split(".")[-1] if table else ""
     if not physical or not table_name:
-        # No identifier to name a relation with. Out of scope rather than a refusal: there is
-        # no statement, so there is nothing for a layer to have decided.
+        # No identifier names a relation. There is no statement to refuse.
         return OUT_OF_SCOPE_MESSAGE, False, None
 
     dialect = getattr(connector, "dialect", None) or "sqlite"
@@ -281,8 +229,7 @@ def sample_rows(
     try:
         _columns, rows, _truncated = connector.execute(prepared.sql)
     except Exception as exc:  # noqa: BLE001 — the row is the point, not the traceback
-        # Returned with the attempt, for the reason ``run_query`` gives: it cleared every
-        # layer and was sent, so the ledger owes it a row.
+        # Cleared every layer and was sent, so the ledger owes a row.
         return f"sample_rows error: {type(exc).__name__}: {exc}", False, attempt
     payload = json.dumps(
         {
@@ -305,17 +252,9 @@ def run_query(
     connector: Any,
     policy: GovernancePolicy,
 ) -> tuple[str, Any]:
-    """``(payload, attempt_row)``. Exactly one ledger row per admitted call.
-
-    The cap is not decided here any more — :class:`~governed_bi.serve.agent_state.AttemptBook`
-    owns it, because counting attempts requires knowing what a *previous node execution*
-    committed and this function only ever saw one closure's list.
-    """
+    """One ledger row per admitted call. The attempt cap is on ``AttemptBook``, which sees other executions."""
     if connector is None:
-        # G1, as for the corpus below. See the note at the `sample_rows` site: a manufactured
-        # ``r_not_a_read`` blamed ``Layer.NO_WRITE`` for an unconfigured connector, so an
-        # infrastructure failure and "the model proposed a write" produced the same ledger row
-        # and the same ``outcome: refused``. 2026-08-10 audit (C2).
+        # Missing connector is wiring. ``r_not_a_read`` would match a model that proposed a write.
         raise GovernanceUsageError(
             "run_query has no connector: configurable['connector'] is None. A missing connector "
             "is a wiring failure, and a turn served without one cannot tell a governance "
@@ -323,10 +262,7 @@ def run_query(
         )
 
     if not isinstance(corpus, AnalystCorpus):
-        # G1: an empty corpus fails closed, so nothing leaks — but it records "the corpus was
-        # never wired up" as ``r_column_not_allowed`` with ``guardrail_errors: 0``,
-        # indistinguishable from "the model asked for a column it may not see". ``serve/`` must
-        # not catch this and substitute a default.
+        # An unwired corpus must not look like ``r_column_not_allowed`` with no guardrail errors (ADR 0006).
         raise GovernanceUsageError(
             "run_query has no AnalystCorpus: configurable['corpus'] is "
             f"{type(corpus).__name__}. Every tool reads through AnalystCorpus as a type, "
@@ -334,12 +270,7 @@ def run_query(
             "governance refusal from its own wiring failure."
         )
 
-    # ADR 0008 D2/D7. Without these two the model's spelling reaches the engine unchanged:
-    # `check()` compares folded keys, so `FROM address.cbsa` matches the retrieved_tables
-    # `address.CBSA` and passes every layer, then Postgres folds the unquoted name and reports
-    # no such relation — 81 tables and 610 columns in the obfuscated lake failed that way,
-    # each *after* a passing result. Scoped to `bounds.retrieved_tables`, because a corpus-wide map
-    # makes `name`, `id` and `city` ambiguous and would refuse nearly every query.
+    # Quoted spellings, scoped to retrieved tables. A corpus-wide map refuses nearly every query (ADR 0008).
     spellings, ambiguous, by_table = spellings_for(corpus, bounds.retrieved_tables)
     prepared = prepare(
         sql,
@@ -361,10 +292,7 @@ def run_query(
     try:
         columns, rows, truncated = connector.execute(prepared.sql)
     except Exception as exc:  # noqa: BLE001 — the row is the point, not the traceback
-        # **The attempt is returned even though the execution failed.** It passed every layer
-        # and was sent to the database, so it is a governed statement and the ledger owes it a
-        # row; returning only the error string makes a driver failure look like a turn that
-        # never attempted anything.
+        # Passed every layer and was sent. An error string alone looks like no attempt.
         return f"run_query error: {type(exc).__name__}: {exc}", attempt
     preview = [list(r) for r in list(rows)[:20]]
     payload = json.dumps(

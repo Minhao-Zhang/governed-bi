@@ -1,25 +1,8 @@
-"""Suite-wide setup. Its only job is to load ``.env`` once, at process entry.
+"""Suite setup loads ``.env`` once, at process entry.
 
-**Why here and not in the fixtures.** A library must not read ``.env`` — `src/` takes a DSN
-or a client and does not decide its own configuration. Something has to bridge the
-developer's ``.env`` to the process environment, and the place is the entry
-point of the process that wants it. For the test suite, that is this file.
-
-The alternative is what the suite had on 2026-08-03, and it is worth recording
-because the cost was invisible: three separate readers of "environment or ``.env``", one of
-which read only `os.environ`. Parcel I's contract therefore **skipped its OpenAI half over a
-key that was in ``.env`` the whole time**, and reported in capital letters that it had
-exercised one adapter of two — a true sentence about a false situation. Then, when the reader
-was unified, the adapter itself still raised, because `OpenAIEmbedder` reads `os.environ` and
-is right to. Bridging per-fixture cannot fix that; bridging at entry can.
-
-**Existing environment always wins.** A value already in the environment is an explicit
-override for this run — `GOVERNED_BI_PG_DSN=... pytest` must point at another database
-without editing a file — so this never overwrites one. It only fills gaps.
-
-**No value is ever printed.** The count of names filled is reported, not the names, and
-certainly not the values: a conftest that echoes what it loaded puts credentials in every
-CI log that runs the suite.
+A library must not read ``.env``. Bridging per fixture cannot reach a client that
+reads the process environment at import. An existing environment value wins, and
+nothing loaded here is printed.
 """
 
 from __future__ import annotations

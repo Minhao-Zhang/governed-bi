@@ -1,22 +1,9 @@
-"""A checkpointed ``Measured`` must come back as a ``Measured``, under strict msgpack.
+"""A checkpointed ``Measured`` must come back as a ``Measured`` under strict msgpack.
 
-Scheduled rather than historical: on langgraph 1.2.10 an unregistered type still
-round-trips (with a warning), so nothing is broken today. The warning names the release
-that breaks it — ``LANGGRAPH_STRICT_MSGPACK=true`` is the announced future default, and
-under it the serde does not raise, it hands back a plain ``dict``. That failure is silent
-by construction: a dict of an absence carries the same four fields, compares equal to
-nothing that is checked, and is *truthy*, so the one distinction the type exists to hold
-disappears on a framework upgrade with no test and no traceback to point at.
-
-So the assertions here are **type identity and ``.is_measured``**, never equality. A dict
-that compares equal to a ``Measured`` is precisely the defect.
-
-The path exercised is the production one: LangGraph derives the strict allowlist from the
-graph's state schema at ``compile()`` and applies it to the saver via the public
-``BaseCheckpointSaver.with_allowlist``. Both halves are asserted, because either one
-failing alone reproduces the bug — and the half that did fail was the derivation
-(``Measured[int]`` is a ``_GenericAlias``, not a dataclass; see
-``Measured.__class_getitem__``).
+Assertions check type identity and ``.is_measured``. A dict of an absence is truthy and
+compares equal, so equality would hide the loss. The allowlist comes from the state schema
+at ``compile()`` via ``with_allowlist``; ``Measured[int]`` is a ``_GenericAlias``, so the
+derivation is the half that drops the type.
 """
 
 from __future__ import annotations
@@ -39,13 +26,7 @@ QUANTITY_TYPES: frozenset[tuple[str, str]] = frozenset(
 
 
 def _strict_saver() -> Any:
-    """The saver LangGraph builds when ``LANGGRAPH_STRICT_MSGPACK=true``.
-
-    ``allowed_msgpack_modules=None`` is what ``JsonPlusSerializer.__init__`` selects under
-    that env var, and the schema-derived allowlist is what ``StateGraph.compile`` applies
-    on top. Constructed here rather than by setting the variable because the flag is read
-    at *import* time, so a test that set it would depend on module import order.
-    """
+    """Built without the env flag: ``LANGGRAPH_STRICT_MSGPACK`` is read at import time."""
     saver = InMemorySaver(serde=JsonPlusSerializer(allowed_msgpack_modules=None))
     return saver.with_allowlist(_serde.build_serde_allowlist(schemas=[ServeState]))
 

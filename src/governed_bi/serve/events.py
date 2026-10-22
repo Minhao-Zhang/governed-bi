@@ -1,16 +1,9 @@
-"""Live stage-event stream — wire shape for ADR 0010.
+"""Live stage events. Status comes from the node update, never a declaration. See ADR 0010.
 
-Status is observed from node updates, never declared. Stream retention follows
-ADR 0006 §11. :func:`emit` never raises.
-
-``kind`` / ``step`` / ``id`` restore an identity the channel throws away: ``stream_mode="custom"``
-is the one mode LangGraph strips node identity from — building a chunk it drops the last
-checkpoint-namespace segment, which is ``node:task_id`` (``CHECKPOINT_NS.split(NS_SEP)[:-1]`` in
-``pregel/main.py``, 1.2.10) — and it is the only channel a node may write to.
-
-The rest is domain: ``rail_observation`` computes ``blocked`` / ``refused`` / ``declined`` /
-``hit`` / ``miss`` from a node's update, and ``error_type`` records an exception's **class**
-where the native ``tasks`` payload carries ``repr(exc)``, which ADR 0006 §11 keeps off the wire.
+``stream_mode="custom"`` drops node identity (LangGraph 1.2.10 strips the last
+checkpoint-namespace segment), and it is the only channel a node may write, so ``kind``,
+``step`` and ``id`` restore it. ``error_type`` is the exception class: ADR 0006 §11 keeps
+``repr(exc)`` off the wire. :func:`emit` never raises.
 """
 
 from __future__ import annotations
@@ -74,24 +67,21 @@ def emit(
 
 
 def rail_event_id(stage: str, state: Mapping[str, Any]) -> str:
-    """Stable rail row id across resume replay (keyed on ``turn_id``)."""
+    # Keyed on ``turn_id`` so a resume replay updates the same row.
     return f"{stage}:{state.get('turn_id') or 'accept'}"
 
 
 def tool_event_id(stage: str, call_id: str) -> str:
-    """Tool row id keyed on ``tool_call_id``."""
     return f"{stage}:{call_id}"
 
 
 def silenced_by_terminal_state(stage: str, state: Mapping[str, Any]) -> bool:
-    """True when the node will no-op because the turn already ended."""
     if stage in TERMINAL_HANDLERS:
         return False
     return state.get("path_kind") in _TERMINAL_PATH_KINDS
 
 
 def rail_observation(stage: str, update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
-    """``(status, detail)`` for a rail, observed from the update it returned."""
     path_kind = update.get("path_kind")
     if path_kind == "crashed":
         failure = update.get("failure") or {}
@@ -118,7 +108,6 @@ def rail_observation(stage: str, update: Mapping[str, Any]) -> tuple[str, dict[s
 
 
 def _reason(update: Mapping[str, Any]) -> dict[str, Any]:
-    """Refusal/decline reason under both ``terminal_reason`` and ``reason``."""
     reason = update.get("terminal_reason")
     if not reason:
         return {}
@@ -214,7 +203,6 @@ def _connect(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
 
 
 def _assemble(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
-    """``n_chars`` of rendered context (observed from the delivery update)."""
     delivery = update.get("delivery")
     if not isinstance(delivery, Mapping):
         return "ok", {}
@@ -243,7 +231,6 @@ def _narrate(update: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     return "ok", {"source": "narrated", "n_chars": len(str(text))}
 
 
-#: Per-stage detail readers. Absent stage → ``("ok", {})``.
 _DETAIL_BY_STAGE: dict[str, Any] = {
     "accept": _accept,
     "guard": _guard,

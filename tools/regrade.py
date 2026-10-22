@@ -148,10 +148,8 @@ def regrade_rows(
 ) -> tuple[list[dict[str, Any]], Counter]:
     """Every row re-executed and graded twice. ``execute(sql) -> (columns, rows)``.
 
-    A statement fault (``QueryError``, including a statement timeout) is a missing prediction
-    or a missing gold, exactly as the harness grades it. A ``ConnectionError`` is retried once
-    and then raises :class:`RegradeAborted`: grading the rest of a run as missing predictions
-    because the database went away is the defect the connector's own docstring describes.
+    A statement fault is a missing prediction or gold, as the harness grades it.
+    A lost connection retries once, then :class:`RegradeAborted`, so the rest is not graded missing.
     """
     from governed_bi.datasource.errors import ConnectionError as DbConnectionError
     from governed_bi.datasource.errors import QueryError
@@ -244,14 +242,8 @@ def _regrade_report(
 ) -> str:
     """Both EX values and the paired test between them, through ``measure/``.
 
-    Unmeasured rows are outside both rates rather than counted as wrong, and the flips are the
-    McNemar table: ``wrong -> correct`` is ``only_b``, ``correct -> wrong`` is ``only_a``. A
-    regrade is the most tightly paired comparison this repository runs, so the delta is reported
-    with its test.
-
-    ``headline_ex`` and ``mcnemar`` rather than arithmetic here: ``Population`` refuses to count a
-    row whose outcome field is absent, and ``Measured`` renders unmeasured as unmeasured instead of
-    as a number.
+    Unmeasured stays outside both rates. ``wrong -> correct`` is McNemar ``only_b``.
+    ``Population`` refuses a row with no outcome; unmeasured stays unmeasured.
     """
     from governed_bi.eval.report import headline_ex  # noqa: PLC0415
     from governed_bi.measure.population import Population  # noqa: PLC0415

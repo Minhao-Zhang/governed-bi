@@ -1,20 +1,4 @@
-"""``_evict``'s fallback must refuse rather than block, because a hang is unmeasurable.
-
-``eval/harness._evict`` prefers ``adelete_thread`` and swallows every failure, which is right for a
-saver that *fails*. The sync fallback is different in kind. ``AsyncSqliteSaver.delete_thread`` is a
-bridge — ``run_coroutine_threadsafe(self.adelete_thread(...), self.loop).result()`` — and this
-harness's loop is not running between calls, so the call never resolves **and never raises**
-(probed at ``langgraph-checkpoint-sqlite`` 3.1.1: still blocked after 5 s). ``except Exception``
-cannot catch that, so if a future release renames or drops ``adelete_thread`` a config blocks on
-question one with no rows, no traceback and no partial output.
-
-The old comment in ``_evict`` said that method raised ``NotImplementedError``. ``aio.py`` contains
-none at all; those live on the *sync* ``SqliteSaver``'s *async* methods
-(``langgraph/checkpoint/sqlite/__init__.py:592``, ``:608``, ``:624``).
-
-Every check here runs ``_evict`` on a **daemon thread with a join timeout**, so a regression that
-reintroduces the block fails this file instead of hanging the suite.
-"""
+"""Sync delete on a loop-bound saver blocks and does not raise, so the fallback refuses by name."""
 
 from __future__ import annotations
 
@@ -52,12 +36,7 @@ def _evict_bounded(compiled: Any, thread_id: str, *, seconds: float = 5.0) -> Ba
 
 
 class _RenamedAwaySaver:
-    """A future ``langgraph-checkpoint`` that dropped ``adelete_thread`` and kept the bridge.
-
-    ``loop`` is the discriminator ``_evict`` uses, and it is the real one: ``AsyncSqliteSaver``
-    sets ``self.loop = asyncio.get_running_loop()`` in ``__init__``, and ``InMemorySaver`` has no
-    such attribute, which is why the in-memory sync path below still works.
-    """
+    """``loop`` is the discriminator. An in-memory saver has none, so its sync delete still runs."""
 
     loop = object()
 
@@ -100,12 +79,7 @@ def test_a_missing_adelete_thread_raises_instead_of_blocking() -> None:
 
 
 def test_a_loop_free_saver_still_gets_the_synchronous_call() -> None:
-    """The guard is about loop-bound savers only.
-
-    ``compile_graph()``'s ``InMemorySaver`` has no pinned loop on the app either, so it reaches
-    the sync branch on purpose (``serve/graph.compile_graph``'s docstring counts on it). Raising
-    there would break the in-memory path to fix the durable one.
-    """
+    """Raising on an in-memory saver would break the path that has no pinned loop."""
     saver = _LoopFreeSaver()
     compiled = SimpleNamespace(checkpointer=saver)
 
@@ -114,12 +88,7 @@ def test_a_loop_free_saver_still_gets_the_synchronous_call() -> None:
 
 
 def test_the_real_durable_saver_is_loop_bound_and_is_refused(tmp_path: Path) -> None:
-    """The discriminator is checked against the installed saver, not only against a double.
-
-    A guard keyed on an attribute the real class does not carry would pass every test above and
-    still hang a run. Opens a durable saver on ``tmp_path`` and strands it — the async path
-    unreachable, exactly as a dropped ``adelete_thread`` would leave it.
-    """
+    """The guard is checked on a real durable saver, not only on a stand-in."""
     from governed_bi.serve.graph import compile_durable
 
     graph = compile_durable(path=tmp_path / "evict-guard.sqlite")

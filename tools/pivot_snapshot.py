@@ -69,7 +69,6 @@ def _layer(result: Mapping[str, Any]) -> str | None:
 
 
 def question_row(question: Mapping[str, Any], out: Mapping[str, Any], assets: Mapping[str, Any]) -> dict[str, Any]:
-    """One question's row, from the state the compiled graph returned."""
     retrieved = out.get("retrieved") or {}
     pulled_in: Mapping[str, str] = retrieved.get("pulled_in") or {}
 
@@ -106,7 +105,6 @@ def question_row(question: Mapping[str, Any], out: Mapping[str, Any], assets: Ma
 
 
 def question_rows(session: Any, questions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Run each question through the whole compiled graph, one thread each, saver emptied after."""
     from governed_bi.serve.graph import compile_graph
 
     graph = compile_graph()
@@ -127,7 +125,6 @@ def question_rows(session: Any, questions: Sequence[Mapping[str, Any]]) -> list[
 
 
 def statement_rows() -> list[dict[str, Any]]:
-    """One row per ``[[case]]`` (through ``check()`` and ``prepare()``) and ``[[guard_case]]``."""
     from governed_bi.govern.adversarial import load_adversarial_suite
     from governed_bi.govern.adversarial_run import run_adversarial_suite, run_guard_suite
 
@@ -165,7 +162,6 @@ def statement_rows() -> list[dict[str, Any]]:
 
 
 def probe_rows() -> list[dict[str, Any]]:
-    """One row per ``[[probe]]``, through the disclosure runner."""
     from governed_bi.eval.disclosure_probes import run_disclosure_probes
 
     return [
@@ -221,7 +217,6 @@ def snapshot(
     *,
     hash_seed: int = 0,
 ) -> list[dict[str, Any]]:
-    """Every row, sorted by (kind, id)."""
     session, embedder = build_session(corpus_dir)
     rows = [
         meta_row(session, embedder, hash_seed=hash_seed, n_questions=len(questions)),

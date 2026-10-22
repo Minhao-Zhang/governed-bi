@@ -1,37 +1,4 @@
-"""The engine must be able to say *why* it withheld, in a vocabulary a check can read.
-
-**The defect this closes.** On the v4 config 19 of 20 refusals end on ``r_table_not_retrieved`` and
-all four clarifications retrieved_tables nothing, so the engine never *decided* to withhold — retrieval
-missed and Layer 6 blocked the fifth statement of five. "Declines on purpose" was a description
-of an outcome, not of a mechanism.
-
-**What is deliberately not here.** No score. ADR 0013 and the register row both say so, and the
-measurements are why: a learned abstainer reached OOF AUC 0.597 with an "unsure" bucket as likely
-to be right as its "correct" one, everything not reading meaning capped at 0.721, and every
-risk-coverage curve reads 0.7144 at the engine's own coverage. This file has a test whose whole
-job is to fail if a confidence field appears, over the module's **source** and not only its
-output, because a behavioural check passes on the day it is written.
-
-**The two halves that make a setting.** Off, the node's entire effect on state is the one
-declared field — asserted on the update itself, not inferred from a passing turn. On, the policy
-withholds the same turn *before the agent is called at all*, which is the property "evaluated
-before the agent spends its five attempts" means.
-
-**Which tests build a state dict, and why so few of them do.** ``ServeState`` has 47 channels and
-the node signature names none of them, so a policy test used to have to assemble a plausible turn
-— nested ``delivery`` and ``channels`` mappings included — to say "nothing failed". The rules take
-:class:`~governed_bi.serve.abstention.AbstentionInputs` now, so a rule test states the one fact
-it is about and the dict appears in exactly two places: the tests of the projection itself, and
-the end-to-end pair that goes through ``build_serve_graph``. That split is asserted, not merely
-observed — ``test_only_the_projection_reads_the_state_dict`` fails if a second reader appears.
-
-**Two files, one scan.** The policy moved to ``serve/abstention.py`` and the LangGraph adapter
-stayed in ``serve/nodes/abstain.py``, which is where the boundary already was. The two source-reading
-tests below therefore had to stop naming a path: a scan that walks one file after the logic moved
-into two has silently narrowed, and would go on passing. :func:`_sources_of_the_policy` derives
-its file set from where the policy's own symbols *live*, so a further split moves the scan with
-it, and :func:`test_the_source_scan_covers_every_file_the_policy_lives_in` fails if the set ever
-collapses back to one file or stops containing the names it claims to have read.
+"""Withholding records a reason a check can read. A retrieval miss is not that decision.
 """
 
 from __future__ import annotations
@@ -89,27 +56,10 @@ def _isolated():
     trust()
 
 
-# ── the vocabulary is closed, and every reader already knows it ───────────────
 
 
 def test_every_reason_is_a_terminal_the_existing_readers_can_attribute() -> None:
-    """A reason outside ``REFUSED_BY_TO_STAGE`` is free text wearing a vocabulary's clothes.
-
-    **``classify_outcome`` is not evidence of that, and the last two lines say so.** It never
-    consults the table: any truthy ``refused_by`` returns ``Outcome.refused``, so the assertion
-    this test used to make about the four reasons held equally for a string in no register — a
-    check that cannot fail for any member of a vocabulary is not a check on the vocabulary. The
-    negative control is asserted here rather than deleted, so the weakness is on the record
-    instead of reading as coverage.
-
-    The falsifiable reader is
-    :func:`~governed_bi.eval.report.refusal_histogram`, and its tests are
-    ``tests/eval/test_the_declared_reasons_have_a_reader.py``. What this function still holds is
-    the *mapping*: every reason is in the table and every one is filed under ``abstain``.
-
-    ``Outcome.refused`` and not ``crashed``: declining on purpose is the product working, and
-    the two must stay apart or every config's crash rate absorbs its abstentions.
-    """
+    """A reason outside ``REFUSED_BY_TO_STAGE`` is free text wearing a vocabulary's clothes."""
     assert ABSTENTION_REASONS, "the policy declares no reasons at all"
     assert ABSTENTION_REASONS <= set(REFUSED_BY_TO_STAGE)
     for reason in sorted(ABSTENTION_REASONS):
@@ -130,13 +80,7 @@ def test_every_reason_is_a_terminal_the_existing_readers_can_attribute() -> None
 
 
 def test_the_policy_and_the_register_declare_the_same_reasons() -> None:
-    """Both directions, because they fail differently.
-
-    A rule with an undeclared reason writes a ``terminal_reason`` nothing can attribute. A
-    declared reason with no rule reads, to anyone grepping the vocabulary, as a decision the
-    engine can take — which is the declared-machinery-with-no-wire shape open-work.md §3.10 is
-    a whole section about.
-    """
+    """Both directions, because they fail differently."""
     assert {rule.reason for rule in ABSTENTION_RULES} == ABSTENTION_REASONS
     assert len({rule.reason for rule in ABSTENTION_RULES}) == len(ABSTENTION_RULES)
     for rule in ABSTENTION_RULES:
@@ -153,17 +97,7 @@ _FORBIDDEN = (
 
 
 def test_the_result_carries_no_trust_signal() -> None:
-    """The line between a ledger and, asserted over the **source**.
-
-    Reporting *why* the engine withheld is the ledger. Scoring *how sure it is* is —
-    ADR 0013's word, and the measurements behind
-    it are in open-work.md §3.11. A behavioural test that no result carries a score passes for
-    every input it happens to try; this one fails when someone adds the field.
-
-    ``question_terms_in_corpus`` is in the evidence and is *not* a violation: nothing reads it,
-    no rule thresholds it, and it is there so a person can see what the question asked for that
-    the corpus does not have. The test below pins that it stays evidence.
-    """
+    """The line between a ledger and, asserted over the **source**."""
     found = sorted(word for word in _FORBIDDEN if word in _vocabulary_of_the_policy())
     assert not found, (
         f"the abstention policy grew a trust signal: {found}. ADR 0007 forbids it on the answer "
@@ -178,13 +112,7 @@ def test_the_result_carries_no_trust_signal() -> None:
 
 #: Every piece the policy and its adapter are made of, as objects — the *code*, not a list of
 #: paths. :func:`_sources_of_the_policy` asks each one where it lives, which is what makes the
-#: source scans follow a split instead of aiming at the file the logic used to be in.
 #:
-#: Public symbols and the rule predicates, because both halves declare an ``__all__`` and a rule
-#: is a lambda that can be moved on its own. The residual gap is and small: a *private*
-#: helper moved to a third module, with no public symbol going with it, would leave the scan
-#: behind. The floor in :func:`test_the_source_scan_covers_every_file_the_policy_lives_in` is
-#: what catches the likely version of that — a file set that shrank.
 _THE_POLICY: tuple[Any, ...] = (
     AbstentionInputs,
     AbstentionInputs.from_state,
@@ -199,18 +127,7 @@ _THE_POLICY: tuple[Any, ...] = (
 
 
 def _sources_of_the_policy() -> tuple[Path, ...]:
-    """Every file the policy's own code lives in, derived from the code.
-
-    Two files today — ``serve/abstention.py`` holds the decision and ``serve/nodes/abstain.py``
-    the LangGraph adapter — and this function does not know that. It asks
-    :mod:`inspect` where each object in :data:`_THE_POLICY` was defined, so the day the rules
-    move again the forbidden-word scan moves with them. A hardcoded path would have gone on
-    passing over the half that stayed behind, which is the failure this whole file exists to
-    make impossible for a *result field* and would have been embarrassing to reintroduce for
-    the scan itself.
-
-    Sorted, so a diff of what was scanned is stable.
-    """
+    """Every file the policy's own code lives in, derived from the code."""
     import inspect
 
     files = {Path(inspect.getsourcefile(obj) or "").resolve() for obj in _THE_POLICY}
@@ -218,15 +135,7 @@ def _sources_of_the_policy() -> tuple[Path, ...]:
 
 
 def _trees_of_the_policy() -> tuple[tuple[Path, Any], ...]:
-    """One parsed module per file. Two tests read the source rather than the behaviour — a
-    forbidden field and a second projection are both things a behavioural check passes on the
-    day it is written — and they share this file set, so a moved definition changes both scans
-    or neither.
-
-    Per file and never over a concatenation: two modules each opening with a docstring and
-    ``from __future__ import annotations`` do not parse as one module at all, so joining the
-    text would trade a scan for a ``SyntaxError``.
-    """
+    """One parsed module per file."""
     import ast
 
     return tuple(
@@ -236,18 +145,7 @@ def _trees_of_the_policy() -> tuple[tuple[Path, Any], ...]:
 
 
 def _vocabulary_of_the_policy() -> str:
-    """Every name and string literal the policy's files *use*, with prose excluded.
-
-    An AST walk rather than a grep over the files, because the modules' own docstrings argue at
-    length about why there is no confidence field, and a grep would fail on the explanation of
-    the rule it is enforcing. Bare string statements — docstrings, at module, class and function
-    level — are the only thing dropped; a string used as a dict key, an argument or a value is
-    code and is kept, because ``{"confidence": ...}`` is exactly the shape being forbidden.
-
-    One tree per file — see :func:`_trees_of_the_policy` for why a concatenation is not an
-    option — and the union of their vocabularies, because a forbidden name is forbidden wherever
-    the decision keeps it.
-    """
+    """Every name and string literal the policy's files *use*, with prose excluded."""
     import ast
 
     words: list[str] = []
@@ -275,29 +173,7 @@ def _vocabulary_of_the_policy() -> str:
 
 
 def test_the_source_scan_covers_every_file_the_policy_lives_in() -> None:
-    """The split's one dangerous consequence, closed.
-
-    ``serve/nodes/abstain.py`` was 470 lines against ADR 0005 §6's soft cap of 400, and the
-    split that pays that back separates the decision from the adapter. The risk it creates is
-    not behavioural: it is that :func:`test_the_result_carries_no_trust_signal` goes on walking
-    one file while half the logic sits in another, and passes for a ``confidence`` field it
-    can no longer see.
-
-    So four properties, all of them about the *scan* rather than the policy:
-
-    * both halves are in it **by name** — the file :func:`decide` lives in and the file
-      :func:`~governed_bi.serve.nodes.abstain.abstain_node` lives in. This is the assertion that
-      fails if :data:`_THE_POLICY` is ever pruned down to one module's symbols;
-    * more than one file, which is a tripwire on today's structure and not a law: if the two
-      halves are deliberately merged back into one module, this line is the one to delete, and
-      having to delete it is the point;
-    * every file is real source under ``src/governed_bi/serve/``, so a stale ``.pyc`` or a
-      test-local shim cannot stand in for it;
-    * every name both halves export appears in the vocabulary the scan built. That is the
-      anti-vacuity floor — the same shape as ``MIN_SOURCE_FILES`` in
-      ``tests/api/test_http_contract_answer_and_stream.py`` — and it is what fails if
-      :func:`_sources_of_the_policy` ever returns a file set that does not contain the code.
-    """
+    """The split's one dangerous consequence, closed."""
     import inspect
 
     from governed_bi.serve import abstention
@@ -326,17 +202,7 @@ def test_the_source_scan_covers_every_file_the_policy_lives_in() -> None:
 
 
 def test_no_rule_reads_a_threshold() -> None:
-    """``lexical_coverage`` is evidence and must not become a check.
-
-    ``the retired threshold`` ships ``UNSET`` rather than guessed, on the argument that "an uncalibrated
-    refusal check is worse than none" — a benchmark whose questions are answerable by
-    construction cannot calibrate one. A coverage threshold here would be that same
-    uncalibrated check under a different name, so the rule is: the evidence may carry the
-    number, and no rule may branch on it.
-
-    Driven, not read: two states differing **only** in ``lexical_coverage``, one at the floor,
-    must reach the same result.
-    """
+    """``lexical_coverage`` is evidence and must not become a check."""
     floor = replace(GOOD, question_terms_in_corpus=0.0)
     ceiling = replace(GOOD, question_terms_in_corpus=1.0)
     assert decide(floor)["outcome"] == decide(ceiling)["outcome"] == "answer"
@@ -345,7 +211,6 @@ def test_no_rule_reads_a_threshold() -> None:
     assert abstention_evidence(ceiling)["question_terms_in_corpus"] == 1.0
 
 
-# ── each rule fires on its own evidence ───────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -358,17 +223,7 @@ def test_no_rule_reads_a_threshold() -> None:
     ],
 )
 def test_each_rule_fires_on_its_own_evidence(reason: str, inputs: AbstentionInputs) -> None:
-    """One case per rule, differing from a clean one in exactly the fact the rule reads.
-
-    ``replace`` and one field, which is the shape of a predicate over named facts. It used to be
-    a nested state dict per case — ``{"channels": {"channel_term": {"channels": {...}}}}`` to say one
-    channel errored — and the *state* those built was never the thing under test: how a channel
-    map becomes ``failed_channels`` is the projection's, and is asserted once, below.
-
-    ``rules_evaluated`` stops at the rule that fired, and that is asserted rather than
-    incidental: listing the rules after it would claim a check the policy never performed,
-    which is the same class of untruth as a check that leaves no trace.
-    """
+    """One case per rule, differing from a clean one in exactly the fact the rule reads."""
     result = decide(inputs)
     assert result["outcome"] == "withhold", result
     assert result["reason"] == reason, result
@@ -378,13 +233,7 @@ def test_each_rule_fires_on_its_own_evidence(reason: str, inputs: AbstentionInpu
 
 
 def test_a_clean_turn_records_that_the_policy_let_it_through() -> None:
-    """An ``answer`` result is a record, not an absence.
-
-    Every rule appears in ``rules_evaluated``, so "the policy considered this turn" is a fact in
-    the artifact. A check that leaves a trace only when it fires cannot afterwards be told from
-    one that was never wired up — ``negative``'s argument, and the reason it writes
-    ``outcome: disabled`` every turn.
-    """
+    """An ``answer`` result is a record, not an absence."""
     result = decide(GOOD)
     assert result["outcome"] == "answer"
     assert result["reason"] is None
@@ -392,33 +241,16 @@ def test_a_clean_turn_records_that_the_policy_let_it_through() -> None:
 
 
 def test_the_result_is_a_pure_function_of_its_inputs() -> None:
-    """So a reader can recompute it from the row instead of trusting it.
-
-    That is the property a score does not have, and it is what "in terms a person can check"
-    means. Nothing here reads a model, a clock, the environment or the network — and, since the
-    policy is handed :class:`AbstentionInputs` rather than the graph's state, "a pure function
-    of *what*" is now answerable by reading the signature. Two equal inputs, two equal results.
-    """
+    """So a reader can recompute it from the row instead of trusting it."""
     inputs = replace(GOOD, retrieved_tables=())
     assert decide(inputs) == decide(replace(inputs))
     assert decide(inputs)["evidence"] == abstention_evidence(inputs)
 
 
-# ── the projection: the one place a state dict is read ────────────────────────
 
 
 def test_the_projection_names_every_channel_the_policy_reads() -> None:
-    """The node's read set, written down — the thing ``(state, config) -> dict`` does not say.
-
-    Asserted as **whole-object equality**, so a ninth field cannot be added without this test
-    naming it. Six channels arrive here (``retrieved_tables``, ``delivery`` twice over, ``channels``,
-    ``retrieved``, ``schemas``, ``settings_resolved``); the two the adapter keeps for itself,
-    ``path_kind`` and ``turn_id``, are asserted where the adapter is.
-
-    The empty case is the second half: an absent channel projects to the field's default, so
-    "nothing recorded" and "recorded as empty" are one value here on purpose — every one of these
-    fields is a count or a collection, and the policy's question of it is "is there any".
-    """
+    """The node's read set, written down — the thing ``(state, config) -> dict`` does not say."""
     state = {
         "retrieved_tables": ["sales.orders", "sales.customers"],
         "delivery": {
@@ -444,17 +276,7 @@ def test_the_projection_names_every_channel_the_policy_reads() -> None:
 
 
 def test_an_unconfigured_channel_is_not_a_failed_one() -> None:
-    """The laptop case, and the reason this rule reads ``failed`` and not ``is_degraded``.
-
-    A deployment with no embedder reports ``not_configured`` on every semantic channel by
-    design. ``registry/channels.is_degraded`` counts that as degradation — correctly, for a
-    *health* check — and a policy built on it would withhold every turn on every machine without
-    an embedding key, which is most of them.
-
-    A test of the **projection**, and it always was: the distinction lives in how a channel map
-    becomes ``failed_channels``, so it is asserted on the field and then once more on the result
-    that reads it.
-    """
+    """The laptop case, and the reason this rule reads ``failed`` and not ``is_degraded``."""
     unconfigured = {
         "retrieved_tables": ["sales.orders"],
         "delivery": {"context_block": "## Context"},
@@ -466,23 +288,7 @@ def test_an_unconfigured_channel_is_not_a_failed_one() -> None:
 
 
 def test_only_the_projection_reads_the_state_dict() -> None:
-    """One projection, structurally — the property the whole split rests on.
-
-    If two functions both know how to pull ``retrieved_tables`` out of a state dict then the read set is
-    not written down anywhere after all, and the second reader is free to disagree with the
-    first. That is not hypothetical here: ``measure/checks.py`` read ``Outcome.clarification`` as
-    a evidence of "reached finish" and silently dropped every row that carried the corpus hash out
-    of a check's denominator.
-
-    So: the functions that take a ``state`` at all are the projection's parts plus the adapter,
-    and the private readers are called from ``from_state`` and nowhere else — including not from
-    ``abstain_node``, which is the regression that would look most reasonable while re-opening
-    exactly this. The rules are checked from the other side: each takes ``inputs``.
-
-    Across **every** file the policy lives in, since the split. Walking only the module the
-    readers happen to sit in would let a second reader appear in the other one, which is the
-    same defect with a file boundary in front of it.
-    """
+    """One projection, structurally — the property the whole split rests on."""
     import ast
 
     functions: dict[str, Any] = {}
@@ -523,22 +329,10 @@ def test_only_the_projection_reads_the_state_dict() -> None:
         )
 
 
-# ── off by default, and the node's whole effect is the declared field ─────────
 
 
 def test_the_disabled_node_writes_one_key_and_nothing_else() -> None:
-    """**The default-path proof, taken at the source rather than inferred from a green turn.**
-
-    The node is registered with ``stream=False``, so it emits no timeline row. Its update, with
-    the setting off, is exactly one key — the declared record field. No ``path_kind``, no
-    ``terminal_reason``, no channel any other node reads. Together those are the whole of the
-    claim that inserting it between ``assemble`` and ``agent_core`` changed nothing: there is no
-    third way for a node to affect a turn.
-
-    Asserting the *shape of the update* rather than the equality of two records is deliberate.
-    An equality test needs a "before", and there is no before once the node is in the graph;
-    this states the property directly and fails on any new key.
-    """
+    """The node is registered with ``stream=False``, so it emits no timeline row."""
     import asyncio
 
     assert decide(AbstentionInputs.from_state(WITHHELD_STATE))["outcome"] == "withhold", (
@@ -566,12 +360,7 @@ async def _call(node: Any, state: dict) -> dict:
 
 
 def test_the_setting_is_what_turns_it_on() -> None:
-    """Read through ``bool_setting``, so the precedence is state → ``settings_resolved`` → register.
-
-    The register default is ``False`` and the string ``"false"`` must not read as ``True`` —
-    ``bool_setting`` owns that and this is the assertion that the policy goes through it rather
-    than testing the value itself.
-    """
+    """Read through ``bool_setting``, so the precedence is state → ``settings_resolved`` → register."""
     import asyncio
 
     from governed_bi.registry.settings import setting_default, setting_names
@@ -595,7 +384,6 @@ def test_the_setting_is_what_turns_it_on() -> None:
     assert set(asyncio.run(_call(abstain_node, off))) == {"abstention"}
 
 
-# ── end to end, through the served graph ──────────────────────────────────────
 
 
 class _EchoConnector:
@@ -620,12 +408,7 @@ def _model() -> ScriptedChatModel:
 
 
 def _session(*, enabled: bool, model: Any) -> Any:
-    """A corpus with a schema and no table, so retrieval licenses nothing.
-
-    Not contrived: open-work.md §1.3 records four turns of the v4 config that retrieved_tables nothing at
-    all, and today every one of them reaches the agent, which writes SQL against a relation
-    Layer 6 will refuse.
-    """
+    """A corpus with a schema and no table, so retrieval licenses nothing."""
     assets = [
         SchemaAsset(id="sales", name="sales", summary="sales orders and customers"),
         TableAsset(
@@ -669,24 +452,7 @@ def _serve(*, enabled: bool, thread: str) -> tuple[dict[str, Any], ScriptedChatM
 
 
 def test_a_turn_that_retrieved_tables_nothing_reaches_the_agent_today_and_is_withheld_by_the_policy() -> None:
-    """The paired turn, through ``build_serve_graph`` — the topology ``langgraph.json`` runs.
-
-    Off, the turn goes to the agent and comes back with prose and no statement, which is exactly
-    what v4 does with its four not_retrieved turns and is what keeps v4 the control. On, the policy
-    withholds it, and the thing that makes this a *decision* rather than a report is the last
-    assertion: **the agent was never called.** Deciding after five refused ``run_query`` attempts
-    is a description of what happened; deciding before the first one is a policy.
-
-    **Renamed on 2026-08-18, from "is answered today".** ``_model``'s docstring already said it
-    "answers from the context without a statement", and the control turn recorded
-    ``outcome: answered`` anyway — ``finish`` hardcoded ``has_sql=True`` for a finished agent loop
-    with an empty ledger. It records ``Outcome.no_sql`` now, which sharpens ADR 0013's own case
-    rather than weakening it: without the policy the engine returns prose over a corpus that
-    retrieved_tables nothing, and the outcome no longer calls that an answer.
-
-    The reason reaches ``terminal_reason``, which is the field the refusal histogram and
-    ``eval/report.py`` already read — not a second field a new reader would have to know about.
-    """
+    """The paired turn, through ``build_serve_graph`` — the topology ``langgraph.json`` runs."""
     committed, committed_model = _serve(enabled=False, thread="t-commit")
     withheld, withheld_model = _serve(enabled=True, thread="t-withhold")
 
@@ -719,7 +485,6 @@ def test_a_turn_that_retrieved_tables_nothing_reaches_the_agent_today_and_is_wit
     )
     assert not (off_record["execution"] or {}).get("attempts"), off_record["execution"]
 
-    # This pair used to assert that both turns reached an injected turn log and that the withheld
     # one was logged `refused`. The log is gone and `turns` is not in `ServeOutput`, so the
     # observable is the answer the same node wrote.
     assert withheld["answer"]["outcome"] == "refused", withheld["answer"]
@@ -727,16 +492,7 @@ def test_a_turn_that_retrieved_tables_nothing_reaches_the_agent_today_and_is_wit
 
 
 def test_a_disabled_policy_puts_no_row_on_the_timeline(monkeypatch) -> None:
-    """The second half of the default-path claim, measured on the wire.
-
-    The node's *state* update is one key (above); this is its *event* output. Registered with
-    ``stream=False``, so ``wrap_node`` emits neither the start nor the resolve row, and the node
-    emits its own only when it judged something. Both halves are needed: a disabled node that
-    still put two rows on every timeline would have changed the event stream of every config
-    measured so far, which is the exact reason ``reflect`` is registered the same way.
-
-    Patches the writer rather than ``emit``, so the payload construction under test is real.
-    """
+    """The second half of the default-path claim, measured on the wire."""
     from governed_bi.serve import events
 
     seen: list[dict[str, Any]] = []
@@ -762,13 +518,7 @@ def test_a_disabled_policy_puts_no_row_on_the_timeline(monkeypatch) -> None:
 
 
 def test_the_reason_reaches_the_artifact_row() -> None:
-    """A reason no check can read is the declared-machinery defect this repository keeps finding.
-
-    Two hops, and both had to be built: ``finish`` projects the result into the turn record, and
-    ``eval/harness.project_turn`` carries it onto the artifact row. Without the second, a config
-    run with ``--abstain`` would decide, record the decision on a turn record nobody keeps, and
-    produce an artifact in which the abstention is a bare ``terminal_reason`` with no evidence.
-    """
+    """A reason no check can read is the declared-machinery defect this repository keeps finding."""
     from governed_bi.eval.harness import project_turn
 
     withheld, _model = _serve(enabled=True, thread="t-artifact")
@@ -781,14 +531,7 @@ def test_the_reason_reaches_the_artifact_row() -> None:
 
 
 def test_the_driver_can_run_the_side_by_side_config() -> None:
-    """The setting's wire. A setting that affects results no driver can set is a setting under test nobody can run.
-
-    Source-level, because running the driver needs a paid model and a live database. What is
-    asserted is the three things that make the config real and distinguishable: the flag exists,
-    it sets the setting, and it tags the artifact — the last because ``--resume`` compares corpus
-    and prompt hashes and not this one, so an untagged abstaining run would resume into a
-    committing artifact and the two would be reported as one.
-    """
+    """The setting's wire."""
     source = (
         Path(__file__).resolve().parents[2] / "tools" / "run_datalake_eval.py"
     ).read_text(encoding="utf-8")

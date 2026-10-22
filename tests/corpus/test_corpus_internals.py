@@ -1,17 +1,6 @@
-"""Parcel D's internals: the guards the acceptance contract does not reach.
+"""Guards the store contract does not reach.
 
-``tests/corpus/test_store_contract.py`` is the criterion and is not edited. This
-file covers what it leaves untested:
-
-* **Assert on the effect, not on the presence of a constant.** The loader's ``on:``
-  handling is tested by loading a join and reading back its ON clause, not by looking
-  for the resolver tweak in the source.
-* **Never assert a module against its own constant.** Nothing here compares a value
-  to the table it came from.
-* **Test the negative case.** Every import-time guard is driven with a broken
-  register so it fires; a guard that only leaves a trace when it fires
-  cannot afterwards be told from one that was never wired up. Each negative has its
-  positive control beside it, or it would also pass for a guard that raises always.
+Assert the effect, not the presence of a constant, and pair each negative with a control.
 """
 
 from __future__ import annotations
@@ -49,12 +38,7 @@ JOIN_YAML = (
 
 @pytest.mark.parametrize("bad", ["beer_factory\n", "../evil", "beer/factory", "..", ""])
 def test_a_schema_name_that_could_name_another_directory_is_refused(bad: str) -> None:
-    """``beer_factory\\n`` is the case that matters and the reason the pattern is
-    ``\\A...\\Z``: Python's ``$`` also matches just before a trailing newline, so this
-    string passes a ``^[A-Za-z0-9_]+$`` validator that names a directory. v1's write
-    path derived the directory from ``asset.schema`` while the only validator in the
-    area guarded the asset id.
-    """
+    """A trailing newline must fail. ``$`` matches before it, so the pattern is anchored at both ends."""
     from governed_bi.corpus.identity import UnsafeName, validate_path_component
 
     with pytest.raises(UnsafeName):
@@ -71,19 +55,7 @@ def test_a_plain_identifier_is_accepted() -> None:
     "hostile", ["cust/omers", "customers\n", "..", "../../etc/passwd", "cust omers"]
 )
 def test_a_path_unsafe_physical_name_is_carried_but_cannot_name_a_path(hostile: str) -> None:
-    """ADR 0008 D1. **The security property moved from rejection to construction.**
-
-    This used to assert that such a ``physical_name`` was *refused* — same character class
-    as a path component, "refuse, never edit". That rule is what made
-    ``airline."Air Carriers"`` unrepresentable: the charset rejected it, ``table_id``
-    derived the id *from* it, and a real four-column table had no asset at all while 24
-    few-shots cited it.
-
-    The name is now carried verbatim and the **slug** is what must be path-safe. That is
-    strictly stronger than the old rule, because it holds for every string rather than for
-    the ones somebody remembered to list — ``..`` included, which the slug turns into an
-    ordinary component. So the assertion is on the derived id, not on a refusal.
-    """
+    """The engine name is kept. The slug is what must be a safe path component. See ADR 0008."""
     from governed_bi.corpus.identity import (
         slug,
         table_id,
@@ -95,13 +67,11 @@ def test_a_path_unsafe_physical_name_is_carried_but_cannot_name_a_path(hostile: 
     assert validate_path_component(component, what="slug") == component
     assert ".." not in component and "/" not in component and "\\" not in component
     assert validate_asset_id(table_id("beer_factory", hostile))
-    # Injective where sanitising alone is not: `a b` and `a_b` are two different tables,
-    # and a slug that collapsed them would license one and query the other.
+    # ``a b`` and ``a_b`` are different tables. A slug that collapsed them would name one and query the other.
     assert slug("a b") != slug("a_b")
 
 
 def test_an_empty_physical_name_is_still_a_problem() -> None:
-    """The one case that is not a spelling but an absence: there is nothing to slug."""
     from governed_bi.corpus.identity import UnsafeName, slug
     from governed_bi.corpus.schema import TableAsset
     from governed_bi.corpus.validate import problems_with
@@ -134,18 +104,12 @@ def test_physical_name_accepts_a_bare_identifier() -> None:
 
 
 def test_the_library_really_does_resolve_on_as_a_boolean() -> None:
-    """The control, asserted against PyYAML rather than assumed.
-
-    Without it, the test below would pass just as well against a loader that fixed
-    nothing, and this whole trap would be untested. ``JoinAsset.on`` is the field at
-    stake and ADR 0005 §1.2 makes the ON clause part of a join's identity.
-    """
+    """Control against PyYAML itself, so the loader test cannot pass on an unfixed parser."""
     assert yaml.safe_load("on: kunden.a = geo.b") == {True: "kunden.a = geo.b"}
 
 
 def test_a_join_keeps_its_on_clause_through_the_loader(tmp_path) -> None:
-    """Under YAML 1.1 the key arrives as ``True``, the field looks absent, and the ON
-    clause vanishes with no error anywhere."""
+    """YAML 1.1 would turn the key ``on`` into ``True`` and drop the clause."""
     from governed_bi.corpus import store
 
     (tmp_path / "j.yaml").write_text(JOIN_YAML, encoding="utf-8")
@@ -158,9 +122,6 @@ def test_a_join_keeps_its_on_clause_through_the_loader(tmp_path) -> None:
 
 
 def test_inline_columns_become_their_own_assets_with_derived_ids(tmp_path) -> None:
-    """v1 concatenated a table and all its columns into one index document, so
-    columns were never ranked at all. One entry per asset is what fixes that, and it
-    requires the loader to expand the inline form."""
     from governed_bi.corpus import store
 
     (tmp_path / "t.yaml").write_text(
@@ -180,17 +141,12 @@ def test_inline_columns_become_their_own_assets_with_derived_ids(tmp_path) -> No
     }
     table = by_id["beer_factory.customers"]
     assert set(table.columns) == {"beer_factory.customers.email", "beer_factory.customers.id"}
-    # The table's id, not its bare physical name. ADR 0008 D4: a reference field names
-    # an asset exactly, so `parent_table` is resolvable without being handed the
-    # column's own schema as a scope -- which is how the bare spelling survived.
+    # The table id, not the physical name: a reference names one asset (ADR 0008).
     assert by_id["beer_factory.customers.email"].parent_table == "beer_factory.customers"
 
 
 def test_an_inline_column_that_states_a_conflicting_parent_is_a_problem(tmp_path) -> None:
-    """Not an override. A column's identity comes from its position, and a file
-    carrying it twice has two answers to one fact -- which is how the retrieval
-    index, ``resolve``'s closure and the per-type budget end up keyed on different
-    strings for one column with nothing raising."""
+    """A stated parent is not an override. Identity comes from where the column is stored."""
     from governed_bi.corpus import store
 
     (tmp_path / "t.yaml").write_text(
@@ -209,10 +165,6 @@ def test_an_inline_column_that_states_a_conflicting_parent_is_a_problem(tmp_path
 
 
 def test_a_subtree_outside_the_manifest_is_not_loaded(tmp_path) -> None:
-    """v1's shared corpus root was a cross-run contamination channel: a schema dropped
-    from one attempt left its YAML behind and competed as a router candidate for every
-    other schema's questions, silently changing the routing problem's difficulty
-    between two runs of the same set."""
     from governed_bi.corpus import store
 
     for schema in ("beer_factory", "leftover"):
@@ -230,8 +182,6 @@ def test_a_subtree_outside_the_manifest_is_not_loaded(tmp_path) -> None:
 
 
 def test_a_manifest_schema_with_no_directory_is_reported(tmp_path) -> None:
-    """The other half. Zero assets for a named schema must not read as "that schema is
-    small"."""
     from governed_bi.corpus import store
 
     (tmp_path / "beer_factory").mkdir()
@@ -243,7 +193,6 @@ def test_a_manifest_schema_with_no_directory_is_reported(tmp_path) -> None:
 
 
 def test_a_near_miss_suffix_is_reported_rather_than_skipped(tmp_path) -> None:
-    """A file the loader ignores in silence is an asset the corpus lost."""
     from governed_bi.corpus import store
 
     (tmp_path / "t.yml").write_text(TABLE_YAML, encoding="utf-8")
@@ -295,10 +244,7 @@ def test_each_rule_fires(overrides: dict, expected: str) -> None:
 
 
 def test_a_body_is_never_a_reason() -> None:
-    """I2, as an explicit non-rule. The seed produces assets with no body at all, and
-    requiring one would falsify ADR 0005's "measurable with no model" claim -- which
-    is the reason the seed exists. The other direction is equally:
-    ``body`` is unbounded, so length must not be a reason either."""
+    """Body length is not a rule. The seed emits assets with no body."""
     from governed_bi.corpus.validate import problems_with
 
     assert problems_with(_table(body=None)) == []
@@ -306,9 +252,6 @@ def test_a_body_is_never_a_reason() -> None:
 
 
 def test_every_reason_names_the_asset() -> None:
-    """A bare reason string still has to be actionable: the seed reports these
-    without a file path, and a problem a reader cannot act on is a silent skip with
-    extra steps."""
     from governed_bi.corpus.validate import problems_with
 
     reasons = problems_with(_table(summary=""))
@@ -316,9 +259,7 @@ def test_every_reason_names_the_asset() -> None:
 
 
 def test_the_tag_rule_predicate_guard_fires_on_a_rule_with_no_predicate(monkeypatch) -> None:
-    """A tag rule with no predicate is a check that never runs -- the
-    ``budgets.get(cls, 0)`` shape, where the rule exists, something iterates the enum,
-    and the missing row is silent."""
+    """A missing predicate would be a check that never runs."""
     from governed_bi.corpus import validate
     from governed_bi.registry.assets import TagRule
 
@@ -328,9 +269,7 @@ def test_the_tag_rule_predicate_guard_fires_on_a_rule_with_no_predicate(monkeypa
 
 
 def test_the_common_field_guard_fires_on_a_class_that_forgets_governance(monkeypatch) -> None:
-    """The six common fields are written out eight times because dataclass
-    inheritance orders them wrongly. Repetition nothing checks is how two v1 tables
-    disagreed for a year."""
+    """Common fields are copied per class because a base class would order them wrongly."""
     from governed_bi.corpus import schema as module
     from governed_bi.registry.assets import AssetType
 
@@ -363,8 +302,6 @@ def test_write_then_load_returns_an_equal_asset(tmp_path) -> None:
 
 
 def test_write_refuses_an_invalid_asset(tmp_path) -> None:
-    """Validation covers *every* writer, not only the loader -- a tool call that built
-    an over-length summary must not be able to put it in the index."""
     from governed_bi.corpus import store
 
     with pytest.raises(ValueError, match="cap"):
@@ -380,10 +317,7 @@ def test_write_refuses_a_namespace_that_escapes_the_root(tmp_path) -> None:
 
 
 def test_write_refuses_to_guess_a_namespace_for_a_type_that_has_none(tmp_path) -> None:
-    """A join's namespace is its left endpoint's, a metric's its base table's -- facts
-    held by another asset. ADR 0005 does not say where such a file lives, so this
-    refuses rather than inventing a default that then has to be reconciled with the
-    tag rule."""
+    """No default directory: the namespace is a fact on another asset."""
     from governed_bi.corpus import store
     from governed_bi.corpus.identity import SHARED_NAMESPACE
     from governed_bi.corpus.parse import from_mapping
@@ -395,9 +329,7 @@ def test_write_refuses_to_guess_a_namespace_for_a_type_that_has_none(tmp_path) -
 
 
 def test_a_metric_is_not_written_into_a_directory_named_after_the_metric(tmp_path) -> None:
-    """``MetricAsset.name`` is a business name. Deriving the directory from "the first
-    attribute that looks like a name" would put ``revenue`` in a schema directory
-    called ``revenue`` -- a plausible-looking wrong answer."""
+    """``name`` is a business name, so it is not the directory."""
     from governed_bi.corpus import store
     from governed_bi.corpus.schema import MetricAsset
 
@@ -416,9 +348,7 @@ def test_a_metric_is_not_written_into_a_directory_named_after_the_metric(tmp_pat
 
 
 def test_the_hash_ignores_a_schema_outside_the_manifest(tmp_path) -> None:
-    """An config's setting under test identity must cover exactly the schemas that config served.
-    A leftover subtree moving the digest would make two runs over the same setting under test
-    look differently treated, which passes the delivery check for the wrong reason."""
+    """A leftover schema must not move a digest limited to the schemas that were served."""
     from governed_bi.corpus.hash import corpus_content_hash
 
     for schema in ("beer_factory", "leftover"):
@@ -434,9 +364,6 @@ def test_the_hash_ignores_a_schema_outside_the_manifest(tmp_path) -> None:
 
 
 def test_a_missing_corpus_has_no_digest_rather_than_a_sentinel_one(tmp_path) -> None:
-    """v1's ``corpus_content_hash == "unknown"`` compared equal to itself, so two runs
-    with no recorded setting under test passed the shared-settings check. Absence is reported out of band
-    precisely because a value can be compared."""
     from governed_bi.corpus.hash import corpus_content_hash
 
     with pytest.raises(FileNotFoundError):
@@ -444,13 +371,7 @@ def test_a_missing_corpus_has_no_digest_rather_than_a_sentinel_one(tmp_path) -> 
 
 
 def test_the_hash_ignores_the_version_controls_own_bookkeeping(tmp_path) -> None:
-    """A corpus in a git repository must not change identity when the repository does.
-
-    Found by moving the corpus into ``../BIRD-corpus``: with ``schemas=None`` the tree is the
-    manifest and ``rglob`` had no exclusions, so the digest was reading 29 files inside ``.git``.
-    A setting under test identity that moves on every commit, fetch and ``git gc`` is not an identity, and
-    it would have defeated the point of putting the corpus under version control.
-    """
+    """``.git`` must not move the digest, or a commit would change the corpus identity."""
     from governed_bi.corpus.hash import corpus_content_hash
 
     (tmp_path / "beer_factory").mkdir()
@@ -464,7 +385,7 @@ def test_the_hash_ignores_the_version_controls_own_bookkeeping(tmp_path) -> None
     (tmp_path / ".git" / "index").write_bytes(b"\x00binary")
     assert corpus_content_hash(tmp_path) == before, "committing must not restate the corpus"
 
-    # …and the corpus's own content still moves it, or the exclusion is too wide.
+    # Corpus bytes still move the digest, so the exclusion is not the whole tree.
     (tmp_path / "beer_factory" / "t.yaml").write_text(
         TABLE_YAML + "\nnote: edited\n", encoding="utf-8"
     )
@@ -472,12 +393,7 @@ def test_the_hash_ignores_the_version_controls_own_bookkeeping(tmp_path) -> None
 
 
 def test_a_corpus_repositorys_readme_is_still_corpus_content(tmp_path) -> None:
-    """The narrow exclusion, stated as a test: only tooling is dropped, not prose.
-
-    ``corpus_content_hash`` documents that everything in the selected subtrees counts. Dropping a
-    root ``README.md`` would be deciding that a corpus's own description is not part of it — a
-    judgement for a caller, which already has ``schemas`` to say "the assets alone".
-    """
+    """Prose at the root still counts. Only tool directories are dropped."""
     from governed_bi.corpus.hash import corpus_content_hash
 
     (tmp_path / "beer_factory").mkdir()

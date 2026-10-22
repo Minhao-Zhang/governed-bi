@@ -1,4 +1,4 @@
-"""AnalystCorpus and phase-boundary restamp."""
+"""The analyst view drops excluded assets and records their column keys."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def test_excluded_assets_leave_the_analyst_view_but_stay_in_the_raw_load() -> No
 
 
 def test_no_tool_writes_authored_corpus_fields() -> None:
-    """The graft tool was the only model-authored write path. Absence is the control now."""
+    """No tool under ``tools/`` may author corpus fields."""
     from pathlib import Path
 
     tools = Path(__file__).resolve().parents[2] / "tools"
@@ -51,7 +51,7 @@ def test_no_tool_writes_authored_corpus_fields() -> None:
 
 
 def test_b10_excluded_column_cannot_be_retrieved_tables_via_allow_set_drift() -> None:
-    """Excluded in the raw corpus, absent from the analyst view: referencing it refuses."""
+    """An excluded column is absent from the view, and a statement that names it fails the column check."""
     from governed_bi.corpus.analyst import for_analyst
     from governed_bi.corpus.schema import ColumnAsset, Governance
     from governed_bi.govern.check import check

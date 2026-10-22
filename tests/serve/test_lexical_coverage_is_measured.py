@@ -38,17 +38,7 @@ def _one_table_index():
 
 
 def test_pass_two_measures_lexical_coverage_from_the_live_index() -> None:
-    """The declared measurement had a dead producer, and the row recorded null on every config.
-
-    ``BM25.coverage`` is the derivation and had **no production caller at all**. Its wrapper,
-    ``lexical_coverage``, had one call site, in ``route_retrieve``'s F1 no-index path, which
-    passes ``index=None`` on purpose — so nothing ever reached the real thing. Pass two, the
-    indexed path, returned ``state.get("lexical_coverage")``: a test hook nothing sets outside
-    tests.
-
-    Two questions over the same index, one whose words the corpus has and one whose words it
-    does not, so a constant cannot satisfy this.
-    """
+    """Two questions over one index, so a constant coverage cannot pass."""
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 
     index, embedder = _one_table_index()

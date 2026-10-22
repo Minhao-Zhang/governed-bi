@@ -1,8 +1,4 @@
-"""Shared serve runtime settings (config + candidate depth + fuse weights).
-
-One home so channel / pass-two / route / assemble do not each redefine the same
-helpers (ADR 0005 §6 one-implementation check).
-"""
+"""One implementation of the serve settings readers (ADR 0005 §6)."""
 
 from __future__ import annotations
 
@@ -40,19 +36,7 @@ DEFAULT_CONTEXT_BUDGET = 80_000
 
 @dataclass(frozen=True, slots=True)
 class ChannelScale:
-    """The three fusion settings **this turn** resolved, carried instead of read at import.
-
-    ``w_lexical``, ``w_semantic`` and ``semantic_scale_ceiling`` were module constants built from
-    ``setting_default`` when ``serve.runtime`` was first imported, so no request could move them
-    (audit I10). That is worse than a missing feature: all three are declared
-    ``a recorded setting``, they enter ``setting_names()`` and ``settings_resolved``, so a run
-    could publish ``w_semantic: 0.9``, move its config hash, and behave exactly like the default —
-    which is the inverse of the defect ``registry/settings.py`` opens by describing.
-
-    A frozen value object rather than three parameters, because the three are read together and a
-    call site that resolved two of them from state and one from a constant would be the same
-    defect in a smaller place.
-    """
+    """Recorded fusion settings. A value that did not move the fuse would be a false record."""
 
     lexical: float
     semantic: float
@@ -60,16 +44,10 @@ class ChannelScale:
 
     @property
     def weights(self) -> Mapping[str, float]:
-        """The pair :func:`~governed_bi.retrieve.fuse.fuse` takes."""
         return {"lexical": self.lexical, "semantic": self.semantic}
 
 
 def channel_scale(state: Mapping[str, Any]) -> ChannelScale:
-    """Resolve the three fusion settings for this turn. **The one reader.**
-
-    Through :func:`float_setting`, so the precedence is the same as every other setting — state, then
-    ``settings_resolved``, then the register — and an ``UNSET`` raises rather than being guessed.
-    """
     return ChannelScale(
         lexical=float_setting(state, "w_lexical"),
         semantic=float_setting(state, "w_semantic"),
@@ -84,30 +62,7 @@ def combine_channels(
     consulted: Collection[str],
     scale: ChannelScale,
 ) -> float | None:
-    """Weighted fuse of **raw** lexical + semantic scores (shared by pass one and pass two).
-
-    ``None`` when neither channel scored this document.
-
-    ``scale`` is required and has no default, deliberately: a default would let a call site keep
-    reading the register while the turn ran on something else, which is the defect I10 names.
-
-    **Takes raw scores and does the scaling itself** (audit I1). Both nodes used to min-max each
-    channel over its own scored population and pass the result in, which made the score relative
-    to the query — see :func:`~governed_bi.retrieve.fuse.scale_to_ceiling` for why that cannot be
-    summed across channels. Doing it here rather than at two call sites is also the structural
-    point: the two passes score different candidate sets, so any normaliser needing a population
-    gave one asset two different scores in one turn, and ``apply_budgets`` then sorts them
-    together in a single global sort.
-
-    The lexical channel is passed through: ``raw/(raw+k)`` is already in ``[0, 1)``, which is the
-    absolute scale the sealed scoring contract prescribes. Only cosine needs a ceiling, because
-    its practical range is a property of the embedder rather than of the score's definition.
-
-    ``consulted`` names the channels that ran for this query, and it is not derivable from the
-    two arguments: ``semantic=None`` means either "the channel did not run for this channel" or
-    "it ran and did not return this document", and :func:`~governed_bi.retrieve.fuse.fuse` must
-    tell those apart or additional evidence lowers the score.
-    """
+    """``None`` if neither channel scored. A per-pass normaliser would score one asset twice."""
     scores: dict[str, float] = {}
     if lexical is not None:
         scores["lexical"] = float(lexical)
@@ -121,17 +76,8 @@ def combine_channels(
 
 
 def lexical_coverage(state: Mapping[str, Any], index: Any) -> float | None:
-    """Share of the question's terms the corpus vocabulary has, or ``None``.
-
-    ``BM25.coverage`` is the measurement; this decides *which text* is measured and honours the
-    ``lexical_coverage`` test hook. The **raw question**, not a channel rewrite: a rewrite is the
-    utility model restating the question *into* the corpus's vocabulary, so measuring it would
-    report the rewriter's success as the corpus's. ``None`` and never ``0.0`` when unavailable
-    — the register declares the field ``Absence.not_measured``.
-    """
-    # Lives here rather than in a node because both `route_retrieve` (the F1 no-index path,
-    # which passes None on purpose) and `pass_two` (the real indexed path) need it, and
-    # `route_retrieve` already imports `pass_two` -- so a node-level home makes it a cycle.
+    """Coverage of the raw question. Scoring the rewrite would report the rewriter as the corpus."""
+    # A home on either node would import-cycle: ``route_retrieve`` imports ``pass_two``.
     hooked = state.get("lexical_coverage")
     if isinstance(hooked, (int, float)) and not isinstance(hooked, bool):
         return float(hooked)
@@ -152,34 +98,9 @@ def vector_for_query(
     fallback: Sequence[float] | None,
     embedder: Any | None,
 ) -> tuple[Sequence[float] | None, ChannelState]:
-    """The vector of the text that was ** searched**, with the channel's own result.
-
-    Shared by both retrieval passes because only one of them had it: pass one embedded each
-    channel's rewritten query, while pass two took the raw question's call-level vector and
-    blended BM25 over the rewrite against cosine over the question — two texts, one score. Pass
-    two is the pass whose output becomes the analyst's context and decides which tables survive
-    the budget.
-
-    **The returned vector is ``query``'s vector or nothing** (audit I7). It used to fall back to
-    ``fallback`` — the *raw question's* vector — whenever the embed raised, so a rate-limited
-    rewrite embed produced a channel that searched BM25 over the rewrite, cosine over the
-    question, blended the two into one ``score``, and recorded ``semantic: ran``. Nothing
-    anywhere said the two channels had searched different text. A degraded channel that reports
-    itself is a measurement; one that substitutes another text's vector is a fabricated one.
-
-    Hence the second element, and hence three states rather than a bare ``None``: ``failed`` is
-    "should have run and did not", ``not_configured`` is "there is nothing to embed, or nothing
-    to embed with". Collapsing them would say a rate limit and an unwired embedder are the same
-    event, which is the distinction ``ChannelState`` exists to carry.
-
-    ``fallback`` is trusted **only when it is provably this query's vector**, i.e. when
-    ``query == question``. With ``question`` unknown there is no such proof, so the query is
-    embedded rather than assumed: that path is the harness's, and it is how ``channel_schema``
-    — the one channel that never rewrites — came to score against ``None`` and report
-    ``semantic: failed`` on every turn of a 1,351-question run.
-    """
+    """The searched text's vector, or nothing. A raw-question fallback would still report ``ran``."""
     if fallback is not None and question is not None and query == question:
-        # No rewrite: `fallback` *is* this text's vector, so the embed is a cache hit.
+        # No rewrite, so ``fallback`` is this text's vector.
         return list(fallback), ChannelState.ran
     if not query or embedder is None:
         return None, ChannelState.not_configured
@@ -189,36 +110,26 @@ def vector_for_query(
         return None, ChannelState.failed
 
 
-#: ``id(asset container) -> (that container, its projection)``. Insertion-ordered and
-#: capped, so a driver that builds a fresh corpus per question cannot grow it without
-#: bound. Deliberately **not** a weak cache: ``dict`` does not support weak references,
-#: which is why the container is held and identity-checked on read.
+#: Capped identity cache. ``dict`` cannot hold a weak reference, so the container is held.
 _STRUCTURE_CACHE: dict[int | None, tuple[Any, "CorpusStructure"]] = {}
 _STRUCTURE_CACHE_MAX = 8
 
 
-#: Run constants no request may name. Empty in-process by default; registered once by
-#: ``api/graph_app.build_serve_graph`` as the graph is compiled -- which is
-#: what ``make_graph`` calls at server start. See :func:`trust`.
+#: Run constants a request cannot name. See :func:`trust` and ADR 0007.
 _TRUSTED: dict[str, Any] = {}
 
 
 def trust(constants: Mapping[str, Any] | None = None) -> None:
-    """Declare run constants a request must not override (policy, corpus, …).
-
-    Call with nothing to clear (tests, multi-session processes).
-    """
+    """Run constants a request must not override. Calling with nothing clears them."""
     _TRUSTED.clear()
     _TRUSTED.update(constants or {})
 
 
 def trusted() -> Mapping[str, Any]:
-    """What :func:`trust` registered, for a caller that needs to check."""
     return dict(_TRUSTED)
 
 
 def configurable(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    """``config["configurable"]`` with :func:`trust`-ed constants forced over it."""
     if not config:
         return dict(_TRUSTED)
     raw = config.get("configurable") if isinstance(config, Mapping) else None
@@ -228,12 +139,7 @@ def configurable(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
 
 
 def prompt_variants(config: Mapping[str, Any] | None) -> dict[str, str]:
-    """``{prompt name -> variant}`` this run selected, empty when it selected none.
-
-    One reader, because a prompt sent at the wrong variant fails **silently**: the turn records
-    the overriding ``prompt_set_hash`` and the model receives the default. Every ``prompt_text``
-    call site in ``serve/`` passes this; ``tests/conformance`` refuses a call site that does not.
-    """
+    """This run's variant map. A second reader can send the default under the override's hash."""
     raw = configurable(config).get("prompt_variants")
     if not isinstance(raw, Mapping):
         return {}
@@ -241,12 +147,7 @@ def prompt_variants(config: Mapping[str, Any] | None) -> dict[str, str]:
 
 
 def model_id(model: Any) -> str | None:
-    """Provider model id, or ``None``. Prefer ``model_name`` over the class label.
-
-    ``model_id`` is last because some clients spell the id only that way. Falling
-    through to ``_llm_type`` records the class, so two models publish one value and
-    the drift check compares them equal. A client that offers both keeps ``model_name``.
-    """
+    """Provider model id, or ``None``. Some clients expose it only as ``model_id``, so that name is last."""
     for attr in ("model_name", "model", "deployment_name", "model_id"):
         value = getattr(model, attr, None)
         if isinstance(value, str) and value:
@@ -255,7 +156,6 @@ def model_id(model: Any) -> str | None:
 
 
 def int_setting(state: Mapping[str, Any], name: str) -> int:
-    """Integer setting: ``state`` → ``settings_resolved`` → register. ``UNSET`` / bad values raise."""
     raw = state.get(name)
     if raw is None:
         settings = state.get("settings_resolved") or {}
@@ -278,13 +178,7 @@ def int_setting(state: Mapping[str, Any], name: str) -> int:
 
 
 def bool_setting(state: Mapping[str, Any], name: str) -> bool:
-    """Boolean setting with the same precedence as :func:`int_setting`.
-
-    A separate reader rather than one generic function, because the coercion is where the danger
-    is and it differs per type: ``int("false")`` raises, but ``bool("false")`` is ``True``, so a
-    setting that arrived from JSON as ``"false"`` would switch a feature **on** and be recorded as
-    off. Only real booleans and the two JSON spellings are accepted.
-    """
+    """Only real booleans and ``"true"`` / ``"false"``. ``bool("false")`` is ``True``."""
     raw = state.get(name)
     if raw is None:
         settings = state.get("settings_resolved") or {}
@@ -308,7 +202,6 @@ def bool_setting(state: Mapping[str, Any], name: str) -> bool:
 
 
 def float_setting(state: Mapping[str, Any], name: str) -> float:
-    """Float setting with the same precedence as :func:`int_setting`."""
     raw = state.get(name)
     if raw is None:
         settings = state.get("settings_resolved") or {}
@@ -331,12 +224,7 @@ def float_setting(state: Mapping[str, Any], name: str) -> float:
 
 
 def channel_weights(state: Mapping[str, Any]) -> Mapping[str, float]:
-    """Per-channel vote multipliers for :func:`~governed_bi.retrieve.route.route`.
-
-    ``channel_weight_schema`` applies to ``channel_schema``, ``channel_weight_other`` to the rest.
-    Both ship 1.0, so this is behaviour-preserving; the point is that moving either now moves
-    the result, which was not true while ``route`` took no weights at all.
-    """
+    """Schema has its own multiplier. Changing either must change the ranking."""
     from governed_bi.registry.stages import CHANNEL_STAGES, Stage
 
     other = float_setting(state, "channel_weight_other")
@@ -349,12 +237,10 @@ def channel_weights(state: Mapping[str, Any]) -> Mapping[str, float]:
 
 
 def candidate_depth(state: Mapping[str, Any]) -> int:
-    """Pass-one / pass-two candidate pool size. One setting, read through :func:`int_setting`."""
     return int_setting(state, "candidate_depth")
 
 
 def channel_hits(channel_result: Any) -> list[Any]:
-    """Hits list from a ChannelResult dict or object."""
     if channel_result is None:
         return []
     if isinstance(channel_result, Mapping):
@@ -363,11 +249,7 @@ def channel_hits(channel_result: Any) -> list[Any]:
 
 
 def corpus_structure(config: Mapping[str, Any] | None) -> CorpusStructure:
-    """Corpus structure projection (ADR 0005 §2.8.2).
-
-    Prefers ``configurable["structure"]``; otherwise derives from assets (memoised).
-    Never returns an empty stand-in when assets are present.
-    """
+    """Corpus structure for this config (ADR 0005 §2.8.2). Assets never yield an empty stand-in."""
     cfg = configurable(config)
     ready = cfg.get("structure")
     if isinstance(ready, CorpusStructure):
@@ -385,14 +267,12 @@ def corpus_structure(config: Mapping[str, Any] | None) -> CorpusStructure:
     if key is not None:
         if len(_STRUCTURE_CACHE) >= _STRUCTURE_CACHE_MAX:
             _STRUCTURE_CACHE.pop(next(iter(_STRUCTURE_CACHE)))
-        # The source object is held alongside the value, so a recycled ``id()`` cannot
-        # return another corpus's projection: the identity check above rejects it.
+        # Held beside the value, so a recycled ``id()`` cannot return another corpus.
         _STRUCTURE_CACHE[key] = (source, structure)
     return structure
 
 
 def assets_by_id(cfg: Mapping[str, Any]) -> dict[str, Any]:
-    """Resolve ``assets_by_id`` or build it from ``corpus`` (list / dict / AnalystCorpus)."""
     direct = cfg.get("assets_by_id")
     if isinstance(direct, Mapping) and direct:
         return {str(k): v for k, v in direct.items()}
@@ -406,11 +286,9 @@ def assets_by_id(cfg: Mapping[str, Any]) -> dict[str, Any]:
         return {str(k): v for k, v in by_id.items()}
 
     if isinstance(corpus, Mapping):
-        # id → asset
         values = list(corpus.values())
         if values and _looks_like_asset(values[0]):
             return {str(k): v for k, v in corpus.items()}
-        # type → sequence of assets
         out: dict[str, Any] = {}
         for value in values:
             _ingest_assets(out, value)

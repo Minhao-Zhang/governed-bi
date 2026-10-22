@@ -1,10 +1,4 @@
-"""Serve graph state and reducers (ADR 0005 §3.2).
-
-``usage`` uses ``operator.add`` and therefore accumulates across turns under a
-checkpointer. Every :class:`UsageRecord` must carry ``turn_index``; ``finish``
-filters to the current turn when projecting the register. Do not treat the raw
-channel as the per-turn cost list.
-"""
+"""See ADR 0005."""
 
 from __future__ import annotations
 
@@ -56,24 +50,14 @@ __all__ = [
 
 PathKind = Literal["refuse", "decline", "answered", "crashed"]
 
-#: Path kinds that short-circuit remaining retrieval / agent nodes.
 TERMINAL_PATH_KINDS: frozenset[str] = frozenset({"refuse", "decline", "crashed"})
 
-#: Written to ``path_kind`` / ``failure`` / ``channels`` to clear them for a new turn. See
-#: :func:`settle_path_kind` for why a sentinel and not ``None``, and :func:`cleared` for the
-#: LangGraph behaviour every reducer here has to survive.
+#: ``None`` is a no-op on these reducers, so it cannot mean clear.
 RESET = "reset"
 
 
 def cleared(left: Any) -> Any:
-    """``None`` if ``left`` is the reset sentinel, else ``left``.
-
-    Needed on ``path_kind`` and ``failure`` only: their annotations strip to a ``Union``, so
-    ``BinaryOperatorAggregate``'s ``typ()`` seed raises, the channel starts ``MISSING``, and
-    LangGraph assigns the first write raw, bypassing the reducer (1.2.10,
-    ``channels/binop.py``). Fields typed ``dict``/``list``/``str`` seed empty and never see it,
-    and ``LastValue`` has no reducer at all. It bites only on turn one of a fresh thread.
-    """
+    """LangGraph 1.2.10 seeds a stripped ``Union`` as ``MISSING``, so the first write skips the reducer."""
     return None if isinstance(left, str) and left == RESET else left
 
 
@@ -84,9 +68,6 @@ class RewriteResult(TypedDict):
 
 
 class ChannelResult(TypedDict):
-    """One channel branch's output. ``channel`` is a
-    :class:`~governed_bi.registry.stages.Stage` value."""
-
     channel: str
     queries: list[str]
     hits: list[Any]
@@ -107,49 +88,24 @@ class RetrievalResult(TypedDict):
     pulled_in: dict[str, Literal["resolve", "connect"]]
     schema_ranking: list[tuple[str, float]]
     lexical_coverage: float
-    #: What a per-type cap discarded, ``{asset_type -> count}``, present only when one bit.
-    #: Absent means the caps did not fire, which is a different fact from "nothing was
-    #: dropped and we counted". ``register/citations.py`` states the requirement: a cap can
-    #: discard a gold table, and without this the miss reads as retrieval never having found
-    #: it. Declared here rather than smuggled onto the dict by ``pass_two``, which is how it
-    #: came to be destroyed by ``resolve`` one super-step later on every turn that hit a cap.
+    #: Missing is not a counted zero: a cap can discard a gold table.
     budget_dropped: NotRequired[dict[str, int]]
-    #: Best score that did not survive, per type. A drop at 0.97 and a drop at 0.01 want
-    #: opposite decisions and a bare count cannot tell them apart.
+    #: A count cannot separate 0.97 from 0.01.
     budget_best_dropped_score: NotRequired[dict[str, float]]
 
 
 class AbstentionResult(TypedDict):
-    """What the declared abstention policy decided, and the evidence behind it (ADR 0013).
+    """See ADR 0013."""
 
-    Written on **every** turn that reaches the node, including the turns where the policy is
-    off. A check that leaves a trace only when it fires cannot afterwards be told from one
-    that was never wired up. ``outcome: "disabled"`` is the
-    setting-off value and it carries no evidence, because gathering evidence for a decision nobody
-    took would be a cost with no reader.
-
-    There is no score here, and that is a decision rather than an omission. A graded
-    ``confidence`` was measured and failed (open-work.md §3.11: the reflector's "unsure" bucket
-    is as likely to be right as its "correct" one), and ADR 0007 forbids a trust field on the
-    answer card. Reporting *why the engine withheld* is the ledger; scoring *how sure it is* is
-    .
-    """
-
-    #: The policy that ran, by name and version. Two runs under two policies are two settings under test.
     policy: str
     outcome: Literal["answer", "withhold", "disabled"]
-    #: A member of :data:`~governed_bi.registry.stages.ABSTENTION_REASONS`, or ``None``.
     reason: str | None
-    #: Every rule the policy asked, in the order it asked them. Present on an ``answer`` too, so
-    #: "the policy considered this turn and let it through" is a recorded fact.
+    #: Present on an answer too, so letting the turn through is a recorded fact.
     rules_evaluated: list[str]
-    #: Facts a person can check against the record without re-running the turn.
     evidence: dict[str, Any]
 
 
 class NodeFailure(TypedDict):
-    """Which node raised, and what. ``detail`` is optional free text."""
-
     stage: str
     error_type: str
     detail: NotRequired[str]
@@ -160,14 +116,12 @@ class Delivery(TypedDict):
     context_hash: str | None
     tool_delivered: dict[str, str]
     delivery_hash: str | None
-    #: What the char budget dropped, present only when it bit: ``bodies_dropped``,
-    #: ``tables_dropped``, ``dropped_ids``, ``over_budget``. Absent means the block fit, which
-    #: is a different fact from "nothing was dropped and we checked".
+    #: Missing is not a counted zero.
     evicted: NotRequired[dict[str, Any]]
 
 
 class UsageRecord(TypedDict):
-    """One model-call cost row. Token fields are ``int | Measured[int]`` (unmeasured ≠ zero)."""
+    """Unmeasured tokens are not zero."""
 
     turn_index: int
     model: NotRequired[str]
@@ -175,14 +129,11 @@ class UsageRecord(TypedDict):
     output_tokens: NotRequired[int | Measured[int]]
     cache_read_tokens: NotRequired[int | Measured[int]]
     cache_write_tokens: NotRequired[int | Measured[int]]
-    #: Model round trips this row paid for. An agent loop aggregates into one row, so without
-    #: it the repeated share of the input -- the only part caching can remove -- is a guess.
+    #: An agent loop is one row, so the repeated input share is otherwise a guess.
     model_calls: NotRequired[int]
 
 
 class Answer(TypedDict):
-    """One question in, one answer out — every terminal path including crashes."""
-
     outcome: str
     text: str | None
     failed_stage: str | None
@@ -192,116 +143,55 @@ class Answer(TypedDict):
 
 
 class TurnEntry(TypedDict, total=False):
-    """One finished turn's wrapper, built only by ``api/graph_app.record_node``.
+    """Identity sits beside ``record``, not inside it."""
 
-    ``question`` / ``answer_text`` sit beside ``record`` rather than inside it because merged
-    in, every record read back out fails ``undeclared_keys``. Three fields are ``| None`` because
-    ``record_node`` writes ``None`` into them: a refusal has no prose, and a turn derived from a
-    non-text message has no question.
-    """
-
-    #: UTC isoformat to the second, stamped when the turn was recorded.
+    #: UTC, to the second.
     asked_at: str
     question: str | None
     answer_text: str | None
     outcome: str | None
     record: dict[str, Any]
 
-    #: What :func:`compact_turn_record` replaced on this row, ``{"dropped": [...], "was_bytes": n}``.
-    #: Present on **every** archived row and absent only on the newest, so ``{"dropped": []}`` is a
-    #: statement ("archived, nothing trimmed") and not a missing field. Lives on the wrapper and
-    #: not inside ``record`` for the reason ``question`` does: a key the register does not declare
-    #: makes every read of that record fail ``undeclared_keys``.
+    #: Absent only on the newest row, so an empty drop list means trimmed nothing.
     compacted: dict[str, Any]
-    #: Turns dropped from this thread's history *before* this row, because
-    #: :data:`MAX_TURNS_RETAINED` bit. Carried on the **oldest surviving** row, which is where the
-    #: gap is: a cap that says nothing reads as full coverage.
+    #: On the oldest survivor, where the gap is.
     elided_turns: int
 
 
-#: Bytes an **archived** turn's ``record`` is trimmed toward — a target, not a guarantee: the
-#: protected keys of :func:`protected_record_keys` are never compacted and set a floor of ~6 KB
-#: on a real record (``settings_resolved`` alone is 3.0 KB of it).
-#:
-#: 8 192 is measured, not chosen: on the real 103.8 KB records in ``runs/conversations.sqlite``
-#: (2026-08-18) exactly two keys are above the line — ``channel_hits`` at 49.8 KB and ``pulled_in``
-#: at 46.2 KB, together 92% of the record — and trimming those two lands at 7.5 KB. So this value
-#: compacts the two bulk diagnostics and nothing else. A lower budget would start replacing
-#: sub-kilobyte fields for no measurable gain.
+#: Not a guarantee. Protected keys floor a real record near 6 KB; 8192 keeps the
+#: two bulk keys on the measured 103.8 KB records.
 COMPACT_RECORD_BUDGET = 8192
 
-#: Values below this are never compacted, because the marker would be **larger** than the value.
-#: The 66-byte ``context_hash`` is the case that made this necessary: trimming it grew the row.
+#: Trimming the 66-byte hash grew the row.
 COMPACT_MIN_VALUE_BYTES = 256
 
-#: Rows :attr:`ServeState.turns` keeps. **This is what makes growth bounded rather than merely
-#: cheaper.** ``AsyncSqliteSaver`` has two tables and no per-channel blob store, so every
-#: super-step re-serialises the whole channel: at the measured 18 super-steps per served turn, a
-#: retained history of ``n`` rows costs ``18 * n * row_bytes`` of writes **for one turn**.
-#:
-#: Priced on the real records (2026-08-18, ``runs/conversations.sqlite``), 25 rows plateaus the
-#: channel at 253 KB — 4.4 MB of writes per turn, of which 1.6 MB is the one verbatim newest row —
-#: and it stays there for turn 26 and turn 400. ``operator.add`` reached 33.8 MB by turn 25 and 54
-#: MB by turn 40, and did not stop. Over forty turns the two are 135 MB and 1 111 MB of writes.
-#: Retention does not save the unbounded case: under ``langgraph dev`` the TTL sweep is
-#: ``return (0, 0)`` ("Not implemented for inmem server"), so nothing evicts locally.
-#:
-#: 25 is a judgement and the arithmetic above is how to move it. It leaves ``turns`` roughly level
-#: with — no longer dominating — the ~5 MB per turn that ``answer`` (88 KB), ``delivery`` (80 KB)
-#: and ``retrieved`` (75 KB) cost on the same thread whatever this channel does. Those three are
-#: per-turn, so they are a constant this cannot touch; a cheaper conversation store has to start
-#: there next.
-#:
-#: Elided rows are not destroyed: their full ``answer["record"]`` is still in that turn's own
-#: checkpoints, and ``AsyncSqliteSaver`` prunes nothing (verified — three turns, three distinct
-#: ``answer`` records reachable through ``alist`` after ``PER_TURN_RESET`` had run twice). Nothing
-#: reads history today, which is why the elision is also *stated* on the row above the gap.
+#: Each super-step rewrites the channel (18 per turn measured). 25 plateaus near
+#: 253 KB. Elided rows remain in that turn's checkpoints.
 MAX_TURNS_RETAINED = 25
 
-#: Record keys a one-line summary of a past turn needs that the register does **not** require,
-#: so an archived row can still be listed without its checkpoint.
+#: Register-optional keys a one-line summary of a past turn still needs.
 _LIST_VIEW_KEYS: frozenset[str] = frozenset({
     "terminal_reason", "schemas", "generated_sql", "latency_sec", "retrieved_tables",
 })
 
 
 def protected_record_keys() -> frozenset[str]:
-    """Record keys :func:`compact_turn_record` must never touch.
-
-    Derived from :data:`~governed_bi.registry.record.RECORD_REGISTER` rather than listed, which is
-    what keeps the **read-time register judgement** ADR 0004 §2 defends: ``missing_required``
-    reads exactly the ``Absence.never`` fields, so retaining all of them verbatim means
-    ``incomplete_fields`` is still computed at read time, against today's declaration, and still
-    gets the same answer it would have got from the untouched record. Compaction therefore buys
-    ~14× on storage *without* moving that judgement to write time.
-
-    What it does **not** buy: a field that is ``not_applicable`` today and is re-declared
-    ``never`` tomorrow may have been compacted on old rows, and would then read as absent. That
-    is why the trim is named on the wrapper (:attr:`TurnEntry.compacted`) instead of being done
-    silently — the alternative reading, "the stage never produced it", is a different and false
-    fact about the turn.
-    """
+    """See ADR 0004. The wrapper names the trim, so a later re-declaration is not an omission."""
     from governed_bi.registry.record import required_keys
 
     return frozenset(required_keys()) | _LIST_VIEW_KEYS
 
 
 def _sized(value: Any) -> int:
-    """Bytes ``value`` costs as JSON. Only a *relative* measure is needed — the checkpoint is
-    msgpack — so the cheapest stable ruler is the right one."""
+    """JSON length is a relative ruler; the checkpoint is msgpack."""
     try:
         return len(json.dumps(value, default=str))
-    except Exception:  # noqa: BLE001 — an unserialisable value is compacted on its repr instead
+    except Exception:  # noqa: BLE001 — unserialisable values are measured by repr
         return len(repr(value))
 
 
 def _marker(name: str, value: Any) -> dict[str, Any]:
-    """What an archived record carries in place of a bulk value.
-
-    **The key stays present.** Deleting it would read as "the stage did not produce the value", a
-    truncation reading as an omission. A value that names itself cannot be misread, and ``sha256``
-    lets a reader match it against the full copy in that turn's own checkpoint.
-    """
+    """The key stays, so a trim is not an omission."""
     payload = json.dumps(value, default=str, sort_keys=True)
     return {
         "compacted": name,
@@ -312,13 +202,7 @@ def _marker(name: str, value: Any) -> dict[str, Any]:
 
 
 def compact_turn_record(record: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
-    """Trim an archived turn's record toward :data:`COMPACT_RECORD_BUDGET`.
-
-    Returns the new record and the names trimmed, largest value first. Byte-driven rather than
-    key-listed, so a future bulk field is caught by the rule instead of needing to be remembered
-    (ADR 0005 §6, "no hand-maintained field lists") — and a field that is small stays verbatim
-    however large the register grows.
-    """
+    """See ADR 0005. Byte-driven, not a key list, so a new bulk field is caught."""
     kept = dict(record)
     protected = protected_record_keys()
     total = _sized(kept)
@@ -346,24 +230,7 @@ def _turn_id_of(row: Mapping[str, Any]) -> str | None:
 
 
 def keep_turns(left: Any, right: Any) -> list[dict[str, Any]]:
-    """Append finished turns to a **bounded, deduplicated** history. Replaces ``operator.add``.
-
-    ``operator.add`` had two defects, and only one of them was visible:
-
-    * **Quadratic checkpoint growth.** ``AsyncSqliteSaver`` has exactly two tables and no
-      per-channel blob store, so every super-step serialises the entire checkpoint into one BLOB.
-      Measured on the real store: 18 super-steps per served turn, 103.8 KB per record, so turn
-      *n* rewrote the previous *n-1* records eighteen times — 5.89 MB of writes for a two-turn
-      thread, ~30 MB for the last turn of a twenty-turn one. Retention does not save us: under
-      ``langgraph dev`` the TTL sweep is ``return (0, 0)`` ("Not implemented for inmem server").
-      :func:`compact_turn_record` shrinks the row ~14× and :data:`MAX_TURNS_RETAINED` bounds how
-      many there are; together they replace an unbounded term with a fixed one.
-    * **Duplicate rows.** ``operator.add`` cannot deduplicate, so a turn resumed after an
-      ``ask_user`` interrupt could append its wrapper twice. ``record["turn_id"]`` is the upsert
-      key the register already declares for exactly this, so a repeat write **replaces**.
-
-    Oldest first.
-    """
+    """``operator.add`` cannot collapse a resumed turn."""
     rows: list[dict[str, Any]] = [
         dict(row) for row in (cleared(left) or ()) if isinstance(row, Mapping)
     ]
@@ -383,8 +250,7 @@ def keep_turns(left: Any, right: Any) -> list[dict[str, Any]]:
         else:
             rows[at] = fresh
 
-    # Only the newest row keeps its record verbatim: it is the one an operator debugging the turn
-    # they just ran opens, and `answer` already holds the same record for that turn anyway.
+    # The newest row stays verbatim; ``answer`` already holds that turn's record.
     for index, row in enumerate(rows[:-1]):
         if "compacted" in row:
             continue
@@ -404,30 +270,9 @@ def keep_turns(left: Any, right: Any) -> list[dict[str, Any]]:
 
 
 def merge_delta(left: Any, right: Any) -> Any:
-    """Merge a mapping channel by top-level key — right wins per key. ``None`` clears.
+    """One level only. A deeper merge would restore a collection a node narrowed.
 
-    The rule that lets a downstream node write **what it changed** instead of rebuilding the
-    whole record from a key list it maintains itself. Both channels that use it were losing
-    fields to exactly that:
-
-    * ``retrieved`` — ``pass_two`` writes ``budget_dropped`` / ``budget_best_dropped_score``
-      when a per-type cap discards a hit, and ``resolve``'s rebuild dropped both one
-      super-step later, on every turn that hit a cap. Verified 2026-08-11: neither key had a
-      reader anywhere in ``src/``, because neither key survived to a reader.
-    * ``delivery`` — ``DeliveryTracker.merge_into`` rebuilt a four-key dict and destroyed
-      ``assemble``'s ``evicted`` the same way. That one was fixed by hand, per channel, by
-      carrying one named key. This is the same fix stated once, for any key.
-
-    Right wins *per top-level key*, so a node that narrows a sub-collection — ``connect``
-    dropping the assets of an unconnectable component — still replaces that key wholesale.
-    The merge is one level deep on purpose: two levels would make a narrowing write additive
-    and re-admit what the node just refused.
-
-    ``None`` clears, because that is what :data:`PER_TURN_RESET` writes for both channels.
-    Clearing matters more here than for an unreduced channel: without it turn one's
-    ``evicted`` would merge into turn two's delivery and report an eviction that never
-    happened. :func:`cleared` is applied to ``left`` for the same belt-over-braces reason
-    :func:`merge_channels` gives.
+    A prior turn's ``evicted`` must not merge forward.
     """
     if right is None or (isinstance(right, str) and right == RESET):
         return None
@@ -441,12 +286,7 @@ def merge_channels(
     left: dict[str, ChannelResult],
     right: Any,
 ) -> dict[str, ChannelResult]:
-    """Replace by key — right wins. :data:`RESET` clears.
-
-    The ``cleared()`` below is belt over braces: this annotation strips to ``dict``, so the
-    channel seeds ``{}`` and this reducer runs from the first write — ``left`` is never the
-    sentinel. See :func:`cleared` for where the call really is.
-    """
+    """``cleared`` is defensive: this annotation strips to ``dict``, so ``left`` is never the sentinel."""
     if right == RESET:
         return {}
     merged = dict(cleared(left) or {})
@@ -455,11 +295,7 @@ def merge_channels(
 
 
 def settle_path_kind(left: Any, right: Any) -> Any:
-    """First terminal wins; ``None`` is a no-op; :data:`RESET` clears.
-
-    Concurrent channel crashes need a reducer (un-reduced → InvalidUpdateError).
-    ``None`` ≠ clear: nodes may return a null path_kind without erasing a prior terminal.
-    """
+    """Concurrent crashes need a reducer, and ``None`` must not erase a prior terminal."""
     left = cleared(left)
     if right == RESET:
         return None
@@ -471,7 +307,6 @@ def settle_path_kind(left: Any, right: Any) -> Any:
 
 
 def settle_failure(left: Any, right: Any) -> Any:
-    """First failure wins; a concurrent second is named in ``detail``."""
     left = cleared(left)
     if right == RESET:
         return None
@@ -487,51 +322,14 @@ def settle_failure(left: Any, right: Any) -> Any:
 
 
 class ServeInput(TypedDict, total=False):
-    """Everything a client is allowed to write into the graph. Deliberately one key.
+    """See ADR 0005. Only the ``accept`` graph uses this schema."""
 
-    The write half of the trust boundary — A2/A3, which measured a client
-    forging ``retrieved_tables`` and ``corpus_content_hash`` straight into ``ServeState``.
-
-    ``trust()`` forces run constants over a caller's ``configurable``, but the graph's own
-    ``input`` is a second write channel: ``langgraph_api`` forwards the client's dict unfiltered,
-    ``PER_TURN_RESET`` does not clear :data:`TEST_HOOKS`, and ``int_setting`` reads state *before*
-    ``settings_resolved`` — so a request could set ``route_top_n`` while the record published the
-    default. ``input_schema`` drops undeclared keys at the entry; measured on langgraph 1.2.10,
-    ``route_top_n=99`` reaches the first node as absent, not as 99.
-
-    Only the ``accept`` variant gets this. ``build_graph()`` without ``accept`` is entered by
-    ``serve/__main__``, ``eval/`` and ``/chat``, which build the turn in-process through
-    ``Session.turn()`` and legitimately pass the whole of :class:`ServeState`.
-    """
-
-    #: The conversation. ``serve/accept.py`` derives the whole turn from its last human message;
-    #: it reads no other state key, which is what makes one key sufficient.
+    #: ``accept`` derives the turn from the last human message and no other key.
     messages: Annotated[list, add_messages]
 
 
 class ServeOutput(TypedDict, total=False):
-    """What ``invoke`` hands back — **the ``invoke`` half only** of the read boundary.
-
-    Two keys, matching what the interface consumes: the transcript the SDK reconciles, and the
-    turn's whole result. Adding a key here is the deliberate act.
-
-    **``output_schema`` narrows ``invoke``**, and B1 is about what it does *not*
-    narrow. Two measurements on langgraph 1.2.11, of two different things, and the difference
-    matters:
-
-    - the compiled ``accept`` graph's ``stream_channels_asis`` is all **46** declared channels;
-    - but the root ``values`` frames of an actual streamed run carried **only** ``answer`` and
-      ``messages`` — 4 frames, 0 containing ``turns``, measured over the wire from the client.
-
-    So the graph *attribute* is wide and the frames are not. ``get_state(...)`` and
-    ``GET /threads/{id}/state`` **are** wide: both return ``delivery`` (the whole rendered corpus context block).
-    This class is not a guarantee about either surface.
-
-    ``turns`` widens the §B1 remainder on the **checkpoint-read** surfaces
-    and not on the streamed one: what escapes there is one ``answer["record"]`` per read plus
-    every prior turn's record, now that ``turns`` is present.
-    Since ``GET /threads/*`` requires no credential (finding A7), that is the surface to price.
-    """
+    """See ADR 0005. ``output_schema`` narrows ``invoke`` only; streams and checkpoints are wider."""
 
     messages: Annotated[list, add_messages]
     answer: dict[str, Any]
@@ -539,7 +337,7 @@ class ServeOutput(TypedDict, total=False):
 
 class ServeState(TypedDict, total=False):
     question: str
-    #: Caller-supplied hint (empty on production paths). Per-turn, not config.
+    #: Empty on production paths. Per-turn, not config.
     evidence: str
     thread_id: str
     turn_index: int
@@ -554,54 +352,25 @@ class ServeState(TypedDict, total=False):
 
     guard: GuardResult
     rewrite: RewriteResult | None
-    #: The declared abstention policy's result (ADR 0013). Written by ``abstain``, read by
-    #: ``graph._after_abstain`` for the routing and by ``finish`` for the record.
     abstention: AbstentionResult | None
 
     channels: Annotated[dict[str, ChannelResult], merge_channels]
 
     schemas: list[str]
-    #: Eval only: a shortlist replayed from a prior artifact, honoured by ``route`` in place of
-    #: its own ranking (``eval/replay.py``). Absent on every served turn. It exists because the
-    #: four channel rewriters (``registry/channels.py``'s ``CHANNEL_EXTRACTS`` — four of the five channel
-    #: nodes) are model calls, so two runs of one question can hand ``route`` different hits — and
-    #: an A/B that lets the shortlist move cannot attribute its own delta.
+    #: Absent on served turns. The rewriters are model calls, so a moving shortlist
+    #: cannot attribute an A/B delta.
     pinned_schemas: list[str] | None
-    #: Reduced by :func:`merge_delta`: ``route`` writes the whole result, ``resolve`` and
-    #: ``connect`` write only the keys they change.
     retrieved: Annotated[RetrievalResult, merge_delta]
     crossings: list[SchemaCrossing]
-    #: **Not** reduced, deliberately. ``connect`` *narrows* this set when a component cannot
-    #: be joined, and a merge rule that unioned writes would re-license a table the node had
-    #: just refused — govern's table allowlist growing back by reducer.
+    #: A union would re-license a refused table.
     retrieved_tables: list[str]
 
-    #: Reduced by :func:`merge_delta`: ``assemble`` writes the block, ``agent_core`` writes
-    #: only the tool-delivery keys.
     delivery: Annotated[Delivery, merge_delta]
     messages: Annotated[list, add_messages]
     usage: Annotated[list[UsageRecord], operator.add]
     clarifications: Annotated[list[dict[str, Any]], operator.add]
     clarification_requested: bool
-    #: Every finished turn of this thread, appended by ``api/graph_app.record_node``. This is the
-    #: channel that makes a checkpoint hold the **whole conversation's** audit trail rather than
-    #: only the newest turn: ``answer``, ``execution`` and ``generated_sql`` are all in
-    #: :data:`PER_TURN_RESET`, so turn two erases turn one's record and a now-deleted JSONL log
-    #: was the only surviving copy — a reader with the thread id and no filesystem access could
-    #: not say what the conversation had already been told. Hence ``operator.add`` and
-    #: :data:`ACCUMULATING`, never ``PER_TURN_RESET``. Deleting that log is what this channel
-    #: made possible.
-    #:
-    #: Each row carries turn identity inside ``record`` — ``turn_id``, ``run_id``, ``thread_id``,
-    #: ``question_id``, and ``record_node`` refuses to append a row with no ``turn_id`` — which is
-    #: what ``ACCUMULATING`` requires: the rows of every turn are one flat list, so a reader that
-    #: cannot tell whose row it is holding would attribute turn one's refusal to turn three. Same
-    #: defect the ``usage`` channel's ``turn_index`` exists to prevent, one level up. ``turn_id``
-    #: is also what :func:`keep_turns` deduplicates on.
-    #:
-    #: Reduced by :func:`keep_turns` and **not** ``operator.add``, which grew this channel — and
-    #: therefore every super-step's checkpoint BLOB — without bound. That function carries the
-    #: measurement and the bound.
+    #: Not ``operator.add``: ``answer`` is cleared each turn, so this channel is what survives.
     turns: Annotated[list[TurnEntry], keep_turns]
 
     execution: ExecutionRecord
@@ -611,21 +380,16 @@ class ServeState(TypedDict, total=False):
     terminal_reason: str | None
     path_kind: Annotated[PathKind | None, settle_path_kind]
     generated_sql: str | None
-    #: Last successful query result ``{columns, rows, row_count, truncated}``. Live only (ADR 0006 §11).
     result_table: dict[str, Any] | None
-    #: Prose answer from ``narrate``. Live only; distinct from system ``answer["text"]``.
+    #: From ``narrate``, distinct from system ``answer["text"]``.
     answer_text: str | None
-    #: Question embedding. Per-turn (streamed path cannot put it on load-time config).
+    #: Per-turn: streamed config is bound with no question.
     query_vector: list[float] | None
-    #: Epoch seconds when the turn's first node ran. ``wrap_node`` writes it, ``finish`` derives
-    #: ``latency_sec`` from it. Wall clock so a clarification resume after a process bounce
-    #: still yields a defined span *if* a durable checkpointer is present. `/chat` today uses
-    #: ``InMemorySaver`` only — resume across processes is not supported there
-    #: (``hitl_survives_process_restart: false``).
+    #: Wall clock, so a resumed clarification still has a span when the checkpointer
+    #: is durable. ``/chat`` keeps the saver in memory, so a process bounce cannot resume.
     turn_started_at: float | None
     n_re_served: int
 
-    # F1 test hooks and per-turn settings.
     channel_route_hits: list[tuple[Any, Any, float]]
     retrieve_hooks: dict[str, Any]
     route_top_n: int
@@ -634,7 +398,6 @@ class ServeState(TypedDict, total=False):
     lexical_coverage: float
 
 
-#: Cleared by :meth:`~governed_bi.serve.session.Session.turn` so a prior turn cannot leak.
 PER_TURN_RESET: dict[str, Any] = {
     "path_kind": RESET,
     "failure": RESET,
@@ -651,31 +414,29 @@ PER_TURN_RESET: dict[str, Any] = {
     "result_table": None,
     "answer_text": None,
     "query_vector": None,
-    # Cleared per turn, or turn two's `latency_sec` spans everything the user did in between.
+    # Or the next turn's latency includes the gap between turns.
     "turn_started_at": None,
     "schemas": [],
-    # Cleared like any other per-turn channel: the eval writes it onto the turn dict *after*
-    # `Session.turn` returns, so resetting here cannot erase it, and not resetting would let
-    # turn one's pinned shortlist silently route turn two.
+    # Eval writes this onto the returned dict, so the reset cannot erase a pin
+    # just applied. Leaving it would route the next turn on this shortlist.
     "pinned_schemas": None,
     "crossings": [],
     "retrieved_tables": [],
     "clarification_requested": False,
 }
 
-#: Channels that accumulate across turns (each row carries turn identity).
+#: Each row carries its own turn identity.
 ACCUMULATING: frozenset[str] = frozenset(
     {"messages", "usage", "clarifications", "turns"}
 )
 
-#: Written by ``turn()`` itself — turn identity and run claims.
 TURN_IDENTITY: frozenset[str] = frozenset({
     "question", "evidence", "turn_index", "thread_id", "run_id", "turn_id",
     "question_id", "db_id", "attempt_id", "corpus_content_hash", "prompt_set_hash",
     "settings_resolved", "n_re_served",
 })
 
-#: Per-turn settings and F1 hooks. Caller sets these over ``turn()``'s output.
+#: Not in :data:`PER_TURN_RESET`, so a caller can set them on the turn dict.
 TEST_HOOKS: frozenset[str] = frozenset({
     "channel_route_hits", "retrieve_hooks", "route_top_n", "max_steiner_points",
     "max_crossings", "lexical_coverage",

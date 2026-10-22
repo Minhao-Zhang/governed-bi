@@ -1,10 +1,6 @@
-"""The HTTP surface, per ADR 0007.
+"""HTTP surface (ADR 0007), over four in-memory assets.
 
-`routes.make_app(session, pending)` and `graph_app.build_serve_graph(session)` take their
-dependencies, and the fixtures below are four assets in memory, so nothing here needs a database,
-a model or a key. Two rules run through it: a client may not write the run's claims about itself
-(`run_id`, `corpus_content_hash`, `settings_resolved` and their siblings), and a field the engine does
-not observe must not be invented at the boundary (ADR 0007 §3).
+A client may not write the run's own claims. A field the engine does not observe is not invented (ADR 0007).
 """
 
 from __future__ import annotations
@@ -18,9 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-#: `src/governed_bi`, for the structural assertions. Some of these must be structural: a
-#: behavioural test that "the server does not synthesize a tier" passes for every input the
-#: test happens to try, and says nothing about the next one.
+#: Structural: a behaviour test that "no tier is synthesized" says nothing about the next input.
 SRC = Path(__file__).resolve().parent.parent.parent / "src" / "governed_bi"
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -31,13 +25,7 @@ QUESTION = "how many root beer brands are there"
 
 @pytest.fixture(autouse=True)
 def _isolated():
-    """The one piece of process-wide state this file touches, cleaned up around every test.
-
-    ``build_serve_graph`` declares its session's constants trusted, and that registry is
-    process-wide (``serve/runtime.trust``) — which is the design, since the server is one
-    session per process. In a suite it is shared mutable state, and the failure mode is the
-    worst kind: a test that passes because an earlier one registered a corpus.
-    """
+    """``trust()`` is process-wide. A test can pass because an earlier one registered a corpus."""
     from governed_bi.serve.runtime import trust
 
     trust()
@@ -46,12 +34,7 @@ def _isolated():
 
 
 class _EchoConnector:
-    """A connector double, for the one test whose subject is the *governance result*.
-
-    Real enough that a refusal is a refusal: with ``connector=None`` a governed block is a
-    wiring failure and proves nothing (``tests/serve/turn_contract_fixtures`` says so at
-    length). Nothing here asserts what a database returned.
-    """
+    """``connector=None`` turns a governed block into a wiring failure, which proves nothing."""
 
     dialect = "postgres"
 
@@ -60,51 +43,17 @@ class _EchoConnector:
 
 
 def _served(session: Any) -> Any:
-    """The served topology, sync-callable. What ``langgraph.json`` runs.
-
-    ``as_sync`` only because this file's tests are sync ``def``; the platform drives
-    ``ainvoke`` itself. The graph is otherwise exactly the process entry's.
-
-    It takes no turn log: ``record`` returns the finished turn onto ``ServeState.turns`` and the
-    checkpointer persists it, so there is no sink to inject.
-    """
+    """Sync wrapper around the graph ``langgraph.json`` runs. ``as_sync`` is only for these tests."""
     from governed_bi.api.graph_app import build_serve_graph
     from governed_bi.serve.graph import as_sync
 
     return as_sync(build_serve_graph(session))
 
 
-# ── the record is the run's, not the client's ─────────────────────────────────
-
-
 def test_a_client_cannot_set_any_provenance_field() -> None:
-    """ADR 0007 §2. The most important test here.
+    """A client-set ``corpus_content_hash`` makes two corpora report as one. The record is what a check reads.
 
-    The UI submits one key — `{messages: [{type: "human", content}]}` — and the record
-    requires fifteen fields. Something server-side must mint the rest. The failure mode is
-    not that it forgets: it is that it **merges** what the client sent.
-
-    `run_id`, `turn_id`, `question_id`, `corpus_content_hash`, `prompt_set_hash`,
-    `settings_resolved` are the run's own claims about itself, and `measure/checks.py` reads them
-    to decide whether a run is quotable. A client that can set `corpus_content_hash` can make
-    two different corpora report as one, which is a forged comparison rather than a bad one.
-
-    **Fixture shape.** Invoke the graph the way the server does, with a client payload that
-    sets every required field to a recognisable sentinel. Assert **no sentinel reaches the
-    record** — field by field, from `required_keys()`, not from a hand-written list. Assert
-    the turn still succeeds: silently dropping the whole turn would also pass a
-    "no sentinel survived" check.
-
-    **Written 2026-08-11**, once `build_serve_graph` existed. It was a stub for the whole of
-    v2 because the served topology could only be assembled from a process-wide session built
-    out of the environment, so the graph this asserts about could not be constructed in a
-    test at all (the 2026-08-11 review, C5).
-
-    Two mechanisms carry the claim and both are exercised here. `ServeInput` drops undeclared
-    keys at the entry, so most sentinels never reach a channel; `accept` then *overwrites* the
-    turn identity from `Session.turn`, so the ones that are declared channels do not survive
-    either. Asserting on the record rather than on either mechanism is deliberate — the record
-    is what a check reads.
+    A turn that produced nothing would also contain no sentinel, so the outcome is asserted too.
     """
     from langchain_core.messages import HumanMessage
 
@@ -139,7 +88,6 @@ SENTINEL = "client-forged-sentinel"
 
 
 def _mentions(value: Any) -> bool:
-    """Whether ``value`` carries the sentinel anywhere a client could have put it."""
     if isinstance(value, str):
         return SENTINEL in value
     if isinstance(value, dict):
@@ -150,24 +98,9 @@ def _mentions(value: Any) -> bool:
 
 
 def test_the_graph_is_loadable_the_way_langgraph_json_loads_it() -> None:
-    """`langgraph.json` names a factory by file path, and LangGraph Server can only put
-    **JSON** in `config.configurable` — while every node needs live objects: `policy` (a
-    dataclass, subscripted unguarded at `serve/nodes/guard.py::guard_node`), `agent_model`, `corpus`,
-    `index`, `structure`, `connector`, `assets_by_id`.
+    """Only JSON fits in ``configurable``. A ``KeyError`` on ``policy`` shows up on the first real request.
 
-    So the factory must close over a `Session`. Assert it does: build the graph the way the
-    server entry does, invoke it with a `configurable` containing **only JSON**, and assert
-    the turn reaches a terminal path. A `KeyError` on `policy` mid-run is the failure this
-    catches, and it is the failure that would only appear on the first real request.
-
-    Assert `langgraph.json` itself parses and its `graphs` key names `serve` — that string is
-    the UI's `ASSISTANT_ID` default, so a rename silently 404s every chat request.
-
-    **Written 2026-08-11.** The half of this that used to be checked was checked by reading
-    `graph_app.py` as text and asserting the substring `"trust("` appeared in `make_graph`'s
-    body — which passes for a call that is unreachable or handed the wrong mapping. It was
-    written that way because `make_graph` builds a Postgres connector; `build_serve_graph`
-    takes the session, so the claim runs.
+    ``graphs.serve`` is the UI's assistant id, so a rename 404s every chat request.
     """
     import json
 
@@ -197,26 +130,8 @@ def test_the_graph_is_loadable_the_way_langgraph_json_loads_it() -> None:
     assert answer["record"]["retrieved_tables"], "no table was retrieved, so no node reached the corpus"
 
 
-# ── /capabilities: observations, and false is a real answer ───────────────────
-
-
 def test_capabilities_reports_what_is_true_not_what_is_configured() -> None:
-    """It is the UI's **first** request; without it the chat panel pins at a skeleton
-    forever, so this route failing is indistinguishable from the whole backend being down.
-
-    `has_live_model` must be false when no model is configured, and `can_clarify` false when
-    the `ask_user` tool is not bound. Assert the false cases, because the true ones pass for
-    a server that hard-codes `true` — and a hard-coded `has_live_model` is the stub-path
-    defect again, one layer out: the interface would promise a model that will never answer.
-
-    `can_edit` is **false** for now: the curator is out of scope, and reporting it true would
-    put an edit button in front of a route that does not exist.
-
-    **Both directions, over the real route.** Two apps differing only in whether the session
-    carries a model: a hard-coded `true` fails the first and a hard-coded `false` fails the
-    second, so neither reading of the field can pass by accident. Reachable at all only since
-    `make_app` — the route used to resolve its session from the environment.
-    """
+    """False is asserted too: a hard-coded true passes every test that only builds a model."""
     from governed_bi.api.routes import make_app
 
     app = make_app(_indexed_session(), _Pending())
@@ -243,20 +158,13 @@ def test_capabilities_reports_what_is_true_not_what_is_configured() -> None:
 
 
 def _client(app: Any) -> Any:
-    """A ``TestClient`` over ``app``. No credential: the engine requires none (2026-08-13)."""
     from fastapi.testclient import TestClient
 
     return TestClient(app)
 
 
 def _indexed_session(*, model: Any = None, connector: Any = None, policy: Any = None) -> Any:
-    """Four assets over one schema, with a real index and structure.
-
-    Small, and large enough to route: the term and the table both mention "root beer", so
-    :data:`QUESTION` reaches ``beer`` on the lexical channel with no embedder. Built through
-    ``from_assets`` rather than by hand, so the index, the structure and ``assets_by_id`` are
-    the ones a real corpus produces.
-    """
+    """Built through ``from_assets`` so the index is the one a real corpus produces. Lexical only."""
     from governed_bi.corpus.schema import (
         AssetType,
         Binding,
@@ -296,11 +204,7 @@ def _indexed_session(*, model: Any = None, connector: Any = None, policy: Any = 
 
 
 def test_the_app_declares_exactly_the_four_custom_routes() -> None:
-    """The server serves what the chat page and a deployment probe call, and nothing else.
-
-    Asserted on the app's own route table, because a status check cannot tell a deleted route
-    from a path parameter that matched nothing. The platform's ``/threads`` routes are not here.
-    """
+    """The route table, not a status check: a deleted route and a missed path parameter look the same."""
     from governed_bi.api.routes import make_app
 
     app = make_app(_indexed_session(), _Pending())
@@ -312,16 +216,7 @@ def test_the_app_declares_exactly_the_four_custom_routes() -> None:
 
 
 class _Pending:
-    """What ``make_app`` asks of the pending-question reader: nothing is waiting.
-
-    Empty rather than seeded. These tests are about the app's other surfaces, and a fake holding
-    rows would turn any assertion about them into an assertion about this class.
-    ``tests/api/test_the_pending_queue_reads_interrupt_state.py`` is where the queue itself is
-    pinned, against a fake that enforces ``status`` and ``select``.
-
-    Self-contained -- it does not import ``PendingPage`` -- because ``make_app`` is imported
-    inside the test bodies here, so there is no module-level engine import to sit beside.
-    """
+    """Nothing is waiting. Rows here would make every other assertion about this class."""
 
     PENDING_FIELDS: tuple[str, ...] = ("asked_at", "question")
 

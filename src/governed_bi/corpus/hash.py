@@ -1,7 +1,6 @@
-"""``corpus_content_hash`` — setting under test identity (one implementation, no sentinel).
+"""``corpus_content_hash``: one implementation, no sentinel.
 
-Raises on a missing root. Sensitive to content, stable, relative sorted paths.
-Unreadable files are named in the digest without their bytes.
+A missing root raises. An unreadable file contributes a fixed placeholder, not its bytes.
 """
 
 
@@ -15,7 +14,7 @@ from .identity import corpus_files
 
 __all__ = ["corpus_content_hash"]
 
-#: Placeholder for a file that exists but cannot be read (not an unknown digest).
+#: Bytes mixed in for an unreadable file. Not a sentinel digest.
 _UNREADABLE = b"<unreadable>"
 
 
@@ -25,32 +24,10 @@ def corpus_content_hash(
     schemas: Sequence[str] | None = None,
     overrides: Mapping[Path, bytes] | None = None,
 ) -> str:
-    """A hex digest over the corpus stored under ``root``.
+    """One digest of the tree under ``root``. No sentinel.
 
-    ``schemas`` restricts the digest to those subtrees, so a config's setting under test identity
-    covers exactly the schemas it served and a leftover subtree enters neither.
-
-    Raises ``FileNotFoundError`` on a missing ``root`` rather than returning a sentinel:
-    two absences would compare equal and pass a check that the runs share their settings.
-
-    Hashes **every** file in the selected subtrees, not just ``.yaml`` — the markdown D9
-    keeps beside the assets is corpus content, and ignoring it reports two different
-    corpora as the same setting under test.
-
-    ``overrides`` substitutes bytes for a file already in the walk, giving **the digest the tree
-    would have after those writes**. That is what makes ``DerivedState.landed_verified`` mean
-    something: the exporter can record the hash of the tree its bundle predicts, so a later landing
-    can be told apart from a landing that arrived with three other bundles. Without it the strongest
-    available answer is ``landed_matched``, and the field the lifecycle reads was never set by
-    anything but a test.
-
-    A parameter here rather than a second function, because two digest implementations is how two
-    answers to "is this the same corpus" come to disagree — the same reason this module's own
-    docstring says "one implementation, no sentinel".
-
-    An override naming a path outside ``root`` **raises**. It cannot be in the walk, so honouring it
-    would describe a tree that cannot exist and ignoring it would return the *unedited* digest —
-    which reports ``superseded`` on a landing that went perfectly.
+    A missing root raises, so two absences cannot compare equal.
+    ``schemas`` limits the walk. An override outside ``root`` raises; a second function would disagree about sameness.
     """
     base = Path(root)
     if not base.is_dir():

@@ -1,9 +1,5 @@
-"""A server that cannot serve says so, and a dropped audit row leaves a log line.
-
-``/livez`` answers without touching the session, so under bare ``uvicorn`` a missing DSN was a
-500 on the first user request while the liveness probe stayed green (``docs/open-work.md``
-§6.8). The ``record`` node swallows its own failures because nothing after it can finish them,
-which made a lost audit row invisible (§6.1).
+"""``/livez`` does not touch the session, so a missing DSN fails ``/readyz`` while liveness stays green.
+The ``record`` node swallows its own failures, so a lost audit row has to leave a log line.
 """
 
 from __future__ import annotations
@@ -59,7 +55,6 @@ def test_readyz_is_503_on_a_fatal_corpus_problem() -> None:
 
 
 def test_a_model_without_its_credential_is_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real environment adapter: DSN and corpus present, model named, no credential."""
     from governed_bi import credentials
     from governed_bi.api import graph_app
     from governed_bi.model import provider
@@ -93,7 +88,6 @@ def test_livez_stays_up_while_readyz_is_not() -> None:
 
 
 def test_bare_uvicorn_with_no_dsn_is_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real environment adapter, with no DSN reachable."""
     from governed_bi import credentials
     from governed_bi.api import graph_app
 
@@ -126,7 +120,6 @@ def test_a_failing_record_node_logs_the_dropped_row(caplog: pytest.LogCaptureFix
 
 
 def test_the_drop_is_logged_even_when_the_state_cannot_be_read(caplog: pytest.LogCaptureFixture) -> None:
-    """The handler runs on a state that already broke once; reading its ids must not raise too."""
     from governed_bi.api.graph_app import record_node
 
     class _Hostile(dict):

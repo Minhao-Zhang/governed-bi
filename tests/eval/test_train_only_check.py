@@ -146,12 +146,7 @@ def test_a_test_side_provenance_citation_fails(tmp_path: pathlib.Path) -> None:
 
 
 def test_the_window_is_not_silently_widened() -> None:
-    """``NGRAM`` is the one arbitrary number in the tool and it was swept, not chosen.
-
-    Pinned because raising it back to 8 is exactly what made the check blind -- 48% of held-out
-    questions became ineligible and the planted leak went undetected, while every number the tool
-    printed still looked healthy.
-    """
+    """Raising the n-gram length made most held-out questions ineligible and hid a planted leak."""
     tool = _tool()
     assert tool.NGRAM <= 6, (
         f"NGRAM={tool.NGRAM} leaves too many held-out questions ineligible: at 8 only 52% have "

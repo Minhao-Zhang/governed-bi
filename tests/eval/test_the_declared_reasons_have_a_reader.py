@@ -1,22 +1,5 @@
-"""ADR 0013 §2's consumer, built rather than described.
-
-**What the ADR claimed and what was there.** §2 argues that putting the abstention reasons in
-``registry/stages.py::REFUSED_BY_TO_STAGE`` — rather than in a private set beside the policy —
-is what makes them readable, and names three readers: ``classify_outcome``, "the refusal
-histogram", and ``eval/report.py``. Measured on 2026-08-12:
-
-* ``classify_outcome`` never consults the table. Any truthy ``refused_by`` returns
-  ``Outcome.refused``, so ``test_the_abstention_policy_is_declared``'s assertion on it holds for
-  ``'banana_not_declared_anywhere'`` too — a test that could not fail for any member of a
-  vocabulary is not evidence the vocabulary is read.
-* A ledger histogram counts ``attempt.reason_code``. A withheld turn writes no ledger row —
-  ADR 0013's acceptance criterion 3 — so the four abstention reasons are invisible to it.
-* ``eval/report.py`` had zero references to ``refused_by``, ``terminal_reason`` or the
-  vocabulary.
-
-:func:`~governed_bi.eval.report.refusal_histogram` is the reader. These tests are what stop the
-sentence being true only because someone wrote it down.
-"""
+"""The refusal histogram reads the declared reasons. A truthy ``refused_by`` is not evidence the vocabulary is read. See
+ADR 0013."""
 
 from __future__ import annotations
 
@@ -31,13 +14,7 @@ def _row(qid: str, *, outcome: str = "refused", **extra: Any) -> dict[str, Any]:
 
 
 def test_every_declared_abstention_reason_is_attributed_to_the_abstain_stage() -> None:
-    """One refused row per reason, through the reader, counted under ``abstain``.
-
-    This is the assertion the ADR's argument needs and the one
-    ``classify_outcome(...) is Outcome.refused`` cannot make: it fails if a reason is dropped
-    from ``REFUSED_BY_TO_STAGE``, if it is mapped to another stage, or if the reader stops
-    consulting the table.
-    """
+    """Fails if a reason leaves the table, moves stage, or the reader stops consulting the table."""
     rows = [
         _row(f"q{i}", terminal_reason=reason)
         for i, reason in enumerate(sorted(ABSTENTION_REASONS))
@@ -53,13 +30,8 @@ def test_every_declared_abstention_reason_is_attributed_to_the_abstain_stage() -
 
 
 def test_an_undeclared_reason_lands_in_its_own_bucket_and_not_in_a_stage() -> None:
-    """What "closed" has to mean once artifacts exist.
-
-    Two import-time guards keep the *declarations* in step with each other, and neither can see
-    a node writing a string that is in no register — a value they never meet. Here it is counted
-    by name, outside ``by_stage``, so a histogram that no longer adds up says which string is
-    why. Crediting it to a stage would be exactly the misattribution ADR 0013 exists to end.
-    """
+    """An undeclared string is counted by name, outside the stages. Crediting it to a stage would misattribute it. See
+    ADR 0013."""
     hist = refusal_histogram(
         [
             _row("q1", terminal_reason="nothing_retrieved"),
@@ -72,14 +44,7 @@ def test_an_undeclared_reason_lands_in_its_own_bucket_and_not_in_a_stage() -> No
 
 
 def test_only_refused_turns_are_counted_and_the_coarser_channel_is_the_fallback() -> None:
-    """``Outcome`` keeps a crash, a cap and a clarification apart from a refusal, so the
-    histogram does too — a count over every row would answer a different question from the one
-    it is named for.
-
-    ``terminal_reason`` wins over ``refused_by`` on a row carrying both: ``route`` and the
-    abstention policy write the *rule* there, while ``refused_by`` names the stage and is
-    coarser. One decision, counted once.
-    """
+    """``terminal_reason`` wins over ``refused_by`` when both are set, so one decision is counted once."""
     hist = refusal_histogram(
         [
             _row("q1", outcome="answered", terminal_reason="nothing_retrieved"),
@@ -98,12 +63,7 @@ def test_only_refused_turns_are_counted_and_the_coarser_channel_is_the_fallback(
 
 
 def test_every_key_in_the_table_is_reachable_through_the_reader() -> None:
-    """The whole table, not only the abstention half.
-
-    ``REFUSED_BY_TO_STAGE`` is the inventory of legal ``refused_by`` values; a key nothing can
-    attribute is the free-text refusal the table exists to replace, and until this reader landed
-    the only thing checking any of it was two guards comparing declarations to declarations.
-    """
+    """Every legal ``refused_by`` value is in the table. A key nothing can attribute is free text."""
     rows = [_row(f"q{i}", refused_by=key) for i, key in enumerate(sorted(REFUSED_BY_TO_STAGE))]
     hist = refusal_histogram(rows)
     assert hist["unattributed"] == {}

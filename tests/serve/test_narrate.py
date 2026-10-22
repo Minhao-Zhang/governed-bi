@@ -1,13 +1,4 @@
-"""``narrate`` writes the sentence the answer card reads.
-
-The defect these pin: a turn answered, ran one governed statement, returned `[[9590]]`, and the
-interface showed SQL, a ledger and a provenance drawer with **no answer on it**. The card reads
-`answer.answer_text`; nothing in the graph wrote it. It was written at the REST boundary only,
-so `POST /chat` had an answer and the streamed path — the one the UI uses — did not.
-
-Two behaviours worth a test each, because each is a decision rather than an implementation
-detail: the node **adopts** the agent's prose instead of paying for a second opinion, and it
-**generates** only when there is no prose to adopt.
+"""``narrate`` writes ``answer_text``. The card has nothing else to read as the answer.
 """
 
 from __future__ import annotations
@@ -24,13 +15,6 @@ RESULT = {"columns": ["restaurant_count"], "rows": [[9590]], "row_count": 1, "tr
 #: The synthetic message ``_CapEndsTheTurn.after_model`` appends at ``cap=5``.
 #:
 #: **A duplicate of the f-string in ``agent_core.py``, not a read of it.** The middleware builds
-#: the line inline and exposes no boundary to ask for it, and driving ``after_model`` to obtain one
-#: would mean constructing middleware state and letting ``emit`` fire for a string. So if that
-#: wording changes, ``test_a_capped_turn_generates_instead_of_adopting_the_cap_exit_line`` keeps
-#: passing while testing nothing — the assertion would compare the generated text against a
-#: sentence no longer in the transcript. Stated because an unrecorded weak assertion is worse
-#: than a recorded one; the paired ``len(model.calls) == 1`` check is what pins the
-#: generate-don't-adopt behaviour, and it does not depend on this constant.
 _CAP_EXIT_LINE = "Stopped: run_query reached its attempt limit of 5."
 
 
@@ -46,20 +30,12 @@ class _Recorder:
         # ``config=`` is part of ``BaseChatModel.invoke``'s real signature, and this fake
         # omitted it. When the callers began naming their runs for the trace, the fake
         # raised ``TypeError`` and the caller's ``except`` reported it as a provider
-        # failure — a fake narrower than the interface turning a code change into a
-        # plausible-looking wrong result. It is recorded so a caller cannot pass one
-        # silently, and ignored because nothing here reads it.
         self.configs.append(config)
         self.calls.append(messages)
         return AIMessage(self._text)
 
     async def ainvoke(self, messages: list[Any], config: Any = None, **kwargs: Any) -> Any:
-        """The nodes await now, and a double that only offers ``invoke`` fails them open.
-
-        Same lesson as the ``config=`` parameter below: a fake that is narrower than
-        ``BaseChatModel`` does not fail loudly, it makes the caller take its error branch. The
-        scope check's error branch is ``error_failed_open``.
-        """
+        """The nodes await now, and a double that only offers ``invoke`` fails them open."""
         return self.invoke(messages, config, **kwargs)
 
 def _config(model: Any) -> dict[str, Any]:
@@ -67,13 +43,7 @@ def _config(model: Any) -> dict[str, Any]:
 
 
 def test_the_agents_own_sentence_is_adopted_and_no_model_is_called() -> None:
-    """The common path, and the reason this stage is nearly free.
-
-    Measured on a live turn, the agent's closing message is *"There are **9,590 restaurants** in
-    total."* — a correct narration the loop produced on its way to finishing. Generating a
-    second one would pay a model call per turn, at the very end where the user is already
-    waiting, to replace prose that was already right.
-    """
+    """The common path, and the reason this stage is nearly free."""
     model = _Recorder()
     state = {
         "path_kind": "answered",
@@ -92,12 +62,7 @@ def test_the_agents_own_sentence_is_adopted_and_no_model_is_called() -> None:
 
 
 def test_a_loop_that_ended_without_prose_gets_a_generated_sentence() -> None:
-    """The case the interface could not survive.
-
-    When the last AI frame carries only tool calls or reasoning, there is nothing to adopt — and
-    that is precisely when the answer card had nothing to render. The narrator is handed the
-    question, the statement and the rows, and nothing else.
-    """
+    """The case the interface could not survive."""
     model = _Recorder()
     state = {
         "path_kind": "answered",
@@ -179,13 +144,7 @@ def test_an_all_refused_ledger_is_not_narrated() -> None:
 
 
 def test_a_capped_turn_is_narrated_because_its_statements_ran() -> None:
-    """The revision. This used to be asserted the other way, grouped with ``refused``.
-
-    Grouping was right about refusals and wrong about caps. A capped turn's statements passed
-    every layer and executed; only the budget ran out. Measured 2026-08-19 on the served
-    surface: 47.5s, eight executed statements, a nine-row table, and ``answer_text: null`` — the
-    reader got a table with no sentence on it and no way to tell what it was.
-    """
+    """The revision."""
     model = _Recorder("It found nine chiller assets before running out of attempts.")
     out = asyncio.run(narrate_node(_capped_state(), _config(model)))
 
@@ -194,12 +153,7 @@ def test_a_capped_turn_is_narrated_because_its_statements_ran() -> None:
 
 
 def test_a_capped_turn_generates_instead_of_adopting_the_cap_exit_line() -> None:
-    """Why generation, not adoption, is the fix.
-
-    ``_CapEndsTheTurn`` appends a synthetic ``AIMessage`` — the exact string asserted here — so a
-    capped turn *does* have prose to adopt. Adopting it would be worse than the null it replaced:
-    the answer card would present the budget's exit line as the answer to the question.
-    """
+    """Why generation, not adoption, is the fix."""
     model = _Recorder("Nine chiller assets found; the run-hours question stayed open.")
     out = asyncio.run(narrate_node(_capped_state(), _config(model)))
 
@@ -208,14 +162,7 @@ def test_a_capped_turn_generates_instead_of_adopting_the_cap_exit_line() -> None
 
 
 def test_the_narrator_is_told_the_capped_turn_is_incomplete() -> None:
-    """The honesty guard, and the reason narrating a cap is not the decoration it replaced.
-
-    On a capped turn ``result_table`` holds the last statement that *succeeded*, which is
-    usually an intermediate probe — in the measured case, the nine chiller assets it found while
-    still looking for run-hours. Handed those rows with no framing, a narrator reads them out as
-    the answer. So the brief must say the turn stopped at its budget and the rows are not a
-    conclusion, and it must say so *before* the rows.
-    """
+    """The honesty guard, and the reason narrating a cap is not the decoration it replaced."""
     model = _Recorder()
     asyncio.run(narrate_node(_capped_state(), _config(model)))
 

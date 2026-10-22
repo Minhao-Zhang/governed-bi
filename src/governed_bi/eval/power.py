@@ -1,34 +1,9 @@
-"""Whether a config can detect the effect it hypothesises, asked before it runs.
+"""Whether a config can detect the effect it hypothesises, before it runs.
 
-Taken from RyanChenJung/governed-bi-utkuai@12c3e15. The prior it is calibrated against is
-**their** paired run, named as such throughout: this repository has published no config carrying
-these figures, and a number whose provenance has been rubbed out is a number the next reader
-quotes as ours.
-
-Their run measured a setting under test that reached 9 of 131 questions, against an MDE of 9.6pp, and
-reported the resulting null as a finding about the feature. It was a finding about the sample.
-This module makes that arithmetic a precondition of declaring a config.
-
-**The arithmetic is not here.** :func:`governed_bi.measure.stats.mde` is the one MDE in this
-repository (ADR 0005 §6), and this module calls it. A second spelling of the same formula
-already disagreed in the last digit, so this module does not restate it. ``eval/report.py``
-reaches down into ``measure/`` for ``mcnemar`` the same way.
-
-What is left here is the **check**, which is a different thing from the formula: it converts a
-discordant *count* into the discordance rate ``mde`` requires, and refuses a config whose
-hypothesis sits under the floor.
-
-``stats.mde``'s own docstring says why that rate is a required argument, and what an MDE
-computed from ``n`` and a base rate alone is instead. Read it before quoting a number from here;
-the warning governs every caller and is deliberately not restated.
-
-**``discordant`` is an estimate, not a measurement, when used here.** It is the count of paired
-questions where the two configs disagreed, and that count is only known once a comparison has
- run -- so a pre-check has nothing but a comparable prior run to estimate it from. The
-only prior available is the fork's ``beer_factory`` pair: 20 discordant of 131 questions (15.3%),
-which is the 0.0956 this check is calibrated against. Presenting the MDE this produces as an exact
-figure, rather than as an estimate carried forward from one prior run in another tree, is the
-mistake this docstring exists to head off.
+The MDE formula lives only in ``measure.stats.mde`` (ADR 0005). A second copy
+disagreed in the last digit, so this module calls it and does not restate it.
+``discordant`` here is an estimate from a prior run, not a measurement of this
+config.
 """
 
 from __future__ import annotations
@@ -40,24 +15,11 @@ __all__ = ["UnderpoweredConfiguration", "require_power"]
 
 
 class UnderpoweredConfiguration(ValueError):
-    """An config hypothesising an effect smaller than it could detect."""
+    """The hypothesised effect sits under the detection floor."""
 
 
 def require_power(n: int, discordant: int, hypothesised_effect: float) -> None:
-    """Raise :class:`UnderpoweredConfiguration` unless ``n`` at ``discordant`` could detect
-    ``hypothesised_effect``. ``discordant`` is an estimate -- see the module docstring.
-
-    ``discordant`` is a **count** of disagreeing pairs and must be an ``int``. A float is
-    refused rather than converted, because the confusion it invites is the one failure this
-    check cannot afford: ``require_power(n=131, discordant=0.29, hypothesised_effect=0.03)``
-    passed silently on an MDE of 0.0115 -- one eighth of the true 0.0956 -- so the check
-    approved the exact config shape it exists to refuse. Delegating the formula does not catch
-    that on its own: ``stats.mde`` takes a *rate*, and 0.29 is a well-formed rate.
-
-    An MDE that cannot be computed is not a pass. ``stats.mde`` returns an unmeasured quantity
-    for no pairs and for zero discordance, and both of those mean this config has no resolution to
-    spend, so both refuse here and carry ``mde``'s own reason.
-    """
+    """A float ``discordant`` is a rate and understated the floor. An unmeasured MDE refuses rather than passes."""
     if not isinstance(discordant, int):
         raise TypeError(
             f"discordant must be a count of disagreeing pairs, not {discordant!r}. A float "

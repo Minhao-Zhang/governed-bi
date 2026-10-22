@@ -1,25 +1,8 @@
-"""A node timeout must finish the turn and resolve its rail, under every stream mode.
+"""A node timeout finishes the turn inside the wrapper and resolves its rail.
 
-This replaces a test of the ``error_handler`` design, which was removed because it did not
-work. The history is worth keeping, because the replacement is only obviously right once you
-know what the original got wrong.
-
-``add_node(..., timeout=..., error_handler=...)`` enforces the bound *outside* the node
-function, so ``wrap_node``'s ``except`` never saw it and a handler was registered to catch the
-``NodeTimeoutError`` instead. Measured on langgraph 1.2.10, that handler **runs, updates state,
-and still loses the run**: ``pregel/_executor.py``'s teardown re-raises the first task exception
-without consulting the handled set, and the runner's single-task fast path that would have
-suppressed it is disabled by ``stream_eager``, ``subgraphs=True``, or ``"messages"`` /
-``"custom"`` among the stream modes. The UI submits ``["values", "messages", "custom"]`` with
-``streamSubgraphs``, so the handler protected exactly one caller: ``ainvoke``, which is what the
-original measurement used.
-
-It failed a second way that no exception would have revealed. A node killed from outside never
-returns, so ``wrap_node._end`` never runs, so the rail emitted ``start`` and no resolve — the
-timeline showed the stage running forever while ``finish`` reported a crash.
-
-So the clock moved inside. Both properties are pinned below, and the stream-mode parametrisation
-is the point: the old design passed the first case and failed the rest.
+LangGraph's node timeout and ``error_handler`` sit outside the node, so the wrapper never sees
+the failure and the rail emits ``start`` with no resolve. The clock lives in the wrapper, and
+the stream-mode cases are the ones an outside handler does not cover.
 """
 
 import asyncio
@@ -51,12 +34,7 @@ async def _slow(_state: dict) -> dict:
 
 
 def _custom_events(node: Any, state: dict) -> list[dict[str, Any]]:
-    """Drive one wrapped node through a real graph and collect its ``custom`` payloads.
-
-    ``emit`` writes to ``get_stream_writer()``, which needs a live runnable context and
-    silently no-ops without one — so calling the wrapped node directly would collect nothing
-    and the assertion would pass for the wrong reason.
-    """
+    """Drive the node on a compiled graph: ``emit`` no-ops without a live stream writer."""
     builder = StateGraph(_RailState)
     builder.add_node("n", node)
     builder.add_edge(START, "n")
@@ -107,7 +85,7 @@ def test_a_timeout_resolves_its_rail_instead_of_leaving_it_running() -> None:
     ],
 )
 def test_the_turn_is_stamped_under_every_stream_mode(stream_mode: str, subgraphs: bool) -> None:
-    """The parametrisation IS the regression. The old design passed row one and failed rows 2-4."""
+    """``custom``, ``messages``, and subgraphs are the modes an outside handler does not cover."""
 
     async def slow(_state: _RailState) -> dict:
         await asyncio.sleep(30)
@@ -143,18 +121,7 @@ def test_the_turn_is_stamped_under_every_stream_mode(stream_mode: str, subgraphs
 
 @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
 def test_a_node_that_returns_no_mapping_crashes_inside_the_wrapper(is_async: bool) -> None:
-    """Audit C7 — the wrapper's own promise, broken by the wrapper.
-
-    ``_end`` and ``_without_cleared_clock`` run *after* the ``except``, and both subscript the
-    update. So a node returning ``None`` — or anything that is not a mapping — raised from the
-    wrapper itself: no ``crashed`` marker, no ``answer``, no ``final`` event, and the exception
-    left the graph. "Every failure routes through ``finish``" is exactly what this wrapper exists
-    for, and this was the one path around it.
-
-    Parametrised over both shapes because the fix nearly missed one: ``_body``'s async branch
-    returned early, before the check, so the first version covered sync nodes only. The two
-    branches now share one shape check.
-    """
+    """A node returning ``None`` is a crash inside the wrapper, on both the sync and async branches."""
     from governed_bi.serve.wrap import wrap_node
 
     if is_async:
@@ -175,13 +142,7 @@ def test_a_node_that_returns_no_mapping_crashes_inside_the_wrapper(is_async: boo
 
 
 def test_a_sync_node_cannot_be_given_a_timeout() -> None:
-    """Refused at build time, because cancelling the await would not stop the thread.
-
-    ``wrap_node`` runs a still-synchronous node through ``asyncio.to_thread``. Cancelling that
-    await abandons the result; the thread keeps running, holding its connection and its slot.
-    A turn recorded as timed out while its node is still executing is a false measurement, so
-    the wiring is refused rather than silently weakened.
-    """
+    """A sync node cannot take a timeout: cancelling ``to_thread`` does not stop the thread."""
 
     def sync_node(_state: dict) -> dict:
         return {}
@@ -191,19 +152,7 @@ def test_a_sync_node_cannot_be_given_a_timeout() -> None:
 
 
 def test_a_raw_sync_invoke_fails_loudly_instead_of_fabricating_a_crashed_turn() -> None:
-    """Forgetting ``as_sync`` must raise, not return a full record for a turn that never ran.
-
-    This is the worst failure the timeout rewiring fixed, and it is here rather than beside
-    ``_SyncApp`` because the timeouts caused it. While the rails carried LangGraph node
-    timeouts, ``pregel/_retry.py`` raised ``sync_timeout_unsupported`` on the sync path for any
-    node with a timeout — before the async check, and regardless of whether the node was sync.
-    ``guard`` is first and carried one, so ``rail``'s ``error_handler`` caught it and
-    ``.invoke()`` returned ``outcome: "crashed"``, ``failed_stage: "guard"``,
-    ``error_type: "ValueError"`` with a complete audit record and **no exception**.
-
-    An eval driver that forgot ``as_sync`` would have produced 1,351 fully-formed fictional
-    rows and no signal that anything was wrong. Nothing else in the suite would catch that.
-    """
+    """A raw sync ``invoke`` raises instead of returning a crashed record for a turn that never ran."""
     from langgraph.checkpoint.memory import InMemorySaver
 
     from governed_bi.serve.graph import build_graph
@@ -220,12 +169,7 @@ def test_a_raw_sync_invoke_fails_loudly_instead_of_fabricating_a_crashed_turn() 
 
 
 def test_no_error_handler_nodes_remain_in_the_graph() -> None:
-    """LangGraph materialises one node per ``error_handler``; we register none.
-
-    They rendered as unreachable islands in every graph diagram and were repeatedly mistaken
-    for orphans. They are gone because the mechanism they served did not work, not because the
-    drawing was untidy.
-    """
+    """The graph registers no ``error_handler`` nodes."""
     from governed_bi.serve.graph import build_graph
 
     nodes = list(build_graph().compile().get_graph().nodes)

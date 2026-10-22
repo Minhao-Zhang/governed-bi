@@ -139,7 +139,6 @@ def _a_table_count(table_ids: list[str], retrieved: dict[str, Any], index: Unifi
     return n
 
 
-# ── channel pass-one ────────────────────────────────────────────────────────────
 
 
 def test_channel_schema_searches_index_within_target_types(
@@ -159,10 +158,6 @@ def test_channel_schema_searches_index_within_target_types(
     # **With one channel running, that channel alone decides both the ranking and the score.**
     # This once read ``hit["score"] == hit["lexical"]``, which is a claim about how two channels
     # combine made in the only configuration the suite ever built — no embedder, so the combiner
-    # is a no-op — and it would have held equally for ``max``, ``min``, or "ignore the vector".
-    # Then a min-max normaliser made ``score`` relative to the channel's best hit and the equality
-    # had to go. The fixed ceiling of audit I1 gives it back, and the second assertion is the
-    # reason that matters: a channel whose best hit is mediocre no longer reports top of scale.
     by_score = [h["asset_id"] for h in sorted(result["hits"], key=lambda h: -h["score"])]
     by_lexical = [h["asset_id"] for h in sorted(result["hits"], key=lambda h: -h["lexical"])]
     assert by_score == by_lexical, "a single running channel must decide the order outright"
@@ -211,7 +206,6 @@ def test_channel_without_index_keeps_empty_hits_for_f1(
     assert asyncio.run(channel_entity_node(_base_turn(), config))["channels"]["channel_entity"]["hits"] == []
 
 
-# ── pass-two / assemble / refuse / budgets ────────────────────────────────────
 
 
 def test_pass_two_recovers_more_in_schema_hits_than_pass_one(
@@ -363,17 +357,7 @@ def test_table_hits_capped_at_register_budget(
 
 
 def test_pass_two_scores_against_the_turns_query_vector_from_state(monkeypatch) -> None:
-    """``route_node`` read ``cfg.get("query_vector")`` only, so the served path had none.
-
-    ``accept`` writes the per-turn vector to **state** (``serve/accept.py``), because
-    ``make_graph`` binds the run constants once at load time with no question — a query
-    vector cannot be a run constant. ``channels._query_vector`` was taught to read state first
-    and documents why at length; ``route_node`` was left on the other side of the same fix.
-    The consequence was silent and total: ``_semantic_scores`` returns ``{}`` for a ``None``
-    vector, so pass two — the pass that builds the analyst's context — fused a single
-    channel on every served turn, while the eval driver passed ``question=`` and therefore
-    measured a different system.
-    """
+    """``route_node`` read ``cfg.get("query_vector")`` only, so the served path had none."""
     from governed_bi.serve.nodes import route_retrieve
 
     seen: dict[str, object] = {}
@@ -406,15 +390,7 @@ def test_pass_two_scores_against_the_turns_query_vector_from_state(monkeypatch) 
 
 
 def _semantic_index(assets):
-    """A real two-channel index. Nothing else in the suite builds one.
-
-    Every serve fixture passes ``build_index(entries)`` with no embedder, so
-    ``UnifiedIndex.vectors is None``, ``semantic_search`` returns ``not_configured``, and the
-    suite's only assertion about the semantic channel is that it is absent
-    (``test_pass_two_carries_lexical_only_when_no_embedder`` below asserts
-    ``hit["semantic"] is None``). That is why every defect in the channel survived: the
-    combiner is a no-op in the only configuration it is ever tested in.
-    """
+    """A real two-channel index."""
     from governed_bi.model.deterministic_embedder import DeterministicEmbedder
     from governed_bi.retrieve.index import IndexEntry, build_index, schema_tag_for
 
@@ -437,19 +413,7 @@ def _semantic_index(assets):
 
 
 def test_a_few_shot_reaches_retrieved_and_the_prompt() -> None:
-    """5 000 past SQL examples — 36% of the corpus — could never reach the analyst.
-
-    Two lines conspired. ``pass_two.py`` gated the whole scoring block on
-    ``_scores_lexical(name)``, and ``channel_example`` declares only ``Channel.semantic``
-    (``registry/channels.py``), so the channel was skipped outright. Its pass-one hits were then
-    dropped by the carry-forward, which keeps only hits with **no** ``schema_tag`` — and
-    every few-shot carries ``TagRule.own_schema``. So ``retrieved["by_type"]["few_shot"]``
-    was never populated, the declared budget of 3 was unreachable, and ``context.py``'s
-    ``## Few-shots`` section could not render. The channel voted on schema routing and then
-    delivered nothing, which is the incident ``nodes/channels.py`` says it fixed one pass
-    earlier: *"``channel_example`` declares only the semantic channel, so without it the
-    past-SQL-example channel retrieves nothing at all."*
-    """
+    """5 000 past SQL examples — 36% of the corpus — could never reach the analyst."""
     from governed_bi.corpus.schema import ColumnAsset, FewShotAsset, TableAsset
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 
@@ -519,23 +483,13 @@ def test_a_few_shot_reaches_retrieved_and_the_prompt() -> None:
 
 
 def test_a_semantic_only_candidate_can_enter_pass_two() -> None:
-    """The candidate set is the union of the channels, not the lexical list re-scored.
-
-    ``pass_two`` took the lexical top-``depth`` and then looked the cosine up **by id**, so
-    an asset with a strong cosine and no shared query term could not enter the context at
-    any depth. A caller that ranks lexically and then attaches a cosine to the survivors has
-    no semantic channel for that channel at all: it has a lexical channel wearing a cosine.
-    ``nodes/pass_two.py``'s own comment states the rule — *"Each channel retrieves; their
-    union is scored"* (ADR 0005 §2.4).
-    """
+    """The candidate set is the union of the channels, not the lexical list re-scored."""
     from governed_bi.corpus.schema import TableAsset
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 
     # No token of the question appears in this summary, so BM25 scores it zero. The
     # embedder is stubbed rather than hashed because `DeterministicEmbedder` puts an
     # unrelated pair at cosine exactly 0.0 — which the `> 0.0` filter drops for the same
-    # reason `nodes/channels.py` drops it, so a hash embedder cannot express "found only by
-    # the vector channel".
     orphan = TableAsset(
         id="sales.zzz",
         schema="sales",
@@ -590,24 +544,7 @@ def test_a_semantic_only_candidate_can_enter_pass_two() -> None:
 
 
 def test_pass_two_scores_both_channels_over_the_same_text() -> None:
-    """Audit §7.2. BM25 searched the rewrite; cosine scored the raw question's vector.
-
-    ``accept`` embeds the **raw last human message** into ``state["query_vector"]`` — it is the
-    only writer of that key repo-wide — and ``route_node`` passed it straight through as one
-    call-level vector for the whole of pass two. The lexical channel meanwhile searched the
-    per-channel ``queries``, which ``_run_channel`` set to the utility-model rewrite. So the two
-    channels were scored over two different texts and then blended at 0.5/0.5.
-
-    ``channels.py`` documents the fix in the pass that already had it — *"The rewrite happens
-    first and both channels then search with it: the point of restating the question in the
-    vocabulary of the thing being searched is to move it semantically closer, so a rewrite
-    reaching only BM25 misses it."* — and that fix applied to pass one only, leaving it undone
-    in the pass whose output becomes the analyst's context.
-
-    The fixture makes the two texts disagree as sharply as possible: the raw question's vector
-    points at ``raw_match`` and the rewrite's points at ``rewrite_match``. Under the old code
-    the semantic channel scored ``raw_match``; it must now score ``rewrite_match``.
-    """
+    """Audit §7.2."""
     from governed_bi.retrieve.index import IndexEntry, build_index
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 
@@ -671,22 +608,7 @@ def test_pass_two_scores_both_channels_over_the_same_text() -> None:
 
 
 def test_pass_two_scores_a_rewrite_against_its_own_vector_or_against_nothing() -> None:
-    """Audit I7. An asset only cosine can find must reach the context — on *this query's* vector.
-
-    ``sales.t`` shares no term with the rewrite, so the lexical channel scores it 0.0 and the
-    semantic channel is the only way it enters. That property is why the ``_scores_lexical`` guard
-    sits one level below the retrieval block (see ``pass_two.py``), and it is asserted below with
-    the embedder threaded, which is what ``route_retrieve.py`` does on every served turn.
-
-    **The second half is the audit finding.** With no embedder there is nothing to embed the
-    rewrite with, and this used to degrade to ``query_vector`` — the *raw question's* — so the
-    channel blended BM25 over "customer count purchasers" with cosine over "how many buyers" and
-    recorded one ``semantic`` score. This test asserted that as correct, on the reasoning that no
-    embedder is a legitimate configuration and going dark would make it unusable. The
-    configuration is legitimate; the substitution is not, and it is not needed to keep it usable:
-    "this call has no embedder" is *not configured*, and production never reaches it,
-    because ``route_retrieve`` passes the embedder from the same config the index was built from.
-    """
+    """Audit I7."""
     from governed_bi.retrieve.index import IndexEntry, build_index
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 
@@ -740,14 +662,7 @@ def test_pass_two_scores_a_rewrite_against_its_own_vector_or_against_nothing() -
 
 
 def test_both_passes_use_one_combiner() -> None:
-    """One asset must not carry two different scores in a single turn.
-
-    Pass one used ``max`` and pass two used ``fuse``, and both scores reach
-    ``apply_budgets``' single global ordering because untagged pass-one hits are carried into
-    pass two verbatim. So a table found by both channels could hold 0.9 down one path and 0.7
-    down the other, and untagged assets were advantaged at the 8-table boundary by arithmetic
-    rather than by relevance.
-    """
+    """One asset must not carry two different scores in a single turn."""
     import inspect
 
     from governed_bi.serve.nodes import channels, pass_two
@@ -789,13 +704,7 @@ def test_both_passes_use_one_combiner() -> None:
     ids=["ran", "failed", "unrecorded"],
 )
 def test_carry_forward_scores_an_unscored_pass_one_hit(semantic_state, expected) -> None:
-    """The carry-forward called ``_hybrid`` without ``consulted``, which is a ``TypeError``.
-
-    Every payload the fan-out writes carries a ``score``, so only a hit built elsewhere — a
-    ``retrieve_hooks`` hook, a fixture — reaches the branch, and it crashed the turn. The
-    consulted set comes from what the channel result records as ``ran``, so the recomputed score
-    is pass one's own rather than an average over whichever components happen to be present.
-    """
+    """The carry-forward called ``_hybrid`` without ``consulted``, which is a ``TypeError``."""
     from governed_bi.corpus.schema import TableAsset
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 

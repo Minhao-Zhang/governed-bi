@@ -1,12 +1,5 @@
-"""Execution-time governance between agent SQL and the database (ADR 0006).
-
-May import ``ports``, ``register``, ``corpus``; no model, no connector.
-
-* G1 Absence refuses — missing security args never mean "skip".
-* G2 Every executor in :data:`~.ledger.EXECUTOR_PATHS` passes ``check()`` and ledgers.
-* G3 Permission is proven — ``failed_layer=None`` never means safe.
-* G4 The string checked is the string executed (:mod:`.pipeline` + ledger hash).
-"""
+"""Execution-time governance between agent SQL and the database. See ADR 0006. May import ``ports``, ``register``, and
+``corpus`` only. A missing security argument refuses; the string checked is the string executed."""
 
 from __future__ import annotations
 

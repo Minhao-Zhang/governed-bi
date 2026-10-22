@@ -1,5 +1,3 @@
-"""Eval harness: grade serve turns, report with measure checks (Parcel G)."""
-
 from governed_bi.eval.configs import ConfigSpec, oracle_config, scripted_config, stub_config
 from governed_bi.eval.grade import grade_results, grade_turn, result_fingerprint
 from governed_bi.eval.harness import run_comparison, run_config

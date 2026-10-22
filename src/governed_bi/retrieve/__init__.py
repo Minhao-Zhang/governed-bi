@@ -1,11 +1,4 @@
-"""Faceted retrieval: lexical + semantic scoring, route, closure, budgets.
-
-Parcel E. Spec: ADR 0005 §2.
-
-``route`` is intentionally **not** re-exported as a function here — the scoring
-contract imports ``governed_bi.retrieve.route`` as the submodule (to read its
-source). Callers use ``from governed_bi.retrieve.route import route``.
-"""
+"""See ADR 0005. ``route`` stays a submodule so its source can be read by name."""
 
 from __future__ import annotations
 

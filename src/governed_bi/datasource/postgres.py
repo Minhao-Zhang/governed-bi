@@ -1,23 +1,9 @@
-"""Postgres connector adapter (BIRD obfuscated path).
-
-Session settings required by ADR 0006 §10 are applied on open:
-``default_transaction_read_only = on`` and ``synchronize_seqscans = off``. Since 2026-08-19,
-``statement_timeout`` joins them (``statement_timeout_ms``): it is the only bound one governed
-statement has, because the agent's wall clock cannot fire while a query blocks.
-
-Error taxonomy is SQLSTATE class lookup (parcel C): ``42`` → ``QueryError``;
-``08`` / ``53`` / ``57`` → ``ConnectionError``, less ``57014`` (``query_canceled`` — our own
-``statement_timeout``), which is a result on the statement and leaves the handle usable.
-Never message-regex.
-
-**A failed statement must discard a dead connection** (audit §9.1). Reusing the
-cached handle let one network blip poison every remaining question in the run, and
-because psycopg raises ``the connection is closed`` with ``sqlstate=None`` the fault
-was recorded as *the model wrote bad SQL* (reproduced on psycopg 3.3.4). The
-no-SQLSTATE case is therefore decided from structured driver state —
-``Connection.closed`` / ``Connection.broken`` and the DB-API ``OperationalError`` /
-``ProgrammingError`` split — never message text: an exception the server classified
-carries a SQLSTATE, so one without is a client-side or transport failure.
+"""On open: read-only and ``synchronize_seqscans=off`` (ADR 0006). ``statement_timeout``
+is set only when the configured milliseconds are above zero. SQLSTATE class, never the
+message: ``42`` is a query fault; ``08``, ``53`` and ``57`` are infrastructure, except
+``57014`` (our timeout), which keeps the handle. No SQLSTATE uses ``closed`` / ``broken``
+and the DB-API split. On psycopg 3.3.4 a closed connection has ``sqlstate=None`` and was
+filed as bad SQL while the dead handle was reused.
 """
 
 from __future__ import annotations
@@ -41,14 +27,11 @@ _log = logging.getLogger(__name__)
 _CONNECT_TIMEOUT_S = 5
 #: Driver gave no code on a connect-path failure (e.g. TCP timeout). Class 08.
 _FALLBACK_CONNECTION_SQLSTATE = "08006"
-#: ``query_canceled``: ``statement_timeout`` fired. Class 57 by code, a statement fault by
-#: meaning -- see :meth:`PostgresConnector._raise_classified`.
+#: ``query_canceled``. Class 57 by number, a statement fault here because it is our timeout.
 _STATEMENT_TIMEOUT_SQLSTATE = "57014"
 
 
 class PostgresConnector:
-    """Read-only Postgres access. Context-managed or lazy-connect on first use."""
-
     def __init__(
         self,
         dsn: str,
@@ -58,9 +41,8 @@ class PostgresConnector:
     ) -> None:
         self._dsn = dsn
         self._max_rows = max_rows
-        #: ``None`` means *the register's value*, not *no bound*. Resolved here rather than as
-        #: a literal default so the number a run records and the number it enforces are one
-        #: value; pass ``0`` to disable the bound, which is what Postgres already means by it.
+        #: ``None`` means the declared default, so the recorded number and the enforced number match.
+        #: It is not "no bound". Pass ``0`` to disable, which is what Postgres already means by zero.
         self._statement_timeout_ms = (
             int(setting_default("statement_timeout_ms"))
             if statement_timeout_ms is None
@@ -81,12 +63,7 @@ class PostgresConnector:
             self._conn = None
 
     def _discard(self) -> None:
-        """Drop the cached handle so the next call reconnects. Never raises.
-
-        Separate from :meth:`close` because it runs on the failure path: a broken handle
-        can raise from ``close()``, which would replace the classified datasource error
-        with a cleanup exception. ``_conn`` is cleared *first*, so the handle is dropped
-        whether or not the close succeeds.
+        """Never raises. ``_conn`` is cleared before ``close()``, which can fail on a broken handle.
         """
         conn, self._conn = self._conn, None
         if conn is None:
@@ -108,17 +85,7 @@ class PostgresConnector:
 
     @property
     def endpoint(self) -> dict[str, Any]:
-        """Which database this is, with the credential removed. Safe to serve.
-
-        **The redaction lives here, in the object that owns the DSN, rather than in the caller
-        that wants to display it.** A route reaching for ``connector._dsn`` and stripping the
-        password itself is one forgotten regex away from serving the credential, and the next
-        surface that wants an endpoint would write that regex again. This returns the three
-        fields that identify a warehouse and never parses out ``user`` or ``password`` at all,
-        so there is nothing for a caller to leak.
-
-        Returns ``{}`` when the DSN cannot be parsed — an unparseable DSN is not a reason to
-        raise on a page that is only trying to say where it is pointed.
+        """Host, port and database, never the credential. An unparseable DSN returns ``{}`` and does not raise.
         """
         try:
             from psycopg.conninfo import conninfo_to_dict  # noqa: PLC0415 (lazy: heavy import)
@@ -153,16 +120,9 @@ class PostgresConnector:
             )
             conn.execute("SET default_transaction_read_only = on")
             conn.execute("SET synchronize_seqscans = off")
-            # A server-side bound on one statement, and the only bound run_query has. The
-            # agent's own wall clock is checked between stream frames, so a query that blocks
-            # emits no frame and cannot be timed out from the client without cancelling a
-            # statement that may already have executed -- the audit break
-            # ``serve/nodes/agent_core.py::_run`` refuses to risk. Postgres cancelling its own
-            # statement has neither problem: nothing executed, the connection stays usable, and
-            # the agent gets a QueryError it can rewrite against.
-            #
-            # Interpolated and not a bound parameter: SET takes no parameters, and psycopg
-            # raises on the placeholder. The value is an int by construction one frame up.
+            # SET takes no parameters; psycopg raises on a placeholder, so the int is interpolated.
+            # The server cancels this statement and leaves the connection usable. A client abort
+            # of the whole turn does not give the agent a ``QueryError`` it can rewrite.
             if self._statement_timeout_ms > 0:
                 conn.execute(f"SET statement_timeout = {self._statement_timeout_ms}")
         except Exception as err:  # noqa: BLE001 — classified and re-raised
@@ -171,19 +131,8 @@ class PostgresConnector:
         return conn
 
     def _connection_is_unusable(self, err: BaseException) -> bool:
-        """Whether this failure means the *connection* is gone, from structured state only.
-
-        Two signals, in order of directness:
-
-        * ``Connection.closed`` / ``Connection.broken`` — psycopg's view of the handle it
-          just failed on. If either is set, the next statement on it cannot succeed.
-        * ``isinstance(err, psycopg.OperationalError)`` — the DB-API split. A *server*
-          error always carries a ``sqlstate``, and this method is only reached when there
-          is none, so the exception is client-side or transport, which is precisely what
-          ``OperationalError`` means (against ``ProgrammingError`` for a statement fault).
-
-        Never message text: ``"the connection is closed"`` is a string psycopg may reword
-        in any release.
+        """From structured state only: ``closed`` or ``broken``, else ``OperationalError`` if SQLSTATE is absent.
+        Never the message. psycopg may reword "the connection is closed".
         """
         conn = self._conn
         if conn is not None and (
@@ -197,10 +146,7 @@ class PostgresConnector:
         return isinstance(err, psycopg.OperationalError)
 
     def _raise_classified(self, err: BaseException, *, connecting: bool = False) -> None:
-        """Map a driver fault to QueryError / ConnectionError by SQLSTATE class.
-
-        Discards the cached handle on every path that raises :class:`ConnectionError`, so the
-        next call reconnects instead of reusing a socket the driver has given up on.
+        """By SQLSTATE class. Every ``ConnectionError`` discards the cached handle so the next call reconnects.
         """
         sqlstate = getattr(err, "sqlstate", None)
         if isinstance(sqlstate, bytes):
@@ -210,14 +156,9 @@ class PostgresConnector:
 
         if sqlstate and sqlstate.startswith("42"):
             raise QueryError(str(err), sqlstate=sqlstate) from err
-        # **Before the class-57 branch, which would call this infrastructure and discard a
-        # healthy handle.** 57014 is ``query_canceled`` -- on this connector, ``statement_timeout``
-        # firing. The rest of class 57 is the operator taking the server away (shutdown,
-        # ``pg_terminate_backend``), where discarding is right; this one is the server enforcing
-        # a bound *we* set on *this statement*, so the connection is fine and the result belongs
-        # to the statement. Classifying it ConnectionError would reconnect on every attempt and,
-        # worse, tell the agent the warehouse is unreachable when what happened is that its query
-        # was too expensive -- the one fact that would make it write a cheaper one.
+        # Before the class-57 branch, which would discard a healthy handle. ``57014`` is our
+        # timeout: the connection is fine, and the agent should rewrite an expensive query
+        # rather than be told the warehouse is unreachable.
         if sqlstate == _STATEMENT_TIMEOUT_SQLSTATE:
             raise QueryError(str(err), sqlstate=sqlstate) from err
         if sqlstate and (
@@ -228,22 +169,19 @@ class PostgresConnector:
             self._discard()
             raise ConnectionError(str(err), sqlstate=sqlstate) from err
         if connecting:
-            # Connect-path without a class-08 code (e.g. TCP timeout): still
-            # infrastructure. Never invent a class-42 code.
+            # Still infrastructure when connect fails without class 08. Never invent class 42.
             self._discard()
             raise ConnectionError(
                 str(err),
                 sqlstate=sqlstate or _FALLBACK_CONNECTION_SQLSTATE,
             ) from err
-        # Statement path, no SQLSTATE: the server did not classify this, so it is not a
-        # result on the statement. Falling through to QueryError here is how one blip made
-        # every remaining question read as "the model wrote bad SQL".
+        # No SQLSTATE means the server did not classify it. Calling that a query fault
+        # made one blip look like bad SQL for every later question.
         if self._connection_is_unusable(err):
             self._discard()
             raise ConnectionError(
                 str(err), sqlstate=sqlstate or _FALLBACK_CONNECTION_SQLSTATE
             ) from err
-        # A client-side fault that is not the connection: a statement problem after all.
         raise QueryError(str(err), sqlstate=sqlstate) from err
 
     def execute(
@@ -360,13 +298,6 @@ class PostgresConnector:
             f'relation "{schema_name}.{table_name}" does not exist',
             sqlstate="42P01",
         )
-
-    # ``sample_values`` was here and is gone; see ``ports.Connector``. It hand-built
-    # ``f'SELECT DISTINCT "{column}" FROM "{schema}"."{table}"'`` with no quote-doubling,
-    # so a ``physical_name`` containing a double quote escaped its intended relation —
-    # and ``corpus/validate.py`` validates only ``slug(physical_name)``, so no such asset
-    # is rejected. Its one caller now builds the statement from ``exp.Identifier`` nodes
-    # and runs it through ``govern``.
 
 
 def _split_name(name: str, *, default_schema: str) -> tuple[str, str]:

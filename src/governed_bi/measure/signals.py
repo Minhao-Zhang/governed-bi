@@ -1,20 +1,6 @@
-"""What an eval row can be ranked on, and which way round.
+"""Direction is declared before any curve is drawn. A sign chosen after seeing the config is not a prediction.
 
-Separated from:mod:`.selective` because the two answer different questions. This
-module answers "what did the artifact record", which is a fact about
-``eval/projection.py::project_turn`` (re-exported from ``eval/harness.py``);
-:mod:`.selective` answers "what does ranking on it
-buy", which is a fact about the config.
-
-Every entry declares its **direction** and the **mechanism** behind that direction
-before any curve is drawn. That is the whole discipline here: a sign chosen after
-seeing which way the config went is not a prediction, and
-``git-history:docs/analysis/risk-coverage-v4.md`` §4 was a page of AUCs sitting either side of 0.5
-by a couple of points, where picking the winning side per signal would manufacture
-separation out of noise.
-
-:func:`assert_no_signal_reads_the_grade` runs at import and is the only thing standing
-between this registry and a leaked feature.
+``assert_no_signal_reads_the_grade`` runs at import.
 """
 
 from __future__ import annotations
@@ -34,29 +20,19 @@ __all__ = [
     "assert_no_signal_reads_the_grade",
 ]
 
-#: **The fields a ranking signal may read off a row. Everything else is refused.**
-#:
-#: An allowlist, because the denylist it replaces had a hole with a name. The old check
-#: moved seven grade-bearing fields on a probe row and required each signal to return
-#: the same value -- which catches a signal reading a field the probe *remembers*, and
-#: catches nothing reading one it forgot. ``computed_fingerprint`` is on every real row,
-#: is what ``computed_correct`` is derived from, and was not in the probe: a signal
-#: reading it would have leaked the counterfactual grade and passed the guard.
-#:
-#: Adding a name here is the deliberate act the guard exists to force. It is checked
-#: against :data:`_NEVER_READABLE` below, so the addition cannot be a grade field.
+# Allowlist. A denylist only catches a field the probe row remembers.
+# ``computed_fingerprint`` is on every real row and was missing from that probe.
+# A new name is checked against ``_NEVER_READABLE``.
 READABLE_FIELDS: frozenset[str] = frozenset(
     {"usage", "attempts", "retrieved_tables", "generated_sql"}
 )
 
-#: Substrings no allowlisted field may contain. The second lock: it guards the
-#: *allowlist*, not the signals, so widening ``READABLE_FIELDS`` to a gold-derived field
-#: fails the import rather than the review.
+# Guards the allowlist: a gold-derived name fails import.
 _NEVER_READABLE: tuple[str, ...] = ("correct", "grade", "gold", "fingerprint", "quality_flags")
 
 
 class Direction(str, Enum):
-    """Which end of a signal is claimed to be the confident end."""
+    """Which end is claimed confident. Declared before the curve."""
 
     lower_first = "lower value delivered first"
     higher_first = "higher value delivered first"
@@ -64,11 +40,7 @@ class Direction(str, Enum):
 
 @dataclass(frozen=True)
 class Signal:
-    """A ranking signal, its declared direction, and the claim behind the direction.
-
-    ``why`` is not decoration. It is the pre-registration: a direction with no stated
-    mechanism is a sign fitted on the config being scored and then written down.
-    """
+    """``why`` is the pre-registration. A direction with no mechanism is a sign fitted on the config being scored."""
 
     name: str
     direction: Direction
@@ -77,17 +49,7 @@ class Signal:
 
 
 def _mappings(row: TurnRow, key: str) -> tuple[Mapping[str, object], ...]:
-    """The ``Mapping`` entries of ``row[key]``; empty when it is absent or not a sequence.
-
-    ``TurnRow`` is ``Mapping[str, object]``, so every list-valued field arrives as ``object``
-    and cannot be iterated until it is narrowed. The three readers below each did the same
-    two steps inline — is it a sequence, and is each entry a mapping — and two of them skipped
-    the first, which is why they were type errors nothing ran.
-
-    Absent and empty are **not** distinguished here. A caller that needs to tell them apart
-    (``_failed_attempts`` does: no ledger is unmeasured, an empty ledger is zero failures)
-    must check ``row.get(key) is None`` itself.
-    """
+    """Absent and empty are not distinguished. A caller that needs both checks ``row.get(key) is None``."""
     value = row.get(key)
     if not isinstance(value, (list, tuple)):
         return ()
@@ -95,11 +57,7 @@ def _mappings(row: TurnRow, key: str) -> tuple[Mapping[str, object], ...]:
 
 
 def _agent_usage(row: TurnRow, key: str) -> float | None:
-    """One counter off the ``agent_core`` usage entry.
-
-    Per ``docs/measurement.md``, ``agent_core`` aggregates a whole tool loop into one
-    entry, so this is the agent's total for the turn and not its first call.
-    """
+    """``agent_core`` aggregates the whole tool loop, so this is the turn total, not the first call."""
     for entry in _mappings(row, "usage"):
         if entry.get("stage") == "agent_core":
             value = entry.get(key)
@@ -108,7 +66,6 @@ def _agent_usage(row: TurnRow, key: str) -> float | None:
 
 
 def _total_usage(row: TurnRow, key: str) -> float | None:
-    """The same counter summed over every stage, or ``None`` if any stage lacks it."""
     entries = _mappings(row, "usage")
     if not entries:
         return None
@@ -127,23 +84,14 @@ def _sql_length(row: TurnRow) -> float | None:
 
 
 def _n_retrieved_tables(row: TurnRow) -> float | None:
-    """How many tables the turn retrieved. Old artifacts still use the previous field name."""
+    """Stored artifacts may still use the old field name."""
     if "retrieved_tables" in row:
         return _size(row, "retrieved_tables")
     return _size(row, "licensed")
 
 
 def _size(row: TurnRow, field: str) -> float | None:
-    """Length of a recorded list, or ``None`` when the field was never written.
-
-    **The empty list and the absent key are different facts**, and this repository has
-    lost that distinction before (L-R1, ``Population.count``'s import-time guard). Both
-    states are on disk right now: ``attempts`` is *absent* on all 1,351 rows of run1 and
-    run2, and *empty* on the two v4 turns that delivered an answer with no statement at
-    all. Reading the first as "zero attempts" gives those two configs a constant signal with
-    a tidy AUC of exactly 0.5000, which reads as "the ledger carries no information"
-    when the truth is that the ledger was never recorded.
-    """
+    """An absent key and an empty list are different. Reading absence as zero attempts looks like a constant signal."""
     value = row.get(field)
     return None if value is None else float(len(value))  # type: ignore[arg-type]
 
@@ -162,13 +110,8 @@ def _declare(
     return Signal(name=name, direction=direction, why=why, read=read)
 
 
-#: Every ranking signal an eval row supports, with its direction declared up front.
-#:
-#: Absent on purpose: anything derived from the gold statement or the grade
-#: (``correct``, ``computed_correct``, ``grade_detail``, ``quality_flags``, the
-#: fingerprint comparison), and anything needing a file this repository does not ship
-#: -- question text lives in ``../BIRD-Data-Obfuscation``, so ``q_chars`` is not an
-#: artifact signal however cheap it looks.
+# Gold-derived fields are absent on purpose, and so is anything that needs a file
+# this repository does not ship, such as question text.
 SIGNALS: Mapping[str, Signal] = {
     s.name: s
     for s in (
@@ -223,15 +166,7 @@ SIGNALS: Mapping[str, Signal] = {
 
 
 class _RecordingRow(dict):
-    """A row that remembers which keys were asked for.
-
-    ``dict`` rather than a ``Mapping`` wrapper so a signal doing anything a dict supports
-    -- ``in``, ``[]``, iteration -- still works; the two access paths a signal 
-    uses are overridden. Iteration is *not* recorded as a read of every key, and does not
-    need to be: :func:`assert_no_signal_reads_the_grade` checks the keys against the
-    allowlist, and a signal that iterated the whole row to find the grade would have to
-    name it to use it.
-    """
+    """``dict`` so ``in``, indexing, and iteration still work. Iteration is not a read of every key."""
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
@@ -247,22 +182,9 @@ class _RecordingRow(dict):
 
 
 def assert_no_signal_reads_the_grade(signals: Mapping[str, Signal]) -> None:
-    """Every signal must read only :data:`READABLE_FIELDS`, and must ignore the grade.
+    """A signal may read only ``READABLE_FIELDS``. Moving the grade only catches a field the probe carries.
 
-    A declaration that a signal is not gold-derived is worth nothing -- ``open-work.md``
-    §3.9 is eight tests that assert a constant equals itself.
-
-    **Two checks, and the first is the general one.** Every signal is run against a row
-    that records which keys it asked for, and a key outside the allowlist fails the
-    import. That closes the hole the second check had: moving the grade only catches a
-    reader of a field the probe row happens to carry, and ``computed_fingerprint`` -- on
-    every real row, and what ``computed_correct`` is derived from -- was not on it, so a
-    signal reading it changed nothing between the two probes and passed.
-
-    The second check stays because it is the one that catches a *value* leak rather than
-    a *name* leak: an allowlisted field whose content is grade-derived would slip the
-    first. Between them, a reader that reached for the answer fails the import rather
-    than the review.
+    The value check stays: an allowlisted field whose content is the grade would slip a name check.
     """
     forbidden = sorted(
         field
@@ -290,9 +212,8 @@ def assert_no_signal_reads_the_grade(signals: Mapping[str, Signal]) -> None:
         "pred_fingerprint": "aaa",
         "gold_sql": "SELECT 1",
         "quality_flags": [],
-        # On every real row and absent from this probe until 2026-08-12, which is what made
-        # the moved-grade check alone a denylist with a hole: `computed_correct` is derived
-        # from this, so a signal reading it reads the counterfactual grade one step early.
+        # On every real row. Omitting it makes the moved-grade check a denylist with a
+        # hole: ``computed_correct`` is derived from this.
         "computed_fingerprint": "aaa",
     }
     for name, signal in sorted(signals.items()):

@@ -1385,4 +1385,4 @@ the graph lazily. **Size:** fixes only.
 | CI time of the `test` job | 145 s at `6ea775a`, before P5; 67 s at `1dd66e1`, after P5 | |
 | Checkpoint size after one turn | (P12) | |
 | EX and coverage, two runs, total and by half | (P16) | |
-| Comment and docstring share of non-blank lines in `src/governed_bi` | 38% (10% comments, 28% docstrings) | (P9b) |
+| Comment and docstring share of non-blank lines in `src/governed_bi` | 38% (10% comments, 28% docstrings) | 12.1% (5.0% comments, 7.1% docstrings) at P9b, of 18,869 non-blank lines; 34.6% on the same count just before the sweep |

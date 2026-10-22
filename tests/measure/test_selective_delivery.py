@@ -1,38 +1,6 @@
-"""Acceptance tests for the risk-coverage instrument.
+"""Assertions are hand-computed literals. Ties are averaged, and an absent signal is not zero.
 
-Every assertion here is against a **hand-computed literal** over a fixture small enough
-to work out on paper. That rule is not style: ``docs/open-work.md`` §3.9 found eight
-tests in this repository that survived mutation because they asserted that a constant
-equals itself, and the shape they all share is re-deriving the answer from the same
-expression the code uses. So no test below calls the module twice and compares the
-results, except where the *point* is that two computations must agree (the constant
-signal against the no-ranking reference), and in that case one of the two is a literal.
-
-The properties under test, each attached to a defect this instrument could plausibly
-have shipped with — and the last three to one it did:
-
-1. **Ties are averaged.** A curve that walks tied rows in artifact order is a curve
-   whose interior reports the driver's write order. Caught by a fixture whose signal is
-   constant: its AURC must equal the no-ranking reference *exactly*.
-2. **Absent is not zero** (L-R1). A signal missing on a delivered turn must make the
-   curve unavailable, not rank that turn at 0.
-3. **The grade never reaches a signal.** Checked two ways: an **allowlist** of the
-   fields a signal may read at all, and the older probe that moves the grade. The
-   allowlist is the general form and it exists because the probe alone had a hole —
-   ``computed_fingerprint`` is on every real row and was not among the seven fields the
-   probe moved, so a signal reading it passed.
-4. **A rate carries its denominator.** ``PricedAbstention`` must refuse a numerator and
-   a denominator that were filtered differently, must not fold ``computed_correct`` into
-   ``correct``, and must not hand back a bare float — the rate it derives stores two
-   integers and no rate, so a caller holding the number holds the denominator.
-5. **A deterministic comparison is not a hypothesis test.** Every risk-coverage trade is
-   nested by construction: a ranking reorders the turns the engine already agreed to
-   answer, so one discordant cell is 0 as arithmetic and the p-value restates the subset
-   relation. ``compare_policies`` returns ``NestedPolicies`` there and a real
-   ``McNemarResult`` only where the two sets cross.
-6. **A figure names the k it was read at.** The curve at a requested coverage and the
-   largest realisable policy within it are different k and different numbers; the page
-   that quoted both attached the second's consequence to the first.
+The grade never reaches a signal. A nested comparison is not a test, and a figure names the k it was read at.
 """
 
 from __future__ import annotations
@@ -96,17 +64,7 @@ _ALL_TIED = [
 
 
 def test_a_signal_that_cannot_separate_gives_exactly_the_no_ranking_curve() -> None:
-    """Four tied turns, two wrong. Every prefix must read 0.5 accuracy, exactly.
-
-    Worked by hand: the tie group holds 2 errors over 4 turns, so after k delivered
-    turns the expected error count is ``2k/4``, risk is ``0.5`` for k = 1..4, and the
-    decline at k = 5 makes it ``3/5``. AURC is the mean of those five risks:
-    ``(0.5 + 0.5 + 0.5 + 0.5 + 0.6) / 5 = 0.52``.
-
-    Under artifact-order tie-breaking the same fixture gives risks
-    ``0, 0.5, 1/3, 0.5, 0.6`` and an AURC of ``0.3867`` -- a signal that separates
-    nothing would look like the best one on the page.
-    """
+    """Artifact order inside a tie would make a constant signal look like it separates."""
     config = _config(_ALL_TIED)
     curve = risk_coverage(config, SIGNALS["agent_out_tok"])
     assert curve.errors == (0.5, 1.0, 1.5, 2.0, 3.0)
@@ -119,13 +77,7 @@ def test_a_signal_that_cannot_separate_gives_exactly_the_no_ranking_curve() -> N
 
 
 def test_a_tie_group_is_one_operating_point_and_a_policy_cannot_split_it() -> None:
-    """Asking for 40% coverage of a single 4-way tie must deliver nothing.
-
-    Delivering two of four turns the signal cannot tell apart is a coin flip dressed as
-    a policy, so the cut moves down to the boundary below -- which is the start of the
-    ranking. The empty policy is the answer and its accuracy is unmeasured, not
-    zero: no answers were given, so there is no accuracy to report.
-    """
+    """A cut that splits a tie delivers nothing. Accuracy of that empty policy is unmeasured, not zero."""
     curve = risk_coverage(_config(_ALL_TIED), SIGNALS["agent_out_tok"])
     assert curve.realisable_coverages() == (0.8,)
     assert curve.policy_at_most(0.4).delivered == frozenset()
@@ -158,13 +110,7 @@ def test_a_separating_signal_produces_the_hand_computed_curve() -> None:
 
 
 def test_the_declared_direction_is_applied_and_not_fitted() -> None:
-    """Flip which turns are right; the curve must get *worse*, not silently re-sign.
-
-    A ranker that chooses its sign per config cannot lose, and would report the same AURC
-    on both fixtures. Here the same four token counts are paired with the opposite
-    grades, so the declared "fewer tokens is safer" claim is now false and the curve
-    must show it: AURC goes from 0.2867 to 0.7533 while the raw AUC goes 0.0 to 1.0.
-    """
+    """Flipping the grades must make the curve worse. A sign fitted per config cannot lose."""
     inverted = risk_coverage(
         _config(
             [
@@ -205,12 +151,7 @@ def test_one_delivered_turn_without_the_signal_makes_the_whole_curve_unavailable
 
 
 def test_an_absent_ledger_is_unmeasured_and_an_empty_one_is_zero() -> None:
-    """The exact distinction run1 lost. ``attempts`` is absent on all 1,351 of its rows,
-    and an empty ledger is a real state on the two v4 turns that answered with no SQL.
-
-    Collapsing them gives run1 a constant ``n_attempts`` with a tidy AUC of 0.5000 --
-    "the ledger carries nothing", when the ledger was never written.
-    """
+    """An absent ledger read as zero attempts looks like a constant signal."""
     ledger = SIGNALS["n_attempts"]
     assert ledger.read({"attempts": []}) == 0.0
     assert ledger.read({"attempts": [{"passed": True}]}) == 1.0
@@ -267,14 +208,7 @@ def test_the_leakage_guard_fires_on_a_signal_that_reads_the_grade() -> None:
 
 
 def test_the_guard_catches_a_grade_field_the_probe_row_never_thought_of() -> None:
-    """**The named hole.** The old guard moved seven grade-bearing fields and required each
-    signal to return the same value -- a denylist of what the probe *remembered*.
-
-    ``computed_fingerprint`` is on every real row and is what ``computed_correct`` is derived
-    from, and it was not among the seven. A signal reading it returned the same value on both
-    probes, passed, and would have ranked turns by the counterfactual grade. The allowlist
-    catches it by name whether or not the probe row carries it, which is the general form.
-    """
+    """A denylist only catches a field the probe row carries. The allowlist catches the name anyway."""
     rogue = Signal(
         name="peeks_at_the_fingerprint",
         direction=Direction.higher_first,
@@ -355,18 +289,7 @@ def test_abstention_precision_is_over_the_priced_subset_and_says_so() -> None:
 
 
 def test_the_rate_has_no_attribute_that_hands_it_over_without_the_denominator() -> None:
-    """The published claim, made true rather than narrowed.
-
-    It read: "the rate cannot be obtained without its denominator: the type stores two
-    ``Population``s and no float". That was true of ``PricedAbstention`` and false of what it
-    returned -- ``.would_have_been_wrong.value`` was ``0.7741935483870968`` and ``.render(4)``
-    was ``"0.7742"``, both bare, and nothing forced a caller through the object's own
-    ``render()``.
-
-    Now the derived object stores two integers and no rate either. There is no attribute that
-    is the float, ``render`` prints both numbers, and ``share`` demands the denominator back --
-    so a caller that has the rate has necessarily read the 62 it is over.
-    """
+    """No attribute is the bare rate. ``share`` demands the denominator back."""
     wrong = PricedAbstention.of(
         _config(
             [
@@ -424,12 +347,7 @@ def test_a_numerator_and_denominator_that_never_met_are_refused() -> None:
 
 
 def test_a_priced_abstention_never_credits_the_engine_for_a_withheld_answer() -> None:
-    """``computed_correct`` must not leak into the operating point.
-
-    A decline whose statement would have been right stays wrong in ``correct``, so
-    coverage and selective accuracy do not move. Folding the two is how an engine that
-    commits to nothing scores well.
-    """
+    """A decline that would have been right stays wrong on the operating point."""
     config = _config(
         [
             _row("a", correct=True, usage=_tokens(10)),
@@ -449,20 +367,7 @@ def test_a_priced_abstention_never_credits_the_engine_for_a_withheld_answer() ->
 
 
 def test_a_nested_trade_is_reported_as_arithmetic_and_not_as_a_test() -> None:
-    """Engine delivers 4 (3 right); the ranked policy delivers 2 (both right).
-
-    The ranked policy hands back a **subset** of the engine's turns and changes no turn's
-    grade, so ``useful_ranked`` is a subset of ``useful_engine`` by construction: the
-    discordant cell one way is 0 as arithmetic, and the p-value is a function of the other
-    cell alone. On ``v4`` that shape was published as ``only_engine=162, only_ranked=0,
-    delta=-0.1199, MDE=0.0264, p=3.4e-49`` -- decisive, and unable to have come out any
-    other way.
-
-    The substantive claim survives and is what this returns: the trade costs one right
-    answer here, 162 on ``v4``. What is refused is the inferential dress, because a reader
-    who sees a p-value is entitled to think a null was tested. Before the fix this returned
-    a ``McNemarResult`` with ``only_b = 0``, which is why that literal is asserted absent.
-    """
+    """One delivery set contains the other, so a p-value would restate the subset. The finding is the count lost."""
     config = _config(
         [
             _row("a", correct=True, usage=_tokens(10)),
@@ -503,13 +408,7 @@ def test_the_order_of_a_nested_pair_does_not_change_what_is_reported() -> None:
 
 
 def test_two_policies_that_are_not_nested_still_get_the_real_paired_test() -> None:
-    """The refusal must be narrow. Two *different* signals cut at one coverage deliver
-    overlapping-but-neither-nested sets, each side can gain, and that is a genuine null --
-    it is the ``a=17, b=3, p=0.0026`` comparison the findings page keeps.
-
-    Four turns: each policy delivers two, sharing one. So each side gains exactly one useful
-    answer the other lacks, both discordant cells are non-zero, and the delta is 0.
-    """
+    """Crossing delivery sets still get a paired test. The refusal is only for a subset."""
     config = _config(
         [
             _row("a", correct=True, usage=_tokens(10)),
@@ -528,9 +427,7 @@ def test_two_policies_that_are_not_nested_still_get_the_real_paired_test() -> No
 
 
 def test_a_policy_compared_against_itself_is_not_a_null_result() -> None:
-    """Equal delivery sets are one policy, and p = 1.0 over zero discordant pairs reads as
-    evidence of no difference rather than as the tautology it is -- ``open-work.md`` §3.9's
-    "assert a constant equals itself" with a statistic attached."""
+    """The same delivery set against itself is a tautology, not evidence of no difference."""
     config = _config([_row("a", correct=True, usage=_tokens(10))])
     engine = engine_policy(config)
 
@@ -540,11 +437,7 @@ def test_a_policy_compared_against_itself_is_not_a_null_result() -> None:
 
 
 def test_a_comparison_across_two_different_populations_is_refused() -> None:
-    """Two configs are not one paired comparison, and ``mcnemar`` is where that is caught.
-
-    This is what stops the sub-population curves the driver prints separately from being
-    differenced against the main table.
-    """
+    """Two configs are not one paired comparison."""
     left = _config([_row("a", correct=True, usage=_tokens(10))])
     right = _config([_row("z", correct=True, usage=_tokens(10))])
     with pytest.raises(ValueError, match="unit sets differ"):
@@ -561,12 +454,7 @@ def test_a_policy_cannot_deliver_a_turn_the_population_does_not_contain() -> Non
 
 
 def test_coverage_at_a_target_accuracy_ignores_a_lucky_prefix() -> None:
-    """52 turns: the first two are right, the rest are 50/50.
-
-    ``k = 2`` reaches accuracy 1.0 and is not an operating point -- two answers is not a
-    policy. With ``min_delivered = 2`` the same curve happily reports it, which is what
-    makes this assertion able to fail.
-    """
+    """Two perfect answers at the top are not an operating point."""
     rows = [_row("r1", correct=True, usage=_tokens(1)), _row("r2", correct=True, usage=_tokens(2))]
     rows += [
         _row(f"x{i}", correct=bool(i % 2), usage=_tokens(10 + i)) for i in range(50)
@@ -578,12 +466,7 @@ def test_coverage_at_a_target_accuracy_ignores_a_lucky_prefix() -> None:
 
 
 def test_coverage_at_a_target_accuracy_is_the_largest_k_and_not_the_first() -> None:
-    """Ranked T, F, T, T: accuracy runs 1.0, 0.5, 0.667, 0.75.
-
-    Target 0.7 is cleared at k = 1 and again at k = 4. The first is a two-answer product;
-    the second is the operating point a buyer is asking about. Reporting the first gives
-    coverage 0.2 where the answer is 0.8.
-    """
+    """The target is cleared twice. The answer is the largest k, not the first."""
     curve = risk_coverage(
         _config(
             [
@@ -603,14 +486,7 @@ def test_coverage_at_a_target_accuracy_is_the_largest_k_and_not_the_first() -> N
 
 
 def test_a_policy_carries_its_configs_filter_trail_so_mismatched_pairs_are_refused() -> None:
-    """Two populations over the same turns but filtered differently are not one pair.
-
-    ``as_population`` rebuilds rows from scratch, and a rebuild that forgot to carry
-    ``filtered_by`` would let the driver's sub-population curves -- the ones printed
-    under "signals present on only part of the config" -- be differenced against the main
-    table. ``mcnemar`` is where that has to be caught, and it can only catch it if the
-    trail survives the rebuild.
-    """
+    """``as_population`` must keep ``filtered_by``, or two filters over the same turns look like one pair."""
     config = _config([_row("a", correct=True, usage=_tokens(10)), _row("b", correct=False, usage=_tokens(20))])
     narrower = config.restrict(lambda _r: True, "delivered turns carrying some signal")
     assert engine_policy(narrower).as_population().filtered_by == narrower.filtered_by
@@ -619,13 +495,7 @@ def test_a_policy_carries_its_configs_filter_trail_so_mismatched_pairs_are_refus
 
 
 def test_every_curve_meets_the_engine_at_the_engines_own_coverage() -> None:
-    """The structural claim the findings page rests on.
-
-    A ranking reorders the delivered turns; it cannot un-withhold a declined one. So at
-    coverage = delivered/n every signal, the oracle included, reads the same accuracy.
-    The assertion can fail: rank the declines above the delivered turns and the oracle
-    reads 0.0 here instead of 0.5.
-    """
+    """A ranking cannot un-withhold a decline, so every curve meets the engine at the engine's coverage."""
     config = _config(
         [
             _row("a", correct=True, usage=_tokens(10)),
@@ -647,19 +517,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def test_the_driver_runs_end_to_end_on_a_synthetic_artifact(tmp_path: Path) -> None:
-    """``tools/selective_curve.py`` against a hand-built config, as a subprocess.
-
-    Its real inputs live under ``runs/``, which is gitignored and absent on CI, so
-    without this the driver is a ``tools/`` script nothing ever executes -- the
-    "declared machinery with no wire" shape ``open-work.md`` §3.10 says is this
-    repository's recurring defect. Naming it ``check_*`` would instead subject it to
-    ``tests/conformance/test_register_closure.py``'s CI-or-manual declaration, and it
-    reports rather than checks.
-
-    The asserted numbers are hand-computed: 4 delivered turns of which 3 are right, one
-    decline, so coverage is 4/5 and selective accuracy 3/4. Both appear on the operating
-    point line, and the coincidence line must print exactly one distinct accuracy.
-    """
+    """The driver has no committed inputs, so this runs it on a synthetic file."""
     artifact = tmp_path / "synthetic_config.jsonl"
     rows = [
         _row("a", correct=True, usage=_tokens(10), retrieved_tables=["t"], attempts=[{"passed": True}]),
@@ -683,10 +541,7 @@ def test_the_driver_runs_end_to_end_on_a_synthetic_artifact(tmp_path: Path) -> N
     # the denominator travels with it -- on the rate's own rendering, not only the object's.
     assert "declines that would have been wrong: 1.0000 (1/1)" in result.stdout
     assert "n=1" in result.stdout and "0 of 1 decline(s)" in result.stdout
-    # Every curve cell carries the k it was read at. Without it, `0.7500` at a requested
-    # coverage of 0.7 and `1.0000` at the realisable policy below it are two numbers on one
-    # page with no way to tell which k each belongs to -- which is how the v4 findings page
-    # attached the k=944 policy's consequence to the k=945 curve cell.
+    # Each curve cell names its k. A requested coverage and the policy below it are different k.
     assert "0.7500@3" in result.stdout, "the curve cell must name its k"
     assert "coverage 0.6000 (3/5)" in result.stdout, "the policy must name its realised coverage"
     # And the nested trade is arithmetic, not a hypothesis test.

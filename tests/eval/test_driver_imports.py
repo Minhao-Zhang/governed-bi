@@ -1,19 +1,4 @@
-"""The eval drivers import. That is the whole test, and it was missing.
-
-Deleting ``measure/price.py`` left ``eval/datalake.py`` importing ``estimate_run_cost`` from a
-module that no longer existed, and ``tools/run_datalake_eval.py`` calling the function that
-imported it. **739 tests passed.** Nothing in the suite imports either file, so the one command
-that spends real money on a 1351-question run was broken and green at the same time.
-
-An import test is the cheapest possible guard and it catches the whole class: a deleted symbol, a
-renamed helper, a moved module. It does not need a database, a model or a corpus — argument
-parsing and the imports at module scope are all it exercises, which is exactly the layer that
-broke.
-
-The drivers under ``tools/`` are loaded by path rather than imported as a package, because that
-is how they are run: ``uv run python tools/run_datalake_eval.py``. Importing them any other way
-would test a spelling nobody uses.
-"""
+"""Load the drivers the way they are run. Nothing else in the suite imports them."""
 
 from __future__ import annotations
 
@@ -66,13 +51,7 @@ def test_the_eval_drivers_import(script: str) -> None:
 
 
 def test_the_datalake_reports_tokens_and_not_money() -> None:
-    """``observed_spend`` is gone and ``observed_tokens`` replaces it.
-
-    Asserted rather than assumed because the rename is what the import test above would have
-    caught, and because "the batch cost $X" and "the batch used N tokens" are different claims:
-    the first needs a price list this repository no longer maintains, and a stale row in the one
-    it had overstated a measured run nine-fold.
-    """
+    """Tokens, not a price. A stale price row overstated a measured run."""
     from governed_bi.eval import datalake
 
     assert not hasattr(datalake, "observed_spend")

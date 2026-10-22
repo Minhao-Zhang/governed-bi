@@ -1,9 +1,5 @@
-"""Build the OpenAI chat model and embedder.
-
-One gateway. Reasoning effort, timeout and retries use OpenAI's spelling.
-``tools=True`` selects the Responses API, the transport that carries tools and
-reasoning effort together. ``reasoning_effort_of`` reads that effort back off
-the client so the turn record and the call agree.
+"""One OpenAI gateway. ``tools=True`` selects the Responses API, which carries
+tools and reasoning effort together. Any other provider is refused.
 """
 
 from __future__ import annotations
@@ -21,8 +17,7 @@ __all__ = [
     "reasoning_effort_of",
 ]
 
-#: The variable naming each surface's model id. Shared by the server and the CLI,
-#: which cannot import each other.
+#: Server and CLI both read these names and cannot import each other.
 SURFACE_MODEL_VARS: dict[str, str] = {
     "agent": "GOVERNED_BI_MODEL",
     "utility": "GOVERNED_BI_UTILITY_MODEL",
@@ -57,7 +52,7 @@ def _openai_kwargs(
 
 
 def reasoning_effort_of(model: Any) -> str | None:
-    """The reasoning effort ``model`` will send, or ``None`` when it sends none."""
+    """Blank or missing effort is ``None``, so the record stores nothing the client will not send."""
     direct = getattr(model, "reasoning_effort", None)
     if isinstance(direct, str) and direct.strip():
         return direct.strip()
@@ -76,7 +71,6 @@ def chat_model(
     tools: bool = False,
     **extra: Any,
 ) -> Any:
-    """An OpenAI chat model. ``provider`` other than ``openai`` is refused."""
     if provider not in (None, "openai"):
         raise ValueError(
             f"only the openai gateway is built; got {provider!r} for the {surface} surface"
@@ -94,19 +88,17 @@ def chat_model(
 
 
 def credential_names() -> tuple[str, ...]:
-    """The variable that satisfies the OpenAI gateway, for an error message."""
     return (_OPENAI_KEY,)
 
 
 def credentials_present() -> bool:
-    """Whether the OpenAI key is available. The value is not returned."""
+    """Whether the key is set. The value is not returned."""
     from governed_bi.credentials import have
 
     return have(*credential_names())
 
 
 def default_embedding_model() -> str:
-    """The embedding model id. One gateway, so one default."""
     from .openai_embedder import OPENAI_EMBEDDING_MODEL  # noqa: PLC0415
 
     return OPENAI_EMBEDDING_MODEL
@@ -120,7 +112,7 @@ def embedder(
     max_retries: int | None = None,
     timeout: float | None = None,
 ) -> Any:
-    """The OpenAI embedder. ``model`` is qualified ``openai:`` so cache keys stay distinct."""
+    """Qualifies ``model`` as ``openai:`` so two gateways cannot share a cache key."""
     if provider not in (None, "openai"):
         raise ValueError(f"only the openai embedder is built; got {provider!r}")
     from .openai_embedder import OpenAIEmbedder  # noqa: PLC0415

@@ -1,34 +1,4 @@
-"""Six settings whose behaviour moved while ``settings_resolved`` stood still.
-
-Every one of these had a real consumer. The code read correctly at the reader and the wire
-back to the record was missing, which is why a static sweep of declarations missed them — only the
-artifacts showed them. The evidence is the six configs in ``runs/eval/``, 1,351 rows each, all
-on corpus ``86ed1dbf…`` (``../BIRD-corpus`` @ ``30872d3``):
-
-=========================== ============================================================
-setting what all 8,106 rows said
-=========================== ============================================================
-``llm_reasoning_effort`` ``null`` — while ``runs/eval/driver_v4.log:6`` records
-                             ``effort=high``
-``llm_utility_provider`` ``"openai"`` — beside ``llm_provider: "custom:007df842"``
-``embedding_provider`` ``"openai"`` — beside
-                             ``embedding_model: "proxy:text-embedding-3-large"``
-``chat_model`` ``null`` on run1 / run2 / v3-pinned / v3-fold; the value was
-                             in ``llm_model``, which ``SETTING_REGISTER`` does not declare
-three timeout env vars ``120.0`` / ``1200.0`` / ``40``, whatever the environment said
-``sqlglot_version`` **absent**, and likewise ``the retired threshold`` and ``the retired budget``
-``prompt_set`` ``null`` on v2, v3, v4 and v5 — the four configs whose entire
-                             setting under test is a prompt variant
-=========================== ============================================================
-
-**Authoring rule, applied throughout: assert the value, never the presence.** ``None`` is
-present, and eight tests in this repository were found asserting exactly that. Each value
-below is compared against something this file supplied — a base URL it chose, an effort it
-requested, a number it exported — or against an independent resolution of the same fact
-(``importlib.metadata`` for the sqlglot version), never against the expression under test.
-
-Network-free: the chat models in this file are scripted stand-ins with the attributes
-the record reads.
+"""A setting the turn reads must appear on the record. The reader alone does not put it there.
 """
 
 from __future__ import annotations
@@ -68,7 +38,6 @@ def _session(assets: dict[str, Any], **kwargs: Any):
     )
 
 
-# ── 1. an embedder id names its gateway ───────────────────────────────────────
 
 
 def test_an_unqualified_embedder_refuses_rather_than_naming_a_gateway():
@@ -90,17 +59,10 @@ def test_an_unqualified_embedder_refuses_rather_than_naming_a_gateway():
         embedding_settings(Unqualified())
 
 
-# ── 3. one spelling of the model, and it is the declared one ──────────────────
 
 
 def test_the_model_is_recorded_under_the_declared_name_and_no_other(two_schema_assets):
-    """``chat_model`` carries it; ``llm_model`` is gone.
-
-    ``llm_model`` was written into ``settings_resolved`` and never declared, so it sat outside
-    ``setting_names()``. On run1, run2, v3-pinned and v3-fold it was the *only* field
-    carrying the model — which put the one value that could have told those configs apart
-    outside the set of settings that affect results.
-    """
+    """``chat_model`` carries it; ``llm_model`` is gone."""
     from governed_bi.serve.scripted_model import ScriptedChatModel
 
     class Named(ScriptedChatModel):
@@ -151,7 +113,6 @@ def test_the_utility_effort_is_recorded_apart_from_the_agents(two_schema_assets)
     assert "llm_utility_reasoning_effort" in setting_names()
 
 
-# ── 4. the three environment variables ────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -165,12 +126,7 @@ def test_the_utility_effort_is_recorded_apart_from_the_agents(two_schema_assets)
 def test_an_env_var_that_moves_behaviour_moves_the_record(
     monkeypatch, two_schema_assets, setting, raw, expected
 ):
-    """Set the variable, and the artifact says what the run will do.
-
-    All three are read env-first by ``serve/graph.py`` and ``serve/nodes/agent_core.py``, and
-    ``_resolved_settings`` built the record from ``setting_default()`` alone — so the record
-    published 120.0 / 1200.0 / 40 whatever was exported.
-    """
+    """Set the variable, and the artifact says what the run will do."""
     from governed_bi.registry.settings import env_overrides
 
     var = env_overrides()[setting]
@@ -210,12 +166,7 @@ def test_the_record_and_the_reader_resolve_the_env_var_to_the_same_value(
 
 
 def test_a_blank_variable_is_unset_and_a_bad_one_refuses(monkeypatch, two_schema_assets):
-    """The two parsing rules the readers already had, kept in step.
-
-    Blank falls through to the setting (``graph.py`` tests ``if raw``, ``agent_core.py`` tests
-    ``strip() != ""``). An unreadable value raises at session construction rather than
-    mid-run, where the run is lost anyway and the message names the variable.
-    """
+    """The two parsing rules the readers already had, kept in step."""
     monkeypatch.setenv("GOVERNED_BI_AGENT_RECURSION_LIMIT", "   ")
     assert _session(two_schema_assets).settings_resolved["agent_recursion_limit"] == 40
 
@@ -225,12 +176,7 @@ def test_a_blank_variable_is_unset_and_a_bad_one_refuses(monkeypatch, two_schema
 
 
 def test_every_declared_env_var_is_one_a_reader_reads():
-    """An ``env_var`` in the register that nothing consults is the defect inverted.
-
-    The register would then publish an override no run can perform — the same false claim as
-    a setting with no reader, in the other direction. Checked against the reader sources, which
-    is where the literal lives.
-    """
+    """An ``env_var`` in the register that nothing consults is the defect inverted."""
     import pathlib
 
     from governed_bi.registry import settings as settings_module
@@ -257,18 +203,10 @@ def test_every_declared_env_var_is_one_a_reader_reads():
     assert unread == [], f"a bound is declared and read by no node: {unread}"
 
 
-# ── 5. nothing is absent ──────────────────────────────────────────────────────
 
 
 def test_no_declared_setting_is_missing_from_the_record(two_schema_assets):
-    """Absence was the defect, and the drift check cannot see it.
-
-    ``_resolved_settings`` dropped every ``UNSET`` setting and re-added three, so
-    ``sqlglot_version``, ``the retired threshold`` and ``the retired budget`` were absent from all 8,106 rows.
-    ``measure/checks.py::_settings_resolved_check`` reads with ``row.get(key)`` — a key missing
-    from every row compares equal to itself and the check passes on a configuration it never
-    saw.
-    """
+    """Absence was the defect, and the drift check cannot see it."""
     settings = _session(two_schema_assets).settings_resolved
 
     assert set(setting_names()) <= set(settings)
@@ -277,14 +215,7 @@ def test_no_declared_setting_is_missing_from_the_record(two_schema_assets):
 
 
 def test_the_sqlglot_version_recorded_is_the_one_installed(two_schema_assets):
-    """*"Resolved from installed metadata at config time; UNSET so it cannot be silently
-    absent"* — its own note, and it was silently absent on every row.
-
-    Compared against ``importlib.metadata`` resolved here, not against
-    ``govern.functions.sqlglot_version()``, which would assert the resolver against itself.
-    Canonical function names are release-dependent and the ADR 0006 allowlist is keyed on
-    them, so this is which vocabulary the governance layer was enforcing.
-    """
+    """The recorded sqlglot version is the installed one. Absence is not a stored zero."""
     from importlib.metadata import version
 
     installed = version("sqlglot")
@@ -312,12 +243,7 @@ def test_an_uncalibrated_setting_records_null_and_a_set_one_records_its_value(tw
 
 
 def test_reading_an_uncalibrated_setting_still_refuses(two_schema_assets):
-    """Recording ``null`` must not hand a node a value nobody chose.
-
-    ``int_setting`` falls a ``None`` through to ``setting_default``, which is still ``UNSET`` and
-    still raises. If recording the absence had also made it readable, this fix would have
-    disabled the refusal that ``registry/settings.py`` exists to make.
-    """
+    """Recording ``null`` must not hand a node a value nobody chose."""
     from governed_bi.serve.runtime import int_setting
 
     settings = _session(two_schema_assets, policy=GovernancePolicy()).settings_resolved
@@ -325,21 +251,10 @@ def test_reading_an_uncalibrated_setting_still_refuses(two_schema_assets):
         int_setting({"settings_resolved": dict(settings)}, "guard_rules_enabled")
 
 
-# ── 6. which prompt variant produced which digest ─────────────────────────────
 
 
 def test_the_prompt_variant_is_named_and_not_only_hashed(two_schema_assets):
-    """v2, v3, v4 and v5 differ by prompt wording and nothing else, and all four recorded
-    ``prompt_set: null``.
-
-    They were *distinguishable* — ``prompt_set_hash`` is on the row and does differ. They
-    were not *nameable*: nothing in an artifact said which variant produced which digest,
-    so reading the six configs could tell you two of them were not the same setting under test and not
-    which setting under test either one was.
-
-    The two must move **together**, from one selection, or the record carries a digest of
-    one prompt set beside the name of another.
-    """
+    """v2, v3, v4 and v5 differ by prompt wording and nothing else, and all four recorded ``prompt_set: null``."""
     def config(variant: str):
         session = _session(two_schema_assets, prompt_variants={"analyst": variant})
         return session.settings_resolved["prompt_set"], session.prompt_set_hash
@@ -364,13 +279,7 @@ def test_the_prompt_variant_is_named_and_not_only_hashed(two_schema_assets):
 
 
 def test_the_recorded_prompt_set_is_the_one_the_hash_was_taken_over(two_schema_assets):
-    """One selection behind both fields. The ``Session`` docstring already requires it:
-    a ``prompt_set_hash`` computed from a different mapping records a setting under test the run
-    did not send.
-
-    Asserted by recomputing the digest from the *recorded names*, which fails the moment
-    the two are derived from different inputs.
-    """
+    """One selection behind both fields."""
     from governed_bi.registry.prompts import prompt_set_hash as digest_of
 
     session = _session(two_schema_assets, prompt_variants={"analyst": "v3"})

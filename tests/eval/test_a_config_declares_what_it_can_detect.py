@@ -1,16 +1,3 @@
-"""``config_power_refusal``: the caller ``eval/power.py`` did not have.
-
-``open-work.md`` §3.10 recorded ``require_power`` as a check nothing invoked. A check with no caller is
-a preference, and the specific cost of this one having none is on record: the run it was taken from
-measured a setting under test reaching 9 of 131 questions against an MDE of 9.6pp and reported the null as a
-finding about the feature.
-
-**The arithmetic is not re-derived here.** ``tests/eval/test_an_underpowered_config_refuses_to_be_
-declared.py`` pins ``require_power`` itself. What this file pins is the *wiring*: that a profile's
-declaration reaches the check, that the two ways of declaring nothing behave differently, and that
-the message says the discordance is an estimate.
-"""
-
 from __future__ import annotations
 
 import textwrap
@@ -86,13 +73,8 @@ def test_a_tiny_config_still_gets_at_least_one_discordant_pair() -> None:
     assert refusal is not None, "n=3 cannot detect a 50pp effect and must not pass"
 
 
-# ── the same check, reached from the file instead of from a constructor ─────────
-#
-# Everything above builds `ConfigProfile(**base)` directly, and that is how the defect this section
-# exists for survived: `hypothesised_effect`, `readout` and `corpus_release` were fields of the
-# dataclass that `_parse_profiles` never passed, so the check worked on every profile a test built
-# and abstained on every profile the loader produced. `--config` reaches this check only through the
-# loader. So does everything below.
+# Tests that build ConfigProfile skip the loader, which is how a dropped field stayed hidden.
+# ``--config`` reaches the check only through the loader.
 
 
 def _from_file(tmp_path: Path, name: str, body: str) -> ConfigProfile:
@@ -118,15 +100,7 @@ def _declaring(tmp_path: Path, name: str, effect: float, readout: str) -> Config
 
 
 def test_a_hypothesis_declared_in_configs_toml_reaches_the_check_and_refuses(tmp_path: Path) -> None:
-    """**The whole chain, driven.** File → ``load_config_profiles`` → ``config_power_refusal`` →
-    ``require_power``.
-
-    1pp on 131 questions against a 9.6pp floor: the config cannot resolve what it says it is testing,
-    so it would spend its whole budget to report a null about its sample. That is the run
-    ``eval/power.py`` was taken from another repository to prevent, and it is the run this check
-    was silently letting start -- the loader dropped the field, so the check read ``None`` and
-    abstained on every config that could ever be declared.
-    """
+    """The loader dropping the hypothesis made the check read ``None`` and abstain on every declared config."""
     refusal = config_power_refusal(_declaring(tmp_path, "tiny", 0.01, "EX"), 131)
 
     assert refusal is not None, (
@@ -159,14 +133,7 @@ def test_the_readout_a_file_declares_is_the_one_in_the_refusal(tmp_path: Path) -
 
 
 def test_the_shipped_configs_reach_the_check_and_it_abstains_on_all_of_them() -> None:
-    """The state of the real file, asserted rather than assumed.
-
-    None of the four configs in ``configs.toml`` declares a hypothesis, so the check is silent on every
-    one -- and until the loader read the field, silence here was indistinguishable from silence
-    caused by the drop. Driving the shipped file is what tells those two apart: this test passed
-    before the fix and passes after it, and
-    ``tests/conformance/test_config_profiles_are_declared.py`` is where the difference is pinned.
-    """
+    """Silence on the shipped file is no hypothesis, which a dropped field would look like too."""
     for name, profile in load_config_profiles().items():
         assert profile.hypothesised_effect is None, (
             f"[config.{name}] now declares a hypothesis; this test's premise has changed"

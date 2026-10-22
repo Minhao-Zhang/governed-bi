@@ -1,21 +1,8 @@
-"""Token rows for every model call the turn makes — one builder, used by every caller.
+"""One token-row builder for every model call. Rows carry ``stage``.
 
-``usage`` used to be written by ``agent_core`` alone, so the guard's BI-scope check and the four
-channel query rewriters spent tokens no record mentioned — four, not five: there are five channel
-*nodes* and ``channel_schema`` is the one that calls no model. On an answered turn those five hid
-behind the agent's several thousand; on a **refused** turn they were the only calls that happened,
-so
-the record reported ``usage = []`` for a turn that really cost 136 tokens, and every token total
-in the repository was low.
-
-Rows carry ``stage``: eight of them can produce one today (``agent_core``, ``guard``,
-``narrate``, ``reflect``, and the four channels in ``CHANNEL_EXTRACTS`` — ``channel_schema`` does not
-rewrite, so it never calls a model). The split between the agent model and the utility model is
-a setting that affects results (``llm_utility_model``) whose justification is cost and latency, which
-cannot be argued from a single total.
-
-A helper, not a node — five call sites in five modules build the same row, so a provider that
-changes its usage payload is fixed once.
+Guard, narrate, reflect, and the rewriting channels spend tokens the agent row hid, and on a
+refused turn they were the only calls. The agent and utility models are separate settings,
+so one total cannot show which spent them. ``channel_schema`` calls no model.
 """
 
 from __future__ import annotations
@@ -32,23 +19,17 @@ NO_TOKEN_USAGE = "the provider returned no usage_metadata carrying both token co
 
 
 def reported_tokens(messages: Any) -> dict[str, int] | None:
-    """This turn's provider-reported token counts, or ``None`` if none were reported.
+    """Provider-reported token counts summed across messages, or ``None``.
 
-    LangChain puts them on ``AIMessage.usage_metadata``; a caller may pass one message or the
-    several an agent loop produced, so the result is the sum. A payload that does not carry
-    **both** counts as integers is not a measurement, and reporting the part it did carry
-    beside a zero for the rest would be the defect this function exists to remove. Cache counts
-    are included only when the provider reported them — a zero here would be this code's claim.
+    A payload missing either count as an integer is not a measurement. Cache counts are
+    included only when the provider reported them; a zero would be this code's claim.
     """
     if isinstance(messages, Mapping) or not isinstance(messages, (list, tuple)):
         messages = [messages]
     total = {"input_tokens": 0, "output_tokens": 0}
-    #: How many model calls contributed. One per ``AIMessage`` carrying usage metadata, so an
-    #: agent loop's row says how many round trips it paid for instead of only the sum.
-    #: Without it a turn's cost cannot be split into "one big call" and "six repeated ones",
-    #: and the repeated part is the whole of what prompt caching can remove -- which matters
-    #: because the internal proxy does not report ``cache_read_tokens`` at all, so this count
-    #: is the only route to an exact figure rather than a bound.
+    # One per AIMessage with usage, so a loop's row shows round trips, not only the sum.
+    # The proxy reports no cache_read_tokens, so this count is the route to an exact figure
+    # rather than a bound.
     calls = 0
     #: Only the cache keys a provider reported. A two-key dict initialised to zero and
     #: emitted whole as soon as **either** key appeared made ``cache_write_tokens: 0`` this
@@ -86,15 +67,10 @@ def reported_tokens(messages: Any) -> dict[str, int] | None:
 
 
 def usage_row(*, stage: str, model: Any, messages: Any, turn_index: Any) -> dict[str, Any]:
-    """One cost row, with the counts the provider reported and the stage that spent them.
+    """One cost row: provider counts plus the stage that spent them.
 
-    A provider that reports nothing gets :meth:`Measured.unmeasured`, which the presence test
-    can refuse and no total can silently absorb. The literal ``input_tokens: 0`` this replaced
-    was on the **real-model** path, and a consumer totalling these rows reads that shape as free.
-
-    ``model_id(model)`` first and ``_llm_type`` only as the fallback. Reversed, every OpenAI turn
-    recorded ``model: "openai-chat"`` — a LangChain *class* label — while
-    ``settings_resolved["chat_model"]`` beside it held the real id, on a field that affects results.
+    No report becomes :meth:`Measured.unmeasured`, which a total cannot absorb as free.
+    ``model_id`` first: ``_llm_type`` recorded every OpenAI turn as ``openai-chat``.
     """
     reported = reported_tokens(messages)
     if reported is None:

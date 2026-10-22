@@ -35,15 +35,13 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tools"))
 
-#: Everything printed after the last question is graded, in its own module: this file reached the
-#: 1 000-line hard cap, and the report half needs no database, model or corpus. The plan /
-#: execute / report split, cut at report first because it is the third that already had no I/O
-#: of its own.
+#: Report printing lives in ``datalake_report``. It needs no database, model, or corpus.
+#: This file is the plan and execute half.
 from datalake_report import print_report  # noqa: E402  (needs the path insert above)
 
-#: The corpus, in its own repository as of 2026-08-07 (D13). Derived from this file's location,
-#: like ``DEFAULT_DATASET``: a relative sibling path resolves against the process's working
-#: directory, and the corpus is what ``corpus_content_hash`` identifies.
+#: Sibling checkout (D13), not a path inside this repo. Derived from this file, like
+#: ``DEFAULT_DATASET``: a relative path follows the working directory, and the corpus
+#: is what ``corpus_content_hash`` identifies.
 DEFAULT_CORPUS = REPO.parent / "BIRD-corpus"
 DEFAULT_DATASET = REPO.parent / "BIRD-Data-Obfuscation" / "eval_dataset"
 
@@ -70,11 +68,8 @@ def apply_served_model_defaults(args: argparse.Namespace) -> None:
 def apply_served_utility_default(args: argparse.Namespace) -> str | None:
     """Fill ``--utility-model`` and ``--utility-effort`` from the served config when unset.
 
-    The served app builds its utility model from ``GOVERNED_BI_UTILITY_MODEL`` and
-    ``GOVERNED_BI_UTILITY_MODEL_EFFORT`` (``api/graph_app.py``); without this the driver reused
-    the agent model and effort for the scope check and the channel rewriters, so a config meant to
-    measure the shipped config measured a different one. An explicit flag always wins. Returns
-    the variable the model came from, or ``None`` when nothing was filled.
+    Without this, the driver reuses the agent model and measures a different config.
+    An explicit flag wins. Returns the setting name filled, or ``None``.
     """
     from governed_bi.registry.settings import effective_settings
 
@@ -218,14 +213,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # A split utility model is wired on every provider since `model/provider.py` landed, so
-    # the old "proxy only" refusal is gone. What remains refused is a *silent* one: an effort
-    # with no model to apply it to would be accepted and dropped, putting an unrecorded
-    # setting under test in the artifact — the shape of the incident `llm_utility_model` was declared
-    # to prevent.
-    # "Keep what was measured" and "throw it away" are opposite instructions, and the file is
-    # the same one. Refused rather than resolved in either direction. The decision itself lives
-    # in `provenance.flag_conflict`, where a test can reach it without starting the driver.
+    # ``--resume`` and ``--truncate`` contradict on one file. Refused in ``flag_conflict``
+    # so a test can reach the decision without starting this driver.
     from governed_bi.eval.provenance import flag_conflict
 
     conflict = flag_conflict(resume=args.resume, truncate=args.truncate)
@@ -240,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
     source = apply_served_utility_default(args)
     if source:
         print(f"utility model {args.utility_model} (effort {args.utility_effort or 'none'}) from {source}")
+    # An effort with no utility model would be accepted and then dropped.
     if args.utility_effort and not args.utility_model:
         parser.error("--utility-effort needs --utility-model; alone it is accepted and ignored")
     from governed_bi.model import provider as provider_mod
@@ -293,9 +283,8 @@ def main(argv: list[str] | None = None) -> int:
     model, utility_model, embedder, vector_cache = _build_models(args)
 
     # One connector for the session and the graph; each worker gets its own below.
-    # `utility_model` is passed only when there is one: `session` writes `llm_utility_model`
-    # from the agent model when it is absent, and "shared one model" and "split them" are two
-    # settings under test that must not resolve to the same setting set.
+    # Pass ``utility_model`` only when set: if absent, ``session`` copies the agent model
+    # into ``llm_utility_model``, and shared-versus-split must not become one setting.
     session_kwargs: dict = {
         "connector": PostgresConnector(dsn),
         "policy": GovernancePolicy(guard_rules_enabled={}),
@@ -327,12 +316,8 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     schemas = sorted({s for s in session.structure.table_schemas.values() if s})
 
-    # **Before the first paid question**, which is the only place this check is worth anything.
-    # `reconcile` compares the profile's committed claim against what a run records, and until
-    # now its only caller was its own tests -- declared machinery with no wire, which is the
-    # defect open-work 3.10 is about, entered deliberately. A run labelled `v4` against a
-    # corpus that is not v4's is a mislabelled artifact, and mislabelled artifacts are how a
-    # number ends up quoted against the wrong setting under test.
+    # Before the first paid question. A named config whose corpus is not the one loaded
+    # is a mislabelled artifact, and this is the only point where refusing is free.
     if profile is not None:
         print(f"config {profile.name}: {profile.description}", flush=True)
         if profile.compare_to:
@@ -354,23 +339,9 @@ def main(argv: list[str] | None = None) -> int:
     # resume, or the scope key would report drift on every resume and mean nothing.
     covered_qids = {str(q["question_id"]) for q in questions}
 
-    # **Both locks, at the first line where both are knowable.** The print above moved apart from
-    # this check on 2026-08-20, when the profile gained a second reconcilable field: the corpus
-    # digest was already knowable at the print, the question set is not knowable until
-    # `covered_qids` exists, and checking each identity in a different place is how one of them
-    # ends up unchecked. This is still ahead of everything that costs or destroys anything --
-    # `append_refusal` and `--truncate` are below, and the first paid question is far below.
-    #
-    # Until this line existed the pre-flight passed the corpus alone, so `--config v4` against a
-    # different `--dataset` agreed with the profile on everything compared and was caught at
-    # *report* time, over the finished artifact, which is after the money is spent. The two keys
-    # go in one mapping with no `settings_resolved`, which is the shape `recorded_question_subset`
-    # falls through for.
-    #
-    # `scope_identity` is called here and again inside `harness_settings` below. That is the same
-    # producer twice, deliberately, not a second copy of the rule: the pre-flight must compare
-    # exactly the value the rows will carry, and the only way to guarantee that is to derive it
-    # from the same function on the same three arguments.
+    # Both identities, once both are knowable, and still before spend or delete.
+    # Flat keys, no ``settings_resolved``: ``recorded_question_subset`` reads that map first.
+    # ``scope_identity`` is called again in ``harness_settings`` on the same arguments.
     if profile is not None:
         mislabelled = config_startup_refusal(
             profile,
@@ -381,18 +352,9 @@ def main(argv: list[str] | None = None) -> int:
                     question_ids=covered_qids,
                     dataset_file=dataset_file,
                 )["question_subset"],
-                # The one setting that affects results that names the *setting under test*: measured 2026-08-23, not
-                # one of the other 50 contains "corpus", so a config whose setting under test is the corpus
-                # could not declare it and `config_profiles.reconcile` returned agreement.
-                #
-                # **Flat, not nested under `settings_resolved`.** A real row carries it in the setting
-                # mapping and `recorded_corpus_release` reads it from there; this identity is not a
-                # row, and putting a nested mapping here is how the question-set check went vacuous
-                # once already -- `recorded_question_subset` looks in the setting mapping first. The
-                # top-level fallback exists for this caller.
-                #
-                # `None` means this run declined to name a release, which `reconcile` reads as "did
-                # not say" rather than as a mismatch: every config on disk predates the setting.
+                # The setting that names the corpus under test. Flat, not under
+                # ``settings_resolved``: this mapping is not a row. ``None`` means the run
+                # named no release, which ``reconcile`` reads as silence, not a mismatch.
                 "corpus_release": _settings_env_override("corpus_release") or None,
             },
         )
@@ -400,34 +362,26 @@ def main(argv: list[str] | None = None) -> int:
             print(mislabelled, file=sys.stderr)
             return 5
 
-        # Power, asked here for the same reason the label is: before the first paid question is the
-        # only point where refusing costs nothing. Silent unless the profile declares a hypothesis
-        # -- every config on disk predates the field, and inventing one so the check has something to
-        # check would put this file's number into somebody's later quotation of the config's.
+        # Power, before the first paid question, where a refusal is free. Silent unless
+        # the profile declares a hypothesis: inventing one would quote a number this
+        # file does not own as if the config had declared it.
         underpowered = config_power_refusal(profile, len(covered_qids))
         if underpowered:
             print(underpowered, file=sys.stderr)
             return 5
 
-    # The retrieval channel is in the tag because it is a config, not a detail: lexical and
-    # embedded runs have different coverage ceilings, so a tag that hid which one ran would
-    # let two incomparable runs read as replicates.
-    # The prompt selection belongs in the tag for exactly the reason the retrieval channel
-    # does, and more sharply: an A/B differing *only* in --prompt-variant would otherwise
-    # auto-name both configs to one path, and --resume would read the first config's rows as this
-    # one's and skip the questions. Two settings under test, one artifact, no error anywhere.
+    # Retrieval channel and prompt selection are in the tag. Channels have different
+    # coverage ceilings, and an A/B that differs only in ``--prompt-variant`` would
+    # otherwise share one path, so ``--resume`` would skip the second config's questions.
     variant_tag = "".join(
         f"_{pair.replace('=', '')}" for pair in sorted(args.prompt_variant or ())
     )
-    # The abstention policy moves
-    # *coverage*, so a resume that merged an abstaining run into a committing artifact would
-    # report one config's delivered set with the other's declines and every selective-accuracy
-    # figure over the file would be a blend of two operating points.
+    # Abstention moves coverage. A resume that merged an abstaining run into a
+    # committing artifact would blend two operating points in every selective figure.
     abstain_tag = "_abstain" if args.abstain else ""
-    # A pinned config and an unpinned one are two settings under test: v3-fold vs v4 is discordant on 9.3%
-    # of questions with the pin and 12.7% without it, which is the difference between an MDE of
-    # 2.3pp and 2.7pp (`measure.stats.mde`, n=1351). It was the one setting under test input with no tag
-    # segment and no readable row, so `--resume` could merge a pinned run into an unpinned one.
+    # A pinned run and an unpinned one disagree often enough to move the detectable effect
+    # (9.3% vs 12.7% of questions; MDE 2.3pp vs 2.7pp, n=1351). The pin is in the tag
+    # so ``--resume`` cannot merge them.
     pinned_tag = "_pinned" if args.replay_routing is not None else ""
     tag = (
         f"{args.model}_{args.effort or 'default'}_top{args.top_n or 'default'}"
@@ -437,8 +391,7 @@ def main(argv: list[str] | None = None) -> int:
     out_path = args.out or pathlib.Path("runs/eval") / f"live_full_{tag}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # A second population appended into one artifact -- see `append_refusal` for what that
-    # printed before anything raised.
+    # A second population in one artifact is refused before anything is written.
     refusal = append_refusal(out_path, resume=args.resume, truncate=args.truncate)
     if refusal:
         print(refusal, file=sys.stderr)
@@ -451,13 +404,9 @@ def main(argv: list[str] | None = None) -> int:
         print(notice, flush=True)
         out_path.write_text("", encoding="utf-8")
 
-    # ── resume: keep what was *measured*, retry what crashed ──────────────────────
-    #
-    # The file is rewritten with crashed rows dropped and their question ids requeued, because a
-    # crashed row is not a measurement and skipping it leaves a permanent hole in the artifact.
-    # A resume that finds nothing is usually a renamed artifact, not a first run: adding the
-    # retrieval channel to the tag once orphaned a 515-row artifact and restarted a 1 351-question
-    # run from scratch. Refusing here costs one flag and saves a multi-hour run.
+    # Resume drops crashed rows and requeues their questions: a crash is not a measurement.
+    # No artifact at this tag, with sibling artifacts present, is treated as a renamed run
+    # unless ``--force-fresh``.
     if args.resume and not out_path.exists():
         siblings = sorted(
             path
@@ -479,12 +428,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 4
 
-    # Per-question setting overrides, composed into one dict. Two separate blocks each writing
-    # `settings_resolved` would mean the second silently dropped the first's override, which is the
-    # defect `Session.turn` already caused once for `--top-n`.
-    #
-    # Built here rather than after the resume block, because the resume guard compares the
-    # artifact's recorded settings that affect results against the ones this run is about to write.
+    # One dict for every per-question override. A second writer of ``settings_resolved``
+    # would drop the first. Built before the resume guard, which compares these settings
+    # with the ones recorded in the artifact.
     setting_overrides: dict[str, Any] = harness_settings(
         repo=REPO,
         schemas=schemas,
@@ -542,13 +488,9 @@ def main(argv: list[str] | None = None) -> int:
     qid_lists = dataset_qid_lists(args.dataset)
     order_sensitive = qid_lists["order_sensitive"]
 
-    # ── what the dataset already knows, and the harness used to ignore ────────────
-    #
-    # Both files ship with the dataset and had no reader. `attach_gold_fingerprints` supplies the
-    # published digest, without which every oracle-config row is `correct=None`. `attach_quality_flags`
-    # marks the questions the dataset warns about, so the headline can be recomputed under a
-    # different exclusion policy without paying for the run twice. Both counts are printed: a
-    # wiring that silently attaches nothing looks exactly like one that was never called.
+    # Attach the published gold digest and the dataset's quality flags, and print both counts.
+    # Without the digest every oracle row is ``correct=None``. A silent empty attach looks
+    # like a call that never happened.
     fingerprints = attach_gold_fingerprints(
         questions, args.dataset, dsn_key="rename_decoy", order_sensitive=order_sensitive
     )
@@ -566,9 +508,7 @@ def main(argv: list[str] | None = None) -> int:
         flush=True,
     )
 
-    # Before the `--top-n` override below, and deliberately: pinning a shortlist that was
-    # produced under a different `route_top_n` is a contradiction, and printing both lets the
-    # operator see it. The pin wins if they disagree -- it is the whole point of the flag.
+    # Writes the prior shortlist onto the questions. ``route_top_n`` stays a separate field.
     if args.replay_routing is not None:
         from governed_bi.eval.replay import attach_pinned_routing, routing_from_artifact
 

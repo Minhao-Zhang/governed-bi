@@ -45,6 +45,9 @@ jobs:
       - name: Plain names
         run: uv run --frozen python tools/check_plain_names.py
 
+      - name: Comment budget
+        run: uv run --frozen python tools/check_comment_budget.py
+
       # `-rs` prints every skip with its reason. Postgres and OpenAI tests skip without
       # credentials, and a silent skip would hide which adapter ran.
       - name: Tests

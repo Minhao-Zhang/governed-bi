@@ -1,45 +1,4 @@
-"""The declared abstention policy — rules, evidence and result (ADR 0013).
-
-**What this is for.** The project's headline is a system that answers with confidence and
-declines on purpose. On the v4 config it declines by accident: 19 of 20 refusals end on
-``r_table_not_retrieved`` and all four clarifications retrieved_tables nothing, so nothing *decided* to
-withhold — retrieval missed and Layer 6 mechanically blocked five statements later. This module
-is the decision, written down: a named policy, a closed vocabulary of reasons, and the evidence
-behind each one, evaluated **before** the agent spends its ``run_query`` budget.
-
-**Where the line is, and which side this is on.** It computes no score. There is no
-``confidence``, no ``certainty``, no threshold on a signal, and there will not be: a learned
-abstainer was measured and failed (OOF AUC 0.597, worse than counting the agent's output tokens,
-and its "unsure" bucket as likely to be right as its "correct" one — open-work.md §3.11), every
-risk-coverage curve reads 0.7144 at the engine's own coverage, and ADR 0007 forbids a trust field
-on the answer card. Reporting *why* the engine withheld is the ledger. Scoring *how sure it is*
-is, and ADR 0013 already named it that.
-
-So every rule here is a **deterministic predicate over state the turn already recorded**. Each
-one can be re-checked by a person reading the artifact, which is the property a score does not
-have.
-
-**Off by default.** ``abstention_policy_enabled`` ships ``False``, so v4 stays the control and
-the change costs one paired config to measure. The result is written on **every** turn including
-the disabled ones, which is ``negative``'s argument one check over: a check that leaves a trace
-only when it fires cannot afterwards be told from one that was never wired up.
-
-**Not a node, and that is the point.** The graph adapter is
-:func:`~governed_bi.serve.nodes.abstain.abstain_node`, in its own module. Everything here takes
-:class:`AbstentionInputs` — a typed read-view of the eight facts the policy needs — and never
-sees ``ServeState``'s 47-channel dict, so "which channels does this decision read" is answerable
-by reading a class instead of a node body. :meth:`AbstentionInputs.from_state` is the one reader
-of that dict in the whole policy, and the adapter names the two channels it keeps for itself.
-
-**Why this is a separate file from the adapter.** Both halves fitted in
-``serve/nodes/abstain.py`` at 470 lines, over ADR 0005 §6's soft cap of 400, and the split
-that pays that back is the one the boundary already drew: a pure decision over named facts on this
-side, a translation to and from LangGraph's ``(state, config) -> dict`` on the other. The cost
-of splitting is that the forbidden-word scan in
-``tests/serve/test_the_abstention_policy_is_declared.py`` had to stop naming one file — it
-derives its file set from where the policy's own symbols live now, so a further split moves the
-scan with it rather than silently narrowing it.
-"""
+"""See ADR 0013. Predicates over ``AbstentionInputs``, not a score and not ``ServeState``."""
 
 from __future__ import annotations
 
@@ -63,83 +22,36 @@ __all__ = [
     "decide",
 ]
 
-#: The policy's name **and version**, carried on every result.
-#:
-#: Versioned because the rule set is the setting under test: adding a fifth rule changes which turns are
-#: delivered, and two configs whose results both said ``abstention_policy`` would compare as one.
-#: ``settings_resolved`` carries the enabling setting; this says *which policy* the setting enabled.
+#: Two configs both named ``abstention_policy`` would compare as one. The enabling setting
+#: does not say which policy ran.
 ABSTENTION_POLICY = "context_sufficiency_v1"
 
 
 @dataclass(frozen=True, slots=True)
 class AbstentionInputs:
-    """**Every channel the policy reads, and the whole of it.** The node's real interface.
+    """Not a ``TypedDict`` in ``state.py``: ``bool_setting`` would import ``retrieve/``.
 
-    The enumeration, because it was previously nowhere. This node reads **eight** of
-    ``ServeState``'s 47 channels. Six of them become the eight fields below — ``retrieved_tables``,
-    ``delivery`` (both its ``context_block`` and its ``evicted`` counts), ``channels``,
-    ``retrieved``, ``schemas``, and ``settings_resolved``, from which
-    :func:`~governed_bi.serve.runtime.bool_setting` resolves ``abstention_policy_enabled``. That
-    setting is also probed as a *state key of its own*, which ``ServeState`` does not declare: on
-    the ``accept`` graph ``input_schema`` drops it, so it can only arrive on the in-process path,
-    and it is named here because an undeclared read is exactly the kind that goes unnoticed.
-
-    The remaining two stay at the boundary in
-    :func:`~governed_bi.serve.nodes.abstain.abstain_node`, which names them: ``path_kind``,
-    the already-ended short-circuit every node in this graph has — routing, not policy input,
-    and read *before* the projection so that a turn which already ended cannot be crashed by
-    this node's setting — and ``turn_id``, which
-    :func:`~governed_bi.serve.events.rail_event_id` keys the rail row on.
-
-    **Written:** ``abstention`` on every turn the node runs, plus ``path_kind`` and
-    ``terminal_reason`` on a withhold. Nothing else; ``tests/serve`` asserts the update's shape
-    rather than inferring it from a green turn.
-
-    **Every field has a default**, so a test states the two or three facts its case is about
-    rather than assembling a turn. That is the property being probed here: a rule is a predicate
-    over a handful of named facts, and the 47-channel dict it used to be handed was an interface
-    an order of magnitude wider than any of the implementations behind it.
-
-    Not a ``TypedDict`` beside ``AbstentionResult`` in ``serve/state.py``: this is a *read*
-    view, so the projection has to travel with it or there are two places that know how to pull
-    ``retrieved_tables`` out of a state dict — and the projection calls ``bool_setting``, which would make
-    ``state.py`` import ``serve/runtime.py`` and through it the whole of ``retrieve/``.
+    ``policy_enabled`` is undeclared because ``input_schema`` drops it.
     """
 
-    #: Table ids Layer 6 will accept for this turn, in the order ``connect`` left them.
+    #: In the order ``connect`` left them.
     retrieved_tables: tuple[str, ...] = ()
-    #: The rendered context block exactly as the model will be handed it.
+    #: Exactly as the model will be handed it.
     context_block: str = ""
-    #: ``("channel_schema.semantic", ...)``, sorted. ``failed`` only — :func:`_failed_channels` says
-    #: why ``not_configured`` is not one.
+    #: ``failed`` only. ``not_configured`` is not one.
     failed_channels: tuple[str, ...] = ()
-    #: Whole tables the char budget dropped from the block after they were retrieved_tables.
+    #: Whole tables the char budget dropped after they were retrieved.
     tables_evicted: int = 0
-    #: Column bodies the same budget dropped. Evidence only; no rule reads it.
+    #: Evidence only; no rule reads it.
     bodies_evicted: int = 0
-    #: Schemas the turn worked from, stringified.
     schemas: tuple[str, ...] = ()
-    #: ``retrieved["lexical_coverage"]``. **Evidence and never a rule** — see
-    #: :func:`abstention_evidence` for why nothing may threshold it.
+    #: Evidence and never a rule.
     question_terms_in_corpus: float | None = None
-    #: The resolved ``abstention_policy_enabled`` setting. ``False`` ships, so this is the default.
     policy_enabled: bool = False
 
     @classmethod
     def from_state(cls, state: Mapping[str, Any]) -> AbstentionInputs:
-        """**The only reader of the state dict in the policy.**
-
-        One projection, so there is one answer to "where does ``retrieved_tables`` come from". Two
-        functions that both knew would be the defect this file is a probe against: a second
-        reader of a channel is where ``measure/checks.py`` came to evidence "reached finish" on
-        ``Outcome.clarification`` and silently drop rows from a denominator.
-
-        Eager, including on the turns where the setting is off. That is a handful of dict lookups
-        for a decision nobody took, which is a real cost and a very small one — the alternative
-        is a conditional projection, and a projection that runs differently depending on what it
-        is about to be used for is two projections again. What the setting-off turn still does not
-        pay for, and must not, is the *result*: :func:`_disabled` carries no evidence.
-        """
+        """The only state-dict reader. A projection that skips when disabled is a second projection."""
         return cls(
             retrieved_tables=_retrieved_tables(state),
             context_block=_context_block(state),
@@ -154,58 +66,28 @@ class AbstentionInputs:
 
 @dataclass(frozen=True, slots=True)
 class AbstentionPatch:
-    """What the decision asks the graph to do — one field per observable effect.
+    """``rail_status`` is not derived from ``outcome``: rows while disabled would change the event stream."""
 
-    Three, because a node has exactly three ways to affect a turn and each is a separate claim:
-    the channels it writes, the route it forces, and the row it puts on the timeline.
-    :func:`~governed_bi.serve.nodes.abstain.abstain_node` translates this into LangGraph's dict
-    and emits the row; it decides nothing, so no branch of the policy is reachable only by
-    invoking a graph.
-
-    ``rail_status`` could be derived from ``result["outcome"]`` instead, and is not on purpose:
-    a node's effect on the timeline is a claim of its own — ``reflect`` and this node are both
-    registered ``stream=False`` precisely because a disabled check that still emitted two rows
-    would have changed the event stream of every config measured so far — and the adapter deriving
-    it would mean the boundary, not the policy, deciding what the timeline says.
-    """
-
-    #: Goes to the ``abstention`` channel, on **every** turn the node judges or declines to.
+    #: On every turn the node judges or declines to judge.
     result: dict[str, Any]
-    #: The terminal this decision imposes, or ``None`` to leave the turn running. Written into
-    #: the same channel ``route`` and ``connect`` write their declines into.
+    #: ``None`` leaves the turn running. Same channel ``route`` and ``connect`` write.
     path_kind: Literal["decline"] | None = None
-    #: Status for the one rail row a *judged* turn emits. ``None`` means no row at all, which is
-    #: what a disabled policy leaves behind — it is registered ``stream=False``, so
-    #: ``wrap_node`` emits neither the start nor the resolve row either.
+    #: ``None`` means no row.
     rail_status: Literal["ok", "declined"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class AbstentionRule:
-    """One named reason to withhold, and the argument for it."""
-
-    #: A member of :data:`~governed_bi.registry.stages.ABSTENTION_REASONS`. Reaches
-    #: ``terminal_reason``, so the refusal histogram separates it from every other terminal.
+    #: Reaches ``terminal_reason``, so the histogram separates it from every other terminal.
     reason: str
-    #: Why withholding is the right answer here — the sentence a person gets when they ask why
-    #: the engine did not answer. Not shown to the model: refusal copy is ``terminal.py``'s.
+    #: Not shown to the model: refusal copy is ``terminal.py``'s.
     why: str
-    #: Reads the turn's projected facts and nothing else. No model, no threshold, no fitted
-    #: parameter — and no state dict, so a rule cannot grow a fifth input that the
-    #: node's declared interface does not carry.
+    #: No model, threshold, or state dict.
     fires: Callable[[AbstentionInputs], bool]
 
 
 def _failed_channels(state: Mapping[str, Any]) -> tuple[str, ...]:
-    """``["channel_schema.semantic", ...]`` for every channel that ran and errored.
-
-    **``failed`` only, never ``not_configured``.** A lexical-only deployment reports
-    ``not_configured`` on every semantic channel by design — ``registry/channels.is_degraded``
-    counts that as degradation, correctly, for a *health* check — and abstaining on it would
-    withhold every turn on a laptop with no embedder. The distinction is exactly the one
-    ``ChannelState`` exists to carry: "there is nothing to embed with" is a deployment, "it
-    should have run and did not" is a failure.
-    """
+    """``not_configured`` is not a failure: a lexical-only deployment would withhold every turn."""
     out: list[str] = []
     for stage, result in (state.get("channels") or {}).items():
         if not isinstance(result, Mapping):
@@ -254,13 +136,9 @@ def _lexical_coverage(state: Mapping[str, Any]) -> float | None:
     return None
 
 
-#: The rules, **in evaluation order**, first match wins.
-#:
-#: The order is causes before consequences, so the reason a person is given names the thing they
-#: can fix. A turn whose semantic channel errored will often also license nothing; reporting
-#: ``nothing_retrieved`` there sends someone to the corpus for what is a provider outage. Within
-#: the remaining three the order is widest-first: no tables, then no context, then a table
-#: dropped for space.
+#: First match wins, causes before consequences, so the reason names what a person can fix.
+#: A failed channel often also retrieved nothing; ``nothing_retrieved`` would send them to the
+#: corpus for a provider outage. Then widest-first: no tables, empty context, then a drop.
 ABSTENTION_RULES: tuple[AbstentionRule, ...] = (
     AbstentionRule(
         reason="retrieval_channel_failed",
@@ -303,19 +181,7 @@ ABSTENTION_RULES: tuple[AbstentionRule, ...] = (
 
 
 def abstention_evidence(inputs: AbstentionInputs) -> dict[str, Any]:
-    """The facts behind the decision, in a form a person can check against the record.
-
-    Three questions, which is what open-work.md §4.1 asks an abstention to be able to answer:
-    **what was retrieved_tables** (``retrieved_tables`` / ``n_retrieved_tables`` / ``schemas``), **what was missing**
-    (``failed_channels``, ``tables_evicted``, ``bodies_evicted``, ``context_chars``), and **what
-    the question asked for that the context could not supply** (``question_terms_in_corpus``).
-
-    That last one is ``lexical_coverage`` — the share of the question's terms the corpus
-    vocabulary has — and it is evidence, never a rule. No threshold reads it.
-
-    ``retrieved_tables`` is capped: it is evidence, and a 40-table list on every row is an artifact
-    cost. The count beside it is not capped, so the cap cannot hide the size.
-    """
+    """See ADR 0013. The table-id list is capped; the count beside it is not, so the cap cannot hide the size."""
     return {
         "n_retrieved_tables": len(inputs.retrieved_tables),
         "retrieved_tables": sorted(inputs.retrieved_tables)[:_EVIDENCE_LIST_CAP],
@@ -328,20 +194,12 @@ def abstention_evidence(inputs: AbstentionInputs) -> dict[str, Any]:
     }
 
 
-#: How many retrieved_tables keys the evidence carries. Evidence, not the record's ``retrieved_tables`` field —
-#: that one is complete and is what a reader joins on.
+#: The record's ``retrieved_tables`` stays complete.
 _EVIDENCE_LIST_CAP = 12
 
 
 def decide(inputs: AbstentionInputs) -> dict[str, Any]:
-    """Run the policy over ``inputs``. **The whole decision, and a pure function of them.**
-
-    Pure so the same result can be recomputed offline from an artifact's own fields, which is
-    what makes "the engine can say why it withheld, in terms a person can check" true rather
-    than asserted. Nothing here reads a model, a clock, the environment or the network — and,
-    since the signature changed, nothing here reads the graph's state dict either: what it can
-    see is exactly the eight fields of :class:`AbstentionInputs`.
-    """
+    """Recomputable from the artifact: no model, clock, environment, network, or state dict."""
     for rule in ABSTENTION_RULES:
         if rule.fires(inputs):
             return {
@@ -365,11 +223,7 @@ def decide(inputs: AbstentionInputs) -> dict[str, Any]:
     }
 
 
-#: The result written when the setting is off. **No evidence**: a result nobody took carrying the
-#: facts behind it would be a cost with no reader, and an empty mapping cannot be mistaken for a
-#: judgement. (The *projection* still runs on those turns — :meth:`AbstentionInputs.from_state`
-#: says why that is the cheaper of the two mistakes — so what this saves is the payload, which is
-#: the part that is written to every artifact row.)
+#: No evidence: facts behind a decision nobody took have no reader.
 def _disabled() -> dict[str, Any]:
     return {
         "policy": ABSTENTION_POLICY,
@@ -381,13 +235,7 @@ def _disabled() -> dict[str, Any]:
 
 
 def apply_policy(inputs: AbstentionInputs) -> AbstentionPatch:
-    """The setting, then the policy. **Everything this node decides, and no state dict in sight.**
-
-    Here rather than in :func:`~governed_bi.serve.nodes.abstain.abstain_node` so that the
-    adapter has no branch of its own: a condition at the boundary is a condition only a graph
-    invocation can reach, and this one — "the setting is off, so record that a policy existed and
-    let the turn through" — is half of what makes the setting.
-    """
+    """The adapter has no branch of its own: a condition there is reachable only by invoking a graph."""
     if not inputs.policy_enabled:
         return AbstentionPatch(result=_disabled())
     result = decide(inputs)
@@ -397,16 +245,7 @@ def apply_policy(inputs: AbstentionInputs) -> AbstentionPatch:
 
 
 def _assert_the_policy_speaks_the_declared_vocabulary() -> None:
-    """Import-time: every rule's reason is declared, and the set is exactly the register's.
-
-    Both directions. A rule with an undeclared reason writes a ``terminal_reason`` nothing can
-    attribute; a declared reason with no rule is the machinery-with-no-wire this repository
-    keeps auditing for, and it would read to anyone grepping the vocabulary as a decision the
-    engine can take.
-
-    Here and not in the adapter, so that importing the policy without the node still runs it —
-    every test of the rules does exactly that.
-    """
+    """An undeclared reason is unattributable; a reason with no rule reads as a live decision."""
     reasons = [rule.reason for rule in ABSTENTION_RULES]
     if len(reasons) != len(set(reasons)):  # pragma: no cover - import-time guard
         raise AssertionError(f"two abstention rules share a reason: {sorted(reasons)}")

@@ -1,22 +1,4 @@
-"""``ServeState.turns`` under :func:`~governed_bi.serve.state.keep_turns`: bounded, deduplicated,
-and about what it trimmed.
-
-**The defect.** ``turns`` was ``Annotated[list[TurnEntry], operator.add]`` and each row holds a
-full turn record. ``AsyncSqliteSaver`` has exactly two tables — ``checkpoints`` and ``writes`` —
-and no per-channel blob store, so every super-step serialises the *whole* checkpoint into one
-BLOB. Measured on the real store (``runs/conversations.sqlite``, 2026-08-18): 18 super-steps per
-served turn and 103.8 KB per record, so turn *n* rewrote the previous *n-1* records eighteen
-times. A two-turn thread had already written 5.89 MB. End to end on production-sized records the
-marginal cost of turn 10 was **14.55 MB**, rising by ~1.6 MB with every turn and never stopping —
-the TTL sweep is ``return (0, 0)`` under ``langgraph dev``, so nothing evicts locally.
-
-**Why these tests are mostly at the reducer and not through the graph.** The end-to-end fixture's
-two-schema corpus produces a 7.5 KB record, which is under
-:data:`~governed_bi.serve.state.COMPACT_RECORD_BUDGET` — so a turn driven through the real
-topology never trims anything, and a compaction test written that way would assert nothing while
-looking thorough. The record shape that matters is the production one, so it is built here with
-the measured key sizes. The cap and the append order *are* asserted through the served graph,
-because those depend on ``accept``-resets-then-``record``-appends.
+"""``turns`` stays bounded. An append-only list rewrites the whole checkpoint every super-step.
 """
 
 from __future__ import annotations
@@ -82,12 +64,7 @@ def _isolated():
 
 
 def _fat_record(turn_id: str = "turn-0001") -> dict[str, Any]:
-    """A record shaped like the real ones, with the two bulk keys at their measured sizes.
-
-    ``channel_hits`` 49.8 KB and ``pulled_in`` 46.2 KB — together 92% of a 103.8 KB record. Every
-    field the register declares ``Absence.never`` is filled, so ``missing_required`` is empty
-    before compaction and the test can attribute any change to compaction itself.
-    """
+    """A record shaped like the real ones, with the two bulk keys at their measured sizes."""
     return {
         "run_id": "run-1", "turn_id": turn_id, "thread_id": "t-1", "question_id": "q-1",
         "db_id": "facilities", "attempt_id": "a-1", "corpus_content_hash": "c0ffee",
@@ -123,21 +100,10 @@ def _bytes(value: Any) -> int:
     return len(json.dumps(value, default=str))
 
 
-# ── the property the compaction had to keep ───────────────────────────────────
 
 
 def test_an_archived_row_is_still_judged_by_todays_register_at_read_time() -> None:
-    """**The trade this design refused to make**, asserted rather than described.
-
-    ADR 0004 §2 defends ``incomplete_fields`` being computed at *read* time: a turn recorded
-    before a register row existed is judged by the current declaration. The obvious way to shrink
-    a row — store the list-view projection and nothing else — moves that judgement to write time.
-
-    :func:`protected_record_keys` derives its keep-set from ``required_keys()``, so every field
-    ``missing_required`` reads survives compaction byte-for-byte and the read-time answer is
-    *identical*. That is what makes the 17× saving free of the trade-off, and it is the assertion
-    that fails if someone lets the byte budget reach a required field.
-    """
+    """**The trade this design refused to make**, asserted rather than described."""
     full = _fat_record()
     assert missing_required(full) == frozenset(), "the fixture must start complete"
 
@@ -158,16 +124,10 @@ def test_an_archived_row_is_still_judged_by_todays_register_at_read_time() -> No
     assert len(archived["retrieved_tables"]) == len(full["retrieved_tables"]), "licensed_count would move"
 
 
-# ── what compaction does, and what it says it did ─────────────────────────────
 
 
 def test_compaction_trims_the_two_bulk_keys_and_nothing_smaller() -> None:
-    """Byte-driven, not key-listed: the rule finds the bulk without being told its names.
-
-    ``COMPACT_RECORD_BUDGET`` is set where the measurement put it — above ``pulled_in`` and below
-    everything else — so a *new* bulk field is caught by the same rule instead of needing to be
-    remembered, and a small field is never touched however large the register grows.
-    """
+    """Byte-driven, not key-listed: the rule finds the bulk without being told its names."""
     full = _fat_record()
     before = _bytes(full)
     assert before > 90_000, f"the fixture is no longer production-sized: {before}"
@@ -180,8 +140,6 @@ def test_compaction_trims_the_two_bulk_keys_and_nothing_smaller() -> None:
     # **The budget is a target, not a guarantee**, and the reason is a floor: every protected key
     # survives compaction, so a record whose protected keys alone exceed the budget stays over it.
     # Asserted as the floor rather than as `after > BUDGET` — this fixture's protected keys happen
-    # to fit, so compaction *does* get under budget here, and demanding otherwise would fail a
-    # correct implementation for being too good.
     survivors = {k: v for k, v in archived.items() if k in protected_record_keys()}
     assert set(survivors) >= set(protected_record_keys()) & set(full), (
         "compaction dropped a protected key; those are a turn summary's columns and the floor the "
@@ -214,14 +172,7 @@ def test_a_trimmed_field_stays_present_and_says_so() -> None:
 
 
 def test_the_trim_is_declared_on_the_wrapper_not_inside_the_record() -> None:
-    """Where the marker lives is forced, not chosen.
-
-    ``TurnEntry``'s own docstring records why ``question`` sits beside ``record`` rather than in
-    it: a key the register does not declare makes every read of that record fail
-    ``undeclared_keys``. ``compacted`` is the same class of fact about the row, so it goes the
-    same place — and ``{"dropped": []}`` on an archived row is a statement ("archived, nothing
-    trimmed"), which is why it is written even when nothing was.
-    """
+    """Where the marker lives is forced, not chosen."""
     rows = keep_turns([], [_entry(_fat_record("t-1"))])
     assert "compacted" not in rows[0], "the newest row keeps its record verbatim"
 
@@ -238,12 +189,7 @@ def test_the_trim_is_declared_on_the_wrapper_not_inside_the_record() -> None:
 
 
 def test_the_newest_row_keeps_its_record_whole() -> None:
-    """The one row an operator opens is the turn they just ran, so it is not trimmed.
-
-    Stated as a test because it is the *cost* half of the design: it is ~86 KB of the ~256 KB the
-    capped channel carries, duplicating ``answer`` in the same checkpoint. Trimming it too would
-    save ~1.6 MB of writes per turn and cost the trace surface ``channel_hits`` on every turn.
-    """
+    """The one row an operator opens is the turn they just ran, so it is not trimmed."""
     rows = keep_turns([], [_entry(_fat_record("t-1"))])
     for i in range(2, 5):
         rows = keep_turns(rows, [_entry(_fat_record(f"t-{i}"))])
@@ -254,7 +200,6 @@ def test_the_newest_row_keeps_its_record_whole() -> None:
     )
 
 
-# ── the bound, and the dedup ``operator.add`` could not do ────────────────────
 
 
 def test_the_history_is_capped_and_the_gap_is_stated() -> None:
@@ -281,13 +226,7 @@ def test_the_history_is_capped_and_the_gap_is_stated() -> None:
 
 
 def test_a_resumed_turn_appends_once() -> None:
-    """``operator.add`` could not deduplicate, and a clarification resume re-runs ``record``.
-
-    The visible cost was one question answered twice, with two rows carrying
-    one ``turn_id``. ``turn_id`` is the
-    register's declared upsert key ("a reused graph deriving it once wrote every question to the
-    same id"), so the later write replaces.
-    """
+    """``operator.add`` could not deduplicate, and a clarification resume re-runs ``record``."""
     first = _entry({"turn_id": "t-resumed", "outcome": "clarification"}, "why")
     again = _entry({"turn_id": "t-resumed", "outcome": "answered"}, "why")
 
@@ -317,7 +256,6 @@ def test_the_reducer_survives_the_shapes_langgraph_hands_it() -> None:
     assert len(kept) == 2 and kept[0]["record"] == "nonsense"
 
 
-# ── through the served topology ───────────────────────────────────────────────
 
 
 def _served() -> Any:
@@ -341,12 +279,7 @@ def _served() -> Any:
 
 
 def test_the_cap_holds_on_the_graph_production_mounts() -> None:
-    """The cap through ``accept``-resets-then-``record``-appends, which is the pair that can break.
-
-    ``MAX_TURNS_RETAINED`` is lowered for the run rather than asking 26 questions of a scripted
-    model: the subject is the reducer running under the real reset, not the number 25. Every row
-    still carries its own identity, which is what ``ACCUMULATING`` requires of a flat list.
-    """
+    """The cap through ``accept``-resets-then-``record``-appends, which is the pair that can break."""
     import governed_bi.serve.state as state_mod
 
     graph = _served()

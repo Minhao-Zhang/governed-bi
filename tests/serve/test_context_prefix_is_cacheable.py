@@ -1,23 +1,4 @@
-"""The repeated context prefix: what makes it cacheable, and what we can and cannot wire.
-
-The agent re-sends a ~22k-token context block on every model call, by design — it cannot be a
-``SystemMessage`` (that would make ``prompt_set_hash`` describe text never sent) and cannot sit
-in ``messages`` as the client's own turn (the SDK renders it as the user's bubble). Measured on
-the 2026-08-09 v3-fold config, ``agent_core`` makes 3 308 model calls over 1 345 turns -- 2.5
-each -- so the repeated prefix is **58.3%** of all input tokens. That is a measurement, not the
-bound it replaced: the bound came from dividing tokens by block size, and ``model_calls`` now
-counts the calls directly.
-
-Caching removes that repeat without touching any of those three constraints. Only two halves of
-it are ours:
-
-* the prefix must be **byte-identical** on every call, or no gateway can cache it;
-* a client that exposes a cache-point factory gets an explicit breakpoint.
-
-OpenAI caches a long prefix automatically and accepts no breakpoint. It reports no
-``cache_read_tokens`` unless the provider sends them, so the repeated share
-is computed from ``usage.model_calls`` rather than from the provider — which is why that field
-exists and is tested here too.
+"""The context block is re-sent on every model call. It is not a system message or a user turn.
 """
 
 from __future__ import annotations
@@ -37,16 +18,10 @@ def _convo() -> list[Any]:
     ]
 
 
-# ── the property every gateway needs ──────────────────────────────────────────
 
 
 def test_the_block_is_byte_identical_on_every_call() -> None:
-    """A prefix that differs per call is uncacheable everywhere, whatever else is wired.
-
-    The middleware closes over one string for the whole turn, so this is really a regression
-    guard: rendering per call, or stamping anything per call into the block, would silently
-    remove the entire saving with nothing failing.
-    """
+    """A prefix that differs per call is uncacheable everywhere, whatever else is wired."""
     block = "CONTEXT:\ntable a\ntable b"
     first = _with_block(_convo(), block)
     second = _with_block(_convo() + [AIMessage("more"), ToolMessage("x", tool_call_id="c2")], block)
@@ -65,7 +40,6 @@ def test_the_block_precedes_the_question_so_the_prefix_is_a_prefix() -> None:
     assert [m.content for m in out[1:]] == [m.content for m in _convo()]
 
 
-# ── the half that is provider-specific ────────────────────────────────────────
 
 
 class _Converse:
@@ -114,7 +88,6 @@ def test_without_a_breakpoint_the_content_stays_a_plain_string() -> None:
     assert _with_block(_convo(), "BLOCK")[0].content == "BLOCK"
 
 
-# ── the measurement that replaces the provider's cache counters ───────────────
 
 
 def test_the_usage_row_counts_the_model_calls_it_aggregated() -> None:
@@ -146,25 +119,10 @@ def test_no_reported_usage_still_means_unmeasured_not_zero_calls() -> None:
     assert reported_tokens([AIMessage("x")]) is None
 
 
-# ── what the budget dropped, which was being destroyed mid-turn ───────────────
 
 
 def test_the_delivery_channel_carries_what_the_budget_evicted() -> None:
-    """``merge_into`` rebuilt a fresh four-key dict, so ``assemble``'s ``evicted`` was destroyed
-    in ``agent_core`` on every turn that had one — a silent data loss that lived undetected.
-
-    It is the only record that a table was routed, retrieved_tables, *counted as covered* by
-    ``table_coverage``, and then dropped for space before the model saw it. Measured once it
-    survived: 19 of 1 351 turns (1.4%), bodies only, never a whole table. Rare — but nothing
-    could know that while this function deleted the field.
-
-    **Asserted through the channel rather than through the tracker** (2026-08-11). The first
-    fix carried the one named key inside ``merge_into``, and the same loss was live on
-    ``retrieved`` at the same time — a per-channel hand-fix cannot see one channel over. The
-    rule is now ``state.merge_delta`` on the channel and a two-key delta from the tracker, so
-    the property that matters is what the *channel* holds after ``agent_core`` writes, which is
-    what ``finish`` reads. Composed here exactly as LangGraph composes it.
-    """
+    """Merging delivery must keep ``evicted``. Rebuilding the dict dropped it."""
     from governed_bi.serve.delivery import DeliveryTracker
     from governed_bi.serve.state import merge_delta
 
@@ -192,13 +150,7 @@ def test_a_turn_whose_block_fit_carries_no_evicted_key() -> None:
 
 
 def test_the_delivery_channel_starts_each_turn_empty() -> None:
-    """The hazard a merge rule introduces, closed by ``PER_TURN_RESET``.
-
-    ``assemble`` writes no ``evicted`` key on a turn whose block fit, so under a merge rule
-    turn one's eviction would survive into turn two and report a drop that never happened.
-    ``Session.turn`` writes ``delivery: None`` and the reducer treats that as a clear — which
-    is the whole reason ``merge_delta`` has a clearing case rather than merging unconditionally.
-    """
+    """The hazard a merge rule introduces, closed by ``PER_TURN_RESET``."""
     from governed_bi.serve.state import PER_TURN_RESET, merge_delta
 
     stale = {"context_block": "B", "context_hash": "h", "evicted": {"tables_dropped": 1}}
@@ -257,17 +209,7 @@ def _wide_tables(n: int = 40) -> dict[str, Any]:
 
 
 def test_assemble_writes_the_eviction_onto_the_delivery_it_returns() -> None:
-    """The link between the renderer and everything downstream, which nothing covered.
-
-    ``render_context``'s out-parameter is asserted above and ``merge_into``'s carry is asserted
-    two tests up, but ``assemble_node`` is what puts the value on ``delivery`` in the first
-    place — and it is three lines that can be deleted without either neighbour noticing. With
-    them gone the whole chain still runs: the renderer fills its dict, the tracker faithfully
-    carries a key that is not there, and every artifact reports that the budget never bit.
-
-    Asserted on the node's own return value, and paired with the roomy case: a node that always
-    wrote the key would report an eviction on all 1 351 turns of a run where 19 had one.
-    """
+    """The link between the renderer and everything downstream, which nothing covered."""
     from governed_bi.serve.nodes.assemble import assemble_node
 
     state = {
@@ -293,19 +235,7 @@ def test_assemble_writes_the_eviction_onto_the_delivery_it_returns() -> None:
 def test_the_served_record_carries_what_the_budget_evicted(
     two_schema_index, two_schema_assets
 ) -> None:
-    """End to end into ``record``, which is what the audit surface serves and what an eval
-    row is projected from. (``runs/serve/*.jsonl`` was that sink when this was written; it is
-    deleted — ADR 0004, ADR 0014 — and the record is read off thread state now.)
-
-    ``finish`` projects ``delivery`` into the record through an explicit key set, so ``evicted``
-    is one name in one literal away from reaching the eval row and nothing else — and that is
-    exactly the state it was found in. A served turn would then have no trace that the char
-    budget dropped a retrieved table before the model ever saw it, on the only path a user's
-    question takes.
-
-    Same turn twice, differing only in the budget, so the field is asserted as a *response* to
-    the budget rather than as a key that happens to be present.
-    """
+    """End to end into ``record``, which is what the audit surface serves and what an eval row is projected from."""
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.serve.graph import compile_graph
 

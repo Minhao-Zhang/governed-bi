@@ -1,8 +1,6 @@
-"""Untrusted mapping ↔ typed asset.
+"""Mapping to a typed asset and back.
 
-Unknown keys error (except :class:`~.schema.Audit`). No validation here —
-:mod:`.validate` judges constructed assets. Defaults omitted on write so round
-trips stay equal.
+Unknown keys are errors, except ``Audit.extra``. Defaults are omitted on write. Validation is :mod:`.validate`.
 """
 
 
@@ -25,10 +23,9 @@ _NONE = type(None)
 
 
 def _coerce(value: Any, annotation: Any, *, where: str) -> Any:
-    """One value into its declared type, or ``ValueError``.
+    """Coerce ``value`` to ``annotation``.
 
-    Generic over the annotation, not a per-class conversion table: such a table is a second
-    declaration of the field list that has to be kept agreeing with the dataclass.
+    One walker over the annotation, not a second table of the dataclass fields.
     """
     origin = get_origin(annotation)
     if origin in (Union, UnionType):
@@ -76,11 +73,7 @@ def _coerce(value: Any, annotation: Any, *, where: str) -> Any:
 
 
 def _build(cls: type, raw: Mapping[str, Any], *, where: str = "") -> Any:
-    """Construct ``cls`` from ``raw``. Unknown keys are an error.
-
-    A mistyped field name that parses is a field nobody writes and nothing reads. The one
-    exception is a class declaring a field literally named ``extra`` — see :class:`Audit`.
-    """
+    """Build ``cls`` from ``raw``. Unknown keys raise, unless the class has an ``extra`` field."""
     hints = get_type_hints(cls)
     declared = {f.name: f for f in fields(cls)}
     prefix = f"{where}." if where else ""
@@ -111,11 +104,7 @@ def _build(cls: type, raw: Mapping[str, Any], *, where: str = "") -> Any:
 
 
 def from_mapping(raw: Mapping[str, Any]) -> Asset:
-    """A raw mapping into the typed asset its ``asset_type`` names.
-
-    Raises ``ValueError`` for anything it cannot build. **Does not validate**: a
-    constructed-but-wrong asset must be representable for ``problems_with`` to find it.
-    """
+    """Build the asset named by ``asset_type``. Does not validate, so a wrong asset can still be reported."""
     if not isinstance(raw, Mapping):
         raise ValueError(f"expected a mapping, got {type(raw).__name__}")
     if "asset_type" not in raw:
@@ -124,11 +113,7 @@ def from_mapping(raw: Mapping[str, Any]) -> Asset:
 
 
 def to_mapping(asset: Asset) -> dict[str, Any]:
-    """An asset back to a YAML-ready mapping, with defaults omitted.
-
-    Omitting defaults keeps a written file showing what was decided, and keeps a round trip
-    through :func:`from_mapping` equal.
-    """
+    """YAML-ready mapping. Defaults are omitted so a round trip stays equal."""
     out: dict[str, Any] = {"asset_type": asset.asset_type.value}
     out.update(_unbuild(asset))
     return out

@@ -1,30 +1,5 @@
-"""The benign half of ADR 0006 OQ3's condition, over the population every number is taken on.
-
-OQ3 held ``govern/guard.py``'s five deterministic rules off until each had **two** numbers:
-adversarial recall and benign firing rate. The first is
-``tests/govern/test_the_prompt_injection_half.py``, where ten attacks are caught by the rule
-each was written for. Six controls sit beside them, and six is not a rate.
-
-This is the rate. Every question in the config's declared test split is run through all five
-rules, and the answer has to be **zero** — not "low", because a false refusal here is not a
-degraded answer, it is a question the engine declines to consider at all, and a single one on
-a 1,351-question benchmark would move a published figure.
-
-**Read from the config's pinned dataset ref, not the working tree.** ``git cat-file`` against
-``config_profile(...).dataset`` is the same read
-``test_config_profiles_are_declared.py::test_every_config_names_a_dataset_whose_split_it_can_hash``
-does, for the same reason: a checkout that drifted would change the denominator, and
-a rate whose population moved is not the rate anybody quoted.
-
-**Question *and* evidence.** The engine sees both — ``eval/harness.py`` records that evidence
-is one of the two conditions for EX being comparable to published BIRD, and ``accept`` carries
-it onto the turn. Screening only the question would measure a narrower input than the one the
-rules run on.
-
-Skipped where ``../BIRD-Data-Obfuscation`` is absent, which is the same precondition the config
-tests carry and which CI's ``test`` job does not meet — so this number is established locally
-and on the ``corpus`` job, and the six controls in ``tests/govern/`` are what run everywhere.
-"""
+"""Benign firing rate over the pinned benchmark, question and evidence together. See ADR 0006. One refusal changes a
+published figure."""
 
 from __future__ import annotations
 
@@ -59,12 +34,7 @@ def _questions(repo: Path, dataset: str) -> list[tuple[str, str]]:
 
 
 def test_no_rule_fires_on_any_question_in_the_benchmark() -> None:
-    """The benign firing rate OQ3 asked for, and the reason turning the rules on is free.
-
-    This is what makes the five safe to ship enabled: the config they would have perturbed is the
-    one every figure in ``docs/`` comes from, and they perturb none of it. If this ever goes
-    non-zero, the response is to re-measure the config, not to widen the rule — the number
-    and the guard configuration are one claim.
+    """Zero firings on the population published figures use. A firing is a reason to re-measure, not to widen the rule.
     """
     from governed_bi.govern.guard import guard
     from governed_bi.govern.policy import GUARD_RULE_IDS, GovernancePolicy
@@ -93,12 +63,7 @@ def test_no_rule_fires_on_any_question_in_the_benchmark() -> None:
 
 
 def test_the_longest_benchmark_question_is_far_below_the_length_bound() -> None:
-    """``g_length`` is the one rule whose firing is a threshold rather than a pattern.
-
-    Zero firings above says nothing about *margin*: a bound one character above the longest
-    question passes that test and refuses the first slightly longer one a user types. This
-    records the headroom so a future change to ``g_length_max_chars`` has to look at it.
-    """
+    """Zero firings say nothing about margin. The longest question must sit well under the bound."""
     from governed_bi.govern.policy import GovernancePolicy
     from governed_bi.registry.config_profiles import config_profile
 

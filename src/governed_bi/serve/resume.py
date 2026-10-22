@@ -10,5 +10,5 @@ __all__ = ["resume_clarification"]
 
 
 def resume_clarification(graph: Any, *, config: Mapping[str, Any], answer: Any) -> Any:
-    """Answer the interrupt pending on ``config``'s thread. The thread id is the only handle."""
+    """The thread id on ``config`` is the only handle for the pending interrupt."""
     return graph.invoke(Command(resume=answer), dict(config))

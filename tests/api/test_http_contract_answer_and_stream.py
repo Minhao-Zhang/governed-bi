@@ -1,30 +1,6 @@
-"""ADR 0007's second acceptance rule: the boundary invents nothing, and the stream reports only
-what it declared.
+"""The served answer invents nothing, and the stream reports only what it declared (ADR 0007).
 
-**Split out of ``test_http_contract.py``.** That file's own module docstring states
-the suite's two governing rules -- "a client may not write the run's claims about itself" and "a
-field the engine does not observe must not be invented at the boundary" -- and still does; this
-file is where the *second* rule's tests live now, physically moved for room and nothing else.
-Read that docstring first for the shared framing (fixtures, the two rules, why nothing here needs
-a database, a model or a key); it is not repeated here.
-
-**What this file owns.** ``test_the_api_never_synthesizes_a_reliability_field`` and
-``test_the_answer_on_the_wire_is_the_engine_s_answer`` pin the second rule on the served answer
-itself -- no reliability result anywhere under ``src/``, and the wire's ``record`` is exactly
-``project()``'s output. The three stream-event tests extend the same rule to the *custom event
-stream* ADR 0007 §5 describes: every emitted ``step`` is a declared ``Stage``, an event's
-``status`` reports what the node did, and a clarification interrupt carries the id and
-reason a client needs to answer it. Same rule, two surfaces (the response body and the event
-stream), so they stay together rather than splitting a third way.
-
-**Fixtures and helpers reused bare from ``test_http_contract.py``.** ``tests/`` carries no
-``__init__.py``, so pytest's rootless import puts ``tests/api/`` on ``sys.path`` and a sibling
-module in the same directory is importable by its bare name -- the same pattern
-``tests/serve/test_sample_rows_governed_executor.py`` uses on ``test_agent_tools_hitl.py`` and
-``tests/serve/test_routing_replay_node.py`` uses on ``test_pass_two_and_context.py``.
-``_isolated`` is imported though never called by name:
-it is an autouse fixture, and importing it into this module's namespace is what makes pytest
-register it as autouse *here* too, the same way a module-level ``pytestmark`` would.
+``_isolated`` is imported so its autouse fixture registers in this module too.
 """
 
 from __future__ import annotations
@@ -44,18 +20,9 @@ from test_http_contract import (  # noqa: E402
     _served,
 )
 
-# ── nothing is invented at the boundary ──────────────────────────────────────
-# ── nothing is invented at the boundary ──────────────────────────────────────
-
 
 def _source_files() -> list[Path]:
-    """Every ``.py`` under :data:`SRC`, and **never an empty list**.
-
-    A function rather than four lines inside the test, so that the emptiness check travels with
-    the walk: a second structural sweep written later gets the control by calling this, which is
-    the failure mode audit D13 describes — the sweeps had no control because writing one was a
-    separate act of remembering.
-    """
+    """The emptiness check travels with the walk. An empty list makes every ``assert not hits`` pass."""
     files = [p for p in sorted(SRC.rglob("*.py")) if "__pycache__" not in p.parts]
     assert files, (
         f"scanned no files at all under {SRC}. Every structural assertion in this module is "
@@ -66,21 +33,13 @@ def _source_files() -> list[Path]:
     return files
 
 
-#: A floor, not a count. The scan is worthless the moment it stops reaching the tree, and
-#: `len(files) > 0` is satisfied by a glob that found one stray file in a wrong directory. The
-#: engine is 123 modules as of 2026-08-12; this fails long before a broken root produces a
-#: plausible-looking scan.
+#: A floor, not a count. ``len(files) > 0`` is satisfied by one stray file in the wrong directory.
 MIN_SOURCE_FILES = 50
 
 
 
 def test_the_api_never_synthesizes_a_reliability_field() -> None:
-    """ADR 0007 §3, asserted structurally: no reliability result is produced under `src/`.
-
-    A behavioural test is true only of the inputs it tried. The scan asserts it reached the tree
-    (:data:`MIN_SOURCE_FILES`), and `tier` is checked as a produced key because it is also a
-    register field property the source names without serialising.
-    """
+    """A behaviour test is true only of the inputs it tried. ``tier`` is named without being serialised."""
     files = _source_files()
     assert len(files) >= MIN_SOURCE_FILES, (
         f"scanned {len(files)} files under {SRC}, which is far below the engine's size. The "
@@ -106,43 +65,23 @@ def test_the_api_never_synthesizes_a_reliability_field() -> None:
         "it:\n  " + "\n  ".join(hits)
     )
 
-    # The third name. Nothing under `src/` serialises a `"tier"` key any more, so it is banned.
+    # A produced ``"tier"`` key is banned: nothing observed earns a reliability tier.
     assert not produces_a_tier, (
         "something under `src/` produces a `tier`. ADR 0007 §3 forbids a reliability tier on the "
         "answer card: v2 observes nothing that could earn one. If this is `RecordField.tier` on "
         "a new surface, change this test on purpose:\n  " + "\n  ".join(produces_a_tier)
     )
 
-    # The paired half: the two names must not be in the record register either, since that is
-    # where a field would have to be declared before `project()` could emit one.
+    # Also absent from the record register: ``project()`` can emit only a declared field.
     from governed_bi.registry.record import record_keys
 
     assert not (set(forbidden) & record_keys()), record_keys() & set(forbidden)
 
 
 def test_the_answer_on_the_wire_is_the_engine_s_answer() -> None:
-    """The complement, and it needs both halves to mean anything.
+    """``record`` equals ``project()``. ``text`` is null off a refusal and set on one.
 
-    The wire shape is v2's: `{outcome, text, failed_stage, error_type, refused_by, record}`,
-    and `record` is exactly `project()`'s output. Assert the served payload's `record` keys
-    equal `record_keys()` — derived, not listed. A server that passes through a subset is the
-    silent-degradation shape: the provenance drawer would render, with fields missing and
-    nothing saying so.
-
-    And assert `text` is **null off the refusal paths** and non-null on refuse (ADR 0007 §4:
-    `text` is system copy; the model's answer is the last `AIMessage`). That asymmetry looked
-    like a bug for a day; asserting it is what stops someone "fixing" it into two fields that
-    must agree. This is the only place either half is asserted.
-
-    **What "the wire" is changed under this test** (2026-08-18, ADR 0014). It used to run over
-    `POST /chat` on the ground that ADR 0007 Amendment 2 records a defect that existed *only* at
-    that boundary: `routes._shape` set `answer_text` at the REST edge, so the route passed and the
-    transport the UI uses did not. The REST pair is deleted, and with it the edge that
-    could disagree — `narrate` writes `answer_text` inside the graph, and the client reads
-    `answer` off a `values` frame the platform streams verbatim. So the served graph's `answer`
-    **is** the wire, and asserting on it is the same claim rather than a weaker one. The defect
-    class the old framing guarded against is gone by construction: there is no second shaping
-    layer left to pass while the real one fails.
+    Making the two agree is the wrong fix. The served ``answer`` is the wire: ``narrate`` writes it (ADR 0014).
     """
     from langchain_core.messages import HumanMessage
 
@@ -153,12 +92,8 @@ def test_the_answer_on_the_wire_is_the_engine_s_answer() -> None:
         {"messages": [HumanMessage(content=QUESTION)]}, {"configurable": {"thread_id": "t-wire"}}
     )["answer"]
 
-    # `no_sql`, not `answered`: `_indexed_session()` configures no `agent_model`, so the loop
-    # takes `agent_core._stub` and the turn executes no governed statement. It asserted
-    # `"answered"` and passed until 2026-08-18, when `finish` stopped hardcoding `has_sql=True` for
-    # a finished loop with an empty ledger. Both properties below hold on every path that took no
-    # governance decision, so the test's subject is unchanged; what it no longer does is claim
-    # this leg was a governed answer.
+    # No agent model, so the stub runs and no statement executes.
+    # ``answered`` would claim this leg was a governed answer.
     assert answered["outcome"] == "no_sql", answered
     assert set(answered["record"]) == record_keys(), (
         "the wire's record is not the register's: "
@@ -186,17 +121,8 @@ def test_the_answer_on_the_wire_is_the_engine_s_answer() -> None:
     assert set(refused["record"]) == record_keys()
 
 
-# ── stream events: one emitter, observed status, declared vocabulary ─────────
-
-
 def _stream(graph: Any, payload: dict[str, Any], conf: dict[str, Any]) -> list[dict[str, Any]]:
-    """One turn's custom event stream, in arrival order.
-
-    ``subgraphs=True`` is not optional: the tools run inside ``agent_core``'s nested
-    ``create_agent`` graph, and without it ``check``, ``execute`` and every tool row vanish
-    while ``guard`` through ``finish`` arrive intact — a stream that is silently half a turn.
-    ADR 0010 M2 is the same trap one layer up, on the HTTP flag.
-    """
+    """``subgraphs=True``: tools run in a nested graph, and without it half the turn is missing."""
     out: list[dict[str, Any]] = []
     for chunk in graph.stream(payload, {"configurable": conf}, stream_mode="custom", subgraphs=True):
         while isinstance(chunk, tuple) and chunk:
@@ -207,26 +133,7 @@ def _stream(graph: Any, payload: dict[str, Any], conf: dict[str, Any]) -> list[d
 
 
 def test_every_emitted_step_name_is_a_declared_stage() -> None:
-    """ADR 0007 §5. The closure that keeps the two ends of the timeline from drifting.
-
-    Events are emitted from `serve/wrap.py`, not from the nodes: every node is already
-    wrapped, so one emitter covers every stage and cannot drift per node. Twenty hand-placed
-    `writer(...)` calls is twenty chances to forget one, and a forgotten call is a step that
-    silently never appears — indistinguishable from a stage that did not run.
-
-    Assert every `step` in a turn's events is a member of `registry/stages.py`'s `Stage`, and
-    that the stages a turn ran all appear. The second half is the one that catches a
-    missing emitter; the first catches a hand-written label drifting from the register.
-
-    Assert `seq` is strictly increasing: the UI orders by it, so a duplicate reorders the
-    timeline and a client cannot tell.
-
-    **Driven through the served graph**, which is what the UI streams and what nothing could
-    construct before `build_serve_graph`. `tests/serve/test_stream_events_end_to_end.py` drives
-    `compile_graph()` — a different topology, with no `accept` — so `accept` was the one stage
-    in the register that no test had ever observed emitting, on the transport the interface
-     uses.
-    """
+    """One emitter in ``wrap.py``. A missing call looks like a stage that did not run. The UI orders by ``seq``."""
     from langchain_core.messages import HumanMessage
 
     from governed_bi.registry.stages import Stage
@@ -263,20 +170,9 @@ def test_every_emitted_step_name_is_a_declared_stage() -> None:
 
 
 def test_an_event_status_reports_what_the_node_did() -> None:
-    """The same rule that `_channels_for` broke, in a new place — and it is worth stating
-    plainly, because this is the third time it has appeared in this system: a status computed
-    from configuration makes a broken run and a clean run produce identical artifacts.
+    """Both directions, with no database: a status of always-blocked would pass a refusal-only test.
 
-    Drive a turn whose governance refuses a statement, and assert the `run_query` event's
-    status is `blocked`/`refused` rather than `ok`. Then drive one that succeeds and assert
-    `ok`. Without the second half, a server that reports everything as `blocked` passes.
-
-    **Offline, and that is what this adds.** The same property is asserted in
-    `tests/serve/test_stream_events_end_to_end.py`, against a live Postgres schema, so it
-    *skips* wherever no database is configured — which is CI. Here the corpus is four assets
-    and the connector is a double, which is enough because the refusal happens in the layer
-    stack over `retrieved_tables` and never reaches a database. The result is what is under test; what
-    a database returned is not.
+    The refusal is decided on ``retrieved_tables`` and never reaches a connector.
     """
     from langchain_core.messages import AIMessage, HumanMessage
 
@@ -326,13 +222,7 @@ def test_an_event_status_reports_what_the_node_did() -> None:
 
 
 def _first_clarification(interrupts: Any) -> dict[str, Any] | None:
-    """The ``ask_user`` payload among ``__interrupt__``, the way the client picks it out.
-
-    Four lines here rather than an import, because ``routes._clarification`` was deleted with
-    ``POST /chat`` — it existed to shape a REST reply, and a helper kept in the engine for one
-    test is dead code that looks live. ``ui/lib/clarification.ts`` is the real reader, and what
-    this test is about is the payload it parses.
-    """
+    """Inline: the client parser is ``ui/lib/clarification.ts``, and there is no engine helper to import."""
     for item in interrupts or ():
         value = getattr(item, "value", item)
         if isinstance(value, dict) and value.get("kind") == "clarification":
@@ -341,25 +231,9 @@ def _first_clarification(interrupts: Any) -> dict[str, Any] | None:
 
 
 def test_a_clarification_interrupt_carries_an_id_and_a_reason() -> None:
-    """ADR 0007 §6, and the failure it prevents is the worst kind: a **deadlock that looks
-    idle**.
+    """A payload the client does not recognise drops the interrupt, and the turn waits while the UI looks idle.
 
-    v2 sends `interrupt({"type": "ask_user", "question": ...})`. The UI requires
-    `kind: "clarification"` (a `z.literal`), plus `clarification_id` and `why`; on a mismatch
-    it drops the interrupt, so the prompt never mounts, `isLoading` is false, the graph waits
-    forever, and the interface shows nothing wrong.
-
-    Assert the payload carries all four. `clarification_id` is what makes an answer
-    attributable to a question rather than to whatever is pending, and `why` is a real thing
-    to record about a clarification — this is a better payload, not merely a conforming one.
-
-    **Written 2026-08-11.** `tests/serve/test_agent_tools_hitl.py` drives the same interrupt
-    and asserts only that `__interrupt__` is truthy, which is true of every payload shape
-    including the one that deadlocks the interface. The shape itself had no assertion anywhere.
-
-    `why` is asserted non-empty rather than equal to what the model sent, because the tool
-    substitutes a default when the model omits it — the client renders this string, and an
-    empty one is a prompt with no reason on it.
+    Truthy ``__interrupt__`` is true of every shape, including that one. ``why`` may be a tool default.
     """
     from langchain_core.messages import AIMessage, HumanMessage
     from langgraph.checkpoint.memory import InMemorySaver

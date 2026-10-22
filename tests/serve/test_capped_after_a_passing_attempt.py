@@ -1,22 +1,7 @@
 """A turn the attempt cap ended is ``capped``, even when an earlier statement succeeded.
 
-**Observed live.** An agent with two passing and two blocked attempts hit the cap and closed
-with *"The query tool reached its execution-attempt limit before returning the winning
-district, so I can't reliably state the result"* — and the record wrote ``outcome:
-answered`` beside ``terminal: "answered"``. The user was told nothing and the artifact said
-they had been told the answer.
-
-The cause was an ordering, in two places that had to agree and did:
-``execution_from_attempts`` tested "did any attempt pass" *before* "did the cap fire", so
-``"capped"`` was unreachable on any turn that had ever succeeded; and ``finish._path_signals``
-read the cap out of a ternary nested inside its own "no attempt passed" branch, so its capped
-config was unreachable for the same reason. ADR 0006 §5 says the cap **terminates the turn** and
-that a cap-terminated turn gets its own ``Outcome`` member; an earlier success does not undo
-the termination.
-
-Kept as a test because ``AGENTS.md`` asks for one with every bug fix, and this bug was
-hit on a paid run — where the cost of the confusion is an EX credited to a turn that refused to
-state its own result.
+The cap terminates the turn (ADR 0006). Both the ledger and ``finish`` test the cap before
+"did any attempt pass", so an earlier success cannot hide it.
 """
 
 from __future__ import annotations
@@ -61,9 +46,7 @@ def test_a_pass_with_no_cap_row_still_reads_answered() -> None:
 
 
 def test_the_record_of_a_capped_turn_says_capped_not_answered() -> None:
-    """``finish`` reads the ledger's result rather than re-deriving it, so the two cannot
-    disagree about the same attempts — which is how ``outcome`` and ``execution.terminal``
-    came to contradict each other in the first place."""
+    """``finish`` reads the ledger's terminal, so ``outcome`` cannot contradict it."""
     execution = execution_from_attempts(_MIXED)
     out = finish(
         {

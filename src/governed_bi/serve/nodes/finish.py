@@ -1,14 +1,4 @@
-"""``finish`` — sole writer of ``answer`` (ADR 0005 §3.1 / §4.1).
-
-**Two halves, one node.** ``finish`` *decides* what happened to the turn and *projects* the turn
-into the register's 42-field record. The decision's seven channels are declared, as
-:class:`~governed_bi.serve.outcome.OutcomeInputs`, and :func:`classify_turn` takes that view and
-never a state dict; the projection's 25 are the register's own, read by field name, and
-``serve/outcome.py`` argues why declaring them a second time here would be worse than not.
-
-So the state dict is read in exactly two places in this file: :func:`finish` itself, at the boundary,
-and :func:`_extract_factory`'s ``extract``, which the register drives by field name.
-"""
+"""Sole writer of ``answer``. See ADR 0005."""
 
 from __future__ import annotations
 
@@ -30,19 +20,14 @@ __all__ = ["classify_turn", "finish"]
 
 
 def _usage_for_turn(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    """Project usage for the current turn only (``operator.add`` accumulates)."""
+    """The channel keeps every turn."""
     turn_index = state.get("turn_index", 1)
     raw = state.get("usage") or []
     return [u for u in raw if isinstance(u, Mapping) and u.get("turn_index") == turn_index]
 
 
 def _cache_total(usage: list[Mapping[str, Any]], field: str) -> int | Measured[int]:
-    """Sum one cache-token field across this turn's usage rows, or *unmeasured*.
-
-    Unmeasured when **no** row reported the field: a provider that reports no cache activity
-    has said nothing about caching, and ``0`` there would be this code's claim wearing the
-    provider's clothes. A row reporting an explicit ``0`` is a measurement and counts.
-    """
+    """An explicit ``0`` is a measurement. Silence is not a zero."""
     total = 0
     seen = False
     for row in usage:
@@ -59,14 +44,7 @@ def _cache_total(usage: list[Mapping[str, Any]], field: str) -> int | Measured[i
 
 
 def _latency_sec(state: Mapping[str, Any]) -> float | Measured[float]:
-    """Wall-clock seconds from the turn's first node to now, or *unmeasured*.
-
-    ``wrap_node`` finishes ``turn_started_at``, so unmeasured is the hand-built-state case (a unit
-    test calling ``finish`` directly), and it says so rather than reporting 0.0. A clarified turn
-    includes the human's thinking time deliberately — the field is how long the user waited.
-
-    Unrounded. Presentation is ``Measured.render``'s job, in ``registry/quantity.py``.
-    """
+    """Includes a clarification wait. Unrounded; rendering belongs to ``Measured``."""
     started = state.get("turn_started_at")
     if not isinstance(started, (int, float)) or isinstance(started, bool):
         return Measured.unmeasured(
@@ -76,12 +54,7 @@ def _latency_sec(state: Mapping[str, Any]) -> float | Measured[float]:
 
 
 def _recorded_channels(state: Mapping[str, Any]) -> dict[str, Any] | None:
-    """``{channel: {channel: state}}`` as the record carries it, or ``None``.
-
-    One reader for two register fields: ``channel_degraded`` must be derived from exactly the
-    mapping ``channel_scoring`` publishes, or the record could report a degradation the
-    channel states beside it do not show.
-    """
+    """One map for scoring and degradation, so they cannot disagree."""
     channels = state.get("channels")
     if not channels:
         return None
@@ -93,11 +66,7 @@ def _recorded_channels(state: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _attempts(execution: Mapping[str, Any] | Any) -> list[Any]:
-    """This turn's **answering** ledger rows.
-
-    Filtered: ``sample`` rows share the ledger, and a passing sample row would make
-    ``_path_signals`` report a turn as answered whose every ``run_query`` was refused.
-    """
+    """A passing sample must not mark the turn answered."""
     if not isinstance(execution, Mapping):
         return []
     return answering_attempts(list(execution.get("attempts") or ()))
@@ -106,20 +75,7 @@ def _attempts(execution: Mapping[str, Any] | Any) -> list[Any]:
 def _path_signals(
     inputs: OutcomeInputs,
 ) -> tuple[str | None, str | None, str | None, str | None, bool, str | None]:
-    """Return ``(refused_by, failed_stage, error_type, text, has_sql, terminal)``.
-
-    ``terminal`` is the ledger's own result, and it is handed to
-    :func:`~governed_bi.registry.stages.classify_outcome` **only** on the paths where the ledger
-    observed an ending. ``None`` everywhere else, which is what keeps an unmarked or crashed turn
-    classifying as ``crashed`` rather than as a turn that merely ran no statement.
-
-    Takes the projection and never a state dict, which closes a hazard this function used to
-    carry a paragraph about. ``execution`` was passed in separately precisely so that nobody
-    re-read ``state["execution"]`` here and saw the ``None`` that
-    :meth:`~governed_bi.serve.outcome.OutcomeInputs.from_state`'s substitution exists to replace
-    — the ``--no-model`` stub writes no ledger, and reading the raw channel reported it as a
-    crash. The only ledger in scope now is the substituted one, so the warning is a type.
-    """
+    """``terminal`` is passed on only when the ledger observed an ending, or an unmarked turn stays a crash."""
     execution = inputs.execution
     path_kind = inputs.path_kind
     has_sql = inputs.has_sql
@@ -150,50 +106,25 @@ def _path_signals(
         return reason, None, None, None, False, None
 
     if path_kind == "answered":
-        # The agent loop finished, which is not the same as the turn having answered. The
-        # ledger decides: a turn whose every attempt was refused is a refusal, and a turn the
-        # cap ended is `capped`. `has_sql` alone is not enough — it comes from the tool-call
-        # *arguments*, so producing a string counted as producing an answer.
+        # The loop finishing is not an answer. The ledger's terminal decides.
         attempts = _attempts(execution)
         raw_terminal = execution.get("terminal")
         terminal = raw_terminal if isinstance(raw_terminal, str) else None
-        # The cap first, and on its own condition — nested inside the "no attempt passed"
-        # branch it is unreachable on any turn where a statement ever succeeded, so a capped
-        # turn with two passing attempts records `outcome: answered`. `execution_from_attempts`
-        # decides this and here we read its result, so the two cannot disagree.
+        # Cap first. Nested under "nothing passed", a cap with a passing attempt
+        # would record answered. This reads the ledger's terminal, not a second derivation.
         if terminal == "capped":
             return ATTEMPT_CAP_REFUSED_BY, None, None, None, False, terminal
         if attempts and not any(attempt_field(a, "passed") is True for a in attempts):
-            # Nothing passed. *Why* nothing passed decides the outcome, and the two answers are
-            # different engineering problems: the layer stack objecting is the product working,
-            # a swallowed exception inside `check()` is our bug. `Outcome` requires they stay
-            # apart and this branch used to collapse them, so a systematically broken `check()`
-            # read as a config that refused everything with `crash_rate == 0` — the exact symptom
-            # `govern.layers.GUARDRAIL_ERROR` documents. `guardrail_errors` is derived by
-            # `execution_from_attempts`, so as with the cap above we read its result rather
-            # than re-deriving one that could disagree. 2026-08-10 audit (C3).
+            # A guardrail error and a layer refusal are different outcomes.
+            # ``guardrail_errors`` is read, not recomputed.
             errors = execution.get("guardrail_errors")
             if isinstance(errors, int) and errors > 0:
                 return GUARDRAIL_ERROR, Stage.check.value, None, None, False, terminal
             return GUARDRAIL_REFUSED_BY, None, None, None, False, terminal
-        # No answering attempt at all, so no governed statement ran. `has_sql` is read off
-        # `generated_sql`, which `agent_core` writes only from an *executed* ledger row, so it is
-        # false here and the turn classifies `Outcome.no_sql` from the ledger's own `terminal`.
-        #
-        # This line used to `return ..., True` — `has_sql` hardcoded, `generated_sql` ignored —
-        # and its comment said the model had answered from the delivered context. Three paths
-        # produce exactly these signals and nothing in the record separates them
-        # (`Outcome.no_sql`'s docstring names all three), so the fall-through was picking the
-        # benign one. Measured 2026-08-18: a model declining in prose because the corpus defined
-        # none of the question's terms recorded `outcome: answered` beside `ledger: no_sql` and
-        # `generated_sql: null`; and across the 9,459 rows in `runs/eval/*.jsonl` all 23
-        # `answered`-with-no-statement turns carry a **null** `answer_text`, so the case the
-        # comment defended has no evidence behind it. What holds of all three is that no governed
-        # statement ran, and that is what is recorded now.
+        # This branch does not force ``has_sql``. Classification uses the ledger terminal.
         return None, None, None, None, has_sql, terminal
 
-    # Unmarked path: no ledger result is handed over, so classify_outcome falls through
-    # (no SQL ⇒ crashed). A turn nothing marked has not been observed ending.
+    # No path mark and no ledger ending. Classification then treats no SQL as a crash.
     return None, None, None, None, has_sql, None
 
 
@@ -206,9 +137,7 @@ def _extract_factory(
     failed_stage: str | None,
     error_type: str | None,
 ) -> Any:
-    # ``evicted`` included, so the served record carries it too: it was reaching the eval row
-    # and nothing else, which left the served turn record with no trace that the char budget
-    # dropped a retrieved table before the model ever saw it.
+    # ``evicted`` is projected. Otherwise a char-budget drop never reaches the record.
     delivery_keys = {"context_hash", "delivery_hash", "tool_delivered", "evicted"}
 
     def extract(state: Mapping[str, Any], name: str) -> Any:
@@ -242,20 +171,14 @@ def _extract_factory(
             "guard",
             "rewrite",
             "crossings",
-            # Why a decline declined. `outcome: "declined"` is one value for four different
-            # engineering problems, so without this "routing found nothing" and "the join
-            # graph is disconnected" are the same recorded row.
+            # One decline outcome covers several causes.
             "terminal_reason",
-            # The abstention policy's result and its evidence (ADR 0013). Copied and never
-            # interpreted, like `reflect_result` above and for the inverse reason: `abstain`
-            # has *already* decided, and re-reading its result here to adjust `outcome` would
-            # be two answers to "did this turn withhold". The one answer is `terminal_reason`,
-            # which the node writes into the same channel `route` and `connect` write.
+            # Copied, not interpreted. See ADR 0013. ``terminal_reason`` is the decision.
             "abstention",
         ):
             return state.get(name)
 
-        # The three cost fields, derived here rather than read off state — nothing writes them.
+        # Derived here. Nothing writes these onto state.
         if name == "latency_sec":
             return latency
         if name in ("cache_read_tokens", "cache_write_tokens"):
@@ -287,18 +210,13 @@ def _extract_factory(
         if name == "channel_scoring":
             return _recorded_channels(state)
         if name == "channel_degraded":
-            # Null when the fan-out did not run, like the field it derives from: `False` there
-            # is the degradation check reading absence as clean.
+            # ``None`` when fan-out did not run. ``False`` would read absence as clean.
             channels = _recorded_channels(state)
             if channels is None:
                 return None
             return channels_degraded(channels)
-        # The keys the register reads straight off `retrieved`. Both budget evidence are here
-        # from 2026-08-12: `merge_delta` stopped `resolve` destroying them, but a key that
-        # survives to `finish` and is not projected reaches no artifact, so "the cap discarded
-        # the gold table" was still unanswerable from a record. They are `NotRequired` on
-        # `RetrievalResult` — absent when no cap bit — and `.get` writes the null the register
-        # declares for that.
+        # Absent when no cap fired. ``.get`` writes that null; a missing projection
+        # would make a discarded gold table look never retrieved.
         if name in ("schema_ranking", "pulled_in", "lexical_coverage",
                     "budget_dropped", "budget_best_dropped_score"):
             if isinstance(retrieved, Mapping):
@@ -311,23 +229,7 @@ def _extract_factory(
 
 
 def classify_turn(inputs: OutcomeInputs) -> TurnOutcome:
-    """What happened to this turn. **The whole decision, and a pure function of the view.**
-
-    Nothing here reads a model, a clock, the environment, the network — or the graph's state
-    dict, since the signature changed: what it can see is exactly the seven fields of
-    :class:`~governed_bi.serve.outcome.OutcomeInputs`. So the same result can be recomputed from
-    an artifact's own fields, which is what makes ``outcome`` auditable rather than merely
-    recorded, and a test of a path is ``OutcomeInputs(path_kind="refuse")`` rather than a turn.
-
-    Three steps, and the order is the argument:
-
-    1. :func:`_path_signals` reads the route and the ledger together, so the ``outcome`` a reader
-       sees and the ``execution`` printed beside it came out of the same record.
-    2. :func:`~governed_bi.registry.stages.classify_outcome` turns those signals into an
-       :class:`~governed_bi.registry.stages.Outcome`.
-    3. A crash overrides whatever came back, unconditionally — including for a turn that raised
-       *after* a statement passed, which step 2 has no way to see.
-    """
+    """A crash overrides, including a crash after a statement had passed."""
     refused_by, failed_stage, error_type, text, has_sql, terminal = _path_signals(inputs)
 
     outcome = classify_outcome(
@@ -338,13 +240,10 @@ def classify_turn(inputs: OutcomeInputs) -> TurnOutcome:
         terminal=terminal,
     )
 
-    # Crash with a failed stage but no refused_by: classify_outcome already returns crashed when
-    # has_sql is false and no ledger result was handed over. Keep outcome as written.
     if inputs.path_kind == "crashed" or inputs.failed:
         outcome = Outcome.crashed
 
-    # Attempts stay; rewrite terminal so outcome=crashed never sits beside
-    # execution.terminal=answered (a careless reader would treat the crash as answered).
+    # So a crash is not stored beside ``terminal=answered``.
     execution = inputs.execution
     if outcome is Outcome.crashed and execution.get("terminal") != "crashed":
         execution = {**execution, "terminal": "crashed"}
@@ -361,57 +260,25 @@ def classify_turn(inputs: OutcomeInputs) -> TurnOutcome:
 
 
 def finish(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Build the turn ``Answer`` and the register projection. Sole writer of ``answer``.
-
-    **The boundary.** Two lines of it: :func:`~governed_bi.serve.outcome.normalised` turns the reset
-    sentinels back into absence, and
-    :meth:`~governed_bi.serve.outcome.OutcomeInputs.from_state` projects the seven channels the
-    decision reads. :func:`classify_turn` then decides, taking the view and nothing else, and
-    everything below this point is translation: the ledger and the outcome onto the register
-    projection, the outcome and the text onto the ``answer``, the status onto the one ``final``
-    row.
-
-    The remaining state reads in this function are the two the projection does not carry, and
-    they are here because they are not decision inputs: ``result_table`` and ``answer_text`` go
-    onto the ``answer`` and never into the record (ADR 0006 §11), and ``turn_id`` — through
-    :func:`~governed_bi.serve.events.rail_event_id` — keys the ``final`` row. The register's own
-    25 reads are :func:`_extract_factory`'s, by field name, which is where they belong.
-    """
+    """``result_table`` and ``answer_text`` stay off the record."""
     state = normalised(state)
     inputs = OutcomeInputs.from_state(state)
     result = classify_turn(inputs)
-    # Unpacked once, so the translation below reads the way it did when the derivation was
-    # inline. `execution` is the result's, not the state's: `classify_turn` rewrites `terminal`
-    # on a crash, and the record must carry the same ledger the outcome was decided from.
     outcome = result.outcome
     execution = result.execution
     failed_stage = result.failed_stage
     error_type = result.error_type
     usage = _usage_for_turn(state)
 
-    # ``guard`` is Absence.never and must **not** be substituted here. Standing in
-    # ``{"outcome": "error_failed_open"}`` fabricates a security event — that sentinel means the
-    # guard ran, errored and let the question through, and it is what a reader counts to find
-    # out whether the check worked. (No quotability check reads it: ``measure/checks.py`` declares
-    # no check over ``guard``. The rule the sentinel stands in for is
-    # ``govern/guard.BI_SCOPE_RULE_ID`` == ``g_bi_scope``.)
-    # An absent guard stays absent; ``missing_required`` names it as the wiring failure it is.
+    # Do not substitute a guard. The failed-open sentinel means the guard ran and
+    # let the question through. Absence is the wiring failure.
     projected_state: dict[str, Any] = dict(state)
     projected_state["execution"] = execution
     projected_state["usage"] = usage
     if projected_state.get("n_re_served") is None:
         projected_state["n_re_served"] = 0
-    # ``settings_resolved`` gets the same setting under test as ``guard`` above, and for the same reason —
-    # it used to be substituted with ``{}`` here, which is the one case ``measure.checks`` names
-    # as the thing it must never see: ``{}`` is a ``Mapping``, so the drift check reads it as a
-    # real configuration in which every setting resolved to ``None``, every row's signature is
-    # identical, and **a config of empties passes**. `measure/checks.py::_settings_resolved_check` says
-    # so in as many words ("Absent ``settings_resolved`` is unmeasured, not passing"), and
-    # `harness.py` carries the same "absent stays absent" comment, while this line defeated
-    # both. Absent now reaches
-    # ``project`` as absent, so ``Absence.never`` reports ``missing_required`` and the check
-    # returns ``cannot_evaluate`` — which is what a turn whose settings were never wired *is*.
-    # Found by the 2026-08-10 audit (C5).
+    # Do not substitute ``{}`` for ``settings_resolved``. An empty mapping is a
+    # configuration of nulls, and the drift check would pass it. Absence stays absence.
 
     record = project(
         projected_state,
@@ -432,20 +299,12 @@ def finish(state: Mapping[str, Any]) -> dict[str, Any]:
         "error_type": error_type,
         "refused_by": result.refused_by,
         "record": record,
-        # On the `answer` and deliberately **not** in `record`: ADR 0006 §11 puts result rows in
-        # the class the durable projection drops, and the audit log persists the record only.
-        # `None` on every path that ran no query, which is a different fact from an empty table.
+        # ``None`` means no query ran, not an empty table.
         "result_table": state.get("result_table"),
-        # From ``narrate``; same class as `result_table` and out of the record for the same
-        # reason. Distinct from `text` above, which is *system* copy: on an answered turn `text`
-        # is null and this is set, on a refusal the other way round, and the client renders on
-        # that asymmetry. Read from state and never recomputed — a second derivation here is how
-        # the audit list and the answer card came to disagree about `answer_text`.
+        # From ``narrate``, not recomputed here. Distinct from ``text``.
         "answer_text": state.get("answer_text"),
     }
-    # The turn's one ``final`` event (ADR 0010 §1). Emitted here because ``finish`` is the one
-    # node deliberately left unwrapped, so ``wrap.py``'s emitter never sees it. Emitted after
-    # ``answer`` is built and from ``answer``, so the row and the record cannot disagree.
+    # The one ``final`` row (ADR 0010). This node is unwrapped, so it emits itself.
     emit(
         kind="final",
         step="finish",
@@ -457,23 +316,14 @@ def finish(state: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _final_status(path_kind: Any, outcome: Outcome) -> str:
-    """The ``finish`` row's status.
-
-    ``path_kind`` is consulted first for exactly one distinction: :class:`Outcome` has no
-    ``declined`` member, so a decline classifies as ``refused`` — right for measurement, wrong
-    for a timeline where "no schema matched" and "the guard blocked this" differ.
-    """
+    """``decline`` is its own status. ``Outcome`` has no declined member, so this would say ``refused``."""
     if path_kind == "decline":
         return "declined"
     return {
         Outcome.answered: "ok",
         Outcome.clarification: "ok",
-        # The rail's status vocabulary is closed and shared with the client
-        # (``ui/lib/steps.ts``'s ``GovEvent["status"]``), and no member of it means "ended with
-        # no statement" — ``refused`` and ``error`` would each claim something this turn did not
-        # do. ``ok`` with the outcome in ``detail`` is the pair: the client labels the row
-        # from ``detail.outcome`` (``outcomeLabel``), so the distinction survives without a wire
-        # value being invented for it.
+        # No status means "ended with no statement". ``ok`` plus ``detail.outcome``
+        # keeps the distinction without a new wire value.
         Outcome.no_sql: "ok",
         Outcome.refused: "refused",
         Outcome.capped: "cap",

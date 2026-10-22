@@ -1,15 +1,7 @@
-"""Nested agent channels — where the turn's ledger survives a resume.
+"""Checkpointed agent channels so a resumed turn does not get a fresh attempt budget.
 
-Tools write durable state via :class:`~langgraph.types.Command` into
-:class:`GovernedAgentState` (checkpointed), keyed by tool call id for exact cap counting and
-attributable deliveries.
-
-The key is *not* for idempotent replay: measured on langgraph 1.2.10, ``create_agent``
-dispatches one ``Send("tools", [call])`` per call and the pending set excludes any call that
-already has a ``ToolMessage``, so a ``run_query`` completed before an ``ask_user`` pause is not
-re-executed on resume. What it buys is that the **outer** ``agent_core_node`` body *does* re-run
-on resume, rebuilding :class:`AttemptBook` with an empty in-memory set — the count has to come
-from this checkpointed channel or a resumed turn silently gets a fresh budget.
+``create_agent`` skips a call that already has a ``ToolMessage``, but the outer node
+body re-runs and rebuilds :class:`AttemptBook` empty. The count has to live here.
 """
 
 from __future__ import annotations
@@ -31,98 +23,55 @@ __all__ = [
     "CAP_LEDGER_KEY",
 ]
 
-#: The one ``attempts_by_call`` key a cap row may ever use.
-#:
-#: A constant rather than ``f"cap:{call_id}"``, because the key **is** the deduplication:
-#: ``AttemptBook.cap_recorded`` lives on a book rebuilt per ``build_tools`` call, and two
-#: writers exist (see :class:`~governed_bi.serve.nodes.agent_core`), so a shared key lets
-#: :func:`merge_by_call` collapse them into one "the cap ended this turn" row.
+# One shared key, not ``f"cap:{call_id}"``: the book is rebuilt per ``build_tools``
+# call and two writers exist, so only a constant key collapses to one cap row.
 CAP_LEDGER_KEY = "cap"
 
 
 def merge_by_call(left: Any, right: Any) -> dict[str, Any]:
-    """Merge two call-keyed maps; right wins per key."""
     merged = dict(left or {})
     merged.update(right or {})
     return merged
 
 
 def keep_newest(left: Any, right: Any) -> Any:
-    """Take the later write. Exists so a second write in one super-step cannot abort the turn.
+    """Later write wins, so a second write in one super-step does not abort the turn.
 
-    ``result_table`` had no reducer, so LangGraph backed it with a LastValue channel, which
-    raises ``InvalidUpdateError`` on a second write in the same super-step. Every successful
-    ``run_query`` writes it, so two parallel calls ran every statement against the database and
-    *then* aborted the nested agent, discarding the ``attempts_by_call`` writes from the same
-    step — measured: three parallel calls, three statements executed, zero ledger rows (audit
-    §13.2). Across super-steps this is what LastValue already did.
-
-    **It does not choose.** Within one super-step "later" is tool-call order, which is arbitrary
-    with respect to which candidate is right. A k>1 candidate design (§16.3③) needs a channel
-    keyed by ``tool_call_id`` plus a real selection step.
+    A LastValue channel raises ``InvalidUpdateError`` on that second write. Parallel
+    ``run_query`` calls then discarded the ledger. Within a step, "later" is call order.
     """
     return right if right is not None else left
 
 
 def any_fail_closed(left: Any, right: Any) -> bool:
-    """``True`` if either write says the turn must end. Order-independent, unlike a last-write.
+    """``True`` if either write ends the turn. Order must not matter.
 
-    **This is :func:`keep_newest`'s defect one channel over, and it cost more.**
-    ``clarification_requested`` was the only channel on this state with no reducer, so
-    LangGraph backed it with a LastValue channel that raises ``InvalidUpdateError`` on a
-    second write in one super-step. Two ``ask_user`` calls in one assistant message reach
-    that: the first pauses, and because ``interrupt()`` ends the super-step the second's
-    ``Send`` never ran and so never got the "only one outstanding" refusal — so on resume
-    both re-run, both pause in turn, and both answers commit together.
-
-    What that produced was worse than a crash. ``agent_core``'s ``_run`` swallows the error
-    into ``path_kind="crashed"``, so **both human answers were discarded**, ``clarifications``
-    came back empty, and ``_sealed`` wrote each of the two tool calls the reply *"Not executed:
-    the turn ended before this tool ran"* — when both had run and a person had answered both.
-
-    ``or`` rather than :func:`keep_newest`: within a super-step "later" is tool-call order,
-    which that function's own docstring admits is arbitrary with respect to which candidate is
-    right. Here there is a right answer and it does not depend on order — a fail-closed
-    decline is a decision to end the turn, and one of them ending it is the whole meaning of
-    the flag. Two ``False``s stay ``False``; a ``True`` anywhere wins.
+    A LastValue channel on ``clarification_requested`` discarded both answers when two
+    ``ask_user`` calls landed in one step. A decline ends the turn whichever write arrives.
     """
     return bool(left) or bool(right)
 
 
 class GovernedAgentState(AgentState):
-    """``AgentState`` plus channels a governed turn must not lose on resume."""
-
-    #: ``tool_call_id -> AttemptRecord``. The governed-statement ledger (ADR 0006 §5).
+    # Governed-statement ledger, keyed by tool call id (ADR 0006 §5).
     attempts_by_call: Annotated[dict[str, Any], merge_by_call]
 
-    #: ``tool_call_id -> sha256(payload)[:16]``. What the tools handed the model.
     tool_delivered: Annotated[dict[str, str], merge_by_call]
 
-    #: ``tool_call_id -> clarification``. One row per answered ``ask_user``.
     clarifications_by_call: Annotated[dict[str, Any], merge_by_call]
 
-    #: Last successful query's result table. Reduced, not LastValue: see :func:`keep_newest`.
+    # Reduced, not LastValue: see :func:`keep_newest`.
     result_table: Annotated[dict[str, Any] | None, keep_newest]
 
-    #: Set by ``ask_user`` on a fail-closed decline/cancel so the inner loop can end
-    #: and ``agent_core`` can lift it onto ``ServeState`` for ``classify_outcome``.
-    #: Reduced with :func:`any_fail_closed` — see it for why the bare ``bool`` was
-    #: :func:`keep_newest`'s defect one channel over.
+    # A fail-closed decline. :func:`any_fail_closed`, not last-write.
     clarification_requested: Annotated[bool, any_fail_closed]
 
 
 def _chargeable(committed: Mapping[str, Any] | None) -> set[str]:
-    """The committed ledger keys that are ``run_query`` attempts, and only those.
+    """``run_query`` rows only. ``sample_rows`` and the cap row do not spend a slot.
 
-    **``attempts_by_call`` is the turn's ledger, not the attempt cap's.** Charging a slot per
-    key meant ``sample_rows`` rows and the cap row itself silently spent governed statements the
-    setting promises. It also made the cap uncountable: ``ToolCallLimitMiddleware`` counts
-    ``run_query`` calls and nothing else, so both enforcers have to read the same population
-    before either can be described as "five attempts".
-
-    Selected by the row's ``path`` rather than by how its key is spelled, because a key prefix is
-    a convention any new executor path can forget. A row with no ``path`` counts, which is the
-    safe direction: under-counting hands out attempts the cap was meant to withhold.
+    Selected by ``path``, not key spelling. A row with no ``path`` counts, so the cap
+    cannot under-count. The middleware counts the same population.
     """
     return {
         str(key)
@@ -133,36 +82,23 @@ def _chargeable(committed: Mapping[str, Any] | None) -> set[str]:
 
 
 class AttemptBook:
-    """Attempt cap over committed ∪ in-flight ``run_query`` tool call ids.
+    """Cap over committed and in-flight ``run_query`` ids. It does not end the turn.
 
-    Committed alone misses parallel siblings in one super-step; in-flight alone
-    resets on resume. ``refund`` releases a slot when an admitted call produces no row.
-
-    **It does not end the turn** — ``ToolCallLimitMiddleware`` does (see
-    :class:`~governed_bi.serve.nodes.agent_core`). This book stays for the two things the native
-    counter has no notion of: refunding a slot charged for a call that crashed before reaching
-    governance, and writing the ledger row that makes ``execution_from_attempts`` return
-    ``terminal: "capped"``.
-
-    Both count the same population, so the effective cap is the smaller, not the sum. Native
-    counts a proposal in ``after_model``, one node *earlier* than the tool body, and never
-    refunds, so on the agent path it always trips first and this book's refusal is reachable
-    only for callers that build tools without the agent.
+    Committed misses parallel siblings; in-flight resets on resume. The middleware ends
+    the turn and never refunds; this book refunds a crash and writes the capped row.
     """
 
     def __init__(self, cap: int) -> None:
         self.cap = int(cap)
         self._in_flight: set[str] = set()
-        #: One ``cap`` stream event per turn, not one per post-cap call. The ledger row cannot
-        #: use this flag — the book is rebuilt on every ``build_tools`` call — so it is
-        #: deduplicated by :data:`CAP_LEDGER_KEY` instead.
+        # The book is rebuilt per ``build_tools`` call, so the ledger row uses
+        # CAP_LEDGER_KEY. This flag only dedups the stream event.
         self.cap_recorded = False
 
     def charged(self, committed: Mapping[str, Any] | None) -> int:
         return len(_chargeable(committed) | self._in_flight)
 
     def admit(self, committed: Mapping[str, Any] | None, call_id: str) -> bool:
-        """Whether this call may run, charging a slot if so."""
         if call_id and call_id in (_chargeable(committed) | self._in_flight):
             return True
         if self.charged(committed) >= self.cap:
@@ -172,5 +108,4 @@ class AttemptBook:
         return True
 
     def refund(self, call_id: str) -> None:
-        """Release a slot charged for a call that produced no ledger row."""
         self._in_flight.discard(call_id)

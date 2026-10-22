@@ -1,7 +1,6 @@
-"""One McNemar, one MDE, one rule-of-three (ADR 0005 §6 singleton).
+"""One McNemar, one MDE, one rule-of-three (ADR 0005).
 
-Exact two-sided binomial McNemar. MDE is post-hoc from observed discordance.
-:func:`rule_of_three` returns an at-most bound, not a measured zero.
+``rule_of_three`` returns an at-most bound, not a measured zero.
 """
 
 
@@ -19,11 +18,7 @@ __all__ = ["McNemarResult", "mcnemar", "mde", "rule_of_three"]
 
 @dataclass(frozen=True)
 class McNemarResult:
-    """A paired comparison, with everything needed to judge whether it is decisive.
-
-    The four cell counts are here because a p-value alone cannot be audited: one over 6
-    discordant pairs and one over 600 look identical in a table (ADR 0005 §4.1).
-    """
+    """Cell counts stay on the result: a p-value alone cannot be audited (ADR 0005)."""
 
     a_label: str
     b_label: str
@@ -38,7 +33,6 @@ class McNemarResult:
     minimum_detectable: Measured[float]
 
     def render(self) -> str:
-        """One auditable line. Formatting goes through ``Measured.render`` only."""
         return (
             f"{self.b_label} - {self.a_label}: {self.delta.render(4)} "
             f"(p={self.p_value.render(4)}, n={self.n_pairs}, "
@@ -48,18 +42,13 @@ class McNemarResult:
 
     @property
     def is_decisive(self) -> bool:
-        """Whether the observed delta clears this comparison's own MDE (not a p-value test)."""
+        """Clears this comparison's own MDE, not a p-value test."""
         if not (self.delta.is_measured and self.minimum_detectable.is_measured):
             return False
         return abs(self.delta.value) >= self.minimum_detectable.value
 
 
 def mcnemar(a: Population, b: Population, outcome: str) -> McNemarResult:
-    """Exact paired comparison of ``outcome`` between two populations.
-
-    Refuses on different ``filtered_by``, ``unit_key``, or unit sets; intersect
-    explicitly if that is the intended population.
-    """
     if a.filtered_by != b.filtered_by:
         raise ValueError(
             f"populations were filtered differently: {a.describe()} vs {b.describe()}. "
@@ -121,13 +110,7 @@ def mcnemar(a: Population, b: Population, outcome: str) -> McNemarResult:
 
 
 def _exact_two_sided(only_a: int, only_b: int) -> Measured[float]:
-    """Two-sided exact binomial p over the discordant pairs.
-
-    Under the null each discordant pair favours either config with probability 1/2, so
-    ``P = 2 * P(X <= min(b, c))`` for ``X ~ Binomial(b + c, 1/2)``, capped at 1. Zero
-    discordant pairs yields 1.0 and is not special-cased: the MDE carries how
-    informative that 1.0 is.
-    """
+    """Zero discordant pairs yields 1.0 and is not special-cased: the MDE carries how informative that is."""
     n = only_a + only_b
     if n == 0:
         return Measured.of(1.0)
@@ -143,17 +126,7 @@ def mde(
     alpha: float = 0.05,
     power: float = 0.80,
 ) -> Measured[float]:
-    """Smallest paired difference this comparison could have detected.
-
-    ``(z_{1-alpha/2} + z_{power}) * sqrt(d / n)``, where ``d`` is the discordance
-    rate. **Requires** ``d``: the standard error of a paired difference depends on how
-    often the configs disagree, and an MDE computed from ``n`` and a base rate alone is a
-    smaller, different number that makes an underpowered comparison look decisive.
-
-    Post-hoc by construction, since ``d`` is observed. State it as such wherever it
-    is reported; it answers "could this comparison have seen the effect" and not
-    "how many questions should the next run use".
-    """
+    """Requires the discordance rate: an MDE from ``n`` and a base rate alone is a different number."""
     if n_pairs <= 0:
         return Measured.unmeasured("no pairs, so no detection floor")
     if not discordance.is_measured:
@@ -173,24 +146,13 @@ def mde(
 
 
 def rule_of_three(n_trials: int) -> Measured[float]:
-    """Upper bound on a rate after observing zero events in ``n_trials``.
-
-    ``3/n`` at roughly 95% confidence. Returned as an
-    :attr:`~governed_bi.registry.quantity.Relation.at_most` bound, so it renders with
-    its inequality attached and cannot be quoted as a point estimate — which is what
-    v1 did when it published a refusal rate of 0% from a check that had never fired.
-    """
+    """An at-most bound, so a zero count cannot be quoted as a point estimate."""
     if n_trials <= 0:
         return Measured.unmeasured("no trials, so no bound")
     return Measured.of(3.0 / n_trials).bounded(Relation.at_most)
 
 
 def _assert_the_guards_fire() -> None:
-    """Import-time checks on the three refusals most likely to be relaxed.
-
-    Each is a place where relaxing the refusal produces a plausible number from an
-    invalid comparison.
-    """
     a = Population.of("a", [{"question_id": "1", "ok": True}])
     b = Population.of("b", [{"question_id": "2", "ok": True}])
     try:

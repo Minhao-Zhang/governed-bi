@@ -1,29 +1,10 @@
-"""Serve one question and print what was recorded. ADR 0005 §2.8.2.2.
-
-**A skeleton, not a demo, and the difference is the exit code**: it exits non-zero when
-``missing_required(record)`` is non-empty and names the fields, because an entry point that
-prints a plausible answer and exits 0 is indistinguishable from one that works.
-
-It also refuses to serve when the corpus reports a fatal problem. ADR 0005 §2.8.2 requires an
-unresolvable join endpoint to surface **where the corpus is built**, and until there was an
-entry point no caller was in a position to exit non-zero.
+"""Serve one question and print the recorded turn.
 
 Usage::
-
-    # a live schema: seed a corpus from it, write it, serve over it
     uv run --frozen python -m governed_bi.serve --schema gbi_demo_sales -q "how many customers?"
 
-    # a corpus already on disk
-    uv run --frozen python -m governed_bi.serve --corpus-dir ../BIRD-corpus --schema beer_factory -q "..."
-
-    # no model: the graph runs, retrieval and governance are real, the answer is the stub
-    uv run --frozen python -m governed_bi.serve --schema gbi_demo_sales -q "..." --no-model
-
-    # a named thread: its checkpoint is kept, so a later invocation can reach the same turn
-    uv run --frozen python -m governed_bi.serve --schema gbi_demo_sales -q "..." --thread-id t-1
-
 Credentials come from the environment or the git-ignored ``.env`` and are never printed.
-"""
+A fatal corpus problem refuses the serve (ADR 0005 §2.8.2). Exit 1 when required fields are absent."""
 
 from __future__ import annotations
 
@@ -36,18 +17,14 @@ from typing import Any
 
 
 def _chat_model_var() -> str:
-    """The variable that names the agent's model. Shared with the server, not copied."""
+    """The variable that names the agent's model, shared with the server."""
     from ..model.provider import SURFACE_MODEL_VARS
 
     return SURFACE_MODEL_VARS["agent"]
 
 
 def _credentials() -> Any:
-    """The shared reader, with ``.env`` bridged into the environment for this process.
-
-    The bridge is for the libraries, not for us: the OpenAI client reads the process
-    environment itself, so a key that only this process can see is not a key the client can use.
-    """
+    """Load ``.env``. The OpenAI client reads the environment itself."""
     from .. import credentials
     from ..boot import resolve_settings
 
@@ -56,7 +33,7 @@ def _credentials() -> Any:
 
 
 def _model(name: str, effort: str | None = None) -> Any:
-    """The OpenAI chat model, built the same way as the server."""
+    """The server's chat client, so this command is not a second construction."""
     from ..model import provider as provider_mod
 
     if not provider_mod.credentials_present():
@@ -81,9 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-q", "--question", required=True)
     parser.add_argument("--schema", help="schema to seed from, or the manifest entry to load")
     parser.add_argument("--corpus-dir", help="a corpus already on disk; omit to seed from --schema")
-    # No `default=`: the only one is "a thread nobody named", and spelling that as a
-    # constant would make the id look nameable when it is a fresh uuid per process. Absent is
-    # absent, and `_forget_thread` reads it that way.
+    # No `default=`: an unnamed thread is a fresh id, and a constant would look nameable.
     parser.add_argument(
         "--thread-id",
         help="name the durable thread, so a later invocation can reach this turn; omit and the "
@@ -129,12 +104,9 @@ def main(argv: list[str] | None = None) -> int:
         from ..retrieve.vector_cache import vector_cache_from_environment
 
         embedder = provider_mod.embedder(str(settings["embedding_model"]))
-        # The same persisted cache the server uses. Without it every invocation re-embedded
-        # all 13,968 summaries in the pooled corpus before answering one question, and nothing
-        # here reports how many vectors were reused, so it went unnoticed.
+        # The server's cache. Without it one question re-embedded all 13,968 summaries.
         vector_cache = vector_cache_from_environment(model=embedder.requested_model)
-    # Resolved after `_credentials()` has bridged `.env` into the environment, so a model named
-    # only in the file is found. `--model` wins, for one run, without editing anything.
+    # After `_credentials()` has loaded `.env`. `--model` overrides for one run.
     model_var = _chat_model_var()
     model_name = args.model or settings["chat_model"]
     if not args.no_model and not model_name:
@@ -163,10 +135,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.json:
             print(f"seeded {len(session.assets_by_id)} assets from {args.schema!r} into {root}")
 
-    # Fatal problems stop the serve; a warning printed beside an answer changes no outcome.
-    # Refusing on *every* problem was the opposite failure — this exited 3 on a corpus the
-    # server served without checking anything, so two readers of one list disagreed
-    # (ADR 0008 D9). `Problem.fatal` decides.
+    # Only fatal problems refuse. Refusing every problem exited 3 on a corpus the server still served (ADR 0008 D9).
     if session.fatal_problems:
         print(
             f"corpus has {len(session.fatal_problems)} fatal problem(s); refusing to serve:",
@@ -176,64 +145,46 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {problem}", file=sys.stderr)
         return 3
     if session.degradations and not args.json:
-        # Printed and counted, not a stop: a run over a degraded corpus is not comparable to
-        # a run over a clean one, so the number goes next to the answer.
+        # Printed beside the answer: a degraded corpus is not comparable with a clean one.
         print(f"corpus has {len(session.degradations)} degradation(s) (serving anyway):")
         for problem in session.degradations[:10]:
             print(f"  {problem}")
         if len(session.degradations) > 10:
             print(f"  ... and {len(session.degradations) - 10} more")
 
-    # Durable, so a turn paused on `ask_user` is still there for a *later* invocation. Under
-    # `InMemorySaver` the interrupt died with the process that raised it, which made the
-    # clarification path unreachable from the one entry point that exits after every question.
+    # Durable so a turn paused on `ask_user` survives this process. An in-memory saver would drop it.
     graph = compile_durable()
-    # One question, one thread. `configurable()` supplies no `thread_id` -- a thread is per
-    # conversation, not a run constant, and defaulting it collapsed conversations together --
-    # so the caller names it. `--thread-id` is what makes the durability above *reachable*:
-    # without it the id is `session.run_id`, a fresh `uuid4().hex[:16]` per process, and no
-    # later invocation could ask for it. That is why the unnamed case is evicted below.
+    # The caller names the thread. Without `--thread-id` the id is deleted after printing.
     thread_id = args.thread_id or session.run_id
     config = session.configurable(question=args.question)
     config["configurable"]["thread_id"] = thread_id
     try:
-        # The same id into the state channel, not only the config: `Session.turn` folds
-        # `thread_id` into `turn_id` and writes it as the turn's own identity, so passing it in
-        # one place leaves the record naming a thread the checkpoint is not under.
+        # `thread_id` goes into the state as well as the config, because `turn_id` is derived from it.
         out = graph.invoke(session.turn(args.question, thread_id=thread_id), config)
     finally:
-        # Evicted before the close, because eviction needs the loop the close tears down. Also
-        # inside `finally`: a turn that raised left the same unreachable checkpoints behind.
+        # Delete before `close`: deletion needs the loop `close` tears down, including when the turn raised.
         if not args.thread_id:
             _forget_thread(graph, thread_id)
-        # Closed here rather than at the end: everything below only reads `out`, and the point
-        # of a durable saver is that the checkpoint is on disk, not that the handle stays open.
-        # `_SyncApp.close` says why leaving it open would stop the process from exiting at all.
+        # An open checkpoint handle stops the process exiting.
         graph.close()
 
-    # A paused turn is not a failed one. `ask_user` interrupts and no node writes `answer`, so
-    # the code below would print `outcome: None` and exit 1 on an incomplete record, naming
-    # fifteen absent fields for a turn that is waiting rather than broken. Exit 4 says which.
+    # Exit 4: a pause has no `answer`, so the incomplete-record check would exit 1.
     pending = _pending_clarification(out)
     if pending:
         print(f"\nThe turn is paused on a clarification: {pending.get('question')}", file=sys.stderr)
         print(f"why: {pending.get('why')}", file=sys.stderr)
         print(
             "This entry point serves one turn and has nowhere to send an answer. Resume by "
-            # `...` rather than `…` for the reason given below: cp1252 cannot encode it, and a
-            # message that raises while explaining how to resume is worse than a plain one.
+            # ASCII `...`: a cp1252 console cannot encode an ellipsis.
             "posting a run carrying {'command': {'resume': ...}} against this thread.",
             file=sys.stderr,
         )
-        # Which thread, and whether it is still there. Naming it is the point: the previous
-        # wording said "the thread this turn paused on" and printed no id, for a thread whose
-        # id was a per-process uuid -- advice that could not be followed.
+        # The id is required: an unnamed thread is a per-process uuid.
         if args.thread_id:
             print(f"thread: {thread_id} (checkpoint kept)", file=sys.stderr)
         else:
             print(
-                # ASCII only: this goes to a Windows console under cp1252, where a printed
-                # em-dash raises UnicodeEncodeError and turns the message into a traceback.
+                # ASCII hyphen: a cp1252 console raises UnicodeEncodeError on an em dash.
                 f"thread: {thread_id} - discarded, because an unnamed thread is unreachable. "
                 "Re-run the question with --thread-id to keep the paused turn.",
                 file=sys.stderr,
@@ -271,32 +222,19 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _forget_thread(graph: Any, thread_id: str) -> None:
-    """Delete a thread nobody can ask for again. Never raises; housekeeping is not the turn.
-
-    Why anything has to: :func:`compile_durable`'s saver is a **file**, and with no
-    ``--thread-id`` the thread is ``session.run_id`` -- a fresh ``uuid4().hex[:16]`` per process
-    (``serve/session.py``). Measured 2026-08-20: ``runs/harness-checkpoints.sqlite`` was 4.6 MB
-    holding **two** such threads, ~1.8 MB and 62 channels each, retained for a resume no
-    invocation could name. So each question stranded a private database.
-
-    The **async** method, on the app's pinned loop. ``AsyncSqliteSaver.delete_thread`` is not
-    merely unimplemented -- it calls ``run_coroutine_threadsafe(...).result()`` against the
-    saver's own loop (``langgraph/checkpoint/sqlite/aio.py:257``), which is not running here, so
-    it blocks forever instead of raising. ``adelete_thread`` (``aio.py:602``) does the deletes.
-    Deliberately *no* sync fallback: silently doing nothing would look identical to working.
-    """
+    """``adelete_thread`` on the app loop. The sync delete blocks on a loop that is not running."""
     saver = getattr(graph, "checkpointer", None)
     adelete = getattr(saver, "adelete_thread", None)
     if adelete is None:
         return
     try:
         graph.run_coro(adelete(thread_id))
-    except Exception:  # noqa: BLE001 -- a saver that cannot evict is a leak, not a failed turn
+    except Exception:  # noqa: BLE001 -- a saver that cannot delete the thread is a leak, not a failed turn
         pass
 
 
 def _pending_clarification(state: dict[str, Any]) -> dict[str, Any] | None:
-    """The ``ask_user`` payload if the graph paused. ADR 0007 §6's ``kind`` decides."""
+    """The ``ask_user`` payload when the graph paused (ADR 0007 §6)."""
     for item in state.get("__interrupt__") or ():
         value = getattr(item, "value", item)
         if isinstance(value, dict) and value.get("kind") == "clarification":
@@ -305,16 +243,11 @@ def _pending_clarification(state: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _answer_text(state: dict[str, Any], answer: dict[str, Any]) -> str:
-    """The model's answer from ``messages``; the system's from ``answer["text"]``.
-
-    ADR 0007 §4: ``text`` is *system copy* and is null on the answered path, so a caller that
-    reads only ``answer["text"]`` shows nothing for every successful turn.
-    """
+    """Model prose from ``messages``. ``answer["text"]`` is system copy (ADR 0007 §4)."""
     if answer.get("text"):
         return str(answer["text"])
     for message in reversed(state.get("messages") or []):
-        # `.text` rather than `str(content)`: the Responses API returns content blocks, and
-        # `str()` on those prints a Python repr of a list of dicts and calls it the answer.
+        # `.text`: `str()` on Responses API content blocks prints a list repr.
         text = getattr(message, "text", None)
         if text and getattr(message, "type", "") != "human":
             return str(text)

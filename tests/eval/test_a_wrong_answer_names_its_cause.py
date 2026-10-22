@@ -1,14 +1,4 @@
-"""``error_type`` was ``None`` on all 78 answered-but-wrong rows of the config that motivated this.
-
-The engine recorded *that* an answer was wrong and nothing about *why*, so a setting under test could be
-aimed at a failure class holding 8 of 78 rows with no way to know it in advance. Those figures come
-from RyanChenJung/governed-bi-utkuai@12c3e15, the fork this module was taken from -- see
-``eval/attribution.py``'s docstring, which says which numbers are theirs and why they are kept.
-These tests pin the categories that let a future config state its target before it runs.
-
-**Attribution never changes a grade.** Every row here arrives already graded; the classifier
-explains ``correct: false`` and cannot set it.
-"""
+"""A truthiness test on ``correct`` treated a missing gold as a wrong answer."""
 
 from __future__ import annotations
 
@@ -38,14 +28,7 @@ def test_a_correct_row_has_no_cause() -> None:
 
 
 def test_a_row_that_could_not_be_graded_has_no_cause() -> None:
-    """``correct: None`` means the instrument had no answer key -- ``grade_turn``'s third value,
-    which ``harness.py`` propagates rather than coercing precisely so a ``missing_gold`` row is
-    not counted as a wrong answer.
-
-    The implementation contradicted its own docstring: it promises ``None`` for a row that is
-    "not answered-and-wrong", and a truthiness test on ``correct`` treated ``None`` as wrong. So
-    a question with no gold was classified anyway -- ``unparseable``, because the empty
-    ``gold_sql`` fails to parse -- and the artifact blamed the model for a missing answer key."""
+    """A truthiness test on ``correct`` classified a missing gold as ``unparseable``."""
     row = _row(
         "SELECT a, b FROM t", "", correct=None, grade_detail="missing_gold"
     )
@@ -83,12 +66,7 @@ def test_a_different_table_set() -> None:
 
 
 def test_a_cte_name_is_not_counted_as_a_table_gold_does_not_have() -> None:
-    """In sqlglot a CTE *reference* parses to ``exp.Table``, so ``find_all(exp.Table)`` collected
-    ``ranked`` here and the row read as querying a table gold never touches. Both statements read
-    only ``sales``; restructuring a query into a CTE is not a wrong table choice.
-
-    This mislabelled 9 of the fork's 23 ``table_set_differs`` rows, which was enough to make that
-    bucket look like the largest and license a curation config against it."""
+    """A CTE reference parses as ``exp.Table``, so ``find_all`` counted a name gold never touches."""
     row = _row(
         "WITH ranked AS (SELECT id, n FROM sales) SELECT id, n FROM ranked",
         "SELECT id, n FROM sales",
@@ -201,13 +179,7 @@ def test_the_harness_row_carries_the_cause_in_its_own_field() -> None:
 
 
 def test_the_classifier_never_writes_error_type() -> None:
-    """``registry/record.py`` declares ``error_type`` as the exception CLASS of a turn that
-    raised, so a consumer reading ``error_type is not None`` as "this turn raised" is reading the
-    declaration. Writing taxonomy labels there took the crashed count from 0 to 78 on the fork's
-    own baseline, which is why the taxonomy gets its own field here.
-
-    An answered-and-wrong row must therefore leave ``error_type`` null while naming its cause,
-    and a row that really did raise must keep the class name it arrived with."""
+    """``error_type`` is the exception class of a raised turn; the taxonomy is a separate field."""
     from governed_bi.eval.harness import project_turn
 
     question = {
@@ -241,12 +213,7 @@ def test_the_classifier_never_writes_error_type() -> None:
 
 
 def test_a_run_concurrently_crash_never_reaches_the_classifier(tmp_path: Path) -> None:
-    """``_run_concurrently``'s exception handler (``harness.py``'s ``run_index``) builds its
-    own minimal row dict inline -- ``error_type`` set to the exception's class name -- and
-    returns it straight from ``run_config``. This row never calls ``project_turn`` at all, so it
-    carries no ``failure_cause`` key and the classifier cannot reach it. Pinned here because
-    ``test_the_row_names_its_configuration.py`` already drives this exact branch (``workers=2``,
-    an exploding ``compiled.invoke``) but never asserts on ``error_type``."""
+    """A crash row from ``_run_concurrently`` never calls ``project_turn``, so it has no cause."""
     import sqlite3
 
     import governed_bi.eval.harness as harness

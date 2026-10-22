@@ -1,9 +1,6 @@
-"""Channel channel configuration: targets, channels, and extraction.
+"""``ChannelState`` is three-valued so absence can be ``not_configured`` or ``failed``.
 
-Declares which scoring channels and asset types each channel uses, and whether
-extraction runs. :class:`ChannelState` is three-valued so absence can be
-``not_configured`` (correct) or ``failed`` (degradation). Judgement of
-observed vs declared state is centralised in :func:`channel_anomaly`.
+Observed versus declared state is judged only in ``channel_anomaly``.
 """
 
 from __future__ import annotations
@@ -30,74 +27,47 @@ __all__ = [
 
 
 class Channel(str, Enum):
-    """Scoring channel, or the extraction step that produces queries.
+    """``extraction`` shares this vocabulary and is not a scoring channel."""
 
-    ``extraction`` shares the three-valued vocabulary though it is not a scoring
-    channel: it either ran, was not configured, or should have run.
-    """
-
-    #: BM25. Saturating normalisation so the score is absolute rather than relative to
-    #: the current query's best hit.
+    #: Saturating normalisation: the score is absolute, not relative to this query's best hit.
     lexical = "lexical"
-    #: Embedding cosine. Already bounded, so comparable across queries.
     semantic = "semantic"
-    #: The model call that turns a question into query phrases.
     extraction = "extraction"
 
 
-#: The members that score documents, so ``extraction`` cannot be fused.
-#:
-#: ``retrieve.fuse.fuse`` renormalises over the channels a caller says were consulted, and
-#: the nearest source of that is the ``ran`` set — to which ``_rewritten_query`` also adds
-#: ``extraction``. The weight mapping it is handed comes from
-#: ``serve/runtime.py::channel_scale`` and carries only the two scoring channels, so passing
-#: ``extraction`` through as consulted surfaces as a channel that retrieved nothing. Named here
-#: rather than filtered at three call sites.
+#: Scoring channels only. Fuse renormalises over consulted channels, and the ran set
+#: also contains ``extraction``, whose weights are absent, so it would look like a
+#: channel that retrieved nothing. Named here rather than filtered at each call site.
 SCORING_CHANNELS: frozenset[Channel] = frozenset({Channel.lexical, Channel.semantic})
 
 
 class ChannelState(str, Enum):
-    """Whether a channel ran for one channel. Three-valued on purpose."""
-
-    #: Executed and returned. Says nothing about whether it found anything: "ran and
-    #: scored zero" is a measurement, not this field's job.
+    #: Says nothing about hits: ran and scored zero is a measurement.
     ran = "ran"
-    #: This channel does not use this channel. Correct behaviour when declared.
+    #: This channel does not use this channel. Correct when declared.
     not_configured = "not_configured"
-    #: Should have run and did not: rate limit, dead endpoint, index build failure,
-    #: unparseable extraction.
+    #: Should have run and did not.
     failed = "failed"
 
 
 class Anomaly(str, Enum):
-    """Why an observed :class:`ChannelState` differs from the declared expectation.
+    """``failed`` and ``unconfigured`` are degradation. ``extra_channel`` is drift: report it, do not refuse the run."""
 
-    ``failed`` and ``unconfigured`` are degradation (fewer channels than claimed).
-    ``extra_channel`` is configuration drift: report it, do not refuse the run.
-    """
-
-    #: Expected ``ran``, observed ``failed``.
     failed = "failed"
-    #: Expected ``ran``, observed ``not_configured``.
     unconfigured = "unconfigured"
-    #: Expected ``not_configured``, observed ``ran``.
     extra_channel = "extra_channel"
 
 
-#: Which scoring channels each channel uses.
 DECLARED_CHANNELS: Mapping[Stage, frozenset[Channel]] = {
     Stage.channel_schema: frozenset({Channel.lexical, Channel.semantic}),
     Stage.channel_term: frozenset({Channel.lexical, Channel.semantic}),
     Stage.channel_metric: frozenset({Channel.lexical, Channel.semantic}),
     Stage.channel_entity: frozenset({Channel.lexical, Channel.semantic}),
-    # No lexical — term-frequency matching between NL questions rewards shared
-    # function words.
+    # No lexical: term frequency between questions rewards shared function words.
     Stage.channel_example: frozenset({Channel.semantic}),
 }
 
-#: Channels whose queries come from model extraction. ``channel_schema`` is absent because
-#: rewriting buys nothing measurable there (see :mod:`.citations`); its prompt stays in
-#: ``PROMPT_REGISTRY`` as an unsent baseline.
+#: ``channel_schema`` is absent: rewriting buys nothing measurable there.
 CHANNEL_EXTRACTS: frozenset[Stage] = frozenset(
     {
         Stage.channel_term,
@@ -107,9 +77,7 @@ CHANNEL_EXTRACTS: frozenset[Stage] = frozenset(
     }
 )
 
-#: Which asset types each channel retrieves over. ``column``, ``table`` and ``join``
-#: share one channel: they arrive together in a real question, and splitting them
-#: produces overlapping extraction calls.
+#: ``column``, ``table`` and ``join`` share one channel: splitting them overlaps extraction.
 CHANNEL_TARGETS: Mapping[Stage, frozenset[AssetType]] = {
     Stage.channel_schema: frozenset({AssetType.schema}),
     Stage.channel_term: frozenset({AssetType.term}),
@@ -118,17 +86,11 @@ CHANNEL_TARGETS: Mapping[Stage, frozenset[AssetType]] = {
     Stage.channel_example: frozenset({AssetType.few_shot}),
 }
 
-#: Asset types indexed but consumed by a check rather than a channel:
-#: ``negative_example`` is matched by ``negative_check`` (a refuse decision, not a
-#: ranking). Declared so :func:`_assert_every_indexed_type_has_a_consumer` closes.
+#: Indexed, but matched by a check: a refuse decision, not a ranking.
 CHECK_CONSUMED_TYPES: frozenset[AssetType] = frozenset({AssetType.negative_example})
 
 
 def expected_channel_state(stage: Stage, channel: Channel) -> ChannelState:
-    """What ``channel``'s state must be for ``stage`` when nothing went wrong.
-
-    Raises ``KeyError`` for a stage that is not a retrieval channel.
-    """
     if stage not in DECLARED_CHANNELS:
         raise KeyError(f"{stage!r} is not a retrieval channel; see CHANNEL_STAGES")
     if channel is Channel.extraction:
@@ -137,10 +99,7 @@ def expected_channel_state(stage: Stage, channel: Channel) -> ChannelState:
 
 
 def channel_anomaly(stage: Stage, channel: Channel, observed: ChannelState) -> Anomaly | None:
-    """``None`` when ``observed`` matches the declared expectation, else why not.
-
-    The single site for the three-way distinction.
-    """
+    """The single site for the three-way distinction."""
     expected = expected_channel_state(stage, channel)
     if observed is expected:
         return None
@@ -152,15 +111,11 @@ def channel_anomaly(stage: Stage, channel: Channel, observed: ChannelState) -> A
 
 
 def is_degraded(stage: Stage, channel: Channel, observed: ChannelState) -> bool:
-    """True when the config is running on fewer scoring channels than it declares.
-
-    A quotability input; ``extra_channel`` is drift, not degradation.
-    """
+    """``extra_channel`` is drift, not degradation."""
     return channel_anomaly(stage, channel, observed) in (Anomaly.failed, Anomaly.unconfigured)
 
 
 def _assert_tables_cover_every_channel() -> None:
-    """Import-time: every channel appears in channel and target tables; no strays."""
     missing_channels = set(CHANNEL_STAGES) - set(DECLARED_CHANNELS)
     missing_targets = set(CHANNEL_STAGES) - set(CHANNEL_TARGETS)
     if missing_channels or missing_targets:  # pragma: no cover - import-time guard
@@ -177,7 +132,6 @@ def _assert_tables_cover_every_channel() -> None:
 
 
 def _assert_every_indexed_type_has_a_consumer() -> None:
-    """Import-time: every indexed type is retrieved by a channel or check-consumed."""
     retrieved: set[AssetType] = set()
     for targets in CHANNEL_TARGETS.values():
         retrieved |= targets

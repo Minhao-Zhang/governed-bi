@@ -66,24 +66,14 @@ def test_changing_one_setting_changes_the_config_hash(monkeypatch) -> None:
 
 
 def test_presence_test_rejects_a_record_of_nulls() -> None:
-    """The check that makes ``missing_required`` more than a rubber finish.
-
-    ``project`` writes every declared key, so key-presence alone always passes. This
-    is the same defect as v1's ``corpus_content_hash == "unknown"`` comparing equal
-    to itself and letting two runs with no recorded setting under test pass the shared-settings check.
-    """
+    """``project`` writes every key, so key-presence alone always passes. ``None`` must count as absent."""
     all_null = {f.name: None for f in record.RECORD_REGISTER}
     assert record.missing_required(all_null) == record.required_keys()
 
 
 def test_a_refusal_path_record_passes() -> None:
-    """The complement, and the reason eleven fields are stage-conditional.
-
-    A guard-blocked turn reaches ``finish`` without running the channels, ``connect``
-    or the agent loop. Declaring those fields ``never`` would either fail every
-    refusal or force an empty-collection encoding — and an empty ``channel_scoring``
-    reads as *clean* to a check looking for degradation.
-    """
+    """A refusal never runs the channels. Declaring those fields always-present would fail every refusal, or encode
+    empty as clean."""
     rec = {f.name: None for f in record.RECORD_REGISTER}
     for f in record.RECORD_REGISTER:
         if f.absence is record.Absence.never:
@@ -159,13 +149,7 @@ def test_exec_error_is_an_answer_not_a_crash() -> None:
 
 
 def test_no_sql_and_no_refusal_is_a_crash() -> None:
-    """A turn that decided nothing did not refuse. Calling it a refusal is the
-    original defect.
-
-    Still a crash **with no ledger result handed over**: ``classify_outcome`` returns
-    ``Outcome.no_sql`` only for a caller that read ``execution.terminal`` (see below), so a turn
-    nothing observed ending keeps the name for that.
-    """
+    """No SQL and no refusal is a crash unless the caller read ``execution.terminal``."""
     assert (
         stages.classify_outcome(error=None, refused_by=None, has_sql=False)
         is stages.Outcome.crashed
@@ -173,14 +157,7 @@ def test_no_sql_and_no_refusal_is_a_crash() -> None:
 
 
 def test_the_statement_less_outcome_is_the_ledger_s_own_word() -> None:
-    """``Outcome.no_sql`` and ``ExecutionRecord.terminal``'s ``"no_sql"`` are one string.
-
-    ``finish`` classifies the outcome by reading that field — the same way it reads the ledger's
-    result for ``capped``, and for the same reason: the two cannot then disagree about whether a
-    statement ran. If the spellings drift, ``classify_outcome``'s comparison stops matching, the
-    member becomes unreachable, and every statement-less turn silently records ``crashed``.
-    ``govern/ledger.py`` asserts the same pair at import; this is the readable half.
-    """
+    """``finish`` reads the ledger's word. A second spelling records every statement-less turn as ``crashed``."""
     from typing import get_args, get_type_hints
 
     from governed_bi.govern.ledger import ExecutionRecord
@@ -272,13 +249,8 @@ def test_a_real_turn_writes_every_required_field_on_every_terminal_path() -> Non
     assert decline["answer"]["refused_by"] == "no_schema_matched"
     assert not missing_required(decline["answer"]["record"])
 
-    # The third terminal, and it is **not** the answered path: this file configures no
-    # ``agent_model``, so ``agent_core`` takes ``_stub`` and the turn ends having executed no
-    # statement. It asserted ``outcome == "answered"`` until 2026-08-18 and passed, because
-    # ``finish`` hardcoded ``has_sql=True`` whenever the agent loop finished with an empty ledger.
-    # ``Outcome.no_sql`` is what that turn is; the answered path with a real ledger is pinned in
-    # ``tests/serve/test_turn_contract.py``. Named for the property under test either way — every
-    # ``Absence.never`` field is written on every terminal, including this one.
+    # No agent model, so the turn ends with no statement. An empty ledger must not count as SQL
+    # having run. ``Outcome.no_sql`` is that turn, and every required field is still written.
     statementless = graph.invoke(
         _base_turn(
             question="how many customers",

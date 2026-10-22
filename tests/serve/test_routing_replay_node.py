@@ -1,14 +1,7 @@
-"""``route`` honouring a replayed shortlist — the half of ``--replay-routing`` that is a node.
+"""``route`` honours a replayed shortlist.
 
-Here rather than beside the rest of the replay contract in
-``tests/eval/test_routing_replay.py`` because the two-schema fixture corpus is a
-``tests/serve`` conftest fixture, and pytest shares a conftest down a package but not across
-siblings. The artifact reading and the drift statistic are asserted there; what the pin *does*
-once it reaches the graph is asserted here.
-
-If this file broke, ``--replay-routing`` would be accepted, printed in the run header, and
-silently ineffective — a config labelled pinned that routed live. That is worse than not having
-the flag, because the label is what a later reader trusts.
+The artifact and the drift statistic live in ``tests/eval``. A pin the node ignores would
+label a run pinned while it still routes live.
 """
 
 from __future__ import annotations
@@ -50,12 +43,7 @@ def _case(index: UnifiedIndex, assets: dict[str, Any]) -> tuple[dict[str, Any], 
 def test_route_honours_a_pinned_shortlist_over_its_own_ranking(
     two_schema_index: UnifiedIndex, two_schema_assets: dict[str, Any]
 ) -> None:
-    """Asserted as a *change*, not as an outcome.
-
-    The same question is routed twice: once free, once pinned to the schema the free run did
-    **not** pick. Asserting only that the pinned run returned the pinned schema would pass just
-    as well if ``route`` had chosen it anyway — the version of this test that proves nothing.
-    """
+    """Pinned to the schema the free run did not pick, so the pin has to change the result."""
     state, config = _case(two_schema_index, two_schema_assets)
 
     free = route_node(state, config)
@@ -73,13 +61,7 @@ def test_route_honours_a_pinned_shortlist_over_its_own_ranking(
 def test_a_pin_naming_an_unknown_schema_is_ignored_rather_than_obeyed(
     two_schema_index: UnifiedIndex, two_schema_assets: dict[str, Any]
 ) -> None:
-    """An artifact from another corpus must not collapse the config it is replayed into.
-
-    Obeying such a pin licenses nothing, and the run reads as a routing collapse caused by the
-    replay rather than by anything under test — a confound introduced by the tool whose whole
-    purpose is to remove one. Falling back to live routing is the failure: the row still
-    carries ``routing_pinned`` so the fraction stays recoverable.
-    """
+    """An unknown schema falls back to live routing instead of licensing nothing."""
     state, config = _case(two_schema_index, two_schema_assets)
 
     routed = route_node({**state, PINNED_SCHEMAS_KEY: ["a_schema_from_another_corpus"]}, config)
@@ -91,11 +73,7 @@ def test_a_pin_naming_an_unknown_schema_is_ignored_rather_than_obeyed(
 def test_a_partly_known_pin_keeps_only_the_schemas_this_corpus_has(
     two_schema_index: UnifiedIndex, two_schema_assets: dict[str, Any]
 ) -> None:
-    """The mixed case, which the all-or-nothing tests above cannot reach.
-
-    A corpus that gained or lost one schema between runs produces exactly this. Dropping the
-    whole pin would discard a decision that is still valid for the schemas that remain.
-    """
+    """A pin that names one known schema and one unknown keeps only the known schema."""
     state, config = _case(two_schema_index, two_schema_assets)
 
     routed = route_node({**state, PINNED_SCHEMAS_KEY: [SCHEMA_B, "gone_from_this_corpus"]}, config)
@@ -106,11 +84,7 @@ def test_a_partly_known_pin_keeps_only_the_schemas_this_corpus_has(
 def test_the_ranking_still_reaches_retrieval_under_a_pin(
     two_schema_index: UnifiedIndex, two_schema_assets: dict[str, Any]
 ) -> None:
-    """Pass two scores against the pass-one ranking, so the pin must not replace it.
-
-    Applying the pin before the ranking was computed would hand pass two a different input and
-    make the pinned config a different system — the opposite of what pinning is for.
-    """
+    """The pin replaces the shortlist and leaves the pass-one ranking in place."""
     state, config = _case(two_schema_index, two_schema_assets)
 
     pinned = route_node({**state, PINNED_SCHEMAS_KEY: [SCHEMA_B]}, config)

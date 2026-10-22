@@ -1,21 +1,8 @@
-"""Pin one run's routing decisions onto the next, so a single-setting A/B measures the setting.
+"""Pin a prior run's schema shortlist so one setting is what the comparison measures.
 
-``route_node`` itself is deterministic — it ranks channel hits and takes ``route_top_n``. What
-is not deterministic is the four **channel rewriters** upstream of it (``CHANNEL_EXTRACTS``;
-``channel_schema`` does not rewrite): each is a utility-model
-call, and two runs of the same question over the same corpus can hand ``route`` two different
-sets of hits. The schema shortlist then differs, ``retrieved_tables`` differs, and the agent is asked
-a different question. A prompt A/B run that way cannot separate "the new prompt helped" from
-"routing happened to land better this time".
-
-This module replays the ``schemas`` field of a prior artifact. The channels still run — they
-also drive pass-two retrieval **within** the chosen schemas, and switching them off would
-measure a system nobody serves. Only the shortlist is frozen.
-
-**It therefore does not freeze everything, and does not pretend to.** Pass two still re-searches
-inside the pinned schemas, so ``retrieved_tables`` can still move. :func:`retrieved_drift` measures how
-much it moved and the driver reports it, because an unquantified "mostly deterministic" is the
-claim this module exists to stop anyone from making.
+Channel rewriters are model calls, so two runs can route differently and the
+agent is asked a different question. Channels still run inside the pin: pass
+two can move ``retrieved_tables``. That residual is measured, not assumed away.
 """
 
 from __future__ import annotations
@@ -37,21 +24,13 @@ __all__ = [
     "pin_realised",
 ]
 
-#: The question-dict / state key carrying a pinned shortlist. One spelling, imported by
-#: ``route_node``, ``harness`` and the driver — three string literals would drift and the
-#: failure would be silent (an unread key is an unpinned run that still says ``--replay-routing``).
+#: Question and state key for a pinned shortlist. One spelling: three literals would drift, and an unread key still
+#: looks pinned.
 PINNED_SCHEMAS_KEY = "pinned_schemas"
 
 
 def routing_from_artifact(path: str | Path) -> dict[str, list[str]]:
-    """``{question_id -> schemas}`` from a prior run's JSONL.
-
-    Rows whose ``schemas`` is absent or empty are **skipped rather than pinned to ``[]``**: an
-    empty shortlist is the ``no_schema_matched`` decline, and replaying it would freeze a
-    retrieval failure into the setting under test config as though it were a decision. Eight rows of the
-    2026-08-09 full run retrieved_tables nothing at all; pinning those would carry that defect forward
-    and make the next config look like it reproduced a bug it never ran.
-    """
+    """Empty ``schemas`` are skipped, not pinned to ``[]``. An empty shortlist would freeze a retrieval failure."""
     pinned: dict[str, list[str]] = {}
     with Path(path).open(encoding="utf-8") as handle:
         for line in handle:
@@ -70,14 +49,10 @@ def routing_from_artifact(path: str | Path) -> dict[str, list[str]]:
 def attach_pinned_routing(
     questions: Sequence[Any], pinned: Mapping[str, Sequence[str]]
 ) -> dict[str, int]:
-    """Write the pinned shortlist onto each question. Returns ``{pinned, unpinned}`` counts.
+    """Write the pinned shortlist onto each question. Count pinned and unpinned.
 
-    Mutates in place, as :func:`~governed_bi.eval.datalake.attach_quality_flags` does, so the
-    harness needs no second argument threaded through every call site.
-
-    A question absent from the artifact is left alone and **counted**. Silently routing it
-    live would mean a config described as pinned had an unmeasured fraction that was not — the
-    driver prints the count so the label on the run is true.
+    A question missing from the artifact stays unpinned and is counted. Routing
+    it live without a count would label a partly live run as pinned.
     """
     counts = {"pinned": 0, "unpinned": 0}
     for question in questions:
@@ -92,21 +67,10 @@ def attach_pinned_routing(
 
 
 def retrieved_tables_baseline(path: str | Path) -> dict[str, list[str]]:
-    """``{question_id -> retrieved_tables}`` for the rows :func:`routing_from_artifact` would pin.
+    """``retrieved_tables`` for the rows a pin would cover, and no others.
 
-    The baseline :func:`retrieved_drift` measures against must cover **the same rows the pin
-    covered** and no others. The driver built it from every row of the replayed artifact,
-    including the ones ``routing_from_artifact`` deliberately skips for having an empty
-    shortlist — turns that declined with ``no_schema_matched``. Those were never pinned, so
-    whatever the next config does with them is drift the pin never claimed to prevent, and
-    counting it deflated the residual.
-
-    Measured on the v4 config against ``proxy_v3_fold``: the six excluded rows move the mean
-    Jaccard over the movers from 0.7020 to 0.7049 and the identical rate from 0.0940 to 0.0937.
-    Small — and in the direction that flatters the pin, which is the direction a measurement
-    must not be wrong in.
-
-    One pass over the file, so the two functions cannot be given different files by accident.
+    Turns with an empty shortlist were never pinned. Counting their movement
+    as drift charges the pin for a change it did not claim to prevent.
     """
     baseline: dict[str, list[str]] = {}
     with Path(path).open(encoding="utf-8") as handle:
@@ -126,15 +90,10 @@ def retrieved_tables_baseline(path: str | Path) -> dict[str, list[str]]:
 def retrieved_tables_drift(
     rows: Iterable[Mapping[str, Any]], baseline: Mapping[str, Sequence[str]]
 ) -> dict[str, Any]:
-    """How far ``retrieved_tables`` moved despite the shortlist being pinned.
+    """How far ``retrieved_tables`` moved with the shortlist pinned.
 
-    ``baseline`` is ``{question_id -> retrieved_tables}`` from the artifact being replayed. Pinning the
-    schemas does not pin pass two, so this is the residual: the fraction of turns whose retrieved_tables
-    table set is not identical to the one the agent saw last time, and the mean Jaccard over
-    those that moved.
-
-    Reported, not asserted. A non-zero drift is expected and fine; an *unreported* one turns
-    "we pinned routing" into a claim wider than what was done.
+    Pass two is not pinned. Identical rows are left out of the mean Jaccard,
+    because averaging them in hides how far the movers went.
     """
     same = moved = missing = 0
     jaccards: list[float] = []
@@ -158,28 +117,15 @@ def retrieved_tables_drift(
         "moved": moved,
         "not_in_baseline": missing,
         "identical_rate": (same / compared) if compared else None,
-        # Over the moved rows only: averaging in the identical ones reports a number near 1.0
-        # that hides how far the movers went.
         "mean_jaccard_when_moved": (sum(jaccards) / len(jaccards)) if jaccards else None,
     }
 
 
 def drift_against(baseline_path: str | Path, rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
-    """ :func:`retrieved_drift` of ``rows`` against the artifact at ``baseline_path``.
+    """Drift of ``rows`` against one artifact, through one statistic.
 
-    **One function, so a contrast cannot difference two different statistics.** The published
-    sentence "mean residual Jaccard is 0.7049 on v4 and 0.7029 on v5 against 0.579 for the
-    unpinned run1/run2 pair" did exactly that. The two pinned figures are
-    ``mean_jaccard_when_moved``; ``0.579`` is the mean over *every* compared row including the
-    33 identical ones — the quantity :func:`retrieved_drift` deliberately does not compute,
-    because averaging in rows that scored 1.0 by definition reports a number near 1.0 and hides
-    how far the movers went. The like-for-like value for run1/run2 is **0.5719** through this
-    function, and 0.5689 if the baseline is widened to every row rather than the rows a pin
-    would have covered. The error flattered the unpinned baseline, so the conclusion survives
-    and the printed comparison did not.
-
-    The pinned side of the contrast (the driver) and the unpinned reference now come out of the
-    same two calls, which is the only structural defence against the next one.
+    The mean is over movers only. Averaging in identical rows reports a number
+    near 1 and cannot be compared with this one.
     """
     return retrieved_tables_drift(rows, retrieved_tables_baseline(baseline_path))
 
@@ -187,31 +133,8 @@ def drift_against(baseline_path: str | Path, rows: Iterable[Mapping[str, Any]]) 
 def pin_realised(
     rows: Iterable[Mapping[str, Any]], pinned: Mapping[str, Sequence[str]]
 ) -> dict[str, int]:
-    """How many turns ran on the pinned shortlist, readable on an old artifact.
-
-    ``routing_pinned`` has meant two things. Under the corrected semantics it is an *outcome* —
-    the turn's shortlist **is** the pinned one — and a turn that ended before ``route_node``
-    carries ``False``. Every artifact in ``runs/eval/`` predates that and was written under the
-    old *intent* semantics, where the flag recorded that the driver had attached a shortlist,
-    whether or not the turn ever used it. So ``sum(r["routing_pinned"] is True)`` returns 1 345
-    on v4, v5 and v4-reflect alike — the count of questions the pin *offered*, not the count it
-    reached.
-
-    The corrected figures were published (1 342 / 1 340 / 1 333) with no producer: they were
-    arithmetic somebody did once, not output any run had emitted. This is the producer, and it
-    reads both semantics:
-
-    * ``flagged`` — what the shipped one-liner returned;
-    * ``realised`` — flagged **and** the turn recorded a non-empty shortlist, which is the
-      corrected reading applied to an old-semantics row;
-    * ``exact`` — an independent check that does not read the flag at all: the turn's
-      ``schemas`` equals the pin source's, in order;
-    * ``same_set_out_of_order`` — turns whose shortlist holds the pinned schemas in a different
-      order. It is 0 on all three configs, which is what makes ``exact`` and ``realised`` agreeing
-      a real corroboration rather than two spellings of one comparison.
-
-    ``flagged - realised`` is the gap: clarifications that ended before routing.
-    """
+    """``routing_pinned`` means a shortlist was attached. ``realised`` also needs a non-empty shortlist. ``exact``
+    compares ``schemas`` to the pin and ignores the flag."""
     flagged = realised = exact = same_set = 0
     for row in rows:
         shortlist = [str(s) for s in (row.get("schemas") or ())]

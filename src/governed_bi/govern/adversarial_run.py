@@ -1,10 +1,4 @@
-"""Run the adversarial suite and publish its rates.
-
-Cases live in :mod:`.adversarial`. ``check()`` is the layer stack; ``prepare()``
-can still emit SQL after a refusal, so an attack with ``Prepared.sql`` set is a
-bypass whatever the result said. A layer that owns no attacks is unmeasured,
-not a perfect score.
-"""
+"""``prepare()`` can still emit SQL after a refusal, and that string is a bypass. No attacks means unmeasured."""
 
 from __future__ import annotations
 
@@ -54,7 +48,7 @@ class CaseResult:
 
     @property
     def observed(self) -> CheckResult:
-        """The result the expectation is read from (:attr:`AdversarialCase.enforced_by`)."""
+        """The result named by :attr:`AdversarialCase.enforced_by`, not always ``check()``."""
         return self.prepared.result if self.case.enforced_by == "pipeline" else self.result
 
 
@@ -76,8 +70,7 @@ def _classify(case: AdversarialCase, result: CheckResult, prepared: Prepared) ->
         layer = observed["failed_layer"]
         return "false_refusal", f"{layer.name if layer else '?'}/{observed['reason_code']}"
 
-    # An attack that yields an executable string is a bypass whatever the result says: the
-    # string is the thing the database sees.
+    # An executable string is a bypass whatever the result says: the database sees the string.
     if prepared.sql is not None:
         return "bypassed", "prepare() produced an executable string"
     if observed["passed"]:
@@ -149,7 +142,7 @@ class SuiteReport:
         return Measured.rate(len(caught), len(owned), what=f"attacks owned by {layer.name}")
 
     def by_family(self) -> Mapping[str, tuple[int, int]]:
-        """``family -> (attacks, benign)``, so a thin family is visible rather than inferred."""
+        """``family -> (attacks, benign)``. A family with no row would be inferred as empty."""
         out: dict[str, tuple[int, int]] = {}
         for family in sorted(CASE_FAMILIES):
             cases = [r.case for r in self.results if r.case.family == family]
@@ -173,8 +166,7 @@ class SuiteReport:
 def run_adversarial_suite(
     suite: AdversarialSuite | None = None, *, policy: GovernancePolicy | None = None
 ) -> SuiteReport:
-    """Run every case through ``check()`` and ``prepare()``. No model, no network, no I/O
-    beyond reading the suite file."""
+    """Both entry points, no model and no network. Reading the suite file is the only I/O."""
     suite = suite or load_adversarial_suite()
     fixture = build_world_fixture(suite.world)
     resolved = policy or GovernancePolicy()
@@ -195,15 +187,7 @@ class GuardCaseResult:
 
 
 def _classify_guard(case: GuardCase, result: GuardResult) -> tuple[str, str]:
-    """The statuses the statement half uses, minus the two that need a statement.
-
-    ``bypassed`` keeps its meaning — an attack that reached the model — but there is no
-    ``prepare()`` string to check, so a passing result is the whole of it. ``error_failed_open``
-    is this half's ``guardrail_error``: :func:`~governed_bi.govern.guard.guard` returns it when
-    a predicate raises, and it is a **bypass in effect** (``serve/graph.py::_after_guard``
-    routes anything that is not ``blocked`` onward) which is why it is counted apart rather
-    than folded into ``caught``.
-    """
+    """A clear result is a bypass. A raised predicate is routed onward, not counted as caught. See ADR 0006."""
     if result["outcome"] == "error_failed_open":
         return "guardrail_error", f"{result['rule_id']} raised: {result['detail']}"
     blocked = result["outcome"] == "blocked"
@@ -236,12 +220,7 @@ class GuardReport:
         )
 
     def rule_recall(self, rule_id: str) -> Measured[float]:
-        """Per rule, over the attacks that rule owns. The statement half's ``layer_recall``.
-
-        Per *rule* and not per family, because ADR 0006 OQ3's condition for shipping these
-        enabled was a number for each one — a set-level recall of 1.000 is compatible with one
-        rule catching everything and four catching nothing.
-        """
+        """Per rule, not per family: a set-level recall of 1 can hide one rule catching nothing. See ADR 0006."""
         owned = [r for r in self.of_kind("attack") if r.case.expect_rule == rule_id]
         caught = [r for r in owned if r.status == "caught"]
         return Measured.rate(len(caught), len(owned), what=f"attacks owned by {rule_id}")
@@ -258,13 +237,7 @@ class GuardReport:
 def run_guard_suite(
     suite: AdversarialSuite | None = None, *, policy: GovernancePolicy | None = None
 ) -> GuardReport:
-    """Run every ``[[guard_case]]`` through ``guard()``. No model, no network, no database.
-
-    **Every rule on, whatever the caller's policy says.** The suite's job is what the rules
-    are worth, not what a deployment enabled; running it under a policy that disabled one
-    would report a bypass rate over a rule that never ran. That is the shape of the defect
-    this half exists because of.
-    """
+    """Every rule on, whatever the caller enabled. A disabled rule would be reported as a bypass it could not catch."""
     suite = suite or load_adversarial_suite()
     resolved = replace(
         policy or GovernancePolicy(),
@@ -281,7 +254,7 @@ def run_guard_suite(
 
 
 def guard_report_lines(report: GuardReport) -> list[str]:
-    """The printed report for the prompt-injection half, same shape as the statement half."""
+    """Same shape as the statement report: every rate carries its denominator."""
 
     def counted(status: str, kind: str) -> str:
         return (
@@ -319,8 +292,7 @@ def _counted(report: SuiteReport, status: str, kind: str) -> str:
 
 
 def report_lines(report: SuiteReport) -> list[str]:
-    """The printed report. Every rate carries its denominator on the same line, because a rate
-    whose denominator a reader has to go and find is a rate nobody checks."""
+    """Every rate carries its denominator on the same line. A rate whose denominator is elsewhere is not checked."""
     attacks, benign = report.of_kind("attack"), report.of_kind("benign")
     lines = [
         f"adversarial governance suite v{report.version} — {len(report.results)} cases "

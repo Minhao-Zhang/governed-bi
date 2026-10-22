@@ -1,17 +1,4 @@
-"""The eval/datalake.py post-hoc measurement layer never lets its denominator shrink silently.
-
-Split out of ``test_eval_contract.py`` by the 1000-line cap (ADR 0005 §6), which was forcing the
-timing rather than the boundary: that file's tests split cleanly into "run a config and grade what it
-did" (kept there) and this file's concern -- the functions that measure a *finished* run's
-population after the fact (``table_coverage``, ``routing_recall``, ``retrieval_funnel``,
-``dataset_qid_lists``), plus the one ``retrieve.connect`` determinism test that exists because its
-output feeds directly into the ``retrieved_tables`` set those functions read.
-
-Every test here is the same shape: a row, a gold statement or a Steiner tree that could be
-silently miscounted, defaulted to a real-looking zero, or dropped from the denominator instead of
-being counted, excluded, or made to raise. ``test_eval_contract.py``'s "authored against the
-plan, not the impl" and "do not re-derive check logic here" apply equally to what moved.
-"""
+"""A miscount must raise, stay excluded, or stay in the denominator. A real-looking zero is a silent shrink."""
 
 from __future__ import annotations
 
@@ -21,18 +8,7 @@ import pytest
 
 
 def test_table_coverage_refuses_rows_that_do_not_carry_retrieved_tables() -> None:
-    """The EX ceiling must not read 0.000 because the producer named the field differently.
-
-    ``routing_recall`` published ``retrieved_schemas`` and not ``retrieved_tables``, and
-    ``table_coverage`` reads exactly ``retrieved_tables`` — so the free harness fed to the function
-    this module documents as *"the EX ceiling"* reported ``all_gold_tables_retrieved: 0.0`` for
-    two configs whose schema recall was 0.851 and 0.877, with ``reached_gold`` in the very same [retired]
-    rows proving the tables had been retrieved_tables. A zero is a publishable number; a ``KeyError``
-    is not, and that asymmetry is the whole point.
-
-    Absent and empty stay different facts: a row that carries ``retrieved_tables: []`` retrieved_tables
-    nothing, which is a measurement this counts.
-    """
+    """A missing ``retrieved_tables`` key must raise. An empty list is a real zero."""
     from governed_bi.eval.datalake import table_coverage
 
     gold = {"q1": "SELECT * FROM restaurant.generalinfo"}
@@ -68,17 +44,7 @@ def test_routing_recall_rows_carry_what_table_coverage_reads() -> None:
 
 
 def test_a_gold_statement_that_reads_no_table_is_not_a_coverage_miss() -> None:
-    """13 of 114 sampled questions have a constant-folded gold statement.
-
-    ``SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")`` reads nothing. It fell through
-    ``needed and hits == len(needed)`` into the ``none`` bucket, so it counted as "no gold table
-    retrieved_tables" on every config -- an unconditional miss no corpus change could fix, holding the
-    ceiling at 101/114 = 0.886 and deflating every published coverage figure by a fixed 11.4%.
-
-    Excluded from the denominator, the way ``gold_sql_unparsed`` already handles a statement the
-    metric cannot read, and **counted** in its own field, because a silently smaller denominator
-    is the same defect pointing the other way.
-    """
+    """A gold that reads no table leaves the denominator and is counted in its own field."""
     from governed_bi.eval.datalake import table_coverage
 
     folded = 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")'
@@ -99,17 +65,7 @@ def test_a_gold_statement_that_reads_no_table_is_not_a_coverage_miss() -> None:
 
 
 def test_connect_seeds_its_tree_deterministically() -> None:
-    """``next(iter(set_of_strings))`` made the Steiner tree depend on the process hash seed.
-
-    Python randomises string hashing per process, so the greedy builder started from a different
-    terminal in every run and added different -- equally valid -- Steiner points. Those points
-    enter ``retrieved_tables``, which is what ``table_coverage`` reads, so every cross-session coverage
-    comparison carried it as noise: one question of 114 was observed, and a direct probe produced
-    three distinct Steiner sets across five hash seeds.
-
-    Asserted as "the seed is the sorted-first terminal" rather than by re-running under two hash
-    seeds, which a test in one process cannot do.
-    """
+    """The tree must not depend on set iteration order. Those points enter ``retrieved_tables``."""
     import random
 
     from governed_bi.retrieve.connect import connect
@@ -123,11 +79,7 @@ def test_connect_seeds_its_tree_deterministically() -> None:
     }
     terminals = ["a", "b", "c", "d"]
 
-    # Both the terminal order AND the edge order are shuffled. Shuffling only the terminals
-    # exercises the tree seed, and a fix to the seed alone passed that while the probe across
-    # real hash seeds still produced three distinct Steiner sets -- the queue order and the
-    # neighbour order in the BFS are two further places an equal-length tie is broken. Edge order
-    # is what varies the `adj` set insertion order, so it is what reaches those two.
+    # Shuffle terminals and edges. Edge order reaches adjacency insertion, a second tie break.
     results = []
     for _ in range(12):
         shuffled_terms = terminals[:]
@@ -150,13 +102,7 @@ def test_connect_seeds_its_tree_deterministically() -> None:
 
 
 def test_the_dataset_exclusion_lists_are_read_by_their_real_names(tmp_path: Path) -> None:
-    """Both drivers asked for ``question_ids``, a key this file has never carried.
-
-    So ``order_sensitive_qids.json`` yielded ``set()`` on every run and the 97
-    order-sensitive plus 10 degenerate golds the dataset says to exclude were graded as
-    ordinary engine misses. The ``or []`` is what let it survive for so long: an empty
-    exclusion set reads exactly like a dataset that declares no exclusions.
-    """
+    """An empty exclusion set looks like a dataset that declares none. A missing key must not read as that."""
     from governed_bi.eval.datalake import dataset_qid_lists
 
     (tmp_path / "order_sensitive_qids.json").write_text(
@@ -244,13 +190,7 @@ def _funnel_rows():
 
 
 def test_the_funnel_separates_routing_from_table_selection_from_generation() -> None:
-    """The measurement the repo could not make, and the reason a day was spent on the wrong fix.
-
-    ``summarise_routing`` reports schema recall over all rows and ``table_coverage`` reports
-    gold-table coverage over all rows; nothing joined them, so "coverage 0.70 against recall@3
-    0.85" could not distinguish a routing failure from a table-selection failure. Those want
-    opposite work.
-    """
+    """Side-by-side rates cannot tell a wrong schema from a dropped table."""
     from governed_bi.eval.datalake import retrieval_funnel
 
     gold_sql = {str(i): "SELECT 1 FROM sales.customers" for i in range(1, 5)}
@@ -276,11 +216,7 @@ def test_the_funnel_separates_routing_from_table_selection_from_generation() -> 
 
 
 def test_an_empty_stage_is_unmeasured_and_not_a_rate_of_zero() -> None:
-    """``or 1`` elsewhere in this module turns a zero-row population into a real-looking 0.000.
-
-    ``Measured.rate`` refuses that, and the reason survives into the artifact rather than being
-    rendered as a string that sorts like a number.
-    """
+    """A stage nothing reached is unmeasured, not 0.0."""
     from governed_bi.eval.datalake import retrieval_funnel
 
     rows = [
@@ -301,8 +237,7 @@ def test_an_empty_stage_is_unmeasured_and_not_a_rate_of_zero() -> None:
 
 
 def test_a_row_with_no_gold_sql_is_counted_rather_than_dropped() -> None:
-    """``table_coverage`` does ``if not sql: continue`` with no counter — a silent denominator
-    shrink, which is the same defect as counting the row wrongly but quieter."""
+    """A row with no gold is counted, not dropped from the denominator."""
     from governed_bi.eval.datalake import retrieval_funnel
 
     rows = _funnel_rows() + [{"question_id": "99", "db_id": "sales", "retrieved_tables": []}]
@@ -313,11 +248,7 @@ def test_a_row_with_no_gold_sql_is_counted_rather_than_dropped() -> None:
 
 
 def test_table_less_gold_leaves_the_funnel_denominator() -> None:
-    """A constant-folded ``VALUES`` gold reads no table, so it cannot be a coverage miss.
-
-    127 of the 1 351 test golds are this shape; counting them as misses deflated every
-    coverage figure by a fixed ~9.4% until 2026-08-05.
-    """
+    """A ``VALUES`` gold reads no table, so it is not a coverage miss."""
     from governed_bi.eval.datalake import retrieval_funnel
 
     rows = [{"question_id": "1", "db_id": "sales", "retrieved_tables": [], "outcome": "answered"}]
@@ -327,15 +258,7 @@ def test_table_less_gold_leaves_the_funnel_denominator() -> None:
 
 
 def test_the_table_less_population_is_published_with_its_own_ex() -> None:
-    """Leaving the denominator must not mean leaving the report.
-
-    127 of 1 351 questions have a constant-folded gold. They are gradeable — an engine that
-    queries the database and returns the right value still matches the digest — but the gold
-    carries no table and no join, so every config scores far below its headline there and
-    excluding them lifts all configs by roughly the same 3 points. That is a choice about what
-    a headline means, not a correction, so the funnel reports the set as its own line and
-    leaves the choice to the reader.
-    """
+    """Leaving the denominator is not leaving the report. An empty set is unmeasured, not zero."""
     from governed_bi.eval.datalake import retrieval_funnel
 
     folded = 'SELECT "v"."c0" FROM (VALUES (121.0)) AS "v"("c0")'
@@ -368,12 +291,7 @@ def test_the_table_less_population_is_published_with_its_own_ex() -> None:
 
 
 def test_an_unparseable_gold_is_not_a_gold_that_reads_no_table() -> None:
-    """One counter carried both, so the funnel disagreed with ``table_coverage``.
-
-    "the metric cannot read this statement" and "this statement reads nothing" want
-    different follow-ups — a parser fix versus a dataset fact — and pooling them makes the
-    tableless count the funnel publishes unusable as the size of that population.
-    """
+    """An unparseable gold is not a gold that reads no table. The two want different follow-ups."""
     from governed_bi.eval.datalake import retrieval_funnel
 
     out = retrieval_funnel(

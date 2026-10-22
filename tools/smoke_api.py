@@ -38,7 +38,6 @@ sys.path.insert(0, str(REPO / "src"))
 #: The custom routes the app declares. The platform's `/threads` routes are not the app's.
 CUSTOM_ROUTES = frozenset({"/livez", "/readyz", "/capabilities", "/clarifications/pending"})
 
-#: Keys the pending queue's `meta` carries.
 PENDING_META = frozenset({"n", "truncated", "threads_scanned", "limit", "offset", "columns"})
 
 

@@ -1,22 +1,7 @@
-"""``governance.excluded`` must reach the index, not just the analyst corpus.
+"""``governance.excluded`` removes the asset from the index, not only from the analyst corpus.
 
-``Governance``'s docstring promises exclusion "removes the asset from everything the analyst
-sees, in every environment". Only ``for_analyst`` honoured it. The index was built from the
-full asset set, so an excluded column still scored in both channels, still spent one of the
-30 column slots, and still rendered once the reference closure pulled it in from its parent
-table.
-
-This matters for a specific measurement. On BIRD-Obfuscation the corpus documents 422 planted
-decoy columns; the config that answers "is it better to warn about a decoy or to withhold it?"
-needs withholding to withhold. Implemented as a flag rather than a file deletion so
-both configs load the same tree and differ in one field.
-
-**Why the fixture is verbose.** The first version of these tests built tables without
-``columns=`` and no join at all, and passed against code that refused to serve the moment
-anything was excluded: dropping an asset leaves every reference to it dangling, and a dangling
-*required* reference is fatal. A fixture that omits the references cannot see that. So every
-table here declares its columns the way ``corpus/seed.py`` does, and there is a join, a metric
-and a term pointing into the assets under test.
+The fixture declares columns, a join, a metric, and a term. Dropping an asset leaves required
+references dangling, and a fixture without them cannot see a corpus that refuses to serve.
 """
 
 from __future__ import annotations
@@ -156,13 +141,7 @@ def test_an_excluded_column_is_absent_from_the_index_and_still_refusable() -> No
 
 
 def test_excluding_a_column_does_not_make_the_corpus_unservable() -> None:
-    """The regression this file exists for.
-
-    ``TableAsset.columns`` holds derived column ids, so removing the column while its parent
-    still declares it made ``_link_table`` record a dangling reference -- ``fatal`` by default,
-    which is ``serve/__main__.py`` printing "refusing to serve" and ``/routes`` reporting
-    ``servable: false``. Withholding a decoy made the corpus unloadable.
-    """
+    """Excluding a column prunes the parent's derived id, so the corpus stays servable."""
     session = _session(exclude_column=True)
     assert not _fatal(session), _fatal(session)
 
@@ -172,12 +151,7 @@ def test_excluding_a_column_does_not_make_the_corpus_unservable() -> None:
 
 
 def test_excluding_a_table_carries_to_its_columns_and_to_the_joins_on_it() -> None:
-    """A table's exclusion reaches its columns *and* everything that required it.
-
-    The join is the one the first version missed: dropping the table left ``right_table``
-    unbindable, and ``_link_join`` records that as fatal. The corpus carries ~928 joins, so
-    every table exclusion tripped it.
-    """
+    """Excluding a table also drops its columns and the joins that required it."""
     session = _session(exclude_table=True)
 
     assert "addr.zones" not in session.index.entries
@@ -203,13 +177,7 @@ def test_a_join_naming_an_excluded_table_by_bare_name_is_dropped_too() -> None:
 
 
 def test_a_required_reference_excludes_its_referrer_and_an_optional_one_is_pruned() -> None:
-    """The split that keeps the closure from over-reaching.
-
-    ``metric.base_table`` is required, so the metric goes with its table. ``term.binding`` is
-    optional -- ``_link_term`` calls an unbound term "a state, not a defect" -- so the term
-    survives with the binding dropped, still glossing vocabulary that stands on its own.
-    ``metric.dimensions`` is a collection, so it loses one member rather than the asset.
-    """
+    """A required reference drops its referrer; an optional binding is pruned and the term stays."""
     # base_table excluded -> the metric cannot resolve, so it leaves with the table.
     session = _session(exclude_table=True)
     assert "metric_points_per_zone" not in session.index.entries

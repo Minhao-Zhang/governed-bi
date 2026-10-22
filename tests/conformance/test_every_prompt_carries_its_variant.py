@@ -1,20 +1,5 @@
-"""Every prompt the engine sends must be resolved at the variant the run selected.
-
-The failure this refuses is **silent and total**: ``prompt_text("analyst")`` with no variants
-argument returns the default, the turn still records the overriding ``prompt_set_hash``, and the
-artifact names a setting under test the model never received. Nothing raises, nothing looks wrong, and a
-paired A/B measures the difference between a prompt and itself.
-
-That was the state of the tree until prompt-variant selection was wired: ``select(overrides)``,
-``prompt_set_hash(overrides)`` and ``prompt_text(name, variants)`` had all carried the parameter
-since the registry was written, and **no caller in ``src/`` passed one**. Two of the five call
-sites were worse than unwired — ``SYSTEM_PROMPT`` and ``REFLECT_PROMPT`` resolved at *import*,
-so no amount of threading at the call site would have reached them.
-
-A source-level check rather than a behavioural one, because the property is about every call
-site including ones nobody has written yet. A new node that sends a registered prompt is
-exactly the case a behavioural test cannot cover.
-"""
+"""A prompt resolved without its selected variant still records the overriding hash. Checked at every call site,
+including ones not written yet."""
 
 from __future__ import annotations
 

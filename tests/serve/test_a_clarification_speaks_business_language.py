@@ -1,14 +1,7 @@
-"""``ask_user`` may not show a raw schema identifier to the human it is asking.
+"""``ask_user`` rejects a raw schema identifier before it pauses the turn.
 
-Shape rules ported from the downstream fork ``utkuai/detentai-fork``
-(``tests/serve/test_schema_term_guard.py``). What is ours is the integration, and it is the
-half a port can get expensively wrong: the rejection is returned **before** the latch is taken
-and before ``interrupt()``, so the rejected ``tool_use`` gets its ``ToolMessage`` on the same
-pass. A thread carrying a dangling ``tool_use`` is permanently unreplayable.
-
-Scoped to ``ask_user``. That a *refusal* may name a table is a recorded owner decision
-(``git-history:docs/analysis/adopting-the-downstream-fork-2026-08-19.md``); a question written
-for a reader to answer is the other surface.
+The rejection is a ``ToolMessage`` on the same pass, so the ``tool_use`` is not left dangling.
+A refusal may still name a table; a question for a person to answer may not.
 """
 
 from __future__ import annotations
@@ -23,8 +16,6 @@ from governed_bi.corpus.schema import TableAsset
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.schema_term_guard import find_schema_leak
 from governed_bi.serve.tools import build_tools
-
-# ── the shapes ─────────────────────────────────────────────────────────────────
 
 
 def test_the_actual_leaked_example_is_caught() -> None:
@@ -47,12 +38,7 @@ def test_a_camel_case_column_name_is_caught() -> None:
 
 
 def test_plain_business_language_is_not_flagged() -> None:
-    """The negative half, and the reason the guard is shape-based rather than corpus-based.
-
-    A column named ``status`` or ``name`` is an ordinary English word, so a guard comparing
-    against known physical names would refuse questions like these — which are exactly the
-    questions ``ask_user`` exists to ask.
-    """
+    """Shape-based, so an ordinary word like ``status`` is not refused as a column name."""
     for text in (
         "Should cancelled orders be excluded from total revenue?",
         "Does active mean transacted in the last 30 days?",
@@ -70,17 +56,9 @@ def test_every_text_is_checked_and_not_only_the_first() -> None:
 
 
 def test_a_camel_case_brand_name_still_trips_it() -> None:
-    """A known limitation, pinned rather than left to be rediscovered as a bug.
-
-    Shape detection cannot tell ``PurchasePrice`` from ``PowerKiosk`` — both are two
-    capitalised words with no space. The cost is one rephrase on the rare question naming a
-    compound-capitalised brand, never a wrong answer, and the two shapes that cannot occur in
-    English at all (dotted paths, snake_case) have no such mode.
-    """
+    """Two capitalised words with no space look like a column, so a brand name trips the guard."""
     assert find_schema_leak("Ask PowerKiosk what they would like to see") == "PowerKiosk"
 
-
-# ── wired into the tool ────────────────────────────────────────────────────────
 
 LEAKY = "does revenue mean payments.amount or line_items.unit_price?"
 
@@ -132,12 +110,7 @@ def _runtime(call_id: str) -> Any:
 
 
 def test_a_leaked_identifier_is_rejected_with_a_tool_reply_and_records_nothing() -> None:
-    """Retry, not record — and the retry is what the code supports.
-
-    The reply is what makes it safe: this ``tool_use`` is answered on the same pass, so nothing
-    is stranded. Recording instead would mean pausing first, which shows the reader the text the
-    guard exists to keep away from them, and then needing a channel for the result.
-    """
+    """The rejection is a tool reply on the same pass and writes no clarification state."""
     command = asyncio.run(
         _ask_user().coroutine(question=LEAKY, basis="data_definition", runtime=_runtime("c1"))
     )
@@ -151,13 +124,7 @@ def test_a_leaked_identifier_is_rejected_with_a_tool_reply_and_records_nothing()
 
 
 def test_a_rejected_question_does_not_consume_the_one_outstanding_slot() -> None:
-    """Placement, asserted where it is observable.
-
-    The guard sits **before** ``pending_clarification.append``. Put it after, and a rejected
-    question would hold the turn's only clarification slot for the rest of the node execution:
-    the next call would be told "this turn already has one" while no human had been asked
-    anything at all.
-    """
+    """The guard runs before the outstanding-question latch, so a rejection does not hold the slot."""
     ask = _ask_user()
     first = asyncio.run(
         ask.coroutine(question=LEAKY, basis="data_definition", runtime=_runtime("c1"))
@@ -172,12 +139,7 @@ def test_a_rejected_question_does_not_consume_the_one_outstanding_slot() -> None
 
 
 def test_a_plain_question_still_reaches_the_interrupt() -> None:
-    """The guard must not swallow the path it is guarding.
-
-    ``interrupt()`` outside a graph raises ``RuntimeError`` from LangGraph's config lookup, so
-    that raise *is* the pass condition: the call got past the guard to the line that pauses the
-    turn. Returning a ``Command`` here would mean an ordinary business question was refused.
-    """
+    """``interrupt()`` outside a graph raises, which is how a plain question is seen to get past the guard."""
     with pytest.raises(RuntimeError):
         asyncio.run(
             _ask_user().coroutine(

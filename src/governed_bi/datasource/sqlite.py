@@ -1,11 +1,5 @@
-"""SQLite connector adapter (dev path and the parcel C acceptance suite).
-
-**Classification is on SQLite's own result code, not on the message** (audit §9.2).
-``sqlite3.Error.sqlite_errorname`` (Python 3.11+) is this engine's SQLSTATE: a closed
-vocabulary the driver assigns, rather than a sentence it may reword. The prose regex it
-replaced misclassified two verified faults — *no such function* read as the database
-being unreachable, and ``SQLITE_READONLY`` (governance stopping a write) recorded as
-infrastructure being down, which hides a working control.
+"""Classify on ``sqlite_errorname``, not the message. Prose matching read "no such function"
+and ``SQLITE_READONLY`` (a refused write) as infrastructure.
 """
 
 from __future__ import annotations
@@ -26,31 +20,25 @@ __all__ = ["SqliteConnector"]
 
 _DEFAULT_MAX_ROWS = 200_000
 
-#: Result-code prefixes that mean **the store was unusable**, not the statement wrong.
-#:
-#: Prefixes because SQLite extends its primary codes (``SQLITE_IOERR_READ``,
-#: ``SQLITE_BUSY_SNAPSHOT``) and a new extended code must land on the same side as its base.
-#:
-#: Everything not listed classifies as a query fault, matching the Postgres adapter's
-#: statement path. Deliberately the safe direction: an unanticipated code degrades to "the
-#: statement was wrong", which is recoverable, where the reverse makes a real outage look
-#: like a model error (§9.1).
+#: Prefixes, so ``SQLITE_IOERR_READ`` stays with ``SQLITE_IOERR``. An unlisted code is a
+#: query fault: an unknown failure then reads as a bad statement, which can be retried,
+#: rather than an outage. A missing code on ``OperationalError`` is still infrastructure.
 _INFRASTRUCTURE_CODES: tuple[str, ...] = (
-    "SQLITE_BUSY",      # another writer holds the lock
-    "SQLITE_LOCKED",    # a table in this connection is locked
-    "SQLITE_IOERR",     # disk read/write failure
-    "SQLITE_CANTOPEN",  # the file could not be opened
-    "SQLITE_CORRUPT",   # the image is malformed
-    "SQLITE_NOTADB",    # not a database file
-    "SQLITE_FULL",      # the disk is full
-    "SQLITE_NOMEM",     # allocation failed
-    "SQLITE_PROTOCOL",  # locking protocol error
-    "SQLITE_INTERRUPT", # interrupted by sqlite3_interrupt
+    "SQLITE_BUSY",
+    "SQLITE_LOCKED",
+    "SQLITE_IOERR",
+    "SQLITE_CANTOPEN",
+    "SQLITE_CORRUPT",
+    "SQLITE_NOTADB",
+    "SQLITE_FULL",
+    "SQLITE_NOMEM",
+    "SQLITE_PROTOCOL",
+    "SQLITE_INTERRUPT",
 )
 
 
 class SqliteConnector:
-    """Read-only-ish SQLite access. ``PRAGMA query_only`` when the build supports it."""
+    """Opened ``mode=ro``. ``PRAGMA query_only`` is set when this build accepts it."""
 
     def __init__(self, path: str | Path, *, max_rows: int = _DEFAULT_MAX_ROWS) -> None:
         self._path = Path(path)
@@ -72,36 +60,15 @@ class SqliteConnector:
 
     @property
     def endpoint(self) -> dict[str, Any]:
-        """Which database this is. A file, so there is no host, port or credential.
-
-        Same shape as :attr:`PostgresConnector.endpoint` so a caller renders one thing; the
-        file name rather than the full path, because the absolute path is this machine's
-        directory layout and says nothing a reader of the page needs.
+        """File name only, not the absolute path. Keys match ``PostgresConnector.endpoint``.
         """
         return {"database": self._path.name}
 
     def _connect(self) -> sqlite3.Connection:
-        """Open a connection for **this call**. Never cached across calls.
-
-        A memoized ``self._conn`` used to survive from whichever call first populated it,
-        and ``sqlite3`` enforces thread affinity on the object it returns: a later call from
-        a different thread raised ``ProgrammingError: SQLite objects created in a thread can
-        only be used in that same thread``. LangGraph's node executor runs a tool call (e.g.
-        ``run_query``) in its own worker thread per invocation, so the second call after
-        construction — from any caller on any thread but the first — was the common case, not
-        an edge case, and it crashed instead of erroring cleanly (RESUME.md, 2026-08-06: two
-        independent 15+-minute hangs, both root-caused here).
-
-        A read-only local-file connection is cheap to open, which is exactly what makes
-        opening a fresh one per call the fix rather than a workaround: the alternative is
-        either a lock (serializing every call through one thread) or ``check_same_thread=
-        False`` (silently permitting concurrent access sqlite3's own docs call unsafe).
-        Neither buys anything a fresh connection does not already have for free here.
-
-        Kept as an instance method (rather than a bare function) for ``__enter__``/
-        ``__exit__``, which still track one connection across the `with` block's lifetime —
-        that scope is single-threaded by construction, so caching there was never the
-        problem.
+        """A new connection per call, unless a ``with`` block already holds ``self._conn``.
+        ``sqlite3`` handles are thread-affine, and LangGraph runs ``run_query`` on a worker,
+        so a handle kept across calls raises ``ProgrammingError``. A lock would serialise
+        every call, and ``check_same_thread=False`` is unsafe. A read-only file open is cheap.
         """
         if self._conn is not None:
             return self._conn
@@ -122,9 +89,7 @@ class SqliteConnector:
     ) -> tuple[Sequence[str], Sequence[tuple[Any, ...]], bool]:
         cap = self._max_rows if max_rows is None else max_rows
         conn = self._connect()
-        # Whether *this call* opened `conn` (and so owes closing it) or is borrowing the one
-        # a `with` block cached. `self._conn` is unread and unwritten anywhere else between
-        # here and the check, so this is exactly "was there already a cached connection".
+        # This call opened `conn` when no `with` block had cached one, and then must close it.
         owns_conn = self._conn is None
         try:
             cur = conn.execute(sql)
@@ -141,30 +106,20 @@ class SqliteConnector:
         return columns, rows, truncated
 
     def _raise_classified(self, err: sqlite3.Error) -> None:
-        """Map a driver fault by result code. One classifier, so both callers agree.
-
-        ``introspect`` must route through here too: letting ``sqlite3.Error`` escape raw
-        leaves a failure neither a query fault nor infrastructure, which the Postgres
-        adapter's ``test_introspection_classifies_its_own_failures`` forbids.
+        """One map for ``execute`` and ``introspect``. A raw ``sqlite3.Error`` is neither fault.
         """
         code = getattr(err, "sqlite_errorname", None)
         if isinstance(code, str) and code.startswith(_INFRASTRUCTURE_CODES):
             raise ConnectionError(str(err), sqlstate=code) from err
         if code is None and isinstance(err, sqlite3.OperationalError):
-            # No result code: an older interpreter, or an error raised before a statement
-            # was prepared. ``OperationalError`` without one is the DB-API's "not under the
-            # programmer's control", the same reading the Postgres adapter takes.
+            # No code: an older interpreter, or the error was raised before prepare.
+            # ``OperationalError`` then matches Postgres: not the caller's fault.
             raise ConnectionError(str(err)) from err
         raise QueryError(str(err), sqlstate=code if isinstance(code, str) else None) from err
 
     def introspect(self) -> Introspection:
-        # Classified like ``execute``: an unclassified failure is neither a query fault nor
-        # infrastructure, so nothing downstream can decide whether to retry.
-        #
-        # Both bindings stay *outside* the `try`, where upstream/main has the `_connect()`
-        # call inside it: this fork's `finally` reads them, and a `_connect()` that raised
-        # would leave them unbound and turn the cleanup into a `NameError` masking the real
-        # error. `_connect()` already raises `ConnectionError`, so nothing is unclassified.
+        # `conn` and `owns_conn` stay outside `try`. If `_connect()` raises, `finally`
+        # must not turn that into a `NameError` by reading names that were never bound.
         conn = self._connect()
         owns_conn = self._conn is None  # see execute()'s comment
         try:
@@ -188,7 +143,6 @@ class SqliteConnector:
                 )
                 tables.append(IntrospectedTable(physical_name=name, columns=cols))
                 for row in conn.execute(f"PRAGMA foreign_key_list({_quote(name)})"):
-                    # id, seq, table, from, to, on_update, on_delete, match
                     fks.append(
                         ForeignKeyInfo(
                             from_table=name,
@@ -215,11 +169,7 @@ class SqliteConnector:
                 return table
         raise QueryError(f"no such table: {name}")
 
-    # ``sample_values`` was here and is gone; see ``ports.Connector``. This adapter quoted
-    # correctly and its Postgres sibling did not: one port method, two implementations, and
-    # the security property held in only one of them.
-
 
 def _quote(name: str) -> str:
-    """A SQLite identifier, quote-doubled. Only for ``PRAGMA``, which takes no parameters."""
+    """Quote-doubled. ``PRAGMA`` takes no parameters, so the identifier cannot be bound."""
     return '"' + name.replace('"', '""') + '"'

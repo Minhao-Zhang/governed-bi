@@ -1,28 +1,4 @@
-"""A turn that dies with a tool call pending must not take the whole thread with it.
-
-**The defect.** ``agent_core_node`` commits the last *committed* values frame's new messages to
-the outer ``messages`` channel whatever happened — and when the loop died between the model
-asking for a tool and the tools super-step yielding a frame, that frame is an ``AIMessage``
-carrying ``tool_calls`` and no ``ToolMessage``. The next turn's inbound **is** that channel, so
-the dangling ``tool_use`` is replayed at the head of every later turn, forever. The gateway
-rejects a history with an unanswered ``tool_use``, so the casualty is the conversation, not the turn.
-
-This repo has already paid for it once by the other route in: thread ``01a01bb8`` (2026-08-19),
-12 ``tool_use`` against 11 ``tool_result``, every subsequent turn raising ``ValidationException``
-before reaching a single attempt. ``tests/serve/test_the_attempt_cap_ends_the_turn.py`` holds
-that route — the attempt cap — and until this file the invariant was enforced *only* there.
-What makes the routes below worse is that the damaging turn writes an ordinary ``crashed`` and
-reads like any other failure.
-
-Two paths reach it, and each has a test here: the ``agent_node_timeout_s`` wall (a live
-production setting) and any exception out of the nested agent with a call pending.
-
-**And the one thing the repair must not do.** A turn paused at ``interrupt()`` has an unanswered
-``tool_use`` *by design*; answering it would break resume, which is the feature the clarification
-surface exists for. Today that is structural — ``_run`` re-raises ``GraphInterrupt`` and the node
-calls it inside no ``try``, so a pause never reaches the write — and the last two tests are what
-would notice a refactor that catches ``GraphInterrupt`` in the node and turns this fix
-into a resume-breaker.
+"""A dying loop must answer a pending tool call, or the next turn replays it.
 """
 
 from __future__ import annotations
@@ -119,12 +95,7 @@ def _config(model: Any) -> dict[str, Any]:
 
 
 def _dangling(messages: Any) -> dict[str, str]:
-    """``{tool_call_id: tool name}`` for every ``tool_use`` nothing answered.
-
-    The same computation ``test_the_attempt_cap_ends_the_turn`` makes, and the reason both files
-    make it: this set being non-empty is not a cosmetic defect in a message list, it is a
-    conversation that cannot be replayed.
-    """
+    """``{tool_call_id: tool name}`` for every ``tool_use`` nothing answered."""
     asked = {
         str(call["id"]): str(call.get("name") or "")
         for message in messages or ()
@@ -144,17 +115,10 @@ def _turn(model: Any) -> dict[str, Any]:
     return asyncio.run(agent_core_node(_state(), _config(model)))
 
 
-# ── path 1: the soft wall fires with a tool call pending ──────────────────────────────
 
 
 class _SlowModel(ScriptedChatModel):
-    """A model call slower than the wall, so the wall fires on the frame after it.
-
-    ``agent_node_timeout_s`` is checked **between** frames (``_run`` says why it must be), so the
-    check that ends this turn is the one after the post-model frame has been consumed and before
-    the tools super-step yields anything. That window — model has asked, tools have not answered
-    — is the whole defect, and it is reachable from a live production setting.
-    """
+    """A model call slower than the wall, so the wall fires on the frame after it."""
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[no-untyped-def]
         time.sleep(0.4)
@@ -184,12 +148,7 @@ def test_a_timeout_between_the_ask_and_the_tool_answers_the_pending_call(
 
 
 def test_both_calls_of_one_stranded_batch_are_answered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two calls to the *same* tool in one message — the shape that cost thread ``01a01bb8``.
-
-    The repair keys on whether a call was answered, never on the tool's name: an earlier version
-    filtered by name and looked straight past the sibling that shared it. One unanswered id is
-    as fatal as twelve.
-    """
+    """Two calls to the *same* tool in one message — the shape that cost thread ``01a01bb8``."""
     monkeypatch.setenv("GOVERNED_BI_AGENT_NODE_TIMEOUT_S", "0.05")
     out = _turn(_SlowModel(responses=[_ask_user("c1", "c2")]))
 
@@ -200,21 +159,12 @@ def test_both_calls_of_one_stranded_batch_are_answered(monkeypatch: pytest.Monke
     )
 
 
-# ── path 2: an exception out of the nested agent, with the call pending ───────────────
 
 
 def test_a_wiring_failure_raised_out_of_a_tool_answers_the_pending_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``GovernanceUsageError`` is the production instance, and it is re-raised on purpose.
-
-    ``serve/tools.py``'s ``run_query`` converts an ordinary tool exception into a reply and a
-    ledger row, but re-raises this one — a security parameter that was never wired up (G1) must
-    not come back as an error string that reads like the tool failing on the model's input. So it
-    leaves the nested agent as an exception with the ``tool_use`` still pending. A
-    ``GraphRecursionError`` — raised by exploration tools that ``_CapEndsTheTurn`` does not count
-    — arrives at the same place by the same route.
-    """
+    """``GovernanceUsageError`` is the production instance, and it is re-raised on purpose."""
     from governed_bi.serve import fetch
 
     def _unwired(*_a: Any, **_k: Any) -> tuple[str, dict[str, Any]]:
@@ -239,18 +189,10 @@ def _paused(graph: Any, model: Any) -> dict[str, Any]:
 
 
 
-# ── the pause, which must be left exactly as it is ───────────────────────────────────
 
 
 def test_a_paused_turn_never_reaches_the_repair(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The invariant stated as a structural fact rather than as a comment.
-
-    ``_run`` re-raises ``GraphInterrupt`` untouched and ``agent_core_node`` calls it inside no
-    ``try``, so a pause propagates out of the node and the write that seals stranded calls is
-    never reached. This asserts that directly: a refactor that catches ``GraphInterrupt`` in the
-    node would answer the ``ask_user`` call the paused turn is *waiting* on, and resume would
-    break with nothing else in the suite objecting.
-    """
+    """The invariant stated as a structural fact rather than as a comment."""
     calls: list[Any] = []
     original = agent_core._sealed
 
@@ -287,14 +229,7 @@ def test_a_resume_still_gets_its_answer() -> None:
 
 
 def test_a_pause_returned_as_a_frame_is_left_alone() -> None:
-    """The configuration where the pause does *not* raise, measured.
-
-    With **no checkpointer** — the eval and CLI shape — the nested Pregel ends the stream instead
-    of re-raising, and returns the pause in the frame as ``__interrupt__`` beside the pending
-    ``tool_use``. So ``_sealed`` really is reached with a legitimate pause in hand, and the frame
-    saying a pause is pending is what stops it. Nothing is lost by not sealing there: without a
-    saver the state does not outlive the invocation, so no later turn replays it.
-    """
+    """The configuration where the pause does *not* raise, measured."""
     out = _turn(ScriptedChatModel(responses=[_ask_user("c1"), AIMessage("ok: 2020")]))
 
     replies = [m for m in out["messages"] if str(getattr(m, "type", "")) == "tool"]

@@ -117,7 +117,7 @@ def _dsn() -> str:
 
 def _rows(rng: random.Random) -> dict[str, list[tuple]]:
     """The data. Deterministic under a fixed seed, because a demo whose row counts move
-    between runs cannot be used to check whether an answer is right."""
+    between runs cannot check whether an answer is right."""
     employees: list[tuple] = []
     for i in range(1, 13):
         region = 1 + (i - 1) % len(REGIONS)

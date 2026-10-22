@@ -1,10 +1,4 @@
-"""``pool.map`` yields in input order, so a hung provider request on question 1 blocks question
-2's already-finished row from reaching the crash-safe writer.
-
-RyanChenJung/governed-bi-utkuai@12c3e15 hit this as an apparent dead run and worked around it
-with a supervisor script rather than a fix. The returned list must stay ordered -- callers index
-it -- but the writer must see a row the moment that row is done, not when its predecessor is.
-"""
+"""The returned list stays ordered, but the writer must see a row when that row finishes."""
 
 from __future__ import annotations
 
@@ -16,27 +10,7 @@ import pytest
 def test_a_later_question_reaches_on_row_before_an_earlier_slow_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pins the ``as_completed`` fix. Under ``pool.map``, ``on_row`` fires in *input* order, so
-    the slow question's row (index 0) reaches the writer before the fast question's row (index
-    1) even though the fast one finishes first.
-
-    **Two events, and the second one is why this test is not flaky.** Ordering the *work* is
-    not enough: ``fast_ready`` only guarantees the slow item returns after the fast item has,
-    and by the time the main thread starts consuming, both futures can already be done --
-    ``as_completed`` then yields them in whatever order it finds them, so ``seen`` came out
-    ``["slow", "fast"]`` on a green tree. Measured at roughly 1 run in 5 locally and seen on CI
-    on 2026-09-21.
-
-    So ``fast_written`` closes the loop causally: the slow item does not return until
-    ``on_row`` has *already been called* for the fast row. There is no window left in which
-    the writer can see them the other way round.
-
-    It still fails against the defect it pins, and fails saying so: under ``pool.map`` nothing
-    is written until every item returns, so the slow item waits out its timeout and the
-    assertion below names the reason. A slow failure, rather than an intermittent one.
-
-    ``workers=2`` is required -- with a single worker the slow item would wait on an event only
-    the never-started fast item can set, and the test would hang forever without the timeout."""
+    """The slow item returns only after ``on_row`` has already run for the fast row."""
     from governed_bi.eval import harness
 
     seen: list[str] = []

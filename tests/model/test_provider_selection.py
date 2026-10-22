@@ -1,7 +1,4 @@
-"""The OpenAI gateway spells effort, timeout and retries in one place.
-
-Call sites pass a surface and an intent. This module is what turns that into the
-client constructor, so a second spelling at a call site cannot drift.
+"""One spelling of effort, timeout and retries, so a call site cannot grow a second one.
 """
 
 from __future__ import annotations

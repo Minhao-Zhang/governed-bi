@@ -1,15 +1,4 @@
-"""The hit / pulled-in split in the rendered context, and what it is allowed to cost.
-
-``resolve`` reaches 66–75 assets by reference closure on a real turn while the question
-hits under ten, and ``retrieved.attributions`` / ``retrieved.pulled_in`` are the only
-record of which is which. If those two ever render the same way again the prompt goes
-back to being a blob, and nothing else in the suite would notice — the block would still
-hash, still contain every id, and still be under budget. Hence this file.
-
-Measured on the gold semantic layer (5 schemas, 923 assets, ``route_top_n = 1``) the
-split is worth 15–27 % of the delivered characters; the ``## Context`` section alone
-falls 24–40 %. Those numbers are not asserted here: a threshold on them would be a
-number nobody measured on the corpus the test builds.
+"""Hits and pulled-in assets render differently. The record is the only split between them.
 """
 
 from __future__ import annotations
@@ -111,12 +100,7 @@ def _corpus() -> dict[str, Any]:
 
 
 def _retrieved() -> dict[str, Any]:
-    """``shop.orders``, its ``customer_id`` and the join are hits; everything else closure.
-
-    The join is in **both** containers, which is not contrived: ``connect_node`` ends with
-    ``pulled_in.setdefault(join_id, "connect")`` over ``complete_joins``, so every join the
-    question hits is added to ``pulled_in`` after the fact.
-    """
+    """``shop.orders``, its ``customer_id`` and the join are hits; everything else closure."""
     hit = {"asset_id": "shop.orders", "asset_type": "table", "score": 0.9}
     return {
         "by_type": {
@@ -181,12 +165,7 @@ def test_a_pulled_in_asset_is_still_present_and_namable() -> None:
 
 
 def test_pulled_in_and_hit_lines_are_visibly_different() -> None:
-    """Fail loudly if the two forms converge, in either direction.
-
-    Asserting only "the body is absent" would still pass if someone made *hits* terse, or
-    made pulled-in assets carry every descriptive field again. Both directions are checked
-    against fields the two assets both have.
-    """
+    """Fail loudly if the two forms converge, in either direction."""
     block = _render()
 
     assert "table shop.orders grain=one row per order rows=4321" in block, (
@@ -200,11 +179,7 @@ def test_pulled_in_and_hit_lines_are_visibly_different() -> None:
 
 
 def test_a_hit_that_is_also_pulled_in_is_a_hit() -> None:
-    """``complete_joins`` re-marks every hit join as ``pulled_in``; that must not demote it.
-
-    ``pulled_in`` used to win this comparison, so on the gold layer 2 of 2 and 3 of 3 join
-    hits lost their bodies to a bookkeeping ``setdefault`` in ``connect_node``.
-    """
+    """``complete_joins`` re-marks every hit join as ``pulled_in``; that must not demote it."""
     retrieved = _retrieved()
     join_id = "join_shop_orders_customers_abc123"
     assert join_id in retrieved["selected"] and join_id in retrieved["pulled_in"]
@@ -235,17 +210,7 @@ def test_context_and_caveats_spell_a_column_the_same_way() -> None:
 
 
 def test_a_slugged_table_renders_the_key_the_tools_accept() -> None:
-    """``airline."Air Carriers"`` is what SQL needs; ``airline.Air_Carriers_66c534`` is what
-    every tool needs, and only the first was ever printed.
-
-    ``slug()`` exists because an id becomes a filename and ``"Air Carriers".yaml`` is illegal
-    on Windows (``corpus/identity.py``), so the divergence is deliberate and permanent. What
-    was missing is that the prompt only ever saw one side of it: ``context.py`` renders
-    ``physical_name`` and ``bounds.may_inspect_schema`` tests membership of ``retrieved_tables``,
-    which holds ids. Every call on the rendered spelling returned ``OUT_OF_SCOPE_MESSAGE`` —
-    which ``bounds.py`` makes deliberately indistinguishable from "not retrieved_tables", so the model
-    could not tell a typo from a permission error and had no way to recover.
-    """
+    """A slugged table renders the tool key, not only the SQL quoting of its name."""
     from governed_bi.corpus.schema import ColumnAsset, TableAsset
     from governed_bi.serve.context import render_context
 
@@ -318,12 +283,7 @@ def test_a_table_whose_key_is_its_name_renders_exactly_as_before() -> None:
 
 
 def test_the_analyst_prompt_names_the_id_convention_and_every_tool() -> None:
-    """The rendered ``id=`` is useless if nothing tells the model what it is for.
-
-    v1 named two of the five bound tools and then said *"Prefer run_query"*, which is advice
-    against calling the three that could have told it a column's value vocabulary — the
-    information the corpus does not carry (0 of 5 947 columns have ``sample_values``).
-    """
+    """The rendered ``id=`` is useless if nothing tells the model what it is for."""
     from governed_bi.registry.prompts import PROMPT_REGISTRY, prompt_text
 
     text = prompt_text("analyst")
@@ -336,13 +296,7 @@ def test_the_analyst_prompt_names_the_id_convention_and_every_tool() -> None:
 
 
 def test_context_eviction_reports_what_it_dropped() -> None:
-    """``_assemble_and_evict`` dropped bodies and whole tables with no signal anywhere.
-
-    No return value, no state field, no record field, no test — so a gold table that was routed,
-    retrieved, retrieved_tables and then evicted for space was indistinguishable in every artifact from
-    one that was rendered. That blind spot sits exactly between "table selection" and
-    "generation", the two stages any attribution of the remaining loss has to separate.
-    """
+    """``_assemble_and_evict`` dropped bodies and whole tables with no signal anywhere."""
     from governed_bi.corpus.schema import TableAsset
     from governed_bi.serve.context import render_context
 

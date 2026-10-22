@@ -1,7 +1,6 @@
-"""What ``inspect_schema`` and ``may_sample`` show, for each ``[[probe]]``.
+"""Disclosure probes call ``serve/fetch.py``, so the runner lives in ``eval/``.
 
-The runner lives in ``eval/`` because it calls ``serve/fetch.py``. ``govern/``
-cannot import ``serve/``.
+``govern/`` cannot import ``serve/``.
 """
 
 from __future__ import annotations
@@ -21,8 +20,6 @@ PROBE_SURFACES: frozenset[str] = frozenset({"inspect_schema", "may_sample"})
 
 @dataclass(frozen=True, slots=True)
 class ProbeResult:
-    """One probe and what the tool showed."""
-
     id: str
     kind: str
     surface: str
@@ -36,7 +33,6 @@ class ProbeResult:
 
 
 def _disclosure_surfaces(world: AdversarialWorld) -> dict[str, object]:
-    """Schema text and sample permission, through the production functions."""
     from governed_bi.govern.bounds import ToolBounds
     from governed_bi.serve.fetch import inspect_schema
 
@@ -81,7 +77,6 @@ def _run_probe(probe: dict, surfaces: dict) -> ProbeResult:
 
 
 def run_disclosure_probes() -> tuple[ProbeResult, ...]:
-    """Every ``[[probe]]``, on the same world the cases read."""
     data = tomllib.loads(SUITE_FILE.read_text(encoding="utf-8"))
     probes = list(data.get("probe") or ())
     if not probes:

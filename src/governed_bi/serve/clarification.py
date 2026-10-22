@@ -1,9 +1,7 @@
-"""Shared ask_user interrupt / resume payloads (ADR 0014 thread state).
+"""One spelling of the ``ask_user`` interrupt and resume payloads.
 
-The interrupt value, the resume maps the UI already sends, and the row written
-onto ``ServeState.clarifications`` after a resume. Callers that
-invent a second spelling of ``basis`` or ``resolution`` will desynchronise the
-pending queue from the live prompt.
+A second spelling of ``basis`` or ``resolution`` desynchronises the pending queue from the
+live prompt.
 """
 
 from __future__ import annotations
@@ -60,7 +58,6 @@ MALFORMED_CLOSED_TEXT = (
 
 
 def parse_basis(raw: Any) -> str | None:
-    """``basis`` if it is one of the two declared values, else ``None``."""
     value = str(raw or "").strip()
     return value if value in CLARIFICATION_BASES else None
 
@@ -83,37 +80,10 @@ def interrupt_payload(
 
 
 def parse_resume(resume: Any, *, why: str, expected_id: str | None = None) -> tuple[str, str, bool]:
-    """Human reply → ``(text, resolution, fail_closed)``.
+    """Human reply to ``(text, resolution, fail_closed)``. Unreadable payloads fail closed.
 
-    Resume maps the live UI already sends:
-
-    * ``{answer}`` / ``{choice_id}`` / a bare non-empty string — proceed, ``answered``
-    * ``{declined: true}`` — fail closed
-    * ``{deferred: true}`` — proceed under ``why``; row written deferred
-    * ``{cancelled: true}`` — ranking only, same as decline (fail closed)
-
-    Definition "cancel" is UI-only and never reaches here: the client does not resume.
-
-    **Anything else fails closed, and did not until 2026-09-18.** The unrecognised shapes
-    fell through to ``("", "answered", False)`` and ``(str(resume), "answered", False)``, so:
-
-    * ``{}`` told the model the analyst's answer was the empty string
-    * ``None`` told it the answer was the literal ``"None"``
-    * ``123`` and ``[1, 2, 3]`` became ``"123"`` and ``"[1, 2, 3]"``
-
-    and each was written ``resolution: "answered"`` in the record, next to the real ones.
-    The turn then proceeded to ``run_query`` on the strength of a reply nobody gave. The
-    ``declined`` branch above was already fail-closed, so the two halves of this function
-    disagreed about what an uninterpretable payload means; ``malformed`` is the same closure
-    with its own name, because "the analyst declined" and "the transport sent something this
-    cannot read" are different facts and the record has to keep them apart.
-
-    ``expected_id`` is checked **only when the payload names one**. The live client sends
-    ``{clarification_id, answer}`` (``ui/components/chat/clarification-prompt.tsx``), but the
-    documented bare-string and flag shapes do not, and requiring an id would refuse the
-    protocol's own vocabulary. A mismatch is a resume aimed at a question that is no longer
-    the outstanding one — a stale tab, a replayed request — and answering the live question
-    with it is how one clarification's answer lands on another.
+    ``malformed`` is not ``declined``: a transport fault is not a reader's decision.
+    Check ``expected_id`` only when named; a mismatch would answer the live question.
     """
     named = resume.get("clarification_id") if isinstance(resume, Mapping) else None
     if expected_id is not None and named is not None and str(named) != expected_id:

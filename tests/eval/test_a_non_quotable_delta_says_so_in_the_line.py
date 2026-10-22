@@ -1,25 +1,4 @@
-"""A rendered comparison carries its own quotability, because a copied line leaves the flag.
-
-``report.py`` renders the paired McNemar whenever the population is non-empty, check or no
-check, and that is deliberate — the comment beside it says computing it for diagnostics
-whatever ``quotable`` says is that line's job, and it is right. ``summary["comparison"]
-["quotable"]`` carries the result one key away.
-
-One key away is the problem. The rendered line is the thing a person copies into a message,
-a commit or a doc, and the boolean does not travel with it. **Every real pair in
-``runs/eval/`` is non-quotable today** — ``settings_comparable`` returns ``cannot_evaluate``
-because ~50 of the 51 settings that affect results are absent from those rows — so every line that
-function has ever produced was a diagnostic that read exactly like a result:
-
-    v4 - v3_fold: 0.0118 (p=0.1812, n=1351, discordant=126, MDE=0.0233)
-
-The check was not removed and the render was not suppressed. Only the string changed.
-
-``McNemarResult.render`` itself is untouched: it is a statement about the statistic, and a
-check result is not part of the arithmetic. The annotation is added where the check's answer
-is known.
-"""
-
+"""A copied McNemar line leaves the quotability flag behind, so the line itself says when it is not quotable."""
 from __future__ import annotations
 
 from governed_bi.eval.report import _rendered_mcnemar
@@ -60,12 +39,7 @@ def test_a_non_quotable_delta_carries_the_result_in_the_string() -> None:
 
 
 def test_the_real_pair_on_disk_is_marked() -> None:
-    """The case this exists for, through ``summarise`` rather than the helper.
-
-    ``configs.toml`` declares ``v4.compare_to = "v3_fold"``, so this pair is computed on every
-    report. It is non-quotable and its delta is null (p=0.18) — the two facts a reader needs
-    together, and until now only one of them travelled with the number.
-    """
+    """The shipped pair is non-quotable and its delta is null; both have to travel with the number."""
     import json
     import pathlib
 

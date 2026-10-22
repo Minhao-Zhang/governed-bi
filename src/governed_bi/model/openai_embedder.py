@@ -1,26 +1,6 @@
-"""``text-embedding-3-large`` through the OpenAI SDK directly.
-
-**Not a wrapper over ``langchain-openai``**, whose ``Embeddings`` lacks ``model`` and
-``dimensions`` — the two facts this port exists to expose (the same reason ``ChatModel``
-was rejected as a port, ``ports.py``'s no-single-adapter rule).
-
-**``model`` reports what the provider served, not what was requested.** A provider may
-serve an alias, a dated snapshot or a silent upgrade, and ``embedding_model`` is a
-setting that affects results, so recording the request would let two runs on different snapshots
-compare as one (v1's reasoning-effort incident: an unrecorded live config field moved the
-baseline config past that ladder's own detection threshold — sizes retired, mechanism is not).
-``ports.Embedder.embed``'s ordering rule also requires ``model`` to be stable for the object's
-lifetime, which rules out returning the request and replacing it after the first call —
-that changes identity under a cache key already formed. One memoised probe holds both.
-
-**Cost shape.** One request per :attr:`~.embedder.BaseEmbedder.batch_size` inputs, plus at
-most one one-token probe per object (:data:`~.embedder.PROBE_TEXT` is ``"probe"``, a single
-``cl100k_base`` token), and only when ``model`` or an unspecified ``dimensions`` is read
-before the first ``embed``. No caching here; ``retrieve.index`` owns that.
-
-**A rate limit or a dead endpoint raises** (``ports.Embedder``'s raise-on-rate-limit rule) — a rate-limited embedder
-once published a schema-pick accuracy that rose sharply when re-measured with quota free
-(both figures and the gap between them retired; see ``register/citations.py``).
+"""SDK embeddings, not ``langchain-openai``: its ``Embeddings`` type has no ``model`` or ``dimensions``.
+``model`` is the served name, not the request. An alias or a snapshot would otherwise share a cache key,
+and renaming after the first call would change identity under a key already formed. One probe, then stable.
 """
 
 from __future__ import annotations
@@ -33,24 +13,16 @@ from .embedder import PROBE_TEXT, BaseEmbedder
 
 __all__ = ["OPENAI_API_KEY_VAR", "OPENAI_EMBEDDING_MODEL", "OpenAIEmbedder"]
 
-#: The environment variable, by **name**. Never log, print or record its value.
+#: The variable's name. Never log, print or record its value.
 OPENAI_API_KEY_VAR = "OPENAI_API_KEY"
 
-#: Every ladder embeds through this model. Changing it changes the vector space: ``cache_key``
-#: is ``model|dimensions|text``, so no cached row carries over and no retrieval figure measured
-#: before the change is comparable to one measured after. The cost half of this note used to
-#: say "add a ``Price`` row" -- there is nowhere to add one, ``measure/price.py`` is deleted and
-#: USD is the provider's number now.
+#: Changing this id changes the vector space. ``cache_key`` is ``model|dimensions|text``,
+#: so a row from another model must not be reused.
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
 
 
 class OpenAIEmbedder(BaseEmbedder):
-    """``text-embedding-3-large`` (or any OpenAI embedding model) as an ``Embedder``.
-
-    ``dimensions`` is passed through to the API (3-large supports Matryoshka truncation).
-    The returned width and the declared width are tracked as two facts, so a ``dimensions``
-    request the provider ignored cannot pass unnoticed into a cache key. ``None`` means the
-    native width, learned from a response.
+    """Requested and served widths are separate, so an ignored ``dimensions`` cannot enter a cache key.
     """
 
     def __init__(
@@ -70,54 +42,38 @@ class OpenAIEmbedder(BaseEmbedder):
         self._served_model: str | None = None
         self._served_width: int | None = None
         self._client = client
-        # The embedder is the second provider surface: same 429 exposure, same critical path
-        # (`accept` embeds the question before any channel runs), so a "global retry limit" that
-        # skipped it would be false. `None` keeps the SDK defaults; `graph_app` passes the settings.
+        # `None` keeps the SDK default. Passing `max_retries=None` sets None and disables retries.
+        # A retry cap that skipped this call would miss the embed, which runs before any channel.
         self._max_retries = None if max_retries is None else int(max_retries)
         self._timeout = None if timeout is None else float(timeout)
         if batch_size is not None:
             self.batch_size = int(batch_size)
 
-    # ── identity ──────────────────────────────────────────────────────────────
-
     @property
     def requested_model(self) -> str:
-        """The name this object was constructed with. **Not** the cache-key identity."""
         return self._requested_model
 
     @property
     def served_model(self) -> str | None:
-        """What the provider last reported, or ``None`` if no response has been seen.
-
-        Deliberately does **not** probe: ``None`` on a fresh object is the only observable
-        difference between reading the response and echoing the request while the provider
-        happens to serve the name it was asked for.
+        """Last served name, or ``None`` before any response. Does not probe.
+        ``None`` on a fresh object is the only sign the name was read, not echoed.
         """
         return self._served_model
 
     @property
     def model(self) -> str:
-        """``openai:<served model>``. Provider-qualified, per ``ports.Embedder.model``."""
         if self._served_model is None:
             self._probe()
         return f"openai:{self._served_model}"
 
     @property
     def dimensions(self) -> int:
-        """The declared width: the requested one when given, else the served one.
-
-        A requested width is returned without a probe — it *is* what this object carries
-        into every cache key. Whether the provider honoured it is checked on the first real
-        response, in :meth:`_record_identity`.
-        """
         if self._requested_dimensions is not None:
             return self._requested_dimensions
         if self._served_width is None:
             self._probe()
         assert self._served_width is not None
         return self._served_width
-
-    # ── the provider ──────────────────────────────────────────────────────────
 
     def _openai_client(self) -> Any:
         if self._client is None:
@@ -131,8 +87,6 @@ class OpenAIEmbedder(BaseEmbedder):
                 )
             from openai import OpenAI
 
-            # Only what was configured: passing `max_retries=None` to the SDK sets it to None
-            # rather than leaving the default, turning "unconfigured" into "no retries".
             options: dict[str, Any] = {}
             if self._max_retries is not None:
                 options["max_retries"] = self._max_retries
@@ -142,7 +96,6 @@ class OpenAIEmbedder(BaseEmbedder):
         return self._client
 
     def _probe(self) -> None:
-        """Learn the served model and native width from one one-token request."""
         self._call([PROBE_TEXT])
 
     def _record_identity(self, served: str, width: int) -> None:
@@ -174,9 +127,8 @@ class OpenAIEmbedder(BaseEmbedder):
 
         response = self._openai_client().embeddings.create(**kwargs)
 
-        # Sorted by the provider's own ``index`` rather than trusted to arrive in order. The
-        # API documents order preservation, but a reorder is silent by construction — every
-        # asset takes another asset's vector and nothing disagrees (``ports.Embedder.embed``'s ordering rule).
+        # Sorted by the provider's ``index``. Documented order can still arrive shuffled,
+        # and a shuffle gives every input another input's vector with nothing to disagree.
         items = sorted(response.data, key=lambda item: int(item.index))
         if len(items) != len(texts):
             raise ValueError(

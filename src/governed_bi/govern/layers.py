@@ -1,10 +1,5 @@
-"""Layer stack, result, and rule table (ADR 0006 §1).
-
-Ordered ``IntEnum``: reaching layer *N* proves ``1..N-1`` passed.
-``failed_layer is None`` means passed and nothing else. ``failed_layer`` is
-derived from the rule id via :data:`RULES` (except :data:`GUARDRAIL_ERROR`).
-``layers_evaluated`` records what ran; its last element is the failing layer.
-"""
+"""Layer stack and rule table. See ADR 0006. Reaching layer N proves 1..N-1 passed. ``failed_layer is None`` means
+passed. The layer comes from :data:`RULES`, except :data:`GUARDRAIL_ERROR`."""
 
 from __future__ import annotations
 
@@ -29,104 +24,79 @@ __all__ = [
 
 
 class Layer(IntEnum):
-    """The six layers, in evaluation order. No fractional members, ever."""
+    """The six layers, in evaluation order. No fractional members."""
 
-    #: A single read statement that parses under the dialect.
     PARSE = 1
-    #: No write, DDL, transaction-control or locking construct anywhere.
     NO_WRITE = 2
-    #: Every function call is permitted, and no argument is a whole row (§2).
     FUNCTIONS = 3
-    #: Every reference binds to exactly one in-scope source (§4).
     BINDING = 4
-    #: Every bound column is allowed, not excluded and not suspect: three rule ids.
     COLUMNS = 5
-    #: Every base table is in the retrieved tables.
     TABLES = 6
 
 
 class CheckResult(TypedDict):
-    """What ``check()`` returns. ``failed_layer is None`` ⟺ ``passed``."""
+    """``failed_layer is None`` if and only if ``passed``."""
 
     passed: bool
     failed_layer: Layer | None
     layers_evaluated: list[Layer]
     #: A rule id from :data:`RULES`, or :data:`PASSED`, or :data:`GUARDRAIL_ERROR`.
     reason_code: str
-    #: Free text for the operator and the ledger's dropped tier. Never surfaced.
+    #: Operator text. Never surfaced.
     detail: str
-    #: Every reference → the source it bound to. The single input to the column and
-    #: table layers, so the two cannot disagree about what a reference means.
+    #: Every reference to the source it bound to. The only input of the column and table
+    #: layers, so the two cannot disagree about what a reference means.
     bound: dict[str, str]
 
 
-#: The reason code of a passing result. A closed vocabulary needs a member for
-#: "nothing objected", or the field is empty on the path a reader checks first.
+#: A closed vocabulary needs a member for "nothing objected", or the passing path is blank.
 PASSED = "passed"
 
-#: An exception was swallowed inside ``check()``. **Not** in :data:`RULES`: its layer
-#: is wherever the exception happened, so it is the one reason code whose layer is
-#: contextual. ADR 0006 §12 requires these be *counted* as well as blocked — a
-#: systematically broken ``check()`` otherwise presents as a config that refuses
-#: everything, with ``crash_rate == 0`` and every register key present.
+#: An exception swallowed inside ``check()``. Not in :data:`RULES`: the layer is wherever
+#: it happened. Counted as well as blocked, or a broken ``check()`` looks like a config
+#: that refuses everything. See ADR 0006.
 GUARDRAIL_ERROR = "guardrail_error"
 
 #: ``refused_by`` for a turn this module refused. Asserted against ``registry.stages``
-#: at import rather than restated: a literal here that no longer matches a key there
-#: is a refusal with no stage.
+#: at import: a literal that does not match a key there is a refusal with no stage.
 GUARDRAIL_REFUSED_BY = "guardrail"
 
-#: ``refused_by`` for a turn the input guard refused (§6).
+#: ``refused_by`` for a turn the input guard refused.
 GUARD_REFUSED_BY = "guard"
 
 
-#: rule id → the layer that owns it. Every rule in the system, once; also the
-#: enumeration of legal ``reason_code`` values. Adding a rule here is the point at
-#: which someone has to say which layer it belongs to.
+#: Rule id to the layer that owns it. Adding a rule here is where its layer is chosen.
 RULES: Mapping[str, Layer] = {
-    # ── PARSE ──
     "r_unparseable": Layer.PARSE,
     "r_empty_statement": Layer.PARSE,
     "r_multiple_statements": Layer.PARSE,
-    #: Raised before NFKC normalisation, at the pipeline's first step: normalising
-    #: first folds bidi overrides and zero-width joiners into ordinary text.
+    #: Before NFKC: normalising first folds bidi overrides into ordinary text.
     "r_control_characters": Layer.PARSE,
-    #: Two declared identifiers differing only by case. The engine folds the
-    #: reference to one of them, possibly the decoy; canonicalisation cannot choose.
+    #: Two declared identifiers differ only by case. The engine may fold to the decoy.
     "r_ambiguous_fold": Layer.PARSE,
-    # ── NO_WRITE ──
     "r_not_a_read": Layer.NO_WRITE,
     "r_write_construct": Layer.NO_WRITE,
     "r_select_into": Layer.NO_WRITE,
     "r_locking_clause": Layer.NO_WRITE,
-    # ── FUNCTIONS ──
     "r_function_not_permitted": Layer.FUNCTIONS,
     "r_whole_row_argument": Layer.FUNCTIONS,
-    # ── BINDING ──
     "r_unbound_reference": Layer.BINDING,
     "r_ambiguous_reference": Layer.BINDING,
     "r_star_projection": Layer.BINDING,
     "r_natural_join": Layer.BINDING,
     "r_table_function": Layer.BINDING,
-    #: A bare name that resolves to a source rather than to a column: in Postgres that
-    #: is the whole row as a composite value, with no Column node for anything it
-    #: emits. B2 without a function in sight.
+    #: A bare name of a source, not a column: the whole row, with no Column node. B2.
     "r_whole_row_reference": Layer.BINDING,
-    # ── COLUMNS ──
     "r_column_not_allowed": Layer.COLUMNS,
     "r_column_excluded": Layer.COLUMNS,
     "r_column_suspect": Layer.COLUMNS,
-    # ── TABLES ──
-    #: Retrieval did not license this table **this turn**.
+    #: This turn's retrieved set does not include the table.
     "r_table_not_retrieved": Layer.TABLES,
 }
 
 
 def rule_layer(rule_id: str) -> Layer:
-    """The layer that owns ``rule_id``. Raises on an undeclared rule.
-
-    An undeclared rule would otherwise produce a result with no layer, which is B3.
-    """
+    """Raises on an undeclared rule: a missing layer is what graded delivery reads as passed. See ADR 0006."""
     try:
         return RULES[rule_id]
     except KeyError:
@@ -159,7 +129,7 @@ def refuse(rule_id: str, detail: str, *, evaluated: Sequence[Layer] = (),
 
 
 def allow(*, evaluated: Sequence[Layer], bound: Mapping[str, str]) -> CheckResult:
-    """A passing result. There is no way to give it a layer."""
+    """A passing result. There is no way to give it a failed layer."""
     return CheckResult(
         passed=True,
         failed_layer=None,
@@ -171,7 +141,7 @@ def allow(*, evaluated: Sequence[Layer], bound: Mapping[str, str]) -> CheckResul
 
 
 def internal_error(layer: Layer, detail: str, *, evaluated: Sequence[Layer] = ()) -> CheckResult:
-    """Result for an exception inside ``check()`` (:data:`GUARDRAIL_ERROR`)."""
+    """An exception inside ``check()``. The layer is the one that was running."""
     return CheckResult(
         passed=False,
         failed_layer=layer,
@@ -183,15 +153,8 @@ def internal_error(layer: Layer, detail: str, *, evaluated: Sequence[Layer] = ()
 
 
 def _assert_stage_vocabulary_is_shared() -> None:
-    """Import-time guard: this module's ``refused_by`` literals still resolve to
-    stages in ``registry.stages``. A refusal whose stage is unknown cannot be
-    attributed to anything.
-
-    :data:`GUARDRAIL_ERROR` is checked here too, because since the 2026-08-10 audit it is a
-    ``refused_by`` value and not only a ``reason_code``: it is the member of
-    ``registry.stages.CRASH_REFUSED_BY`` that has a producer, so if the two spellings drift a
-    swallowed layer exception silently becomes an ordinary refusal again.
-    """
+    """These ``refused_by`` literals must resolve in ``registry.stages``. :data:`GUARDRAIL_ERROR` is one of them: a
+    drift records a swallowed exception as an ordinary refusal."""
     for value, expected in (
         (GUARDRAIL_REFUSED_BY, Stage.check),
         (GUARD_REFUSED_BY, Stage.guard),

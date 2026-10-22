@@ -1,17 +1,4 @@
-"""The routing driver must empty its saver as it goes.
-
-``eval/datalake.routing_recall`` builds ``compile_graph()`` — whose default is an
-``InMemorySaver`` — and gives every question its own thread, which is correct (a shared thread
-would carry the previous question's per-turn channels in). What was missing is the other half:
-nothing ever removed a thread, so the saver held one per question for the life of the process.
-``serve/graph.compile_graph``'s own docstring puts that at roughly 135 MB over a pooled run.
-
-It matters more here than the number suggests, because this is the driver run most often:
-retrieval measurement calls no provider, so a full-scale run on a laptop is the normal case.
-
-Asserted on **the saver's own state**, not on a byte count or a process RSS, both of which are
-allocator noise dressed up as a measurement.
-"""
+"""Each question gets its own thread, and the saver must drop it; a shared thread would carry the last question."""
 
 from __future__ import annotations
 
@@ -35,12 +22,7 @@ class _FakeSession:
 
 
 class _FakeGraph:
-    """``_SyncApp``-shaped, checkpoints for real, runs no nodes.
-
-    The saver is a **real** ``InMemorySaver`` because it is the thing under test; the graph body
-    is not, because routing behaviour is measured elsewhere and would need a corpus, a connector
-    and a model to reach.
-    """
+    """The saver is a real ``InMemorySaver``. The graph body is not what this file measures."""
 
     def __init__(self) -> None:
         self.checkpointer = InMemorySaver()
@@ -107,15 +89,8 @@ def test_the_routing_loop_leaves_no_thread_in_the_saver(monkeypatch: Any) -> Non
 
 
 def test_in_memory_delete_thread_is_synchronous_at_this_version() -> None:
-    """Pinned because getting it backwards is how housekeeping becomes a hang.
-
-    ``InMemorySaver.delete_thread`` is a plain ``def`` over three dicts
-    (``langgraph/checkpoint/memory/__init__.py:505``), so the routing loop calls it directly.
-    ``AsyncSqliteSaver``'s sync namesake instead blocks on
-    ``run_coroutine_threadsafe(...).result()`` against a loop that is not running, which is why
-    the durable callers use ``adelete_thread``. If a future version makes this one a coroutine,
-    the routing loop starts leaking silently — a never-awaited coroutine deletes nothing.
-    """
+    """In-memory delete is synchronous. The sqlite sync name blocks on a stopped loop, so durable callers use the async
+    one."""
     import inspect
 
     assert not inspect.iscoroutinefunction(InMemorySaver.delete_thread)

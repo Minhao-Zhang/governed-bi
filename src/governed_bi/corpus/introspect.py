@@ -1,8 +1,6 @@
-"""Introspection shapes consumed by the seed (ADR 0005 §1.7).
+"""Shapes the seed reads. Kept here so the seed does not import ``datasource``. See ADR 0005.
 
-Here rather than in ``datasource/`` so the seed can import them without an upward
-layer violation. Named ``Introspected*`` because ``ColumnInfo`` / ``TableInfo``
-already belong to the ``ports`` Protocols for ``Connector.describe_table``.
+Named ``Introspected*`` because ``ColumnInfo`` and ``TableInfo`` belong to ``ports``.
 """
 
 from __future__ import annotations

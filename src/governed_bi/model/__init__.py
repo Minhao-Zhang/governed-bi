@@ -1,9 +1,4 @@
-"""Model adapters. Two :class:`~governed_bi.ports.Embedder` implementations, and the
-OpenAI chat-model builder in ``provider.py``.
-
-Importing this package does not import the OpenAI SDK. Each provider tree is
-imported inside the function that needs it, so a model-free test can reach
-``DeterministicEmbedder``.
+"""OpenAI is imported in the function that needs it, so tests can load ``DeterministicEmbedder`` without the SDK.
 """
 
 from __future__ import annotations

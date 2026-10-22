@@ -1,35 +1,4 @@
-"""What scale the two channels are compared on, in both retrieval passes.
-
-Split out of ``test_pass_two_and_context.py`` when that file crossed the 1,000-line cap, and it
-is the right boundary: everything here turns on one question, which has now been answered three
-different ways.
-
-1. ``max(lexical or 0.0, semantic or 0.0)``. Measured on corpus ``86ed1dbf``, a lexical top hit
-   runs 0.666–0.933 where a semantic top hit runs 0.140–0.544, so ``max`` compared *units* rather
-   than strength and the semantic channel was decorative. (The figure this once quoted, 0 wins in
-   32,244 scored documents, is [retired] — ``register/citations.py`` records why it is not usable.
-   The ranges above replace it and were measured after the tokenizer changed.)
-2. A min-max over each channel's own scored population within the channel. Commensurate, and
-   query-relative: the top-scoring document became exactly 1.0 whatever its absolute strength,
-   the weakest became exactly 0.0, and ``route`` **sums those per-channel votes across channels** —
-   so a channel that found nothing convincing voted as loudly as one that found the right table.
-   ``tests/retrieve/test_scoring_contract.py`` states the violated property in the design
-   holder's own words and tests it one layer below where the division happened.
-3. A fixed ceiling per channel (audit I1), which is what is asserted here. The lexical channel
-   passes through — ``raw/(raw+k)`` is already in ``[0, 1)`` — and cosine is divided by
-   ``semantic_scale_ceiling``, whose value is a property of the embedder rather than of the
-   query. Fitted for ``text-embedding-3-large`` at 0.6: measured over 120 questions × 57 schema
-   summaries on corpus ``86ed1dbf``, the best-matching pair tops out at 0.5443.
-
-The fixture is the same in both tests and the numbers in it are measured, not invented: BM25
-over this index gives ``lex_best`` 0.627, ``lex_mid`` 0.599, ``lex_weak`` 0.207, and does not
-score ``vector_only`` at all. The stub embedder puts ``vector_only`` at cosine 0.40, which is where
-a real *good* cosine sits on this corpus: top-hit p90 is 0.442 and the observed max 0.544.
-
-Note also that ``lex_mid`` repeats every query term four times and still scores *below*
-``lex_best``: BM25's length normalisation penalises it, which is worth seeing in a fixture
-rather than assumed away.
-"""
+"""Both retrieval passes compare lexical and semantic scores on a fixed ceiling, not a relative scale."""
 
 from __future__ import annotations
 
@@ -72,13 +41,7 @@ def _index():
 
 
 def _assert_the_scale_is_fixed_not_relative(mid, only) -> None:
-    """The four properties, shared by both passes because both must agree on them.
-
-    Asserted together in one helper rather than duplicated, because the whole point of moving the
-    scale into ``combine_channels`` is that the two passes cannot answer this differently: pass
-    one's untagged hits are carried into pass two verbatim and then compete against pass-two hits
-    in ``apply_budgets``' single global sort.
-    """
+    """The four properties, shared by both passes because both must agree on them."""
     # Resolved from the register through the one reader, exactly as a turn does (audit I10).
     SEMANTIC_CEILING = channel_scale({}).semantic_ceiling
 
@@ -97,7 +60,6 @@ def _assert_the_scale_is_fixed_not_relative(mid, only) -> None:
     assert only["semantic"] == pytest.approx(0.40, abs=1e-3)
     assert mid["lexical"] == pytest.approx(0.599, abs=5e-3)
 
-    # 2. **A good-but-not-maximal cosine no longer normalises up to 1.0.** Under min-max this
     #    document was its channel's best hit, so it scored exactly the channel's full weight of
     #    0.5 — and it would have done so at cosine 0.04 just the same.
     expected = 0.5 * min(1.0, 0.40 / SEMANTIC_CEILING)
@@ -111,15 +73,12 @@ def _assert_the_scale_is_fixed_not_relative(mid, only) -> None:
     )
 
     # 3. The weakest scored document is not floored at 0.0, so it stays distinguishable from a
-    #    document the channel scored zero — the residual `fuse`'s docstring used to record.
     assert mid["semantic"] > 0.0
     assert 0.0 < 0.5 * (mid["semantic"] / SEMANTIC_CEILING) < mid["score"]
 
     # 4. The units still do not decide. `vector_only` is BM25-invisible, so the fixed
     #    denominator caps it at the semantic weight and `lex_mid` — two channels, mediocre on
     #    both — comes out marginally ahead. That ordering is unchanged from the min-max rule and
-    #    is **unmeasured either way**; what this asserts is that the two stay within a few
-    #    percent, which is the property the units-deciding failure violates by a factor of three.
     assert only["score"] > mid["score"] * 0.9, (
         "a strong-cosine, no-shared-term asset is being ranked by units rather than strength: "
         f"vector_only={only['score']} mid={mid['score']}"
@@ -127,13 +86,7 @@ def _assert_the_scale_is_fixed_not_relative(mid, only) -> None:
 
 
 def test_the_ceiling_clamps_rather_than_letting_one_channel_exceed_its_weight() -> None:
-    """``scale_to_ceiling``'s own three properties, none of which the fixtures above reach.
-
-    The fixture's cosine of 0.40 sits below the ceiling, so it never exercises the clamp — and an
-    unclamped map would let a single unusually good cosine contribute more than
-    ``w_semantic``, which silently un-declares the weight. ``fuse`` would not catch it: it
-    renormalises by weight, not by the range of what it is handed.
-    """
+    """``scale_to_ceiling``'s own three properties, none of which the fixtures above reach."""
     from governed_bi.retrieve.fuse import scale_to_ceiling
 
     assert scale_to_ceiling(0.3, ceiling=0.6) == pytest.approx(0.5)
@@ -147,13 +100,7 @@ def test_the_ceiling_clamps_rather_than_letting_one_channel_exceed_its_weight() 
 
 
 def test_pass_one_compares_the_two_channels_on_a_fixed_scale() -> None:
-    """The case the suite never built: hits with **both** channels non-``None``.
-
-    Every serve fixture calls ``build_index(entries)`` with no embedder, so
-    ``UnifiedIndex.vectors is None`` and the combiner is a no-op in the only configuration it was
-    ever exercised in. ``max(lexical or 0.0, semantic or 0.0)`` could have been ``min``, or
-    ``lexical``, or a constant, and the suite would have stayed green.
-    """
+    """The case the suite never built: hits with **both** channels non-``None``."""
     from governed_bi.registry.stages import Stage
     from governed_bi.serve.nodes.channels import _pass_one_hits
 
@@ -183,13 +130,7 @@ def test_pass_one_compares_the_two_channels_on_a_fixed_scale() -> None:
 
 
 def test_pass_two_uses_the_same_fixed_scale() -> None:
-    """Pass two fused **raw** BM25 against **raw** cosine at 0.5/0.5 until 2026-08-06, and it is
-    the pass that decides the budget.
-
-    Pass one's combiner was repaired first and this one was not, which left the defect exactly
-    where it costs most: ``_hybrid``'s output is what reaches ``apply_budgets``, so it decides
-    which tables survive the cap of 8 — the largest attributable loss in the pipeline.
-    """
+    """Pass two uses the same fixed scale. Its scores decide which tables survive the cap."""
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
 
     retrieved = pass_two_retrieve(
@@ -212,15 +153,7 @@ def test_pass_two_uses_the_same_fixed_scale() -> None:
 
 
 def test_the_two_passes_score_one_asset_identically() -> None:
-    """The structural reason the scale moved into ``combine_channels``.
-
-    A normaliser needing a population is a normaliser that depends on **which candidates were
-    scored** — and the two passes score different sets by design, pass two being restricted to
-    the selected schemas. So the same raw ``(lexical, semantic)`` pair came out as two different
-    numbers in one turn, and ``apply_budgets`` sorted pass-one carry-forwards and pass-two hits
-    together in a single global sort. With a fixed ceiling the pair determines the score, which
-    is what makes the two comparable at all.
-    """
+    """The structural reason the scale moved into ``combine_channels``."""
     from governed_bi.registry.stages import Stage
     from governed_bi.serve.nodes.channels import _pass_one_hits
     from governed_bi.serve.nodes.pass_two import pass_two_retrieve
@@ -257,20 +190,7 @@ def test_the_two_passes_score_one_asset_identically() -> None:
 
 
 def test_a_run_can_move_the_fusion_settings_and_the_score_follows() -> None:
-    """Audit I10. All three were read at **import** and no request could move them.
-
-    That is not a missing feature, it is a false claim about a run: `w_lexical`, `w_semantic` and
-    `semantic_scale_ceiling` are declared ``a recorded setting``, so they enter
-    ``setting_names()`` and ``settings_resolved``. A run could publish ``w_semantic: 0.9``, move its
-    config hash, and score exactly like the default — the inverse of the defect
-    ``registry/settings.py`` opens by describing, and the same shape as the four settings
-    ``tests/serve/test_affects_results_settings.py`` was written for.
-
-    Asserted through ``_pass_one_hits`` rather than on ``channel_scale``, because the resolver
-    returning the right numbers says nothing about whether the scoring path uses them — which is
-    exactly how the import-time constants survived. Two setting settings, two different scores, on one
-    index and one query.
-    """
+    """Audit I10."""
     from governed_bi.registry.stages import Stage
     from governed_bi.serve.nodes.channels import _pass_one_hits
     from governed_bi.serve.runtime import channel_scale

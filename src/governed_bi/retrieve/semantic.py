@@ -1,8 +1,4 @@
-"""Semantic channel: cosine similarity and embedding cache keys.
-
-``cosine`` raises on width mismatch. Cache keys carry model and dimensions.
-Scoring runs in LanceDB; ``cosine`` is the reference definition for tests.
-"""
+"""Cosine is the reference definition. Scoring runs in the store. See ADR 0011."""
 
 
 from __future__ import annotations
@@ -20,7 +16,6 @@ __all__ = ["cosine", "cache_key", "check_query_vector", "semantic_search"]
 
 
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:
-    """Standard cosine similarity. Raises if vector widths differ."""
     if len(a) != len(b):
         raise ValueError(
             f"cosine width mismatch: {len(a)} vs {len(b)}"
@@ -43,10 +38,7 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 def check_query_vector(vector: Sequence[float], *, width: int) -> None:
-    """Refuse a query :func:`cosine` would refuse (wrong width, empty, or zero).
-
-    LanceDB makes none of these refusals, so the store shares this one definition.
-    """
+    """The store shares this refusal. The database accepts a bad query vector."""
     if len(vector) != width:
         raise ValueError(f"cosine width mismatch: {len(vector)} vs {width}")
     if not vector:
@@ -56,7 +48,6 @@ def check_query_vector(vector: Sequence[float], *, width: int) -> None:
 
 
 def cache_key(text: str, *, model: str, dimensions: int) -> str:
-    """Content key that includes embedder identity (model + dimensions)."""
     return f"{model}|{dimensions}|{text}"
 
 
@@ -67,12 +58,7 @@ def semantic_search(
     candidates: Collection[str] | None = None,
     top_n: int | None = None,
 ) -> tuple[list[tuple[str, float]], ChannelState]:
-    """Cosine search over ``candidates`` (or the whole index).
-
-    Returns ``(hits, state)``. Zero scores are kept (measurement, not absence).
-    ``not_configured`` when no embedder/store/query vector; otherwise ``ran``.
-    Width mismatch and zero query raise. State decided in Python before the store.
-    """
+    """Zero scores stay. State is chosen here, before the store."""
     ids = (
         sorted(str(c) for c in candidates)
         if candidates is not None
@@ -83,14 +69,12 @@ def semantic_search(
     if index.embedder_model is None or store is None or len(store) == 0 or query_vector is None:
         return [], ChannelState.not_configured
 
-    # An empty candidate set **ran**: it measures "nothing of these types is a candidate",
-    # not a missing channel. It must not reach `search`, whose `limit` refuses zero.
+    # An empty candidate set still ran. ``search`` refuses a zero limit.
     if not ids:
         return [], ChannelState.ran
 
     scored = store.search(query_vector, keys=ids)
-    # LanceDB breaks ties by insertion order. Re-sorted so two indexes built from the same
-    # assets in a different order cannot disagree.
+    # Ties follow insertion order. Sort so two build orders agree.
     scored.sort(key=lambda pair: (-pair[1], pair[0]))
     if top_n is not None:
         scored = scored[:max(0, int(top_n))]

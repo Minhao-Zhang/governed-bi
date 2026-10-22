@@ -1,23 +1,8 @@
-"""``ServeState.turns``: a checkpoint holds the whole conversation's audit trail, not the newest turn.
+"""A checkpoint holds every turn, not only the newest.
 
-**The defect this closes.** Every channel a turn's record is built from — ``answer``,
-``execution``, ``generated_sql``, ``answer_text`` — is in ``PER_TURN_RESET``, so turn two erased
-turn one and a thread's checkpoint could only ever describe its most recent question.
-``runs/serve/*.jsonl`` was the only surviving copy, which made the audit surface depend on a
-filesystem beside the process rather than on the store the conversation already lives in.
-
-**Why the test drives the real served topology.** ``record`` is mounted on exactly one graph —
-``build_graph(record=...)``, which only ``api/graph_app.build_serve_graph`` calls — and the reset
-that this channel has to survive is written by ``accept``, the node in front of ``guard`` on that
-same graph. Asserting the reducer over a hand-built two-node graph would prove that
-``keep_turns`` appends, which ``tests/serve/test_the_turn_history_is_bounded.py`` does directly.
-The pair that can break is ``accept``-resets-then-``record``-appends, so both nodes are
-here, mounted the way production mounts them.
-
-The one deviation from production is the checkpointer: ``build_serve_graph`` compiles without one
-because the server supplies its own, and with no saver there is no second turn to have.
-No model, no database — a scripted model and a connector double, as in
-``test_the_abstention_policy_is_declared.py``.
+``answer`` and the other record channels reset each turn. ``turns`` is appended by ``record``
+after ``accept`` resets, on the served graph. The saver is supplied here because the server
+graph compiles without one.
 """
 
 from __future__ import annotations
@@ -93,12 +78,7 @@ def _assets() -> list[Any]:
 
 
 def _served(turn_log: Any) -> Any:
-    """The served topology with a saver, and its session's constants registered as trusted.
-
-    ``trust`` is called here rather than through ``build_serve_graph`` because that function
-    compiles with no checkpointer; this is the same two lines it runs, plus the saver the Agent
-    server contributes in production.
-    """
+    """The served graph plus a saver; ``build_serve_graph`` compiles without one."""
     from governed_bi.serve.runtime import trust
 
     session = from_assets(
@@ -118,12 +98,7 @@ def _served(turn_log: Any) -> Any:
 
 
 def _as_read_back(value: Any) -> Any:
-    """The value as a reader of either sink gets it: tuples collapsed to lists, dates to strings.
-
-    ``json.dumps(..., default=str)`` is what the deleted JSONL log wrote, so this
-    is not a convenience — it is the shape the log's own reader sees, and the shape msgpack hands
-    back out of the checkpoint.
-    """
+    """Round-trip through JSON so tuples and dates match what a reader of the checkpoint sees."""
     return json.loads(json.dumps(value, default=str))
 
 
@@ -144,13 +119,7 @@ def _turns(graph: Any, *, thread: str) -> list[dict[str, Any]]:
 
 
 def test_two_turns_on_one_thread_both_survive_in_state() -> None:
-    """The property: turn one is still there after turn two reset everything else.
-
-    The ``answer`` assertion is not decoration — it is what makes the ``turns`` assertion mean
-    something. If ``PER_TURN_RESET`` had not run, ``turns`` holding two rows would prove nothing
-    about surviving a reset, because there would have been no reset to survive. So the same state
-    is asserted to have forgotten turn one's ``answer`` and remembered turn one's wrapper.
-    """
+    """Turn two's ``answer`` is only the latest turn, while ``turns`` still holds both."""
     log = _TurnLog()
     graph = _served(log)
 
@@ -175,12 +144,7 @@ def test_two_turns_on_one_thread_both_survive_in_state() -> None:
 
 
 def test_a_failed_log_write_still_records_the_turn_in_state() -> None:
-    """The state entry is the durable sink, so the fallible one must not be able to skip it.
-
-    ``record_node`` swallowed everything in one ``try`` and returned ``{}``, which would have made
-    a full disk cost the thread its audit trail as well as its log line — the log failing is
-    precisely when state is the only copy left.
-    """
+    """A failed log write still appends the turn; the log is not the only copy."""
     graph = _served(_BrokenLog())
     out = _ask(graph, FIRST, thread="t-broken-log")
 
@@ -202,18 +166,6 @@ def test_a_turn_with_no_record_appends_nothing() -> None:
 
 
 def test_turns_accumulates_and_is_never_reset() -> None:
-    """The classification, stated where an edit to the reset trips over it rather than passing.
-
-    ``tests/serve/test_state_channels.py`` proves every channel is classified as *something*.
-    This proves *which*, and it is the only assertion here that can: mutation-checked
-    2026-08-18, adding ``"turns": []`` to ``PER_TURN_RESET`` leaves the two-turn test above
-    **green**, because a ``[]`` write under :func:`~governed_bi.serve.state.keep_turns` is a no-op
-    — an accumulating channel cannot be cleared through the reset dict at all. So the
-    misclassification is invisible behaviourally and only a statement about the classification
-    catches it.
-
-    What *is* caught behaviourally is the reducer: dropping the ``Annotated[..., keep_turns]``
-    annotation fails the two-turn test, which is the erasure that could really happen.
-    """
+    """``turns`` accumulates: a ``[]`` reset is a no-op under ``keep_turns``."""
     assert "turns" in ACCUMULATING
     assert "turns" not in PER_TURN_RESET

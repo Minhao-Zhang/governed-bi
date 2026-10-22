@@ -1,7 +1,6 @@
-"""Model-free seed: introspection → valid assets (ADR 0005 §1.7).
+"""Build assets from introspection, with no model calls. See ADR 0005.
 
-Deterministic non-empty ``summary`` on every asset. Does not author
-``reliability`` from absence.
+Summaries are deterministic. Reliability is not inferred from a missing note.
 """
 
 
@@ -25,10 +24,7 @@ __all__ = ["seed", "fit_summary"]
 
 
 def fit_summary(head: str, entries: list[str], *, joiner: str = ", ", tail: str = "") -> str:
-    """``head`` plus as many whole ``entries`` as fit the cap; never mid-token truncate.
-
-    Dropped count appears as ``(+N more)``. ``tail`` is measured inside the loop.
-    """
+    """Whole entries only. The dropped count is ``(+N more)``, and ``tail`` counts toward the cap."""
     cap = int(setting_default("summary_max_chars"))
     kept = list(entries)
     while True:
@@ -42,7 +38,6 @@ def fit_summary(head: str, entries: list[str], *, joiner: str = ", ", tail: str 
 
 
 def seed(introspection: Introspection, schema: str) -> tuple[list[Asset], list[Problem]]:
-    """Build a seeded corpus for ``schema`` from ``introspection``. Zero model calls."""
     tables = sorted(introspection.tables, key=lambda t: t.physical_name)
     table_names = [t.physical_name for t in tables]
     assets: list[Asset] = []
@@ -56,9 +51,7 @@ def seed(introspection: Introspection, schema: str) -> tuple[list[Asset], list[P
     )
 
     for table in tables:
-        # The convention is declared once, in identity.py: endpoint reconciliation in
-        # retrieve/structure.py keys on it, and a second spelling there binds an edge to
-        # the wrong table rather than merely losing it (ADR 0005 §2.8.2).
+        # One spelling, from identity.table_id. A second spelling binds a join to the wrong table (ADR 0005).
         table_id = table_id_for(schema, table.physical_name)
         col_names = [c.physical_name for c in table.columns]
         summary = fit_summary(
@@ -84,9 +77,7 @@ def seed(introspection: Introspection, schema: str) -> tuple[list[Asset], list[P
                     schema=schema,
                     parent_table=table_id,  # the table's id, not its bare name (0008 D4)
                     physical_name=column.physical_name,
-                    # Not run through `fit_summary`: one identifier and one type, nothing
-                    # to drop, so an over-cap value means a pathological physical name and
-                    # belongs to the validator rather than to a silent slice.
+                    # One name and one type: an over-cap summary is a bad physical name, not a slice.
                     summary=f"{table.physical_name}.{column.physical_name} ({ctype})",
                     physical_type=column.physical_type,
                     nullable=column.nullable,

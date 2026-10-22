@@ -1,23 +1,5 @@
-"""The adversarial governance suite, as data (``adversarial.toml``).
-
-open-work.md 3.11 recorded the gap this closes — until this suite existed it read "the layer
-stack, the allowlist and the scope check have no adversarial evaluation, so what governance buys
-has no number", and it now reports the first number instead. This module loads the cases and resolves
-the fictional world they read against;:mod:`.adversarial_run` runs them and reports the
-numbers. Both are deliberately model-free, network-free and credential-free — the whole layer
-stack is deterministic, so measuring it must be too.
-
-Loading is where the suite is kept. A case with no ``why`` and no ``origin`` fails to
-load, an attack that does not name the layer *and* the rule it expects fails to load, and a
-layer that disagrees with ``layers.RULES`` about who owns that rule fails to load. Each of
-those is a way a suite rots into a list nobody can tell a deliberate probe from a leftover in.
-
-``bypass`` is closed on the same argument and was the last field that was not: every other case
-field failed to load on a typo while ``B4`` mistyped as ``B44`` loaded, ran, and counted towards
-nothing. It is checked against :data:`BYPASSES`, and the *coverage* claim — which of ADR 0006's
-ten bypasses this file can aim a statement at — is the ``[bypass.*]`` tables rather than a
-sentence, so :func:`_assert_bypass_coverage_is` can hold it to the cases that exist.
-"""
+"""Load the suite and its fictional world. See ADR 0006. A case that does not explain itself fails to load, and
+``bypass`` is closed on :data:`BYPASSES` so a typo cannot count toward nothing."""
 
 from __future__ import annotations
 
@@ -77,10 +59,9 @@ CASE_FAMILIES: frozenset[str] = frozenset(
 
 CASE_KINDS: frozenset[str] = frozenset({"attack", "benign"})
 
-#: Which entry point the expectation is read from. ``check`` is the layer stack alone;
-#: ``pipeline`` is a step ``prepare()`` runs around it — the pre-NFKC encoding check, or
-#: canonicalisation — where ``check()`` on the raw string would pass. Both run for every case
-#: regardless, and an attack must leave ``prepare()`` with nothing to execute either way.
+#: Where the expectation is read. ``pipeline`` covers a ``prepare()`` step ``check()`` on
+#: the raw string would pass. Both still run; an attack must leave ``prepare()`` with
+#: nothing to execute.
 ENFORCERS: frozenset[str] = frozenset({"check", "pipeline"})
 
 #: ADR 0006's Context table, B1–B10. Closed for the reason every other case field is closed:
@@ -91,14 +72,7 @@ BYPASSES: frozenset[str] = frozenset(f"B{n}" for n in range(1, 11))
 
 @dataclass(frozen=True, slots=True)
 class BypassClaim:
-    """What this suite claims about one of ADR 0006's ten bypasses.
-
-    The claim used to live in a sentence at the top of ``adversarial.toml`` and in a report:
-    *"B1/B2/B4/B5/B6 are statement-shaped and are here; B3/B7/B8/B9/B10 have no SQL surface."*
-    Prose cannot be checked, and a suite that covered five of ten while being called
-    "the bypass suite" is the failure ADR 0006's own bypass list was written to stop. As data,
-    :func:`_assert_bypass_coverage_is` can hold it to the cases present.
-    """
+    """Data, not a sentence in the suite file: prose cannot be checked against the cases."""
 
     id: str
     #: Whether the bypass can be expressed as a statement this suite can hand to ``check()``.
@@ -135,11 +109,7 @@ class AdversarialCase:
 
 @dataclass(frozen=True, slots=True)
 class AdversarialWorld:
-    """The fixed fictional lake every case reads against.
-
-    One world, declared once. A per-case world would let a failing case be repaired by moving
-    its fixture, which turns an acceptance criterion into a description of the code.
-    """
+    """One world for every case. A per-case world would let a failing case be repaired by moving its fixture."""
 
     default_schema: str
     #: ``{schema}.{table} -> declared column spellings``, in declaration order.
@@ -151,11 +121,7 @@ class AdversarialWorld:
 
 @dataclass(frozen=True, slots=True)
 class GuardCase:
-    """One prompt-injection case: a question, not a statement.
-
-    A separate table, because a guard case has no SQL and no layer. Folding it
-    into the statement cases would make every field optional. Parsed here; the
-    disclosure probes are read from the file by their own runner.
+    """A question, not a statement. A separate table: folding it into statement cases would make every field optional.
     """
 
     id: str
@@ -164,11 +130,8 @@ class GuardCase:
     question: str
     why: str
     origin: str
-    #: ``question`` repeated this many times. Machinery for exactly one property: ``g_length``
-    #: and its 8,000-character bound cannot be exercised without an 8,001-character payload,
-    #: and spelling that into a data file buries fifteen readable cases under a hundred lines
-    #: of filler. A count is still data, and it keeps the *shape* of the payload legible —
-    #: which matters for the benign long case, where the point is that it is ordinary prose.
+    #: ``question`` repeated this many times, so ``g_length`` can be exercised without an
+    #: 8,001-character payload in the file. The benign long case stays readable as prose.
     repeat: int = 1
     #: The ``GUARD_RULES`` id expected to fire. Required on an attack, forbidden on a benign
     #: case. There is no layer half to declare: ``guard()`` screens the input before any layer
@@ -184,7 +147,7 @@ class GuardCase:
 
     @property
     def text(self) -> str:
-        """What :func:`~governed_bi.govern.guard.guard` is handed. Honours :attr:`repeat`."""
+        """The string :func:`~governed_bi.govern.guard.guard` sees, :attr:`question` times :attr:`repeat`."""
         return self.question * self.repeat
 
 
@@ -203,7 +166,7 @@ class AdversarialSuite:
 
 @dataclass(frozen=True, slots=True)
 class WorldFixture:
-    """ :class:`AdversarialWorld` resolved into the arguments the two entry points take."""
+    """World resolved into the corpus, retrieved set, and spelling maps the two entry points take."""
 
     corpus: AnalystCorpus
     retrieved_tables: frozenset[str]
@@ -211,9 +174,6 @@ class WorldFixture:
     ambiguous: frozenset[str]
     by_table: Mapping[str, Mapping[str, str]]
     default_schema: str
-
-
-# ── loading ───────────────────────────────────────────────────────────────────
 
 
 def _require(body: Mapping[str, Any], key: str, where: str) -> str:
@@ -416,13 +376,7 @@ def _parse_bypasses(body: Any) -> dict[str, BypassClaim]:
 def _assert_bypass_coverage_is(
     cases: Sequence[AdversarialCase], bypasses: Mapping[str, BypassClaim]
 ) -> None:
-    """The declaration and the cases must agree, in both directions.
-
-    Either half alone is decorative. Without the first, a bypass can claim a statement surface
-    and have no statement aimed at it — the coverage gap the prose version hid. Without the
-    second, an attack can be filed under a bypass the suite says it cannot express, which makes
-    the ``sql_surface = false`` rows meaningless and the "pinned elsewhere" pointer a lie.
-    """
+    """Both directions: a statement surface needs an attack, and an attack cannot name a bypass with none."""
     aimed = {case.bypass for case in cases if case.bypass and case.is_attack}
     filed = {case.bypass for case in cases if case.bypass}
 
@@ -495,9 +449,6 @@ def load_adversarial_suite(path: Path | None = None) -> AdversarialSuite:
     return _parse_suite(tomllib.loads(source.read_text(encoding="utf-8")))
 
 
-# ── the world, resolved ───────────────────────────────────────────────────────
-
-
 def _world_assets(world: AdversarialWorld) -> list[Asset]:
     assets: list[Asset] = []
     for table_id, columns in world.tables.items():
@@ -536,14 +487,7 @@ def _world_assets(world: AdversarialWorld) -> list[Asset]:
 
 
 def build_world_fixture(world: AdversarialWorld) -> WorldFixture:
-    """Resolve the world into a corpus, a licence and the spelling maps.
-
-    Built through :func:`~governed_bi.corpus.analyst.for_analyst` over real ``TableAsset`` /
-    ``ColumnAsset`` objects rather than through ``analyst_corpus_from_keys``, which makes no
-    table assets: ``spellings_for`` reads ``TableAsset.columns``, so a key-only corpus would
-    hand ``prepare()`` an empty spelling map and leave canonicalisation — where both of
-    open-work.md 3.2a's defects live — untested.
-    """
+    """Real table and column assets. A key-only corpus has no columns, so canonicalisation is untested."""
     corpus = for_analyst(_world_assets(world))
     spellings, ambiguous, by_table = spellings_for(corpus, world.retrieved_tables)
     return WorldFixture(
@@ -557,12 +501,7 @@ def build_world_fixture(world: AdversarialWorld) -> WorldFixture:
 
 
 def _assert_the_suite_has_both_halves(cases: Sequence[AdversarialCase]) -> None:
-    """Import-time guard: a suite with no benign half measures nothing.
-
-    ``def check(...): return {"passed": False}`` scores a perfect bypass rate on attacks alone,
-    so the benign half is not a nicety — it is the other side of the only trade the layer stack
-    makes. Asserted here rather than only in a test because a driver run outside pytest must
-    not report a bypass rate of zero over a suite that lost its controls.
+    """Refusing every statement scores a perfect block rate on attacks alone. Asserted at import, not only under pytest.
     """
     attacks = sum(1 for c in cases if c.is_attack)
     benign = len(cases) - attacks
@@ -579,20 +518,7 @@ def _assert_the_suite_has_both_halves(cases: Sequence[AdversarialCase]) -> None:
 def _assert_the_guard_half_has_both_halves_and_covers_every_rule(
     cases: Sequence[GuardCase],
 ) -> None:
-    """Import-time: the prompt-injection half has controls, and every rule has an attack.
-
-    The benign requirement is :func:`_assert_the_suite_has_both_halves`'s argument verbatim —
-    a guard that refuses everything scores a perfect block rate. The ratio is **not** copied:
-    these controls are questions, and the denominator for "does an enabled rule refuse
-    ordinary analytics" is the benchmark's own 1,351 questions, which
-    ``tests/conformance/test_the_guard_does_not_refuse_the_benchmark.py`` runs and this file
-    cannot (it needs the dataset repo). The handful here are the shapes that most look like
-    an attack and are not; the 1,351 are the rate.
-
-    **Every rule needs an attack**, which the statement half does not require of every
-    ``Layer``: these five ship enabled on the served surface, and ADR 0006 OQ3's condition for
-    that was a number per rule, not a number for the set.
-    """
+    """Controls, plus an attack per rule. These five ship enabled, so a set-level rate is not enough. See ADR 0006."""
     attacks = [c for c in cases if c.is_attack]
     benign = [c for c in cases if not c.is_attack]
     if not attacks or not benign:  # pragma: no cover - import-time guard

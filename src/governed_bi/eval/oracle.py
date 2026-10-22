@@ -1,16 +1,8 @@
-"""Oracle-only ceiling: execute gold SQL, no model (ADR 0005 step 15).
+"""Execute gold SQL and compare it to an independent record (ADR 0005).
 
-Re-executes each question's ``gold_sql`` on this connector and compares the result against an
-*independent* record of what that statement returns — a ``gold_fingerprint``, or
-``gold_columns`` + ``gold_rows``. Below 1.000 the finding is real and is not about the model:
-the grader disagrees with the reference, this engine returns something different from the one
-the reference was taken on, or the harness lost rows. That is the "grader ceiling".
-
-**Without that independent record there is no measurement here at all.** Fingerprinting the
-executed gold against itself returns ``correct=True`` for any statement whatsoever, including
-``SELECT 'garbage'``. Such a question yields ``correct=None``, which
-``measure/population.Population.count`` reads as unmeasured, so the config's headline EX is
-unmeasured with a reason attached — neither 1.000 nor 0.000, both of which are claims.
+The record is a ``gold_fingerprint``, or ``gold_columns`` plus ``gold_rows``.
+Without it, executed gold compared with itself is true for any statement, so
+the row is unmeasured rather than scored.
 """
 
 from __future__ import annotations
@@ -24,11 +16,8 @@ from governed_bi.registry.stages import Outcome
 __all__ = ["oracle_grade", "OracleQuestion", "NO_INDEPENDENT_GOLD"]
 
 
-#: One fixture / dataset question for the free grader ceiling.
 OracleQuestion = Mapping[str, Any]
 
-#: ``grade_detail`` for a question this config cannot grade. Spelled out because it is what a
-#: reader of the artifact sees instead of a score, so it has to say why the cell is empty.
 NO_INDEPENDENT_GOLD = (
     "no_independent_gold: the question carries neither gold_fingerprint nor "
     "gold_columns+gold_rows, so the only available comparison is the executed gold against "
@@ -42,15 +31,7 @@ def oracle_grade(
     *,
     order_sensitive_qids: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """Execute ``gold_sql`` and compare it against the question's independent gold.
-
-    Returns a turn-shaped row. ``correct`` is ``None`` — unmeasured — when the question
-    supplies no independent gold, and when the gold statement itself fails to execute the row
-    is ``crashed`` rather than incorrect: a gold that does not run is a defect in the dataset
-    or the engine, not a wrong answer.
-
-    No serve graph, no model.
-    """
+    """``correct`` is ``None`` when the independent gold is missing. A gold that fails to execute is ``crashed``."""
     qid = str(question["question_id"])
     sql = str(question["gold_sql"])
     order_sensitive = qid in (order_sensitive_qids or frozenset())
@@ -58,10 +39,8 @@ def oracle_grade(
     try:
         columns, rows, _truncated = connector.execute(sql)
     except Exception as err:  # noqa: BLE001 — the row is the point
-        # Caught rather than propagated: one unexecutable gold statement raising out of here
-        # would end the config and discard every row already computed, reported as a shorter
-        # file. `harness.run_config` calls this row by row and hands each to `on_row`, so a
-        # crashed row is recorded and the config continues.
+        # Caught so one unexecutable gold does not end the config and drop rows
+        # already written. The harness records the crashed row and continues.
         return _row(
             qid,
             sql,
@@ -131,12 +110,7 @@ def _row(
     pred_fingerprint: str | None = None,
     error_type: str | None = None,
 ) -> dict[str, Any]:
-    """One oracle row. Built in one place so every branch produces the same keys.
-
-    ``pred_fingerprint`` is filled even on the unmeasured branch: the gold statement did
-    execute, and its digest is the field to harvest into ``gold_fingerprint`` so a later run
-    becomes measurable.
-    """
+    """``pred_fingerprint`` stays set when unmeasured, so a later run can store it as ``gold_fingerprint``."""
     return {
         "question_id": qid,
         "config": "oracle",

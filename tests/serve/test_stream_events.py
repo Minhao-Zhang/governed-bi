@@ -1,17 +1,4 @@
-"""The live stage-event stream (ADR 0010).
-
-**Why this file exists at all**, given AGENTS.md's rule that not everything needs a test.
-:func:`~governed_bi.serve.events.emit` swallows every exception on purpose — an observability
-layer that can fail a turn is worse than one that can go quiet — and the cost of that choice is
-that a broken emitter is invisible in production. These tests are what pays the cost: they
-build payloads for steps and statuses spread across both vocabularies and assert each field
-arrives, so a payload that would have raised inside the ``try`` is caught here instead.
-
-The second reason is the vocabulary. ``registry/stages.py`` is the authority for ``step``, and a
-step name emitted from ``serve/`` that is not a ``Stage`` member is precisely the "second,
-competing vocabulary invented at the moment somebody needed it" that module exists to prevent.
-:func:`test_every_emitted_step_is_a_declared_stage` is that check, and it is the one that will
-fire if someone adds a step by hand later.
+"""Live stage events (ADR 0010). The emitter swallows errors, so a broken one is invisible.
 """
 
 from __future__ import annotations
@@ -51,8 +38,6 @@ EMITTED_STEPS = (
     # Emitted only when the declared abstention policy ran, which the shipped configuration
     # never does (`abstention_policy_enabled` is False). Listed for the same reason `reflect`
     # is: a step the engine *can* put on the wire is declared, and "off by default" is a
-    # configuration rather than an absence. Unlike `reflect` it can also end the turn, so its
-    # `declined` status is the one a timeline has to render.
     "abstain",
     "agent_core",
     "read_body",
@@ -86,8 +71,6 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     # Patched on ``events``, not on ``langgraph.config``. ``events`` binds the name at import
     # (deliberately — see the comment on that import), so patching the source module would
     # leave the bound reference untouched and this fixture would silently capture nothing:
-    # every assertion below would read an empty list and the tests would fail for the wrong
-    # reason, or worse, pass vacuously.
     monkeypatch.setattr(events, "get_stream_writer", lambda: seen.append)
     return seen
 
@@ -102,12 +85,7 @@ def test_every_emitted_step_is_a_declared_stage() -> None:
 
 
 def test_run_query_is_not_a_step() -> None:
-    """``Stage`` deliberately has no ``run_query`` member, and the stream must not invent one.
-
-    A SQL call emits ``check`` then ``execute``. The reason is in ``stages.py``: a passing query
-    already emits that pair and a third record would double-count an action the ledger and every
-    rate already agree on.
-    """
+    """``Stage`` deliberately has no ``run_query`` member, and the stream must not invent one."""
     assert "run_query" not in EMITTED_STEPS
     assert "run_query" not in {m.value for m in Stage}
 
@@ -150,21 +128,7 @@ def test_empty_detail_is_omitted_not_sent_as_an_empty_object(
 
 
 def test_emit_outside_a_runnable_context_is_a_noop() -> None:
-    """A call with **no graph running at all** must not raise. This test is that caller.
-
-    The population used to be named as ``eval/harness.py`` and ``python -m governed_bi.serve``,
-    and that was wrong in a way worth keeping on record: both of them *run the graph*
-    (``compile_graph().invoke(...)``), so both are firmly inside a runnable context. Read on
-    langgraph 1.2.10 — the raise lives in ``get_config()``, not in ``get_stream_writer``, and
-    ``astream`` installs a writer unconditionally, falling back to ``def stream_writer(c): pass``
-    when ``"custom"`` is absent from the stream modes. ``ainvoke`` streams ``"values"``, so it
-    gets the no-op writer rather than an exception.
-
-    The real population is a caller that never enters Pregel: a unit test like this one, or a
-    node function invoked directly. The swallow in ``emit`` is still right — it just protects a
-    much narrower set than the docstring claimed, and someone deciding whether to delete it
-    should be weighing the true one.
-    """
+    """A call with **no graph running at all** must not raise."""
     events.emit(kind="rail", step="guard", status="ok", event_id="guard:t1")
 
 
@@ -185,7 +149,6 @@ def test_the_event_carries_the_step_and_status_it_was_given(
     assert (captured[-1]["step"], captured[-1]["status"]) == (step, status)
 
 
-# ── rail_observation: status is read out of the update, never declared ──
 
 
 @pytest.mark.parametrize(
@@ -207,28 +170,17 @@ def test_rail_status_is_observed(stage: str, update: dict[str, Any], expected: s
     assert status in VALID_STATUSES
 
 
-# ── the seven defects adversarial review found. Each one shipped, briefly. ──
 
 
 def test_a_check_that_errored_open_is_not_reported_as_clear() -> None:
-    """``error_failed_open`` means the check ran, a rule threw, and the question went through.
-
-    ``registry/record.py`` makes it a countable security event and checks a run on it, so
-    reporting it as ``ok`` is the stream disagreeing with the record on the one outcome where
-    "nothing happened" is the dangerous reading.
-    """
+    """``error_failed_open`` means the check ran, a rule threw, and the question went through."""
     status, detail = rail_observation("guard", {"guard": {"outcome": "error_failed_open"}})
     assert status == "error"
     assert detail == {"check": "error_failed_open"}
 
 
 def test_a_channel_whose_channel_never_ran_is_not_reported_as_zero_hits() -> None:
-    """"0 hits" and "the channel was never wired up" are different facts.
-
-    This is ``_channels_for``'s own defect one layer out: its predecessor reported the
-    configuration instead of the observation, so a channel that consulted nothing claimed it had.
-    An operator reading "Terms: 0 hits" would conclude the corpus is empty.
-    """
+    """"0 hits" and "the channel was never wired up" are different facts."""
     degraded = {
         "channels": {
             "channel_term": {
@@ -277,13 +229,7 @@ def test_a_declining_node_still_reports_what_it_measured() -> None:
 
 
 def test_accept_is_not_silenced_by_the_previous_turns_terminal_state() -> None:
-    """``path_kind`` is checkpointed and ``accept`` is the node that clears it, so on turn N+1 of
-    a thread whose turn N declined, ``accept`` reads its predecessor's value on entry.
-
-    Silencing it there cost the first row of the timeline *and* the turn's only ``serve_path``
-    tag, which the wire contract says rides the first event — on every follow-up question after
-    a refusal, a decline or a crash.
-    """
+    """``accept`` clears a checkpointed ``path_kind``, so the next turn must not inherit a decline."""
     for stale in ("refuse", "decline", "crashed"):
         assert not silenced_by_terminal_state("accept", {"path_kind": stale}), (
             f"accept was silenced by a stale {stale} from the previous turn"
@@ -321,7 +267,6 @@ def test_rail_observation_tolerates_a_missing_channel() -> None:
         assert isinstance(detail, dict)
 
 
-# ── ids are stable across a resume replay ──
 
 
 def test_rail_event_id_is_keyed_on_the_turn_not_the_sequence() -> None:
@@ -347,7 +292,6 @@ def test_tool_event_id_is_the_tool_call_id() -> None:
     assert tool_event_id("check", "call-1") == tool_event_id("check", "call-1")
 
 
-# ── nodes that no-op on a terminal turn must not claim to have run ──
 
 
 @pytest.mark.parametrize("path_kind", ["refuse", "decline", "crashed"])
@@ -368,7 +312,6 @@ def test_a_healthy_turn_silences_nothing() -> None:
     assert not silenced_by_terminal_state("route", {"path_kind": "answered"})
 
 
-# ── wrap_node: the emitter cannot change what the node returns ──
 
 
 def test_wrap_node_emits_start_then_the_observed_status(
@@ -381,7 +324,6 @@ def test_wrap_node_emits_start_then_the_observed_status(
     # The node's own keys pass through untouched, which is this test's name. The wrapper adds
     # exactly one of its own: the turn's clock, because it is the one place every rail passes
     # through and `latency_sec` needs a single start (audit §10 — no clock was read anywhere in
-    # `src/` at all). A second added key would be a wrapper deciding something.
     assert {k: v for k, v in out.items() if k != "turn_started_at"} == {
         "guard": {"outcome": "blocked"}
     }

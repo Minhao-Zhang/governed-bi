@@ -1,17 +1,6 @@
-"""The part of :class:`~governed_bi.ports.Embedder` that is the same on every adapter.
-
-Three of the port's guarantees are adapter-independent — one vector per input in input
-order, every vector exactly ``dimensions`` wide, a refusal on blank input — so they live
-here once and each adapter supplies only ``_embed_batch``. A template method the adapter
-cannot bypass, rather than a helper it can forget to call.
-
-Blank input is refused here and not only at the caller: OpenAI returns a vector for a blank
-string that can score above zero, and a rule only the caller enforces holds until a new
-caller exists.
-
-Batching is the only place ordering can break, and a reorder is silent —
-``retrieve/index.py`` zips with ``strict=True``, which catches a *short* result but lets a
-reordered one give every asset another asset's vector.
+"""Blank input is refused here: OpenAI returns a vector for a blank string that can score above zero.
+A zero vector looks orthogonal to ``cosine``. Dropping the blank would shorten the batch.
+A reorder is silent. ``retrieve/index.py`` zips with ``strict=True`` and only a short result fails.
 """
 
 from __future__ import annotations
@@ -31,24 +20,15 @@ __all__ = [
     "embedding_provider",
 ]
 
-#: Inputs per provider request. Not a provider maximum (OpenAI accepts 2048) but a size that
-#: keeps one failed request from discarding a large batch's worth of paid work.
+#: Not OpenAI's 2048 limit. One failed request should not throw away a large batch of paid work.
 DEFAULT_BATCH_SIZE = 256
 
-#: Shortest non-blank probe, for adapters that can only learn their served model or their
-#: vector width from a response. Non-blank because :func:`refuse_blank` refuses one, and an
-#: adapter exempting its own probe from its own rule is exactly what that function closes.
-#: Here rather than in each adapter: two spellings of one probe.
+#: Non-blank: blank is refused here, and an adapter must not exempt its own probe.
+#: One spelling, shared, so two adapters cannot drift.
 PROBE_TEXT = "probe"
 
 
 def refuse_blank(texts: Sequence[str]) -> None:
-    """Raise if any element is empty or whitespace-only. ``ports.Embedder``'s no-blank-input rule.
-
-    Raises rather than dropping (which would make the result shorter than the input) or
-    substituting a zero vector, which renders "not measured" as "scores nothing" —
-    indistinguishable to ``cosine`` from a real orthogonal vector.
-    """
     for position, text in enumerate(texts):
         if not isinstance(text, str):
             raise TypeError(
@@ -64,34 +44,17 @@ def refuse_blank(texts: Sequence[str]) -> None:
 
 
 class BaseEmbedder(Embedder, ABC):
-    """Every adapter's shared half. Subclasses implement ``_embed_batch`` only.
-
-    **Inherits the declaration rather than restating it.** ``model`` and ``dimensions`` were
-    declared here as abstract properties *and* in :class:`~governed_bi.ports.Embedder`, which
-    made two answers to "what must an embedder do" — and the port is the one ``retrieve/`` and
-    ``serve/`` annotate against, so a rule added to only this copy would bind nothing they can
-    see. Subclassing the Protocol keeps this class to what it contributes: the
-    ``batch_size`` policy, the three checks in :meth:`embed`, and the ``_embed_batch`` hook.
-
-    Explicit inheritance, not the structural conformance this used to rely on, because the
-    abstract members are what stop an adapter shipping without ``model``; the port's own
-    docstring records why they carry ``@abstractmethod``. It costs nothing — ``model`` is layer
-    11 and ``ports`` is layer 3 — and the Protocol stays ``runtime_checkable``, so a test
-    double still satisfies it without coming through here.
+    """Inherits ``ports.Embedder``. ``retrieve/`` and ``serve/`` see that declaration, not a second copy here.
     """
 
-    #: Inputs per call to :meth:`_embed_batch`.
     batch_size: int = DEFAULT_BATCH_SIZE
 
     @abstractmethod
     def _embed_batch(self, texts: Sequence[str]) -> list[Vector]:
-        """Embed one batch, at most :attr:`batch_size` long, **in input order**."""
+        """In input order, at most ``batch_size`` texts."""
 
     def embed(self, texts: Sequence[str]) -> list[Vector]:
-        """Embed ``texts``, one vector each, in input order.
-
-        The width check runs after the batches, so an adapter whose ``dimensions`` is only
-        knowable from a response does not pay a probe request it is about to answer anyway.
+        """Check width after the batches, so a width learned from the response needs no extra probe.
         """
         items = list(texts)
         refuse_blank(items)
@@ -123,9 +86,7 @@ class BaseEmbedder(Embedder, ABC):
 
 
 def embedding_provider(model: str) -> str:
-    """The prefix of a provider-qualified embedder model, or a refusal if it has none.
-
-    Guessing a gateway for an unqualified id records a measurement that did not happen.
+    """An unqualified id is refused. Guessing a gateway would record a call that did not happen.
     """
     prefix, separator, _rest = model.partition(":")
     if not separator or not prefix.strip():
@@ -137,11 +98,6 @@ def embedding_provider(model: str) -> str:
 
 
 def embedding_settings(embedder: Any) -> dict[str, Any]:
-    """The embedder's model and width, both declared settings.
-
-    An unqualified model is refused: the prefix is the only thing that keeps two
-    gateways out of one cache, and it already lives on ``embedding_model``.
-    """
     model = str(embedder.model)
     embedding_provider(model)
     values: dict[str, Any] = {

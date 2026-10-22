@@ -1,15 +1,4 @@
-"""F3: tools bounds, delivery_hash, ask_user HITL + resume.
-
-**Split, 2026-08-19.** The ``sample_rows`` governed-executor cluster, plus the two short generic
-checks that sat next to it (``test_delivery_hash_stable_for_same_tool_payload``,
-``test_tool_bounds_from_state_includes_pulled_in``), moved to
-``test_sample_rows_governed_executor.py``. This file was **seven lines** from ADR 0005 §6's hard
-cap at 1,000, so the next test written here would have failed the build; the boundary is the one the
-docstring above already draws, since neither the executor cluster nor those two checks touch the
-HITL machinery the rest of this file exists for.
-
-The outstanding-clarification latch tests stayed. They drive ``ask_user``'s interrupt and its
-resume, which is the other half of this file's own subject.
+"""Tool bounds, delivery hash, and ``ask_user`` resume. The latch tests stay here.
 """
 
 from __future__ import annotations
@@ -115,15 +104,7 @@ def _tools(state: dict[str, Any] | None = None, config: dict[str, Any] | None = 
 
 
 def _runtime(call_id: str, committed: dict[str, Any] | None = None) -> Any:
-    """A ``ToolRuntime`` built by hand, because a tool that takes one cannot be invoked alone.
-
-    ``ToolRuntime`` is injected by the agent's tool node, not by ``langchain_core``'s
-    ``StructuredTool``: ``runtime`` is a **required** field of the generated args schema, so
-    ``tool.invoke({"args": ...})`` fails validation on it before the body runs. Supplying one
-    here is what keeps these tests direct unit tests of the tool bodies rather than agent
-    round-trips — the agent path is covered end to end by
-    ``test_ask_user_interrupt_and_resume`` and the F turn contracts.
-    """
+    """A ``ToolRuntime`` built by hand, because a tool that takes one cannot be invoked alone."""
     from langchain.tools import ToolRuntime
 
     return ToolRuntime(
@@ -139,15 +120,7 @@ def _runtime(call_id: str, committed: dict[str, Any] | None = None) -> Any:
 def _call(
     tool: Any, call_id: str = "call-1", committed: dict[str, Any] | None = None, **args: Any
 ) -> tuple[str, dict[str, Any]]:
-    """Run a tool's body and split its ``Command`` in two.
-
-    Every tool now returns a ``Command`` carrying its own ``ToolMessage``; the tool call id is
-    what keys the durable ledger, so passing one is the point rather than ceremony.
-    ``committed`` is the ledger the *checkpoint* already holds, which is how the attempt cap's
-    resume behaviour is exercised.
-
-    Returns ``(text the model sees, everything the call recorded)``.
-    """
+    """Run a tool's body and split its ``Command`` in two."""
     # `.coroutine` first: the tools are `async def` now — the shape the nested agent's `astream`
     # needs — and `@tool` puts an async implementation there, leaving `.func` as None.
     body = tool.coroutine or tool.func
@@ -169,13 +142,7 @@ def test_out_of_scope_tools_share_identical_message() -> None:
 
 
 def test_an_out_of_scope_refusal_is_not_recorded_as_a_delivery() -> None:
-    """The model receives the message; the corpus delivered nothing.
-
-    ``delivery_hash`` audits what the corpus handed over, so a refusal counted as a delivery
-    would put a digest of ``OUT_OF_SCOPE_MESSAGE`` in the record and make three refused reads
-    hash-distinct from three refused reads of something else. The old code encoded this by
-    *skipping* the tracker call on an early return — correct, and invisible to any caller.
-    """
+    """The model receives the message; the corpus delivered nothing."""
     for tool_name, args in (
         ("read_body", {"asset_ids": ["nope"]}),
         ("inspect_schema", {"table_id": "other.table"}),
@@ -283,13 +250,7 @@ def test_run_query_attempt_cap(tmp_path: Path) -> None:
 
 
 def test_a_replayed_run_query_does_not_consume_a_second_attempt_slot() -> None:
-    """The cap counts governed statements, not tool invocations.
-
-    This is the property that makes the ledger survive a resume. Attempts are keyed by tool
-    call id, so the same call arriving twice — which is what a replay is — is one statement.
-    Under the previous list-append accounting it was two, and under the previous *closure*
-    accounting a resume reset the count to zero instead.
-    """
+    """The cap counts governed statements, not tool invocations."""
     from governed_bi.serve.agent_state import AttemptBook
 
     committed = {"rq-0": {"passed": False}}
@@ -330,7 +291,6 @@ def test_tool_exception_is_not_refuse() -> None:
 
     tools = _tools(_state(), _config(connector=Boom()))
     out, update = _call(tools["run_query"], sql="SELECT 1")
-    # Discriminating, deliberately. This used to read
     #     out.startswith("run_query") or "refused" in out.lower() or "error" in out.lower()
     # which the real refusal string `run_query refused: id binds to customers.id, which is not
     # allowed` also satisfies — so the test could not fail for the reason it exists (audit M4).
@@ -351,33 +311,13 @@ def test_tool_exception_is_not_refuse() -> None:
 
 
 def test_a_checker_that_raises_is_recorded_rather_than_returned_as_a_string() -> None:
-    """Audit C1 — the worst measurement defect found, and the one with no coverage at all.
-
-    An exception escaping ``prepare()`` was caught on the tool surface, refunded, and handed to
-    the model as a string with **no ledger row**. ``finish`` reads an empty ledger as "answered
-    from the delivered context", so the turn recorded ``outcome: answered``,
-    ``guardrail_errors: 0``, every quotability check green, and ``generated_sql`` holding a
-    statement that never reached ``prepare()``. A systematically broken ``check()`` presented as
-    a clean, quotable config.
-
-    The escape is reached the way it happens in production: a malformed key in the corpus.
-    ``check()`` normalises its key arguments *outside* its own ``try`` on purpose
-    (the ``normalise_*_key`` block above ``check()``'s own ``try``) — "a security parameter was
-    not wired up" must not become a blocked result — and ``normalise_column_key`` raises
-    ``ValueError`` on a four-part key. The governance side is right; the recording side had
-    nowhere for the raise to land.
-
-    Paired with ``test_tool_exception_is_not_refuse`` above: a **driver** failure keeps its
-    passing row and is not a guardrail error, while a **checker** failure produces a
-    ``guardrail_error`` row and crashes the turn. The two must not collapse into each other.
-    """
+    """Audit C1 — the worst measurement defect found, and the one with no coverage at all."""
     from governed_bi.corpus.analyst import AnalystCorpus
     from governed_bi.serve.ledger import execution_from_attempts
 
     # Constructed directly rather than through `analyst_corpus_from_keys`, which validates and
     # would raise here instead of inside `check()`. A corpus object that exists and holds a
     # malformed key is exactly the state C1 needs: the failure has to happen *inside the tool
-    # body*, past the wiring checks, where the old code turned it into a string.
     broken = AnalystCorpus({}, frozenset({"a.b.c.d"}), frozenset(), frozenset())
     tools = _tools(_state(), _config(corpus=broken, connector=_Answering()))
     out, update = _call(tools["run_query"], sql="SELECT id FROM customers")
@@ -451,30 +391,15 @@ def test_ask_user_interrupt_and_resume() -> None:
     clars = done.get("clarifications") or []
     assert any(c.get("answer") == "2020" for c in clars)
     # `no_sql`: the scripted model answers "ok: 2020" in prose and never calls `run_query`, so the
-    # resumed turn executed no governed statement. It read `answered` until 2026-08-18. The
     # subject here is the resume, and what it must not be is `crashed` or a refusal.
     assert done["answer"]["outcome"] in {"answered", "clarification", "no_sql"}
 
 
 def test_the_ledger_survives_the_interrupt() -> None:
-    """A governed statement made **before** ``ask_user`` must still be in the record after.
-
-    This is the property the whole ``Command``-into-agent-state move exists for, and it is the
-    one the closures could not have. ``interrupt()`` aborts the outer node without committing
-    its update, so on resume the node re-executes, ``build_tools`` builds fresh boxes, and the
-    nested agent restores its *messages* from its own checkpoint rather than re-invoking the
-    tools. Every ToolMessage was therefore present while every box that recorded what those
-    calls did was empty — the turn reported ``terminal: "no_sql"`` with ``attempts: []``
-    beside a populated ``generated_sql``, one row of the artifact contradicting itself.
-
-    Order: ``run_query`` (a governed statement, recorded), then ``ask_user`` (the interrupt),
-    then the answer. The assertion is on what the record says *after* the resume.
-    """
+    """A governed statement made **before** ``ask_user`` must still be in the record after."""
     # A connector, because the statement has to reach `check()` for the assertion below to be
-    # about the ledger. Until the 2026-08-10 audit (C2) this turn ran with none, and `fetch.py`
     # manufactured `refuse("r_not_a_read", "no connector configured")` for that — so "a governed
     # statement made before ask_user" was a fabricated refusal for a wiring failure. A missing
-    # connector now raises, which is what surfaced it.
     class Answering:
         dialect = "postgres"
 
@@ -527,9 +452,6 @@ def test_the_ledger_survives_the_interrupt() -> None:
     # The ledger is checkpointed now, so its rows have to be serialisable *without* a
     # `default=str` escape hatch. They were not: `result_layer` held a `Layer` enum, and
     # LangGraph's serde said so out loud -- "Deserializing unregistered type
-    # governed_bi.govern.layers.Layer from checkpoint. This will be blocked in a future
-    # version." A row a future LangGraph refuses to load is a ledger that stops existing on
-    # the resume path, which is the path it was moved into state to protect.
     import json
 
     json.dumps(attempts)  # raises TypeError on any non-JSON-native value
@@ -544,19 +466,7 @@ def test_the_ledger_survives_the_interrupt() -> None:
 
 
 def test_only_one_clarification_may_be_outstanding_per_turn() -> None:
-    """A second ``ask_user`` in one assistant message is refused, not queued.
-
-    **The bug it closes.** LangGraph dispatches one ``Send`` per pending tool call, so two
-    ``ask_user`` calls in one message both interrupt. The surfacing order is a race,
-    ``_clarification`` returns the first interrupt, and ``Command(resume=...)`` always lands on
-    the first tool call — so the user is shown "which region?", answers it, and the answer is
-    recorded against, and handed to the model as, "which year?". The resume surface carries no
-    way to say *which* question is being answered, so the fix has to be that only one is ever
-    outstanding.
-
-    Both calls share one ``build_tools`` closure, which is what makes a latch work. The check
-    and the set have no ``await`` between them, so two concurrent ``Send``s cannot both pass.
-    """
+    """A second ``ask_user`` in one assistant message is refused, not queued."""
     import asyncio
 
     ask = _tools()["ask_user"]
@@ -609,23 +519,7 @@ def _clarify_turn(*, thread: str, turn: str) -> dict[str, Any]:
 
 
 def test_a_second_question_after_a_resume_is_not_refused_as_still_outstanding() -> None:
-    """The one-outstanding-question latch has to be **given back** when the question is answered.
-
-    ``pending_clarification`` is rebuilt by every ``build_tools`` — once per ``agent_core``
-    execution — so it never accumulated across passes. It stayed *occupied*, which is a different
-    bug and the one that reached the model. The call being resumed has no ``ToolMessage`` yet —
-    that is exactly why its ``Send`` re-runs on the resume pass — so it re-appends its own
-    ``clarification_id``, and nothing released it once ``interrupt()`` returned an answer.
-
-    Measured before the fix, on this script: "which year?" is asked, answered "2020", and the
-    model's next ``ask_user`` is refused with *"Only one clarifying question may be outstanding at
-    a time, and this turn already has one"* — with the ``ToolMessage`` carrying "2020" sitting
-    directly above the refusal in the transcript. That refusal also tells the model to ask "after
-    this one is answered", which is what it had just done, so the advice is unfollowable.
-
-    The assertion is that the second question **pauses** rather than returning a string: a real
-    interrupt, on its own ``clarification_id``.
-    """
+    """The one-outstanding-question latch has to be **given back** when the question is answered."""
     graph = compile_graph()
     config = {
         "configurable": {
@@ -677,26 +571,7 @@ def test_a_second_question_after_a_resume_is_not_refused_as_still_outstanding() 
 
 
 def test_the_replayed_ask_user_start_reuses_the_row_id_rather_than_opening_a_second() -> None:
-    """The resume replay re-emits ``start``. That is ADR 0010's contract, and this pins it.
-
-    ``interrupt()`` cannot be reached without re-running everything above it, so the ``start``
-    emitted before it is emitted again on the resume pass. Moving it after ``interrupt()`` would
-    stop the repeat and delete the open row for the whole interval a human spends reading the
-    question — the only interval it exists to describe — and would leave the ``refused`` resolve
-    with no ``start`` on its own stream. ADR 0010 chose the repeat and paid for it with a stable
-    ``id``: "the ``tools`` node re-executes on resume, so ``start`` is emitted twice, and a
-    seq-derived id would have shown the same step twice".
-
-    So the property is not "one start" but **"one row"**: every event for one ``ask_user`` call
-    shares ``tool_event_id("ask_user", tool_call_id)`` and the resolve arrives last, so
-    ``ui/lib/steps.ts::reduceSteps`` — which merges on ``id`` — folds all three into a single row
-    that settles resolved. A repeat carrying a fresh id would show the user their clarification
-    twice; a resolve arriving before a replayed ``start`` would show it spinning after it was
-    answered.
-
-    Measured through the real graph rather than reasoned: the emitter is not what decides how many
-    times the node re-executes.
-    """
+    """The resume replay re-emits ``start``."""
     graph = compile_graph()
     conf = {
         "thread_id": "t-replay",

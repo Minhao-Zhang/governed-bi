@@ -1,14 +1,8 @@
-"""``Measured[T]``: a quantity that may be absent, with an explicit reason.
+"""A quantity that may be absent, with an explicit reason.
 
-Lives in ``registry/`` so:mod:`.record` can recognise unmeasured values in the
-presence test without importing upward. Three states: measured, not_measured,
-not_applicable. Truthiness and arithmetic are refused; format only via
-:meth:`Measured.render`.
-
-**Before renaming anything in here, read :data:`CHECKPOINT_PICKLED_NAMES` at the bottom.** The
-three class names in this module are written into ``.langgraph_api/.langgraph_ops.pckl`` on every
-served turn, and a rename deletes the whole thread registry on the next boot. The guard below
-refuses to import rather than let that happen.
+Lives in ``registry/`` so the record can test presence without importing upward.
+Truthiness and arithmetic are refused. Renaming ``Measured``, ``State``, or
+``Relation`` deletes the thread registry; see ``CHECKPOINT_PICKLED_NAMES``.
 """
 
 from __future__ import annotations
@@ -33,21 +27,15 @@ U = TypeVar("U")
 
 
 class State(str, Enum):
-    """Whether a quantity exists, and if not, which kind of not."""
+    """Should-exist versus correctly-absent. The second is declared, not inferred."""
 
-    #: A value exists and is in :attr:`Measured.raw`.
     measured = "measured"
-    #: Should exist, does not. Instrumentation failure, missing table entry, or a
-    #: rate whose denominator is zero.
     not_measured = "not_measured"
-    #: Correctly does not exist for this subject. Declared, not inferred.
     not_applicable = "not_applicable"
 
 
 class Relation(str, Enum):
-    """How :attr:`Measured.raw` relates to the true quantity, so that a one-sided
-    bound does not render as a point estimate.
-    """
+    """A one-sided bound must not render as a point estimate."""
 
     exact = "="
     at_most = "<="
@@ -55,56 +43,28 @@ class Relation(str, Enum):
 
 
 class NotMeasured(Exception):
-    """Raised by :meth:`Measured.value` when there is nothing to return."""
+    pass
 
 
 @dataclass(frozen=True)
 class Measured(Generic[T]):
-    """A quantity, or a stated reason there is none.
-
-    Construct through :meth:`of`, :meth:`unmeasured`, :meth:`inapplicable` or
-    :meth:`rate`. Invariants: reason on every absence; no ``nan``/``inf``; no
-    value when absent.
-    """
+    """Reason on every absence; no ``nan`` or ``inf``; no value when absent."""
 
     state: State
     raw: T | None = None
-    #: Why there is no value. Required when absent, forbidden when present.
     why: str = ""
     relation: Relation = Relation.exact
 
-    # ── surviving a checkpoint ────────────────────────────────────────────────
-
     def __class_getitem__(cls, item: object) -> type[Measured[Any]]:
-        """``Measured[int]`` **is** ``Measured`` at runtime: the subscript is erased.
+        """``Measured[int]`` is ``Measured`` at runtime so the checkpoint allowlist sees a class.
 
-        Erasure is what registers the class with LangGraph's msgpack serde. Under
-        strict mode (langgraph 1.2.11) ``StateGraph.compile`` derives the allowlist by
-        walking the state schema (``_internal._serde.build_serde_allowlist`` →
-        ``BaseCheckpointSaver.with_allowlist``) — the only boundary that reaches the
-        deployed server's saver, which this repository never builds. That walk
-        recognises real classes only. Without this method
-        ``dataclasses.is_dataclass(Measured[int])`` would be ``False``, because a
-        subscripted generic is a ``typing._GenericAlias``, and the allowlist derived
-        from ``ServeState`` named nothing from this module.
-
-        Unregistered, an absence comes back as a plain dict — ``.is_measured`` gone,
-        :func:`~.record.missing_required`'s presence test blind to it, and
-        :meth:`__bool__` no longer refusing, so a *truthy* dict makes ``if not
-        tokens:`` read "we measured something". Unmeasured collapsing into zero is the
-        defect this module exists to prevent.
-
-        The parameter is not at runtime (nothing reads ``get_args`` of a
-        ``Measured``), and a type checker resolves ``Measured[int]`` against
-        ``Generic[T]`` rather than this method, so annotations still check.
+        A subscripted generic is not a dataclass, so an unregistered absence comes back as a dict and ``__bool__`` stops
+        refusing.
         """
         return cls
 
-    # ── construction ──────────────────────────────────────────────────────────
-
     @classmethod
     def of(cls, value: T, relation: Relation = Relation.exact) -> Measured[T]:
-        """A measured value. Rejects ``None``, ``nan``, and ``inf``."""
         if value is None:
             raise ValueError(
                 "Measured.of(None) — None is the absence sentinel this type exists "
@@ -120,7 +80,6 @@ class Measured(Generic[T]):
 
     @classmethod
     def unmeasured(cls, why: str) -> Measured[T]:
-        """Should have a value and does not. ``why`` is mandatory."""
         if not why:
             raise ValueError(
                 "unmeasured() requires a reason: an unexplained absence is "
@@ -131,16 +90,13 @@ class Measured(Generic[T]):
 
     @classmethod
     def inapplicable(cls, why: str) -> Measured[T]:
-        """Correctly has no value for this subject. ``why`` is mandatory."""
         if not why:
             raise ValueError("inapplicable() requires a reason; see unmeasured()")
         return cls(state=State.not_applicable, why=why)
 
     @classmethod
     def rate(cls, numerator: float, denominator: float, *, what: str) -> Measured[float]:
-        """``numerator / denominator``. A zero denominator is no rate, not a rate of
-        zero, so it returns unmeasured.
-        """
+        """A zero denominator is unmeasured, not a rate of zero."""
         if denominator == 0:
             return Measured(
                 state=State.not_measured,
@@ -148,22 +104,19 @@ class Measured(Generic[T]):
             )
         return Measured.of(numerator / denominator)
 
-    # ── access ────────────────────────────────────────────────────────────────
-
     @property
     def is_measured(self) -> bool:
         return self.state is State.measured
 
     @property
     def value(self) -> T:
-        """The value, or raise :class:`NotMeasured`."""
         if self.state is not State.measured:
             raise NotMeasured(f"{self.state.value}: {self.why}")
         assert self.raw is not None  # guaranteed by of()
         return self.raw
 
     def or_else(self, default: U) -> T | U:
-        """The value, or ``default``. Display fallbacks only, never arithmetic."""
+        """Display fallback only, never arithmetic."""
         return self.raw if self.state is State.measured else default  # type: ignore[return-value]
 
     def __bool__(self) -> bool:
@@ -173,10 +126,7 @@ class Measured(Generic[T]):
             "conclusions. Test .is_measured, or compare .value explicitly."
         )
 
-    # ── combination: absence propagates, it does not default ──────────────────
-
     def map(self, fn: Callable[[T], U]) -> Measured[U]:
-        """Apply ``fn`` if measured; carry the reason and relation through."""
         if self.state is not State.measured:
             return Measured(state=self.state, why=self.why, relation=self.relation)
         return Measured.of(fn(self.value), relation=self.relation)
@@ -184,7 +134,6 @@ class Measured(Generic[T]):
     def combine(
         self, other: Measured[U], fn: Callable[[T, U], object], *, what: str
     ) -> Measured[object]:
-        """Combine two quantities. Unmeasured if either side is."""
         if self.state is not State.measured or other.state is not State.measured:
             absent = self if self.state is not State.measured else other
             return Measured(
@@ -199,19 +148,13 @@ class Measured(Generic[T]):
         return Measured.of(fn(self.value, other.value), relation=weakest)
 
     def bounded(self, relation: Relation) -> Measured[T]:
-        """Re-label a measured value as a one-sided bound."""
         return replace(self, relation=relation)
 
-    # ── the only formatting site in src/ ──────────────────────────────────────
-
     def rounded(self, places: int) -> Measured[float]:
-        """Round a numeric measurement. Absence survives rounding."""
         return self.map(lambda v: round(float(v), places))  # type: ignore[arg-type]
 
     def render(self, places: int = 2, unit: str = "", *, scale: float = 1.0) -> str:
-        """The one permitted way to turn a quantity into display text: absent
-        quantities never render as numbers and bounds keep their relation.
-        """
+        """The only permitted way to turn a quantity into display text."""
         if self.state is State.not_measured:
             return f"not measured ({self.why})"
         if self.state is State.not_applicable:
@@ -229,7 +172,6 @@ class Measured(Generic[T]):
 
 
 def _assert_absence_cannot_carry_a_value() -> None:
-    """Import-time: absent states carry no value and require a reason."""
     factories: tuple[Callable[[], Measured[float]], ...] = (
         lambda: Measured.unmeasured("probe"),
         lambda: Measured.inapplicable("probe"),
@@ -245,49 +187,12 @@ def _assert_absence_cannot_carry_a_value() -> None:
 _assert_absence_cannot_carry_a_value()
 
 
-# ── these three names are on disk, so renaming one destroys the thread registry ────────────
-
-#: The names of this module's classes **as they are written inside every persisted thread row**,
-#: and therefore names that cannot be changed by an ordinary rename.
-#:
-#: Why these three and not the whole module: they are the only ``governed_bi``-owned types that
-#: reach a checkpoint. Verified two ways on 2026-08-20 — statically,
-#: ``langgraph._internal._serde.build_serde_allowlist(schemas=[ServeState])`` derives 18 entries
-#: of which exactly these 3 are ours; dynamically, walking ``checkpoint["values"]`` after real
-#: refuse / decline / no-statement turns finds exactly these 3 and nothing else. ``State`` and
-#: ``Relation`` are not extras: they are :class:`Measured`'s field types, so a pickled absence
-#: names all three. Every other declared channel type (``GuardResult``, ``ExecutionRecord``,
-#: ``RetrievalResult``, ``ChannelResult`` …) is a ``TypedDict`` — a plain ``dict`` at runtime, with
-#: no class name in the pickle — and the ``Any``-typed holes carry plain JSON today
-#: (``channels[*]["hits"]`` and ``retrieved["selected"]`` are dicts built with ``asset_type.value``,
-#: never :class:`~governed_bi.retrieve.result.Hit` objects).
-#:
-#: **What a rename costs.** ``langgraph.json`` mounts a custom checkpointer, so
-#: ``langgraph_api.config.USE_CUSTOM_CHECKPOINTER`` is true and
-#: ``langgraph_runtime_inmem/ops.py::_get_checkpointer`` returns on that branch *before* it can
-#: pass ``unpack_hook=_msgpack_ext_hook_to_json`` — the sanitiser that flattens these to JSON on
-#: the built-in path. So live instances land in ``checkpoint["values"]``, get copied verbatim
-#: onto the thread row (``Threads.set_status`` / ``set_joint_status``) and are pickled **by
-#: reference** into ``.langgraph_api/.langgraph_ops.pckl`` (``PersistentDict.dump``, protocol 2).
-#: On the next boot ``PersistentDict.load`` raises — measured: ``AttributeError`` for a rename in
-#: place, ``ModuleNotFoundError`` for a move — and ``database.py::start_pool`` catches *both*
-#: (``except ModuleNotFoundError`` and a bare ``except Exception``) and ``os.remove``\\ s the
-#: file. That deletes the **entire thread registry**, not the one unreadable row.
-#:
-#: The damage is silent and asymmetric: ``runs/conversations.sqlite`` survives untouched, so
-#: every paused turn is still resumable while nothing can list it — the pending-clarification
-#: queue reports empty and the chat page's conversation list goes blank. Nothing reconciles the registry from the
-#: checkpointer at startup (``start_pool`` only back-fills empty lists).
-#:
-#: The module path is **not** checked here, because a move deletes this file and takes the guard
-#: with it. ``tests/conformance/test_a_rename_deletes_the_thread_registry.py`` pins
-#: ``governed_bi.registry.quantity`` from the outside and holds that half.
+# Pickled by reference into .langgraph_api/.langgraph_ops.pckl. A rename makes the
+# next boot delete the thread registry. The module path is pinned from outside, in
+# tests/conformance/test_a_rename_deletes_the_thread_registry.py.
 CHECKPOINT_PICKLED_NAMES: tuple[str, ...] = ("Measured", "State", "Relation")
 
-#: Shown when the guard below fires. A comment would not have been enough: a prose rule in a
-#: reader's context was measurably ignored this week, and the conclusion recorded was that an
-#: obligation needs a mechanism. This is the mechanism — the module does not import at all until
-#: the reader has dealt with the message.
+# Import refuses until these names still bind. A comment alone did not hold.
 RENAME_DELETES_THE_THREAD_REGISTRY = """\
 {renamed} no longer resolves under that name in governed_bi.registry.quantity, and that name is
 on disk: it is pickled by reference into .langgraph_api/.langgraph_ops.pckl on every served turn
@@ -312,14 +217,9 @@ To rename anyway, in one commit:
 
 
 def renamed_pickled_classes(namespace: dict[str, Any]) -> tuple[str, ...]:
-    """Which of :data:`CHECKPOINT_PICKLED_NAMES` ``namespace`` no longer binds to a class of
-    that name.
+    """``__qualname__`` is compared, not mere presence: an alias keeps the binding and still writes the new name.
 
-    Takes the namespace rather than reading ``globals()`` itself so the negative case is
-    testable: a guard nobody has watched fail cannot be told from one that was never wired up.
-    ``__qualname__`` is compared and not just presence, because ``Measured = Quantity`` — the
-    alias a considerate renamer leaves behind — keeps the *binding* working and still writes
-    ``Quantity`` into the pickle, which is the whole defect.
+    The namespace is an argument so a failed guard is testable.
     """
     return tuple(
         name

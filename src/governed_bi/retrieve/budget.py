@@ -1,8 +1,4 @@
-"""Per-type retrieval budgets from the asset register (ADR 0005 §2.5).
-
-Every type has an explicit budget — no ``dict.get(..., 0)`` default.
-``resolve``/``connect`` pulls do not consume budget.
-"""
+"""Every type has an explicit cap. Closure pulls do not consume it. See ADR 0005."""
 
 
 from __future__ import annotations
@@ -14,31 +10,22 @@ from governed_bi.registry.assets import ASSET_REGISTER, AssetType, Budget
 
 __all__ = ["BudgetResult", "budget_for", "apply_budgets"]
 
-#: One ranked hit: ``(asset_id, asset_type, score)``.
 RankedHit = tuple[str, AssetType, float]
 
-#: One structural addition: ``(asset_id, asset_type)``.
 PulledIn = tuple[str, AssetType]
 
 
 @dataclass(frozen=True, slots=True)
 class BudgetResult:
-    """Post-budget survivors, with ranked hits and pulled-in kept apart."""
-
     hits: list[RankedHit]
     pulled_in: list[PulledIn]
-    #: ``{asset_type -> count of ranked hits discarded by the cap}``.
+    #: Discarded ranked hits, so a cap is not the same fact as a miss.
     dropped: dict[str, int] = field(default_factory=dict)
-    #: Best score that did not survive, per type (tight cap vs noise tail).
     best_dropped_score: dict[str, float] = field(default_factory=dict)
 
 
 def budget_for(asset_type: AssetType) -> Budget:
-    """Return the register budget for ``asset_type``.
-
-    Raises ``KeyError`` on a type missing from the register; a silent ``0`` default would
-    turn a missing policy row into a type that is never retrieved.
-    """
+    """A missing register row raises. A silent zero would hide that type forever."""
     return ASSET_REGISTER[asset_type].budget
 
 
@@ -47,28 +34,10 @@ def apply_budgets(
     *,
     pulled_in: Sequence[PulledIn],
 ) -> BudgetResult:
-    """Cap ranked hits per type; keep every pulled-in asset outside the caps.
+    """Cap ranked hits per type. ``pulled_in`` is unchanged and does not consume the cap.
 
-    Hits are sorted by score descending, then accepted in that order until the
-    type's budget is exhausted:
-
-    * ``int`` — keep at most that many ranked hits of the type
-    * ``"all"`` — keep every ranked hit of the type
-    * ``"n/a"`` — keep zero ranked hits of the type (still allowed in pulled_in)
-
-    ``pulled_in`` is returned unchanged in membership and does not consume budget.
-
-    Caps report what they discarded in :attr:`BudgetResult.dropped` and
-    :attr:`BudgetResult.best_dropped_score`: a cap with no evidence is indistinguishable
-    from a retrieval that never found the asset.
-
-    **Ties break on the asset id**, matching every other ordering in the retrieval path
-    (``(-score, str(id))``). Score alone left the tie to ``hits_by_channel`` dict order, so
-    two equal-scoring tables swapped across processes at the cap boundary — and equal
-    scores were common, because each channel min-maxed its own scored population and so put
-    its best hit at exactly 1.0. That scaler is gone (``fuse.scale_to_ceiling``, audit I1),
-    which makes ties rarer rather than impossible: the ceiling still clamps, so every cosine
-    at or above ``semantic_ceiling`` scores exactly 1.0.
+    Ties break on asset id. The score ceiling still clamps, so equals occur and dict order swapped them across
+    processes.
     """
     ranked = sorted(hits, key=lambda h: (-h[2], str(h[0])))
     taken: dict[AssetType, int] = {}

@@ -1,8 +1,4 @@
-"""Retrieval hit attribution — channel, channels, and the queries that produced it.
-
-``lexical`` / ``semantic`` are ``None`` when that channel did not run for the
-channel (e.g. ``example`` has no lexical). A missing channel is never a zero score.
-"""
+"""A channel that did not run is ``None``. A missing channel is never stored as zero."""
 
 from __future__ import annotations
 
@@ -13,8 +9,6 @@ __all__ = ["Hit"]
 
 @dataclass(frozen=True)
 class Hit:
-    """One asset found by one channel, with both channel components and provenance."""
-
     channel: str
     asset_id: str
     asset_type: str

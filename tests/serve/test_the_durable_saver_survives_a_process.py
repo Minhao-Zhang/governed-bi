@@ -1,27 +1,7 @@
 """The durable checkpointer, opened for real.
 
-**No other test opens one.** ``compile_durable`` is patched to a stub in the one place eval's
-concurrent path is exercised, and everything else takes ``compile_graph``'s ``InMemorySaver``. So
-the whole reason the saver exists — a checkpoint that outlives the process that wrote it — was
-verified only by hand, and three of the four traps below are the kind that pass a review and hang a
-run:
-
-- ``aiosqlite`` binds its connection to the loop that opened it. A saver reused across two
-  ``asyncio.run`` calls does not raise, it **hangs** — so a test that merely constructs one proves
-  nothing about using it twice.
-- Its worker thread is not a daemon and CPython joins non-daemon threads *before* ``atexit``, so a
-  graph that is never closed stops the interpreter from exiting. A leak here does not fail an
-  assertion; it hangs the suite.
-- ``AsyncSqliteSaver.delete_thread`` exists and **blocks forever** rather than raising: it is a
-  ``run_coroutine_threadsafe(..., self.loop).result()`` bridge, and a caller-owned loop is not
-  running between calls (probed at ``langgraph-checkpoint-sqlite`` 3.1.1 — still blocked after
-  5 s, no raise). ``aio.py`` contains no ``NotImplementedError`` at all; those are on the *sync*
-  ``SqliteSaver``'s *async* methods. So ``eval/harness._evict`` prefers ``adelete_thread`` and
-  now raises ``EvictionWouldHang`` rather than falling through to the bridge.
-
-Each test bounds itself with ``pytest.mark.timeout``-free plain code and its own ``tmp_path``
-database, so a hang is a hung test rather than a poisoned session, and no test touches
-``HARNESS_DB``.
+``aiosqlite`` hangs when a saver is reused across two ``asyncio.run`` calls, an unclosed graph
+holds a non-daemon thread, and sync ``delete_thread`` blocks. Eviction uses ``adelete_thread``.
 """
 
 from __future__ import annotations
@@ -40,12 +20,7 @@ def _config(thread: str) -> dict[str, Any]:
 
 
 def _write_one(graph: Any, thread: str, values: dict[str, Any]) -> None:
-    """Put a checkpoint on ``thread`` through the saver, without running the graph.
-
-    ``update_state`` is the boundary because this file is about persistence, not about the serve
-    topology: a real turn would need a model, a connector and a corpus, and none of them are what
-    could be broken here.
-    """
+    """Write a checkpoint through the saver, without running a turn."""
     graph.run_coro(graph.checkpointer.aput(
         _config(thread),
         {
@@ -62,11 +37,7 @@ def _write_one(graph: Any, thread: str, values: dict[str, Any]) -> None:
 
 
 def test_a_checkpoint_written_by_one_saver_is_read_by_the_next(tmp_path: Path) -> None:
-    """The property the whole change exists for, and the one nothing tested.
-
-    Two savers, opened one after the other on the same file, in two different event loops — which
-    is what a restart is. Under ``InMemorySaver`` the second read returns nothing.
-    """
+    """Two savers on one file, in two event loops, which is what a restart is."""
     db = tmp_path / "conversations.sqlite"
 
     first = compile_durable(path=db)
@@ -90,12 +61,7 @@ def test_a_checkpoint_written_by_one_saver_is_read_by_the_next(tmp_path: Path) -
 
 
 def test_the_saver_answers_more_than_once_rather_than_hanging(tmp_path: Path) -> None:
-    """Two reads through one graph.
-
-    This is the ``aiosqlite`` loop-binding trap: with ``_SyncApp``'s default ``asyncio.run``-per-call
-    the second call's future belongs to a closed loop and **never returns**. If this test hangs
-    instead of failing, the pinned loop in ``compile_durable`` is gone.
-    """
+    """A second read on the same saver must return; a closed loop hangs instead of raising."""
     graph = compile_durable(path=tmp_path / "twice.sqlite")
     try:
         _write_one(graph, "t-twice", {"question": "first"})
@@ -109,12 +75,7 @@ def test_the_saver_answers_more_than_once_rather_than_hanging(tmp_path: Path) ->
 
 
 def test_closing_releases_the_connection_so_the_file_is_usable(tmp_path: Path) -> None:
-    """``close()`` is, not tidiness — see this module's header.
-
-    Asserted through the filesystem rather than by inspecting the object: after ``close`` the
-    write-ahead log has been folded back in and a *plain* ``sqlite3`` connection can read the
-    table, which is only true if the connection really closed.
-    """
+    """After ``close`` a plain sqlite connection can read the file, so the saver released it."""
     db = tmp_path / "closed.sqlite"
     graph = compile_durable(path=db)
     _write_one(graph, "t-closed", {"question": "q"})
@@ -133,12 +94,7 @@ def test_closing_releases_the_connection_so_the_file_is_usable(tmp_path: Path) -
 
 
 def test_closing_twice_is_harmless_and_a_default_graph_has_nothing_to_close() -> None:
-    """``close`` is called from ``finally`` blocks that may already have closed.
-
-    The second half matters more: ``compile_graph()`` — what most of the suite uses — has no pinned
-    loop, and ``close`` on it must be a no-op rather than tearing down an ``InMemorySaver`` some
-    other test is mid-way through.
-    """
+    """``close`` on the default graph is a no-op, so a second close does not tear the saver down."""
     from governed_bi.serve.graph import compile_graph
 
     plain = compile_graph()
@@ -148,14 +104,7 @@ def test_closing_twice_is_harmless_and_a_default_graph_has_nothing_to_close() ->
 
 
 def test_a_thread_can_be_evicted_through_the_async_method(tmp_path: Path) -> None:
-    """``eval/harness._evict`` depends on this and swallows failures, so nothing else would notice.
-
-    ``adelete_thread`` is the only usable eviction: the sync ``delete_thread`` on this saver
-    bridges onto the saver's own loop and blocks when that loop is not running, which is why
-    ``_evict`` refuses it by name rather than falling through
-    (``tests/eval/test_eviction_fails_loudly_rather_than_hanging.py``). Pinned because a saver
-    that cannot evict makes a config's database grow without bound.
-    """
+    """Eviction goes through ``adelete_thread``; the sync method blocks when its loop is idle."""
     graph = compile_durable(path=tmp_path / "evict.sqlite")
     try:
         _write_one(graph, "t-evict", {"question": "q"})
