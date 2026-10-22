@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import subprocess
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
@@ -34,3 +35,13 @@ def test_a_guidance_word_is_printed_and_does_not_fail(tmp_path: pathlib.Path, ca
     (tmp_path / "sample.py").write_text("shape = 1\n", encoding="utf-8")
     assert _tool().main(["--root", str(tmp_path)]) == 0
     assert "shape 1" in capsys.readouterr().out
+
+
+def test_a_git_ignored_file_is_not_scanned(tmp_path: pathlib.Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("vendor/\n", encoding="utf-8")
+    (tmp_path / "vendor").mkdir()
+    (tmp_path / "vendor" / "notes.md").write_text("licensed set\n", encoding="utf-8")
+    assert _tool().main(["--root", str(tmp_path)]) == 0
+    (tmp_path / "notes.md").write_text("licensed set\n", encoding="utf-8")
+    assert _tool().main(["--root", str(tmp_path)]) == 1

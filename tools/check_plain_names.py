@@ -17,6 +17,7 @@ import argparse
 import ast
 import io
 import re
+import subprocess
 import sys
 import tokenize
 import tomllib
@@ -266,9 +267,21 @@ def scan_md(
     return hits
 
 
+def candidates(root: Path) -> list[Path]:
+    # Inside a git work tree, only files git would commit: ignored local files (installed
+    # skills, build output) are not this repo's prose.
+    listed = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        capture_output=True,
+    )
+    if listed.returncode != 0:
+        return list(root.rglob("*"))
+    return [root / name for name in listed.stdout.decode("utf-8").split("\0") if name]
+
+
 def files(root: Path) -> list[Path]:
     found: list[Path] = []
-    for path in root.rglob("*"):
+    for path in candidates(root):
         if not path.is_file() or skipped(path) or path.suffix not in SUFFIXES:
             continue
         found.append(path)

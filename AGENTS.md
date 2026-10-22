@@ -35,6 +35,9 @@ Ossie plan and the September milestones are superseded.
   load-bearing for what you are about to change, check it against the code and *fix the prose in
   the same commit* — a comment that contradicts the code beside it is worse than no comment.
   Do not silently work around a stale one.
+- Coined names and the words that replace them are in `docs/plain-names.toml`;
+  `uv run --frozen python tools/check_plain_names.py` fails when one of the coined names appears
+  in a live doc or in a Python or TypeScript comment, docstring, or identifier.
 - Place all *documents* in the `docs/` folder — design documents, architecture diagrams, user
   guides. The root holds only `README.md`, `AGENTS.md`, `CLAUDE.md` and `LICENSE`; `ui/` holds only
   `ui/README.md`. Nothing else goes in either root.
