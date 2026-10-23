@@ -12,6 +12,7 @@ from governed_bi.measure.degradation import channels_degraded
 from governed_bi.registry.quantity import Measured
 from governed_bi.registry.record import project
 from governed_bi.registry.stages import ATTEMPT_CAP_REFUSED_BY, Outcome, Stage, classify_outcome
+from governed_bi.serve.agent_state import NO_ANSWER_CALL
 from governed_bi.serve.events import emit, rail_event_id
 from governed_bi.serve.ledger import answering_attempts, attempt_field
 from governed_bi.serve.outcome import OutcomeInputs, TurnOutcome, normalised
@@ -186,10 +187,17 @@ def _extract_factory(
         if name == "assumptions":
             raw = state.get("assumptions")
             return [dict(item) for item in raw] if isinstance(raw, list) else []
+        if name in ("guess_count", "ambiguous_guess_refusals"):
+            raw = state.get(name)
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                return 0
+            return raw
         if name == "answer_tool_called":
             # Refuse, decline, clarification, cap and crash are not a missing call.
             if state.get("answer_tool_called") is True:
                 return True
+            if error_type == NO_ANSWER_CALL:
+                return False
             return outcome not in (Outcome.answered, Outcome.no_sql)
 
         if name == "schemas":

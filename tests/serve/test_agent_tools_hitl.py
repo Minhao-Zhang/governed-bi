@@ -22,7 +22,7 @@ from governed_bi.serve.delivery import delivery_hash_for, payload_digest
 from governed_bi.serve.events import tool_event_id
 from governed_bi.serve.graph import compile_graph
 from governed_bi.serve.resume import resume_clarification
-from governed_bi.serve.scripted_model import ScriptedChatModel
+from governed_bi.serve.scripted_model import ScriptedChatModel, answer_call
 from governed_bi.serve.tools import build_tools
 
 
@@ -352,7 +352,7 @@ def test_ask_user_interrupt_and_resume() -> None:
                     }
                 ],
             ),
-            AIMessage(content="ok: 2020"),
+            answer_call("ok: 2020"),
         ]
     )
     graph = compile_graph()

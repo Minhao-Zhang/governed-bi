@@ -16,7 +16,7 @@ from governed_bi.registry.quantity import Measured
 from governed_bi.registry.stages import Outcome
 from governed_bi.serve.messages import last_proposed_sql
 
-__all__ = ["project_turn"]
+__all__ = ["ASSUMPTION_BASES", "project_turn"]
 
 
 #: Outcomes whose last proposed statement is priced and not scored. ``clarification``
@@ -195,6 +195,31 @@ def _int_or_absent(value: SupportsInt | str | None) -> int | None:
     return int(value)
 
 
+#: Bases an assumption may carry (ADR 0018). A count is kept for each, including zero.
+ASSUMPTION_BASES: tuple[str, ...] = ("layer", "convention", "guess", "found_in_query")
+
+
+def _assumption_counts(record: Mapping[str, Any]) -> dict[str, int] | None:
+    """Counts by basis, or ``None`` when ``assumptions`` was not written.
+
+    An empty list is an answer that stated nothing. A missing list is a crash
+    or an old run, and those two must not look the same on the row.
+    """
+    if "assumptions" not in record:
+        return None
+    assumptions = record["assumptions"]
+    if not isinstance(assumptions, (list, tuple)):
+        return None
+    counts = dict.fromkeys(ASSUMPTION_BASES, 0)
+    for entry in assumptions:
+        if not isinstance(entry, Mapping):
+            continue
+        basis = entry.get("basis")
+        if basis in counts:
+            counts[str(basis)] += 1
+    return counts
+
+
 def project_turn(
     state: Mapping[str, Any],
     *,
@@ -368,6 +393,10 @@ def project_turn(
         "re_served": None if n_re_served is None else n_re_served > 0,
         "refused_by": answer.get("refused_by") if isinstance(answer, Mapping) else None,
         "failed_stage": answer.get("failed_stage") if isinstance(answer, Mapping) else None,
+        # Missing list stays ``None``. Zero is an answer that named none of that basis.
+        "assumption_counts": _assumption_counts(record),
+        "guess_count": _int_or_absent(record.get("guess_count")),
+        "ambiguous_guess_refusals": _int_or_absent(record.get("ambiguous_guess_refusals")),
     }
 
     # Own field, not `error_type`. That name is the exception class of a crash.

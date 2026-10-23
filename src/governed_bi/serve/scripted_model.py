@@ -12,7 +12,22 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import Field
 
-__all__ = ["ScriptedChatModel"]
+__all__ = ["ScriptedChatModel", "answer_call"]
+
+
+def answer_call(
+    text: str, assumptions: list[dict[str, Any]] | None = None, call_id: str = "answer-1"
+) -> AIMessage:
+    """The ``answer`` tool call a scripted turn ends with. Prose alone is not an answer."""
+    return AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "answer",
+            "args": {"answer_text": text, "assumptions": list(assumptions or [])},
+            "id": call_id,
+            "type": "tool_call",
+        }],
+    )
 
 
 def _tool_name(tool: Any) -> str:

@@ -37,16 +37,15 @@ def test_route_top_n_from_settings_resolved_changes_the_turn(
     two_schema_assets, guard_off_policy
 ) -> None:
     """The reachability claim, asserted on what the setting controls: how many schemas are shortlisted."""
-    from langchain_core.messages import AIMessage
 
     from governed_bi.serve.graph import compile_graph
-    from governed_bi.serve.scripted_model import ScriptedChatModel
+    from governed_bi.serve.scripted_model import ScriptedChatModel, answer_call
     from governed_bi.serve.session import from_assets
 
     question = "customer account voltage reading device"
 
     def run(**overrides: Any) -> dict[str, Any]:
-        model: Any = ScriptedChatModel(responses=[AIMessage(content="one device")])
+        model: Any = ScriptedChatModel(responses=[answer_call("one device")])
         session = from_assets(
             list(two_schema_assets.values()),
             connector=None,

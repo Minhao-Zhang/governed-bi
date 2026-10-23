@@ -15,7 +15,7 @@ from langchain_core.messages import AIMessage
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.graph import compile_durable
 from governed_bi.serve.resume import resume_clarification
-from governed_bi.serve.scripted_model import ScriptedChatModel
+from governed_bi.serve.scripted_model import ScriptedChatModel, answer_call
 
 #: Long enough that a slow Windows file open is not a failure, short enough that a genuine block
 #: is reported in the same minute. The failure mode being bounded is a *block*, which no timeout
@@ -38,7 +38,7 @@ def _asking_model() -> ScriptedChatModel:
                     }
                 ],
             ),
-            AIMessage(content="ok: 2020"),
+            answer_call("ok: 2020"),
         ]
     )
 

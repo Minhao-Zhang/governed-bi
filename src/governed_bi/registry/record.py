@@ -308,6 +308,12 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "false when an answered or no-SQL turn ended without an accepted answer call. "
        "Refuse, decline, clarification, cap and crash record true: those endings are not "
        "a missing call"),
+    _f("guess_count", Tier.outcome, Absence.never, Stage.finish,
+       "how many accepted assumptions have basis guess. Zero when the turn did not accept "
+       "an answer call"),
+    _f("ambiguous_guess_refusals", Tier.outcome, Absence.never, Stage.finish,
+       "how many answer calls this turn were refused because a guess was about a phrase "
+       "two retrieved terms bind differently. Zero when answer was not called"),
 )
 
 #: Refuse; do not warn.

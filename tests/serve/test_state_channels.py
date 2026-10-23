@@ -192,6 +192,8 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # A carried-over list would publish the previous turn's choices as this turn's.
         "assumptions": [{"statement": "stale", "about": None, "basis": "guess", "asset_id": None}],
         "answer_tool_called": True,
+        "guess_count": 2,
+        "ambiguous_guess_refusals": 4,
         # A carried-over result is the previous turn's opinion filed against this turn's SQL,
         # and the record would publish it as this turn's — an observer's judgement about a
         # statement it never saw.

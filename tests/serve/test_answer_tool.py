@@ -252,18 +252,53 @@ def test_a_downgraded_layer_claim_is_corrected_once_then_accepted(monkeypatch: A
     assert out["answer"]["record"]["answer_tool_called"] is True
 
 
-def test_prose_without_the_answer_tool_is_recorded_and_still_adopted(monkeypatch: Any) -> None:
-    """A missing call is a field on the record. The sentence the model wrote is still the answer."""
+def test_prose_is_reminded_once_then_the_answer_is_accepted(monkeypatch: Any) -> None:
+    """One reminder, then the tool call. The reminder is not kept in the thread's messages."""
+    from governed_bi.serve.nodes.agent_core import ANSWER_REMINDER
+
+    _install(monkeypatch, check=_passthrough)
+    model = ScriptedChatModel(responses=[
+        AIMessage(content="three customers"),
+        _answer_call("There are three customers.", [_CONVENTION], "a1"),
+    ])
+    out = _run(model, "turn-reminded")
+
+    assert out["answer"]["outcome"] == "no_sql"
+    assert out["answer"]["answer_text"] == "There are three customers."
+    assert out["answer"]["record"]["answer_tool_called"] is True
+    assert ANSWER_REMINDER in model.prompt_text(1)
+    assert all(ANSWER_REMINDER not in str(m.content) for m in out["messages"])
+    assert len(model.prompts_seen) == 2
+
+
+def test_prose_after_the_reminder_is_no_answer(monkeypatch: Any) -> None:
+    """Still prose after the reminder: the turn records no answer, and the text is not adopted."""
+    from governed_bi.serve.nodes.agent_core import NO_ANSWER_CALL
+
     _install(monkeypatch, check=_passthrough)
     model = ScriptedChatModel(responses=[AIMessage(content="three customers")])
     out = _run(model, "turn-prose")
 
-    assert out["answer"]["answer_text"] == "three customers"
-    assert out["turns"][0]["answer_text"] == "three customers"
+    assert out["answer"]["outcome"] == "crashed"
+    assert out["answer"]["error_type"] == NO_ANSWER_CALL
+    assert out["answer"]["answer_text"] is None
     assert out["answer"]["record"]["answer_tool_called"] is False
     assert out["answer"]["record"]["assumptions"] == []
-    assert out["turns"][0]["assumptions"] == []
-    assert len(model.prompts_seen) == 1
+    assert len(model.prompts_seen) == 2
+
+
+def test_a_refused_statement_ending_in_prose_is_not_reminded(monkeypatch: Any) -> None:
+    """The ledger already says refused, so the prose gets no reminder and no second call."""
+    _install(monkeypatch, check=_passthrough)
+    refused = AIMessage(content="", tool_calls=[{
+        "name": "run_query", "args": {"sql": "DROP TABLE sales.customers"},
+        "id": "q1", "type": "tool_call",
+    }])
+    model = ScriptedChatModel(responses=[refused, AIMessage(content="I cannot do that.")])
+    out = _run(model, "turn-refused")
+
+    assert out["answer"]["outcome"] == "refused"
+    assert len(model.prompts_seen) == 2
 
 
 def test_a_turn_with_no_query_stores_no_found_in_query_entries(monkeypatch: Any) -> None:

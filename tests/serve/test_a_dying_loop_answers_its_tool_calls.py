@@ -17,7 +17,7 @@ from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve import graph as graph_module
 from governed_bi.serve.nodes import agent_core
 from governed_bi.serve.nodes.agent_core import agent_core_node
-from governed_bi.serve.scripted_model import ScriptedChatModel
+from governed_bi.serve.scripted_model import ScriptedChatModel, answer_call
 
 
 def _ask_user(*ids: str) -> AIMessage:
@@ -214,13 +214,13 @@ def test_a_resume_still_gets_its_answer() -> None:
     """The paired positive, without which every assertion above is satisfiable by a graph that
     stopped resuming at all: the answer becomes the ``ask_user`` reply, and not an error one."""
     graph = graph_module.compile_graph()
-    model = ScriptedChatModel(responses=[_ask_user("c1"), AIMessage("ok: 2020")])
+    model = ScriptedChatModel(responses=[_ask_user("c1"), answer_call("ok: 2020")])
     _paused(graph, model)
 
     done = graph.invoke(Command(resume="2020"), _config(model))
 
     assert done["path_kind"] == "answered", f"failure={done.get('failure')!r}"
-    replies = [m for m in done["messages"] if str(getattr(m, "type", "")) == "tool"]
+    replies = [m for m in done["messages"] if getattr(m, "tool_call_id", None) == "c1"]
     assert [str(m.content) for m in replies] == ["2020"], (
         f"the human's answer is what closes the call, got {[str(m.content) for m in replies]!r}"
     )
@@ -241,7 +241,7 @@ def test_a_pause_returned_as_a_frame_is_left_alone() -> None:
 def test_a_clean_turn_is_left_exactly_as_it_was() -> None:
     """The guard against sealing turns that need no sealing — a spurious error reply is a
     message the model reads and reasons from."""
-    out = _turn(ScriptedChatModel(responses=[AIMessage("three customers")]))
+    out = _turn(ScriptedChatModel(responses=[answer_call("three customers")]))
 
     assert out["path_kind"] == "answered"
-    assert [getattr(m, "type", None) for m in out["messages"]] == ["ai"]
+    assert [getattr(m, "type", None) for m in out["messages"]] == ["ai", "tool"]

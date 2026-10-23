@@ -16,6 +16,7 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 from langgraph.types import Command, interrupt
 
+from governed_bi.corpus.schema import TermAsset
 from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE, ToolBounds
 from governed_bi.govern.check import GovernanceUsageError
 from governed_bi.govern.ledger import (
@@ -27,7 +28,9 @@ from governed_bi.registry.prompts import prompt_text
 from governed_bi.serve import fetch
 from governed_bi.serve.agent_state import CAP_LEDGER_KEY, AttemptBook
 from governed_bi.serve.assumptions import (
+    AmbiguousGuess,
     AssumptionClaim,
+    ambiguous_guesses,
     check_layer_claims,
     delivered_statement,
     found_in_query,
@@ -485,18 +488,30 @@ def build_tools(
     ) -> Command:
         """Record the answer and every assumption it depends on.
 
-        A layer claim the server cannot back is sent back once, so the basis or the asset id
-        can be corrected. The next call is kept, including that correction.
+        A layer claim the server cannot back is sent back once. A guess about a phrase
+        two retrieved terms bind differently is refused on every call.
         """
         claims = [
             item if isinstance(item, AssumptionClaim) else AssumptionClaim.model_validate(item)
             for item in assumptions or []
         ]
+        known_assets = set(assets)
+        retrieved_assets = bounds.readable_assets | bounds.retrieved_tables
         checked = check_layer_claims(
             claims,
-            known_assets=set(assets),
-            retrieved_assets=bounds.readable_assets | bounds.retrieved_tables,
+            known_assets=known_assets,
+            retrieved_assets=retrieved_assets,
         )
+        # Every call: a later one with the same guess must not become the answer.
+        conflicts = ambiguous_guesses(
+            checked, _retrieved_terms(assets, bounds.readable_assets)
+        )
+        if conflicts:
+            return _reply(
+                runtime,
+                _ambiguous_reply(conflicts),
+                ambiguous_guess_refusals=1,
+            )
         # The first downgrade is a reply the agent can correct. A later call is the answer.
         bad = _downgraded_asset_ids(claims, checked)
         if bad and _completed_answer_calls(runtime) == 0:
@@ -530,6 +545,29 @@ def build_tools(
     return [read_body, inspect_schema, sample_rows, run_query, ask_user, answer]
 
 
+def _retrieved_terms(assets: Mapping[str, Any], readable: Any) -> list[TermAsset]:
+    """Term assets this turn retrieved. ``readable`` is ``bounds.readable_assets``."""
+    return [
+        asset
+        for asset_id, asset in assets.items()
+        if str(asset_id) in readable and isinstance(asset, TermAsset)
+    ]
+
+
+def _ambiguous_reply(conflicts: list[AmbiguousGuess]) -> str:
+    pieces = []
+    for item in conflicts:
+        terms = ", ".join(
+            f"{term['id']} ({term['name']}, {term['binding']})" for term in item["terms"]
+        )
+        pieces.append(f"{item['about']}: {terms}")
+    listed = "; ".join(pieces)
+    return (
+        "answer rejected: a guess is about a phrase the layer defines more than one way "
+        f"({listed}). Call ask_user with basis 'data_definition' to ask which one the person means."
+    )
+
+
 def _downgraded_asset_ids(claims: list[AssumptionClaim], checked: list[Any]) -> list[str]:
     """Asset ids of ``layer`` claims the check stored under another basis."""
     bad: list[str] = []
@@ -546,7 +584,13 @@ def _downgraded_asset_ids(claims: list[AssumptionClaim], checked: list[Any]) -> 
 def _completed_answer_calls(runtime: Any) -> int:
     """This turn's answer calls that already have a reply. Earlier turns' calls do not count."""
     messages = list((getattr(runtime, "state", None) or {}).get("messages") or [])
-    humans = [i for i, m in enumerate(messages) if str(getattr(m, "type", "") or "") == "human"]
+    # The answer reminder is a human message inside the turn, so it does not start one.
+    humans = [
+        i
+        for i, m in enumerate(messages)
+        if str(getattr(m, "type", "") or "") == "human"
+        and not str(getattr(m, "id", "") or "").startswith("answer-reminder-")
+    ]
     messages = messages[humans[-1] + 1 :] if humans else messages
     replied = {
         str(getattr(message, "tool_call_id", "") or "")

@@ -19,13 +19,18 @@ __all__ = [
     "merge_by_call",
     "keep_newest",
     "any_fail_closed",
+    "add_counts",
     "AttemptBook",
     "CAP_LEDGER_KEY",
+    "NO_ANSWER_CALL",
 ]
 
 # One shared key, not ``f"cap:{call_id}"``: the book is rebuilt per ``build_tools``
 # call and two writers exist, so only a constant key collapses to one cap row.
 CAP_LEDGER_KEY = "cap"
+
+#: ``error_type`` of a turn that ended in prose after its one reminder.
+NO_ANSWER_CALL = "NoAnswerCall"
 
 
 def merge_by_call(left: Any, right: Any) -> dict[str, Any]:
@@ -41,6 +46,17 @@ def keep_newest(left: Any, right: Any) -> Any:
     ``run_query`` calls then discarded the ledger. Within a step, "later" is call order.
     """
     return right if right is not None else left
+
+
+def add_counts(left: Any, right: Any) -> int:
+    """Each write is a count to add, so two writes in one step do not raise."""
+    return _as_count(left) + _as_count(right)
+
+
+def _as_count(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value
 
 
 def any_fail_closed(left: Any, right: Any) -> bool:
@@ -71,6 +87,8 @@ class GovernedAgentState(AgentState):
     assumptions: Annotated[list[Any] | None, keep_newest]
     # Matches the turn id the middleware holds. A later turn's id does not.
     answer_accepted_epoch: Annotated[str | None, keep_newest]
+    # A count, not last-write: two answer calls in one step must both count.
+    ambiguous_guess_refusals: Annotated[int, add_counts]
 
 
 def _chargeable(committed: Mapping[str, Any] | None) -> set[str]:

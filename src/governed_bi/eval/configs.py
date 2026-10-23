@@ -12,7 +12,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from governed_bi.govern.policy import GovernancePolicy
-from governed_bi.serve.scripted_model import ScriptedChatModel
+from governed_bi.serve.scripted_model import ScriptedChatModel, answer_call
 
 __all__ = ["ConfigSpec", "oracle_config", "stub_config", "scripted_config", "live_config"]
 
@@ -84,7 +84,7 @@ def model_for_question(configurable: Mapping[str, Any], question_id: str) -> Any
         return configurable.get("agent_model")
     sql = lookup.get(question_id)
     if not sql:
-        return ScriptedChatModel(responses=[AIMessage(content="no gold sql")])
+        return ScriptedChatModel(responses=[answer_call("no gold sql")])
     call = AIMessage(
         content="",
         tool_calls=[
@@ -96,5 +96,5 @@ def model_for_question(configurable: Mapping[str, Any], question_id: str) -> Any
             }
         ],
     )
-    final = AIMessage(content=f"executed {question_id}")
+    final = answer_call(f"executed {question_id}")
     return ScriptedChatModel(responses=[call, final])

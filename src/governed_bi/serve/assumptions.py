@@ -16,6 +16,7 @@ from sqlglot import expressions as exp
 from sqlglot.errors import OptimizeError, SqlglotError
 from sqlglot.optimizer.scope import Scope
 
+from governed_bi.corpus.schema import Binding, TermAsset
 from governed_bi.govern.identifiers import column_key, fold, normalise_column_key
 from governed_bi.govern.policy import DEFAULT_DIALECT
 from governed_bi.govern.scopes import iter_scopes
@@ -26,6 +27,9 @@ __all__ = [
     "STATED_BASES",
     "Assumption",
     "AssumptionClaim",
+    "CompetingTerm",
+    "AmbiguousGuess",
+    "ambiguous_guesses",
     "check_layer_claims",
     "delivered_statement",
     "found_in_query",
@@ -54,6 +58,71 @@ class Assumption(TypedDict):
     about: str | None
     basis: Basis
     asset_id: str | None
+
+
+class CompetingTerm(TypedDict):
+    """One retrieved term that binds the phrase differently from another."""
+
+    id: str
+    name: str
+    binding: str
+
+
+class AmbiguousGuess(TypedDict):
+    """One guess, with every term that matches its phrase."""
+
+    about: str
+    terms: list[CompetingTerm]
+
+
+def ambiguous_guesses(
+    assumptions: Sequence[Mapping[str, Any]],
+    terms: Sequence[TermAsset],
+) -> list[AmbiguousGuess]:
+    """Guesses whose phrase matches two terms that bind differently.
+
+    ``about`` is compared case-folded, with surrounding whitespace stripped.
+    Only basis ``guess`` is checked, and an empty phrase never matches.
+    """
+    found: list[AmbiguousGuess] = []
+    for item in assumptions:
+        if item.get("basis") != "guess":
+            continue
+        phrase = _phrase_key(item.get("about"))
+        if not phrase:
+            continue
+        matched = [term for term in terms if phrase in _term_phrases(term)]
+        if len({term.binding for term in matched}) < 2:
+            continue
+        about = item.get("about")
+        found.append({
+            "about": about.strip() if isinstance(about, str) else phrase,
+            "terms": [_competing(term) for term in matched],
+        })
+    return found
+
+
+def _phrase_key(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().casefold()
+
+
+def _term_phrases(term: TermAsset) -> set[str]:
+    phrases = {_phrase_key(term.name)}
+    phrases.update(_phrase_key(synonym) for synonym in term.synonyms)
+    phrases.discard("")
+    return phrases
+
+
+def _competing(term: TermAsset) -> CompetingTerm:
+    return {"id": term.id, "name": term.name, "binding": _binding_text(term.binding)}
+
+
+def _binding_text(binding: Binding | None) -> str:
+    if binding is None:
+        return "no binding"
+    return f"{binding.target_type.value} {binding.target_id}"
 
 
 def check_layer_claims(

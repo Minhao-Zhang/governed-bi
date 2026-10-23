@@ -32,7 +32,7 @@ from governed_bi.serve.abstention import (
 )
 from governed_bi.serve.graph import as_sync
 from governed_bi.serve.nodes.abstain import abstain_node
-from governed_bi.serve.scripted_model import ScriptedChatModel
+from governed_bi.serve.scripted_model import ScriptedChatModel, answer_call
 from governed_bi.serve.session import from_assets
 
 QUESTION = "how many sales orders are there"
@@ -404,7 +404,7 @@ class _TurnLog:
 
 def _model() -> ScriptedChatModel:
     """Answers from the context without a statement. Its **call count** is the assertion."""
-    return ScriptedChatModel(responses=[AIMessage(content="there are some orders")])
+    return ScriptedChatModel(responses=[answer_call("there are some orders")])
 
 
 def _session(*, enabled: bool, model: Any) -> Any:
@@ -427,6 +427,8 @@ def _session(*, enabled: bool, model: Any) -> Any:
         db_id="sales",
         corpus_content_hash_="corpus-under-test",
         agent_model=model,
+        # Its own model: the rewriters read prose, and the agent's script ends in a tool call.
+        utility_model=ScriptedChatModel(responses=[AIMessage(content="there are some orders")]),
     )
     assert not session.fatal_problems, [str(p) for p in session.fatal_problems]
     if not enabled:

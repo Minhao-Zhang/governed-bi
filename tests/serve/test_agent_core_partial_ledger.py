@@ -14,7 +14,7 @@ from langchain_core.messages import AIMessage
 from governed_bi.corpus.analyst import analyst_corpus_from_keys
 from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.serve.nodes.agent_core import agent_core_node
-from governed_bi.serve.scripted_model import ScriptedChatModel
+from governed_bi.serve.scripted_model import ScriptedChatModel, answer_call
 from governed_bi.serve.wrap import wrap_node
 
 ASK = AIMessage(
@@ -104,7 +104,7 @@ def test_the_messages_the_loop_did_produce_survive() -> None:
 
 def test_a_clean_turn_is_unchanged_and_carries_no_failure() -> None:
     """The guard against fixing the crash path by making every turn look crashed."""
-    out = _run_turn(ScriptedChatModel(responses=[AIMessage("three customers")]))
+    out = _run_turn(ScriptedChatModel(responses=[answer_call("three customers")]))
 
     assert out["path_kind"] == "answered"
     assert "failure" not in out, "a turn that did not fail must not carry a failure marker"

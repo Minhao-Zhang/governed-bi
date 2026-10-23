@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from governed_bi.eval.projection import ASSUMPTION_BASES
 from governed_bi.measure.checks import (
     CHECK_IMPLEMENTATIONS,
     CheckResult,
@@ -34,6 +35,8 @@ __all__ = [
     "settings_comparable",
     "outcome_rates",
     "paired_ex",
+    "assumption_figures",
+    "assumption_report_lines",
     "refusal_histogram",
     "refusal_report_lines",
     "summarise",
@@ -151,6 +154,136 @@ def refusal_report_lines(hist: Mapping[str, Any]) -> list[str]:
         )
     if hist["no_reason"]:
         lines.append(f"  refused with no reason recorded: {hist['no_reason']}")
+    return lines
+
+
+def _plain_int(value: Any) -> int | None:
+    """An int, or ``None``. ``bool`` is not a count (``True`` would read as one guess)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _recorded_answers(
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[list[Mapping[str, Any]], int]:
+    """Answered rows whose assumption counts were written, and how many answers were not."""
+    recorded: list[Mapping[str, Any]] = []
+    not_recorded = 0
+    for row in rows:
+        if str(row.get("outcome") or "") != Outcome.answered.value:
+            continue
+        if isinstance(row.get("assumption_counts"), Mapping):
+            recorded.append(row)
+        else:
+            not_recorded += 1
+    return recorded, not_recorded
+
+
+def _basis_value(row: Mapping[str, Any], basis: str) -> int | None:
+    counts = row.get("assumption_counts")
+    if not isinstance(counts, Mapping):
+        return None
+    return _plain_int(counts.get(basis))
+
+
+def _basis_mean(recorded: Sequence[Mapping[str, Any]], basis: str) -> dict[str, Any]:
+    """Total and mean, or both ``None`` when any answer left this basis unwritten."""
+    values = [_basis_value(row, basis) for row in recorded]
+    known = [value for value in values if value is not None]
+    if not recorded or len(known) != len(recorded):
+        return {"total": None, "mean": None}
+    total = sum(known)
+    return {"total": total, "mean": total / len(recorded)}
+
+
+def _execution_accuracy(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """``correct`` over this split, with the same absence rule as the headline rate.
+
+    One ungraded answer makes the accuracy unmeasured. Counting it wrong would
+    mix a missing gold in with answers the model missed.
+    """
+    n = len(rows)
+    if n == 0 or any(row.get("correct") is None for row in rows):
+        return {"n": n, "n_correct": None, "accuracy": None}
+    n_correct = sum(1 for row in rows if row["correct"])
+    return {"n": n, "n_correct": n_correct, "accuracy": n_correct / n}
+
+
+def assumption_figures(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Per-answer means, guess accuracy, and server-added ``found_in_query`` entries.
+
+    Answered rows with no ``assumption_counts`` count as not recorded. They stay
+    out of the means: a missing list is not an answer that stated nothing.
+    """
+    recorded, not_recorded = _recorded_answers(rows)
+    guessed: list[Mapping[str, Any]] = []
+    unguessed: list[Mapping[str, Any]] = []
+    for row in recorded:
+        guesses = _basis_value(row, "guess")
+        if guesses is None:
+            continue
+        (guessed if guesses > 0 else unguessed).append(row)
+    # Every found_in_query entry is one the server added, so the total is what the model did not state.
+    found = [_basis_value(row, "found_in_query") for row in recorded]
+    known_found = [value for value in found if value is not None]
+    if not recorded or len(known_found) != len(recorded):
+        unstated: dict[str, Any] = {"total": None, "n_with_any": None, "share": None}
+    else:
+        n_with_any = sum(1 for value in known_found if value > 0)
+        unstated = {
+            "total": sum(known_found),
+            "n_with_any": n_with_any,
+            "share": n_with_any / len(recorded),
+        }
+    # Every turn, not just answers: a refused guess usually ends the turn in a clarification.
+    refusals = [_plain_int(row.get("ambiguous_guess_refusals")) for row in rows]
+    known_refusals = [value for value in refusals if value is not None]
+    refusal_total = sum(known_refusals) if known_refusals else None
+    return {
+        "n_answers": len(recorded),
+        "not_recorded": not_recorded,
+        "by_basis": {basis: _basis_mean(recorded, basis) for basis in ASSUMPTION_BASES},
+        "with_guess": _execution_accuracy(guessed),
+        "without_guess": _execution_accuracy(unguessed),
+        "found_in_query_unstated": unstated,
+        "ambiguous_guess_refusals": refusal_total,
+    }
+
+
+def assumption_report_lines(figures: Mapping[str, Any]) -> list[str]:
+    """Printable lines for :func:`assumption_figures`. No lines when nothing was answered."""
+    n = int(figures["n_answers"])
+    missing = int(figures["not_recorded"])
+    if n == 0 and missing == 0:
+        return []
+    lines = [f"\nassumptions per answer ({n} recorded, {missing} not recorded):"]
+    if n == 0:
+        return lines
+    for basis in ASSUMPTION_BASES:
+        entry = figures["by_basis"][basis]
+        shown = "not recorded" if entry["total"] is None else f"{entry['total']}/{n}"
+        lines.append(f"  {basis}: {shown}")
+    for label, key in (("with a guess", "with_guess"), ("with no guess", "without_guess")):
+        group = figures[key]
+        if group["n"] == 0:
+            shown = "n=0"
+        elif group["accuracy"] is None:
+            shown = f"not recorded (n={group['n']})"
+        else:
+            shown = f"{group['n_correct']}/{group['n']} (n={group['n']})"
+        lines.append(f"  execution accuracy {label}: {shown}")
+    unstated = figures["found_in_query_unstated"]
+    if unstated["total"] is None:
+        lines.append("  found_in_query the model did not state: not recorded")
+    else:
+        lines.append(
+            "  found_in_query the model did not state: "
+            f"{unstated['total']} ({unstated['n_with_any']}/{n} answers)"
+        )
+    refusals = figures["ambiguous_guess_refusals"]
+    shown = "not recorded" if refusals is None else str(refusals)
+    lines.append(f"  ambiguous_guess_refusals: {shown}")
     return lines
 
 
@@ -388,6 +521,7 @@ def summarise(
                 "crash_rate": _measured_dict(pop.rate("crashed")),
                 # Per config: why this config declined is not a property of the pair.
                 "refusals": refusal_histogram(pop.rows),
+                "assumptions": assumption_figures(pop.rows),
                 "checks": [g.render() for g in evaluate_config(pop)],
             }
             for name, pop in pops.items()

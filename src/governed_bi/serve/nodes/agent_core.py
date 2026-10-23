@@ -19,7 +19,7 @@ from langchain.agents.middleware import (
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
-from governed_bi.serve.agent_state import CAP_LEDGER_KEY, GovernedAgentState
+from governed_bi.serve.agent_state import CAP_LEDGER_KEY, NO_ANSWER_CALL, GovernedAgentState
 from governed_bi.serve.delivery import DeliveryTracker
 from governed_bi.serve.events import emit, tool_event_id
 from governed_bi.serve.ledger import answering_attempts, cap_attempt, execution_from_attempts
@@ -28,7 +28,7 @@ from governed_bi.serve.state import TERMINAL_PATH_KINDS
 from governed_bi.serve.tools import analyst_prompt, build_tools, policy_from_config
 from governed_bi.serve.usage import NO_TOKEN_USAGE, usage_row
 
-__all__ = ["agent_core_node", "STUB_ANSWER", "NO_TOKEN_USAGE"]
+__all__ = ["agent_core_node", "STUB_ANSWER", "NO_TOKEN_USAGE", "ANSWER_REMINDER", "NO_ANSWER_CALL"]
 
 STUB_ANSWER = "STUB_ANSWER"
 
@@ -56,7 +56,7 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
         state_schema=GovernedAgentState,
         middleware=[
             *_context_middleware(state, model),
-            _CapEndsTheTurn(policy_from_config(config).run_query_attempt_cap),
+            _CapEndsTheTurn(policy_from_config(config).run_query_attempt_cap, epoch),
             # One before_model node. A second spends a recursion step each loop, and the
             # sample-then-query cap then dies on the default limit before it can record itself.
             _EndsTheTurn(epoch),
@@ -81,7 +81,7 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     )
 
     out_messages = list(result.get("messages") or [])
-    fresh = out_messages[len(inbound) :]
+    fresh = [m for m in out_messages[len(inbound) :] if not _is_reminder(m)]
 
     # From the checkpointed channels, not closures on the tool objects.
     attempts = list((result.get("attempts_by_call") or {}).values())
@@ -116,14 +116,35 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     result_table = result.get("result_table")
     if result_table:
         update["result_table"] = result_table
-    if epoch and result.get("answer_accepted_epoch") == epoch:
+    accepted = bool(epoch) and result.get("answer_accepted_epoch") == epoch
+    assumptions = result.get("assumptions")
+    stored = list(assumptions) if isinstance(assumptions, list) else []
+    if accepted:
         text = result.get("answer_text")
         if isinstance(text, str) and text.strip():
             update["answer_text"] = text.strip()
-        assumptions = result.get("assumptions")
-        update["assumptions"] = list(assumptions) if isinstance(assumptions, list) else []
+        update["assumptions"] = stored
         update["answer_tool_called"] = True
+        update["guess_count"] = _guess_count(stored)
+    else:
+        update["guess_count"] = 0
+    # Copied on every ending, including a refusal that then asks.
+    update["ambiguous_guess_refusals"] = _as_count(result.get("ambiguous_guess_refusals"))
+    if _ended_without_answer(result, failure, accepted=accepted, execution=execution):
+        # Reminded once and still prose: that text is not the answer (ADR 0018 §1).
+        update["path_kind"] = "crashed"
+        update["failure"] = {"stage": "agent_core", "error_type": NO_ANSWER_CALL}
     return update
+
+
+def _ended_without_answer(
+    result: Mapping[str, Any], failure: Any, *, accepted: bool, execution: Mapping[str, Any]
+) -> bool:
+    if failure is not None or accepted or result.get("__interrupt__"):
+        return False
+    if result.get("clarification_requested") or execution.get("terminal") in ("refused", "capped"):
+        return False
+    return any(_is_reminder(m) for m in result.get("messages") or ())
 
 
 async def _run(
@@ -269,21 +290,23 @@ def _with_block(messages: list[Any], block: str, cache_point: dict[str, Any] | N
 
 
 class _CapEndsTheTurn(ToolCallLimitMiddleware):
-    """``thread_limit`` survives resume; ``run_limit`` resets.
+    """The cap, and the one reminder a prose ending gets. One node: each spends a recursion step.
 
-    Native ``end`` writes no ledger row, so the hook jumps.
+    ``thread_limit`` survives resume; ``run_limit`` resets. Native ``end`` writes no ledger row,
+    so the hook jumps.
     """
 
-    def __init__(self, cap: int) -> None:
+    def __init__(self, cap: int, epoch: str = "") -> None:
         super().__init__(tool_name="run_query", thread_limit=int(cap), exit_behavior="continue")
+        self.epoch = epoch
 
-    @hook_config(can_jump_to=["end"])
+    @hook_config(can_jump_to=["end", "model"])
     def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         """The decorator is repeated: an override without it loses ``can_jump_to``."""
         update = super().after_model(state, runtime)
         blocked = [m for m in (update or {}).get("messages") or () if isinstance(m, ToolMessage)]
         if not update or not blocked:
-            return update
+            return update or _remind_once(state, self.epoch)
         stranded = _stranded_replies(
             state,
             {m.tool_call_id for m in blocked},
@@ -303,6 +326,38 @@ class _CapEndsTheTurn(ToolCallLimitMiddleware):
             "messages": [*update["messages"], *stranded, final],
             "attempts_by_call": {CAP_LEDGER_KEY: cap_attempt()},
         }
+
+
+#: Sent once when the model ends in prose. Stripped from ``messages`` so it is not a question.
+ANSWER_REMINDER = (
+    "You ended without calling a tool. Finish by calling answer with the answer and its "
+    "assumptions, or call ask_user if you need the person to choose. Prose alone is not an answer."
+)
+
+
+def _remind_once(state: Any, epoch: str) -> dict[str, Any] | None:
+    """Back to the model once, when it ended in prose with nothing that ends a turn."""
+    state = state or {}
+    messages = list(state.get("messages") or ())
+    last = messages[-1] if messages else None
+    if not isinstance(last, AIMessage) or last.tool_calls or not epoch:
+        return None
+    if state.get("clarification_requested") or state.get("answer_accepted_epoch") == epoch:
+        return None
+    # A refused or capped ledger already decides the outcome; the prose there is not the answer.
+    attempts = list((state.get("attempts_by_call") or {}).values())
+    if execution_from_attempts(attempts)["terminal"] in ("refused", "capped"):
+        return None
+    if any(_is_reminder(m) for m in messages):
+        return None
+    return {"messages": [HumanMessage(ANSWER_REMINDER, id=f"{_REMINDER_ID}{epoch}")], "jump_to": "model"}
+
+
+_REMINDER_ID = "answer-reminder-"
+
+
+def _is_reminder(message: Any) -> bool:
+    return str(getattr(message, "id", "") or "").startswith(_REMINDER_ID)
 
 
 class _ClarificationEndsTheTurn(AgentMiddleware):
@@ -396,6 +451,18 @@ def _stub(state: dict) -> dict:
         ],
         "clarification_requested": False,
     }
+
+
+def _guess_count(assumptions: list[Any]) -> int:
+    return sum(
+        1 for item in assumptions if isinstance(item, Mapping) and item.get("basis") == "guess"
+    )
+
+
+def _as_count(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value
 
 
 def _last_executed_sql(attempts: Any) -> str | None:

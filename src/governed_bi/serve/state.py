@@ -389,6 +389,10 @@ class ServeState(TypedDict, total=False):
     assumptions: list[dict[str, Any]] | None
     #: True when an accepted ``answer`` call ended the turn. Finish records the fault when this stays unset.
     answer_tool_called: bool | None
+    #: Accepted assumptions whose basis is ``guess``. Zero when no answer was accepted.
+    guess_count: int | None
+    #: Answer calls refused for a phrase two retrieved terms bind differently.
+    ambiguous_guess_refusals: int | None
     #: Per-turn: streamed config is bound with no question.
     query_vector: list[float] | None
     #: Wall clock, so a resumed clarification still has a span when the checkpointer
@@ -421,6 +425,8 @@ PER_TURN_RESET: dict[str, Any] = {
     "answer_text": None,
     "assumptions": None,
     "answer_tool_called": None,
+    "guess_count": 0,
+    "ambiguous_guess_refusals": 0,
     "query_vector": None,
     # Or the next turn's latency includes the gap between turns.
     "turn_started_at": None,
