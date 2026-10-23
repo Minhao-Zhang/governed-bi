@@ -52,6 +52,6 @@ uv run --frozen python -m governed_bi.corpus.ossie_export --corpus-dir <corpus> 
 
 Both flags are required. The command writes `<dir>/<database>.yaml`, one Ossie `0.2.0.dev0` model per database, and `<dir>/export-report.json`. It prints the totals, and it exits 1 when the corpus has load problems. Write the output under `runs/`, or outside this repository.
 
-The model records Ossie commit `53418ba` in a `custom_extensions` entry whose `vendor_name` is `GOVERNED_BI`. Ossie relationships are many-to-one and carry no cardinality, so the exporter writes cardinality into that extension. Joins it cannot express as a relationship, joins with no cardinality, terms it cannot bind, and metric expressions sqlglot cannot parse are counted in the report. The mapping in full is in ADR 0020.
+The model records Ossie commit `d85e9e1` in a `custom_extensions` entry whose `vendor_name` is `GOVERNED_BI`. Ossie relationships are many-to-one and carry no cardinality, so the exporter writes cardinality into that extension. Joins it cannot express as a relationship, joins with no cardinality, terms it cannot bind, and metric expressions sqlglot cannot parse are counted in the report. The mapping in full is in ADR 0020.
 
 Reading an Ossie file as the corpus the server loads is not implemented. The server reads this YAML layout.

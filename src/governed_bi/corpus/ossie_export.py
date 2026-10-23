@@ -50,7 +50,7 @@ __all__ = [
 ]
 
 OSSIE_VERSION = "0.2.0.dev0"
-OSSIE_COMMIT = "53418ba"
+OSSIE_COMMIT = "d85e9e1"
 VENDOR = "GOVERNED_BI"
 REPORT_NAME = "export-report.json"
 

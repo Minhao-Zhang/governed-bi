@@ -35,7 +35,7 @@ def _data(entity: dict[str, Any]) -> dict[str, Any]:
 def test_version_and_commit_are_written() -> None:
     model, _ = _export()
     assert model["version"] == "0.2.0.dev0"
-    assert _data(model)["ossie_commit"] == "53418ba"
+    assert _data(model)["ossie_commit"] == "d85e9e1"
     assert model["custom_extensions"][0]["vendor_name"] == "GOVERNED_BI"
 
 

@@ -1387,4 +1387,4 @@ the graph lazily. **Size:** fixes only.
 | EX and coverage, two runs, total and by half | not measured | PLACEHOLDER (P16) |
 | Comment and docstring share of non-blank lines in `src/governed_bi` | 38% (10% comments, 28% docstrings) | 12.1% (5.0% comments, 7.1% docstrings) at P9b, of 18,869 non-blank lines; 34.6% on the same count just before the sweep |
 | Phrases BIRD-corpus defines more than one way (P11 rule) | none measured | 2: "predominant" in `mondial_geo`, "name" in `superstore`; the rule is tested on a fixture corpus, not measured on BIRD |
-| BIRD exports that pass Ossie `validate.py` (P15) | no exporter | 57 of 57 at Ossie `53418ba`; 592 relationships, 112 `many_to_many` kept in the extension, 2 joins without cardinality |
+| BIRD exports that pass Ossie `validate.py` (P15) | no exporter | 57 of 57 at Ossie `53418ba`, and again at `d85e9e1`, which adds dataset-scoped metrics; 592 relationships, 112 `many_to_many` kept in the extension, 2 joins without cardinality |
