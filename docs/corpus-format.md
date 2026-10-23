@@ -86,6 +86,21 @@ Assets split into three tiers, plus optional governance overrides:
 | Inference | Authored semantics |
 | Audit | Provenance and review state; never injected into model context |
 
+## Export to Ossie
+
+```
+uv run --frozen python -m governed_bi.corpus.ossie_export --corpus-dir <corpus> --out <dir>
+```
+
+Writes `<dir>/<database>.yaml`, one Ossie `0.2.0.dev0` model per database (mapping in
+[ADR 0020](adr/0020-ossie-export-and-a-separate-viewer.md)), and `<dir>/export-report.json`. The
+report counts what did not map: many-to-many joins, joins with no cardinality, joins whose `on` is
+not an AND of column equalities, and metric expressions sqlglot cannot parse. Ossie's
+`validate.py` rejects those metric expressions, so a model that holds one fails it. The extension
+`GOVERNED_BI` records the Ossie commit. `round_trip_loss` in the same module lists what the
+exporter's own reader does not bring back. The test runs `../ossie/validation/validate.py` and
+skips when `../ossie` is absent. Write exports outside the repository tree, or under `runs/`.
+
 ## Validate
 
 Use the corpus package under `src/governed_bi/corpus/` and the tests in `tests/corpus/`. There is

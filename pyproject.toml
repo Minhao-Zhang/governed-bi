@@ -139,6 +139,8 @@ dev = [
     # of `httpx2`, which is a choice this file is currently not making.
     "ruff>=0.16.0",
     "mypy>=2.3.0",
+    "jsonschema>=4.26.0",
+    "referencing>=0.37.0",
 ]
 
 [build-system]
