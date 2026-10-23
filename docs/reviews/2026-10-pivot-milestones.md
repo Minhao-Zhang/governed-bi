@@ -1373,18 +1373,18 @@ the graph lazily. **Size:** fixes only.
 
 | Metric | Start (2026-10-19, `eaba82a`) | End |
 |---|---|---|
-| Lines in `src/governed_bi` (Python) | 42,907 in 151 files | |
-| Lines in `tests/` (Python) | 51,968 in 193 files | |
-| Tests collected | 2,126 | |
-| Lines in `ui/` (TS and TSX, excluding build folders; with tests / without) | 21,512 / 21,137 | |
-| Python files in `tools/` | 39 | |
-| `tools/check_*.py` | 12 | |
-| Declared knobs or settings | 63 | |
-| UI pages | 8 | |
+| Lines in `src/governed_bi` (Python) | 42,907 in 151 files | 24,138 in 128 files at P17 |
+| Lines in `tests/` (Python) | 51,968 in 193 files | 29,319 in 151 files at P17 |
+| Tests collected | 2,126 | 1,513 at P17 |
+| Lines in `ui/` (TS and TSX, excluding build folders; with tests / without) | 21,512 / 21,137 | 6,093 / 5,019 at P17 (git-tracked files) |
+| Python files in `tools/` | 39 | 10 at P17, after the snapshot tools were deleted |
+| `tools/check_*.py` | 12 | 4 at P17 |
+| Declared knobs or settings | 63 | 63 plain defaults with no roles at P17 (`effective_settings()`), counting the provenance fields the record carries |
+| UI pages | 8 | 1 at P13 |
 | Snapshot SHA-256 and wall time | `b4f62e8c8b16518176ff223edbf30cf0fafcdf5e9f60dbfbc23116045fd231b4`, 387 s | `d87881ff9ae80f7c779ae70aa1e52292c154ddb8b4c9d5c477aa5d0fde5f85e6` at P10, byte-identical to the P9b snapshot: the snapshot does not run the agent; `120288781310aaa0f900a8f155d7fb52df73642ba1ae3b1618b9ecd6f835315a` at P15, after BIRD-corpus `8ba312ed` wrote 15 metric expressions as SQL: the corpus hash and 251 context hashes change, and the P15 code on the old corpus reproduces the P10 snapshot exactly |
-| CI time of the `test` job | 145 s at `6ea775a`, before P5; 67 s at `1dd66e1`, after P5 | |
-| Checkpoint size after one turn | (P12) | 65,107 bytes over 26 checkpoints for a scripted turn with a 150-row result at P12; the stored 20-row preview adds 335 bytes |
-| EX and coverage, two runs, total and by half | (P16) | |
+| CI time of the `test` job | 145 s at `6ea775a`, before P5; 67 s at `1dd66e1`, after P5 | 72 s at `ead514e` (P14) |
+| Checkpoint size after one turn | not measured | 65,107 bytes over 26 checkpoints for a scripted turn with a 150-row result at P12; the stored 20-row preview adds 335 bytes |
+| EX and coverage, two runs, total and by half | not measured | PLACEHOLDER (P16) |
 | Comment and docstring share of non-blank lines in `src/governed_bi` | 38% (10% comments, 28% docstrings) | 12.1% (5.0% comments, 7.1% docstrings) at P9b, of 18,869 non-blank lines; 34.6% on the same count just before the sweep |
-| Phrases BIRD-corpus defines more than one way (P11 rule) | | 2: "predominant" in `mondial_geo`, "name" in `superstore`; the rule is tested on a fixture corpus, not measured on BIRD |
-| BIRD exports that pass Ossie `validate.py` (P15) | | 57 of 57 at Ossie `53418ba`; 592 relationships, 112 `many_to_many` kept in the extension, 2 joins without cardinality |
+| Phrases BIRD-corpus defines more than one way (P11 rule) | none measured | 2: "predominant" in `mondial_geo`, "name" in `superstore`; the rule is tested on a fixture corpus, not measured on BIRD |
+| BIRD exports that pass Ossie `validate.py` (P15) | no exporter | 57 of 57 at Ossie `53418ba`; 592 relationships, 112 `many_to_many` kept in the extension, 2 joins without cardinality |

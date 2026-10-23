@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--model",
         help="chat model id; omit to read "
-        f"{_chat_model_var()} from the environment or .env",
+        f"{_chat_model_var()} from the environment (not .env, which holds secrets only)",
     )
     parser.add_argument("--no-model", action="store_true", help="serve without a model (stub answer path)")
     parser.add_argument("--embed", action="store_true", help="build the index with an embedder (costs tokens)")

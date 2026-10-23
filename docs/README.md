@@ -1,72 +1,61 @@
-# governed-bi design
+# Documentation
 
-Design for an agentic BI system: natural-language questions → grounded,
-governed, auditable answers over relational data. Postgres is the live path;
-SQLite is the offline test/CI substrate.
+What is in `docs/`.
 
-## Read in this order
+## Using the app
 
-1. [Usage](usage.md) — install, env, serve.
-2. [Architecture](architecture.md) — the serve graph and package map.
-3. [Measurement](measurement.md) — how to run an evaluation configuration, what a
-   measurement row carries, and what makes a number quotable.
-4. [Corpus format](corpus-format.md) — where the corpus is, its layout and field
-   tiers.
-5. [ADRs](adr/) — binding decisions (start with 0005, 0006, then 0014).
-6. [Design decisions](design-decisions.md) — short index into the ADRs.
-7. [Glossary](glossary.md) — canonical terms.
-8. [Open work](open-work.md) — what is unfinished, and the evidence for each.
+- [Usage](usage.md): install, configure, and run the server, the page, the evaluation, and the exporter.
+- [Corpus format](corpus-format.md): the YAML layout of the semantic layer, and the Ossie export.
+- [OpenAPI](openapi.json): the custom HTTP routes the page calls besides chat.
 
-## Decision records (ADRs)
+## How it works
 
-Point-in-time decisions. **The decision an ADR records is never edited to match later
-reality** — a superseding ADR or a code change wins, and the reasoning is kept even when it
-was reasoning toward the wrong answer.
+- [Architecture](architecture.md): how a question becomes an answer.
+- [Failure modes](failure-modes.md): how answers go wrong.
+- [Glossary](glossary.md): the words this repository uses.
+- [Open work](open-work.md): what is unfinished.
 
-What *is* edited is everything around the decision. A superseded ADR is rewritten as a
-reversal record: what was decided, what is true instead, and what was learned. It does not
-keep coordinates into files that no longer exist, and its Status line does not describe a
-build in the present tense after that build was deleted.
+## Measurement
 
-| ADR | Title |
-|---|---|
-| [0001](adr/0001-langgraph-server-chat-runtime.md) | Chat via LangGraph Server + `useStream` — **superseded**; transport still holds |
-| [0002](adr/0002-governed-agentic-serve-runtime.md) | Serve runtime as a governed agentic core — **superseded**; governance-as-topology still holds |
-| [0003](adr/0003-governed-notes-tri-modal-retrieval.md) | Governed notes and tri-modal retrieval — **reversed in full by 0005** |
-| [0004](adr/0004-local-first-conversation-run-logging.md) | Local-first conversation + run logging — **superseded in part by 0014**: the log is deleted and the checkpointer is built |
-| [0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) | Memory layer and faceted retrieval |
-| [0006](adr/0006-execution-time-governance.md) | Execution-time governance |
-| [0007](adr/0007-http-surface-and-the-ui-contract.md) | HTTP surface and the UI contract |
-| [0008](adr/0008-identifiers-end-to-end.md) | Identifiers end to end |
-| [0009](adr/0009-browsing-and-filtering-api.md) | Browsing, filtering, and relationship API — **reversed**; the browse routes and every page but chat are deleted |
-| [0010](adr/0010-live-stage-events.md) | Live stage events |
-| [0011](adr/0011-two-model-split-and-facet-query-rewriting.md) | Two models and a query per retrieval channel |
-| [0012](adr/0012-access-seam-principal-and-authorization.md) | Principal, authorization, and the Layer 6 split — **reversed**; the boundary is deleted and the Layer 6 split stays |
-| [0013](adr/0013-the-declared-abstention-policy.md) | The declared abstention policy |
-| [0014](adr/0014-one-conversation-store.md) | One conversation store, on a durable LangGraph checkpointer — **supersedes 0004 §5** |
-| [0015](adr/0015-the-return-path.md) | The return path: reader feedback into the corpus — **reversed**; the loop is deleted and the waiting list reads interrupts only |
-| [0016](adr/0016-gating-the-corpus-repository.md) | Checking the served corpus — **reversed**; the conformance rules and the nightly job are deleted, and the held-out quote check stays on the train-only check |
-| [0017](adr/0017-a-served-chat-app-over-a-layer-the-user-brings.md) | A served chat app over a semantic layer the user brings — **Proposed**; deletes access, the return path, the extra pages and most repository checks |
-| [0018](adr/0018-every-answer-states-its-assumptions.md) | Every answer states its assumptions, and the server checks them — **Proposed** |
-| [0019](adr/0019-one-plain-chat-page.md) | One plain chat page — **Proposed** |
-| [0020](adr/0020-ossie-export-and-a-separate-viewer.md) | Ossie as the export format, and a viewer as its own project — **Proposed** |
+- [Measurement](measurement.md): how to run an evaluation and how to read the result.
 
-## Measurement findings
+## Decisions
 
-A measurement is only true of the tree and the corpus it was taken on, so every
-finding below names both. **One document per question, replaced rather than
-appended to**:
-an analysis that has been superseded is deleted, because a page carrying both the
-old reading and the correction is a page a reader has to date-check line by line.
-Git history is the record of what changed.
+The records in [adr/](adr/) are point-in-time decisions. The decision an ADR records is not edited to match later reality. A later ADR, or the code, wins, and the reasoning stays even when it led to the wrong answer.
 
-| Doc | What it covers |
-|---|---|
-| [Measurement](measurement.md) | how to produce a finding: the eval driver's flags, the prompt registry, the measurement row schema, and the quotability checks |
-| [Failure modes](failure-modes.md) | how the engine answers wrongly, per failure class, with the causal repair experiments — configuration `v4`, engine `3c0079a`, corpus `30872d3` |
-| [Open work](open-work.md) | the unfinished items those findings imply, re-verified against the current tree |
+What is edited is everything around the decision. A superseded ADR is rewritten as a reversal record: what was decided, what is true instead, and what was learned. It does not keep coordinates into files that no longer exist, and its Status line does not describe a build in the present tense after that build was deleted.
 
-## Frontend, and external data
+- [0001](adr/0001-langgraph-server-chat-runtime.md): chat goes through LangGraph Server. That transport still holds. The graph this record describes does not.
+- [0002](adr/0002-governed-agentic-serve-runtime.md): the model proposes SQL, and the checks run in tool code.
+- [0003](adr/0003-governed-notes-tri-modal-retrieval.md): reversed. There is no note asset.
+- [0004](adr/0004-local-first-conversation-run-logging.md): superseded in part by 0014. A conversation is the checkpointer.
+- [0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md): the semantic layer, and how a question finds the assets it needs.
+- [0006](adr/0006-execution-time-governance.md): the six checks that run before a query.
+- [0007](adr/0007-http-surface-and-the-ui-contract.md): the HTTP routes, and what the page may show. There is no trust score.
+- [0008](adr/0008-identifiers-end-to-end.md): identifiers from the corpus through to the SQL.
+- [0009](adr/0009-browsing-and-filtering-api.md): reversed. The only page is chat.
+- [0010](adr/0010-live-stage-events.md): the status line while a turn runs.
+- [0011](adr/0011-two-model-split-and-facet-query-rewriting.md): a chat model and a utility model, and a rewritten query for each retrieval channel.
+- [0012](adr/0012-access-seam-principal-and-authorization.md): reversed. Who may read which rows is a database role.
+- [0013](adr/0013-the-declared-abstention-policy.md): a named policy that can decline before the model spends a query. It ships off.
+- [0014](adr/0014-one-conversation-store.md): one conversation store, a SQLite checkpointer.
+- [0015](adr/0015-the-return-path.md): reversed. The app does not collect notes on answers.
+- [0016](adr/0016-gating-the-corpus-repository.md): reversed. The corpus belongs to whoever brings it.
+- [0017](adr/0017-a-served-chat-app-over-a-layer-the-user-brings.md): what the project is. Accepted.
+- [0018](adr/0018-every-answer-states-its-assumptions.md): every answer states its assumptions, and the server checks them. Accepted.
+- [0019](adr/0019-one-plain-chat-page.md): the one chat page. Accepted.
+- [0020](adr/0020-ossie-export-and-a-separate-viewer.md): Ossie as an export, and a viewer in another repository. Accepted.
+- [Design decisions](design-decisions.md): a short pointer into these records.
 
-- UI: [`ui/`](../ui/) in this repository — running it and its checks are in [usage](usage.md#ui)
-- Data: [BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) (`../BIRD-Data-Obfuscation`)
+## Dated reviews
+
+The current work follows the pivot milestones. The earlier plans stay as the record of what they decided.
+
+- [2026-10 pivot](reviews/2026-10-pivot.md): why the project is a chat app over a semantic layer the user brings.
+- [2026-10 pivot milestones](reviews/2026-10-pivot-milestones.md): the work that carries out that decision.
+- [2026-10 trim plan](reviews/2026-10-trim-plan.md): an earlier cut. The pivot supersedes it.
+- [2026-10 trim milestones](reviews/2026-10-trim-milestones.md): the steps of that cut.
+- [2026-10 Ossie plan](reviews/2026-10-ossie-plan.md): an earlier plan to store the corpus as Ossie. ADR 0020 supersedes it.
+- [2026-09 improvement plan](reviews/2026-09-improvement-plan.md): the September plan.
+- [2026-09 improvement milestones](reviews/2026-09-improvement-milestones.md): the steps of that plan.
+- [2026-09 outside review](reviews/2026-09-outside-review.md): an outside read of the code with the comments and the docs removed.

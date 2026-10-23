@@ -1,175 +1,37 @@
 # Architecture
 
-How a question becomes a finished answer in this tree. Binding detail lives in
-[ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md) (retrieval /
-memory) and [ADR 0006](adr/0006-execution-time-governance.md) (governance).
+A question in English becomes either an answer with its SQL, a refusal, or a clarifying question. The engine reads a semantic layer and a read-only Postgres connection, and LangGraph Server sends the turn to one chat page. A deployment that needs per-user data access has to provide it with database roles ([ADR 0017](adr/0017-a-served-chat-app-over-a-layer-the-user-brings.md)).
 
-## The serve graph
+## How a question becomes an answer
 
-Wired in [`serve/graph.py`](../src/governed_bi/serve/graph.py). Nodes live under
-[`serve/nodes/`](../src/governed_bi/serve/nodes/).
+The served graph is built in [`serve/graph.py`](../src/governed_bi/serve/graph.py). `accept` reads the latest question and starts the turn from the session, and it ends the turn when the conversation has no question. `guard` runs five text rules and then asks the utility model whether the question is about this data. `rewrite` leaves the first question as written, and on a later turn records that it did so. `fanout` starts the five retrieval channels together. `route` chooses the schema shortlist. `resolve` pulls in assets the hits refer to. `connect` adds the tables a join needs. `assemble` renders the context the agent will see. `abstain` applies the abstention policy when that setting is on, and otherwise records that it did not decide ([ADR 0013](adr/0013-the-declared-abstention-policy.md)). `agent_core` is the model loop. `narrate` adopts the answer the model recorded, and writes a sentence only when that text is missing. A turn that spent its query attempts is always rewritten there, so the last successful rows are not presented as the answer. `finish` classifies the outcome and writes the turn record. `record` appends the turn row the page reads, and the checkpointer stores the thread ([ADR 0014](adr/0014-one-conversation-store.md)).
 
-```
-[accept] → guard → rewrite
-  → fanout ─┬─ channel_schema
-            ├─ channel_term
-            ├─ channel_metric
-            ├─ channel_entity
-            └─ channel_example
-  → route → resolve → connect → assemble → abstain
-  → agent_core → narrate → finish → [record] → END
+A guard block goes to `refuse`, which sets the public message. A miss at `route`, a set that is too large at `resolve`, a join `connect` cannot build, and a decline from `abstain` go to `decline`. A crash in a wrapped node goes straight to `finish`. All of those endings reach `finish`, and then `record`. The eval graph is this sequence from `guard` through `finish`.
 
-guard blocked ───────────────────────────────→ refuse  ─┐
-route / connect / abstain ───────────────────→ decline ─┼─→ finish
-any node raising (wrap_node) ───────────────────────────┘
-```
+## Retrieval
 
-`accept` and `record` are bracketed because both are optional arguments to
-`build_graph`: `accept` (the client-facing path) also switches the graph to the
-`ServeInput` / `ServeOutput` schemas, and without `record` the graph runs
-`finish → END`. Every terminal path funnels through `finish`, including crashes —
-`wrap_node` turns a node exception into `failure` + `path_kind: crashed` and
-routes there rather than letting it escape the graph.
+Five channels search the layer in parallel: schemas, terms, metrics, entities, and examples ([ADR 0005](adr/0005-v2-memory-layer-and-faceted-retrieval.md), [ADR 0011](adr/0011-two-model-split-and-facet-query-rewriting.md)). The schema channel searches the question as written. Each of the other four may ask the utility model to rewrite the search text before it searches. Lexical search runs whenever the index is loaded. Semantic search runs when an embedder is configured. `route` keeps the schemas that scored, up to the shortlist size, or the shortlist a pinned eval run supplied. `resolve` and `connect` widen the set with referenced assets and join tables. The rendered context walks those added assets in sorted order, so two processes build the same prompt. A character budget can drop descriptions, or a whole table, and the record says which.
 
-`record` writes nothing itself. It returns the finished turn onto `ServeState.turns`, an
-accumulating state field, and the durable checkpointer `langgraph.json` mounts is what persists it —
-so thread state is the only store of a turn
-([ADR 0014](adr/0014-one-conversation-store.md)). It is the only producer of a turn record; the
-REST chat pair that was the second one is deleted.
+## The agent and its tools
 
-| Stage | Role |
-|---|---|
-| `guard` | Five deterministic rules (`govern/guard.py::GUARD_RULES`), then a model-backed BI-scope check on the utility model. **Enabled per rule id, and `guard_rules_enabled` ships `UNSET`** — the served app (`api/graph_app.py`) turns on all six; the eval driver, the one-turn CLI and `tools/` all pass `{}`, so no guard rule fires on any measured configuration. Until 2026-09-18 the served app turned on `g_bi_scope` *and nothing else*, which reads as "the guard is on" and means five of six are off: `g_bi_scope` is not a member of `GUARD_RULES`, and an id absent from the mapping is silently `False`. `GovernancePolicy.__post_init__` now refuses a key that dispatches nothing |
-| `rewrite` | Stub rail today; retrieval-channel query rewriting lives inside `channel_*` |
-| `channel_*` | Parallel retrieval channels (each may rewrite its query) |
-| `route` / `resolve` / `connect` | Schema pick, budgets, Steiner join |
-| `assemble` | Render retrieval context block |
-| `abstain` | The declared abstention policy — deterministic predicates over recorded state, no score. `abstention_policy_enabled` ships `False`, so it writes a `disabled` result and routes on ([ADR 0013](adr/0013-the-declared-abstention-policy.md)) |
-| `agent_core` | Nested `create_agent` loop (read-only tools) |
-| `narrate` | Short answer over the result table (must not crash an answered turn) |
-| `finish` | The turn record: `outcome`, `guardrail_errors`, the ledger, `latency_sec` |
+`agent_core` calls the model with six tools from [`serve/tools.py`](../src/governed_bi/serve/tools.py). The model never holds a database connection. The connector is closed over when the tools are built. `read_body` returns the text of assets this turn retrieved. `inspect_schema` lists the columns of a retrieved table. `sample_rows` returns a few distinct values of one column, after the same checks as a query. `run_query` checks the statement and, if it passes, runs it read-only and keeps the first 20 rows. Each call spends one attempt, including a statement the checks refuse, up to five. An infrastructure error refunds the attempt. The reply tells the model which attempt this was. `ask_user` pauses the turn for one clarifying question, with a reason and at most four choices, and rejects a question that names a schema identifier. `answer` ends the turn with the answer text and the assumptions it depends on, and the server checks that list before accepting it ([ADR 0018](adr/0018-every-answer-states-its-assumptions.md)). A model that ends in prose without calling `answer` or `ask_user` is reminded once; if it ends in prose again, the turn records no answer.
 
-`agent_core` tools: `read_body`, `inspect_schema`, `sample_rows`, `run_query`,
-`ask_user`.
+## The six query checks
 
-**Where governance runs.** The two executing tools call it themselves —
-there is no tool-call interceptor, and `wrap_tool_call` appears nowhere in `src/`:
+Every statement passes through six checks in [`govern/layers.py`](../src/governed_bi/govern/layers.py), in order, before it runs ([ADR 0006](adr/0006-execution-time-governance.md)). Parse accepts one read statement and refuses an empty statement, several statements, control characters, and two names that differ only by case. No-write refuses anything that changes data or locks rows. Functions allow only the functions the policy names. Binding refuses an unknown name, an ambiguous name, `SELECT *`, a natural join, and a reference to a whole row. Columns refuse a column the layer excludes or does not allow. A column marked suspect is refused only when `hard_block_suspect` is on. The served app leaves that off, so a suspect column can be queried and the assumption check notes it. Tables refuse a table this turn did not retrieve. The tables the retrieval budget kept are the tables this check allows, so a table the budget dropped cannot be queried. Which person may see a row is left to database roles ([ADR 0017](adr/0017-a-served-chat-app-over-a-layer-the-user-brings.md)).
 
-```
-serve/tools.py  →  serve/fetch.py  →  govern/pipeline.py::prepare
-                →  govern/check.py::check()  →  read-only connector
-```
+## Assumptions
 
-The ledger row comes back on the tool's own `Command(update=...)`, beside the
-payload. What keeps this from being merely a convention is that the model holds no
-connector handle — the connector is closed over inside `build_tools` — and that
-`check()` raises `GovernanceUsageError` rather than defaulting permissive when a
-security argument is unwired. Adding a new executor that skips `check()` is caught by
-review, not by the topology and not by a test: G2 is prose in
-`govern/__init__.py:6`, and the only test closing over `EXECUTOR_PATHS`
-(`tests/serve/test_state_channels.py:495`) asserts that the four paths partition into answering
-and introspection — never that one of them calls `check()`. Layers, rules and
-executor paths: [ADR 0006](adr/0006-execution-time-governance.md).
+The `answer` tool requires a list. Each entry has a sentence, an optional phrase of the question, a basis of `layer`, `convention` or `guess`, and an asset id when the basis is `layer`. [`serve/assumptions.py`](../src/governed_bi/serve/assumptions.py) then checks the list. A `layer` claim whose asset does not exist, or was not retrieved this turn, is sent back once so the model can correct it. A later call stores that claim as a `guess`. A `guess` about a phrase that two retrieved terms bind differently is refused on every call, and the reply tells the model to call `ask_user`. The server parses the statement whose rows were delivered and adds anything the model did not state: a comparison to a value the question never names, an inner join that drops unmatched rows, `DISTINCT`, a `LIMIT` written in the statement, and a suspect column. Those added entries have basis `found_in_query`. The checks are deterministic and make no model call. The page shows the list under the answer, with "This is a guess." and a Change link on a guess, and "The query does this, though you didn't ask for it." on a server finding ([ADR 0019](adr/0019-one-plain-chat-page.md)).
 
-**There is no authorization.** The engine serves one local operator, so the TABLES layer asks one
-question, whether the turn retrieved the table (`r_table_not_retrieved`), and COLUMNS asks whether the
-corpus allows, excludes or marks the column suspect. `api/auth.py` admits every caller and refuses
-only a state-writing payload ([ADR 0012](adr/0012-access-seam-principal-and-authorization.md) is the
-reversal record).
+## The turn record and the turn row
 
-`AgentMiddleware` *is* used in `agent_core`, for three things that are **not**
-governance: injecting the retrieval context block on every model call (via
-`wrap_model_call`, so it never enters `messages`), ending the turn at the
-`run_query` attempt cap (`_CapEndsTheTurn`), and ending the inner loop after a
-clarification or a fail-closed decline (`_ClarificationEndsTheTurn`).
+`finish` writes the turn record that [`registry/record.py`](../src/governed_bi/registry/record.py) declares. The outcome is one of `answered`, `refused`, `clarification`, `capped`, `crashed` or `no_sql`. The record also holds the ledger of every attempt, the guard result, the abstention result, the assumptions, the SQL that was executed, the retrieval shortlist, token usage, and the latency. `record` copies the result rows and the answer text onto the turn row, beside a copy of the record. The thread keeps the newest 25 rows. The newest 10 of those keep the 20-row preview, so an old conversation can show its numbers without running the query again.
 
-Server entry: [`api/graph_app.py:make_graph`](../src/governed_bi/api/graph_app.py)
-(`uv run langgraph dev`). HTTP app: [`api/routes.py:app`](../src/governed_bi/api/routes.py)
-([ADR 0007](adr/0007-http-surface-and-the-ui-contract.md),
-[ADR 0010](adr/0010-live-stage-events.md)).
+## HTTP
 
-## Packages (`src/governed_bi/`)
+Chat runs on LangGraph Server: threads, runs, and the stream. The custom routes in [`api/routes.py`](../src/governed_bi/api/routes.py) are the five in [`docs/openapi.json`](openapi.json). `GET /livez` means the process is up. `GET /readyz` means the session loaded and the corpus has no fatal problem, and it answers 503 otherwise. Serving with no model is ready. `GET /capabilities` tells the page the model, the connection, and whether a paused question can be resumed. `GET /clarifications/pending` lists questions the engine is waiting on, from interrupt state. `GET /examples` returns a few questions from the layer, and with `near` it ranks them against the text, without sending the SQL. `authenticate` admits every caller as one local identity, because the server will not start without that handler, and it refuses a client write to thread state ([ADR 0007](adr/0007-http-surface-and-the-ui-contract.md), [ADR 0017](adr/0017-a-served-chat-app-over-a-layer-the-user-brings.md)). Reaching the port is enough to run a query as the database login. Separating users takes database roles.
 
-| Package | Responsibility |
-|---|---|
-| `api` | FastAPI + LangGraph Server wiring |
-| `corpus` | Typed assets, load, validate |
-| `datasource` | Connectors |
-| `eval` | Measurement harness |
-| `govern` | The layer stack (six layers), ledger, tool bounds |
-| `measure` | Population / stats helpers |
-| `model` | Chat and embedder adapters |
-| `registry` | Settings, prompts, turn records |
-| `retrieve` | BM25, semantic channel, join planner |
-| `serve` | Rails graph + agent loop |
+## The page
 
-## Configuration
-
-Every setting is a named default in
-[`registry/settings.py`](../src/governed_bi/registry/settings.py). A `GOVERNED_BI_*`
-variable in the process environment overrides one for a run and enters the
-config hash. Secrets are read apart, from the environment and then `.env`, and
-never enter that hash. See [usage](usage.md).
-
-## Logging and health
-
-The standard library's `logging`, one `_log = logging.getLogger(__name__)` per module that logs,
-configured once by `api/graph_app.py::configure_logging` at both API entry points. The turn record
-stays the structured account of a turn; logs are for what the record cannot hold, such as a
-dropped audit row or a node's traceback. `/livez` means the process is up; `/readyz` means the
-session resolved with no fatal corpus problem, and answers 503 otherwise; serving with no model is
-a supported mode and is ready.
-
-## What `finish` writes on the turn
-
-`finish` projects the record `registry/record.py` declares. The fields a reader reaches
-for first:
-
-- **`outcome`** — `answered` / `refused` / `capped` / `crashed` / `clarification` /
-  `no_sql`, from `registry/stages.classify_outcome`, derived from the **ledger** rather
-  than from whether a SQL string exists. `no_sql` is a turn that ended having executed no
-  governed statement: it is not `answered`, because an answer with no auditable statement is
-  not a governed answer, and not `crashed`, because nothing failed. Rows written before
-  2026-08-18 record those turns as `answered`, so a rate spanning that date mixes two
-  taxonomies (ADR 0006 §5).
-- **`guardrail_errors`** — how many attempts died of an exception *inside* `check()`.
-  Derived from the attempts, never counted alongside them.
-- **`terminal_reason`** — why a refusal or decline ended the way it did, so that
-  "routing found nothing" and "the join graph is disconnected" are not one row.
-- **`execution`** — every attempt, with its result layer, reason code and executor
-  path.
-
-### Outcome precedence, and the one pair it masks
-
-`classify_outcome` tests in a fixed order: an infra-prefixed error or a `CRASH_REFUSED_BY` value
-is `crashed`, then `attempt_cap` is `capped`, then `clarification_requested` is `clarification`,
-then any `refused_by` is `refused`, then a statement makes it `answered`, then a declared
-`no_sql` terminal, else `crashed`. The order is the decision; two things follow from it that a
-reader cannot get from the enum.
-
-**`clarification` is not evidence that the turn "never reached `finish`", and must not be read as that.** The
-pause itself never reaches `classify_outcome` at all — `ask_user` raises `GraphInterrupt`, and the
-`clarification` on such a row is written by the transport or by `eval/projection.py` when no
-answer exists. What reaches this function is the *answered-and-declined* case: `ask_user` returns
-`clarification_requested=True` when the reader declines or cancels a ranking, the inner loop ends,
-and the turn writes a full record including both config identities. A check that read the
-outcome as "reached finish" dropped these rows — which do carry the corpus hash — out
-of the population that checks it.
-
-**Clarification is tested before `refused_by`, and masks exactly one pair.**
-`clarification_requested` is only ever true on the answered path, where `finish` returns some
-`refused_by` whenever no answering attempt passed. Two of the three values it can return there
-already outrank the branch (`guardrail_error` is our bug, `attempt_cap` is the cap), so the only
-masked pair is `guardrail`: a layer refused every attempt, then the model asked and the reader
-declined. The decline wins deliberately — it is a decision something took on this turn, while
-`guardrail` there is a summary derived from "nothing passed", and this registry puts a decision
-above a derived summary, the same rule that makes `terminal` the last thing read. The row keeps
-its `refused_by` and its per-attempt trace, so the layer refusal is
-readable, but it leaves `eval/report.refusal_histogram`, which counts rows classified `refused`.
-
-> **There is no reliability summary on any path.** A turn carries the fields above and
-> nothing that summarises them. A single collapsed trust score is worse than none, and
-> a result needs a definition of what measures it before it needs a field — so the
-> record carries only what something observes.
-> `tests/api/test_http_contract_answer_and_stream.py` fails if `safety_clearance` or
-> `semantic_assurance` appears in `src/`.
+The UI is one page, [`ui/app/page.tsx`](../ui/app/page.tsx) ([ADR 0019](adr/0019-one-plain-chat-page.md)). A sidebar lists conversations by date, and a conversation that is waiting on a clarifying question appears first, under "Waiting for you". The conversation is one column: the question on the right, the answer as plain text on the left, then the result table, the assumptions, and Copy and Details. Details opens the SQL, the checks, the tables the query reads, the model, and the time taken. While a turn runs, one status line names the stage, from the stage events ([ADR 0010](adr/0010-live-stage-events.md)). A new conversation offers three example questions from `GET /examples`. A refusal says "I can't answer this from your data." and offers nearby examples that fill the composer. The line under the composer says the queries are read-only and checked before they run.

@@ -1,211 +1,78 @@
 # governed-bi
 
-**Ask your database questions in English. Get an answer, the SQL behind it, or a reason it could
-not answer.**
+governed-bi is a chat app that answers questions about a database. You bring the semantic layer, which names the tables, columns, joins, metrics, and business words the questions use. Every answer states the assumptions behind it, and every query is checked before it runs.
 
-[![CI](https://github.com/Minhao-Zhang/governed-bi/actions/workflows/ci.yml/badge.svg)](https://github.com/Minhao-Zhang/governed-bi/actions/workflows/ci.yml)
-![Python 3.13](https://img.shields.io/badge/python-3.13-blue)
-![Node 22](https://img.shields.io/badge/node-22-green)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+Who may see which rows is a role on the database. This app has no setting for that.
 
-governed-bi turns a business question into read-only SQL, checks that SQL before it runs, and
-hands back the statement along with the answer. When it cannot find what a question needs, it
-says so instead of guessing. It is for data teams who need an answer they can audit.
+## Run it
 
-![A full turn at real speed: the question is sent, the governance stages report themselves as they
-run, and the answer arrives with the SQL behind it](docs/images/answered-turn.gif)
-
-<sup>One turn, at real speed — about eighteen seconds from question to answer. The stage tree is
-the engine reporting itself as each stage finishes, not a progress animation.</sup>
-
-**Read the SQL, not the answer.** `negocios`, `estrellas` and `estado = 'AZ'` are physical names
-nobody typed — the question said "Arizona businesses" and "star rating". The schema is
-deliberately obfuscated: this is the
-[BIRD-Obfuscation](https://github.com/Minhao-Zhang/BIRD-Obfuscation) lake, where names carry no
-English meaning. Mapping business vocabulary onto them, and knowing Arizona is `'AZ'`, is the job
-of the semantic layer you curate. That layer is the product.
-
-> A demonstration, not a measurement. One turn on a live stack, so nothing in the clip is a
-> quotable figure. Those are [below](#how-well-it-works).
-
-## What makes it different
-
-**The model never touches your database.** It proposes SQL and never holds a connection. A tool
-body checks every statement first and runs it read-only, so the boundary is the *absence of a
-tool* rather than a prompt asking the model to behave.
-
-**A miss becomes a refusal, not a wrong number.** Ask for something the semantic layer does not
-cover and the engine says so, or pauses and asks you, instead of computing a plausible number over
-whatever tables happened to be nearby. [Failure modes](docs/failure-modes.md) is what it does
-instead, per class, with the numbers.
-
-**A paused turn outlives the process.** When the engine needs to ask you something it stops
-mid-turn and checkpoints, so killing the server and starting a fresh one leaves the question where
-it was — answering it resumes that same turn rather than beginning the work again. Three bounds
-travel with that. What a test covers is the boundary rather than the restart:
-`tests/serve/test_a_pause_survives_a_restart_on_disk.py` drives a real `ask_user` interrupt onto
-`AsyncSqliteSaver` and answers it through a second `compile_durable` on the same file — new loop,
-new connection, new saver, new graph, so the file is the only thing carrying the pause — but the
-interpreter and its module-level state survive, and a bug living in one of those would pass.
-Spawning a real server and killing it is the test that would cover that, and it needs a model key
-and a port, so it stays a hand procedure. The resumable state and the browsable history are two
-different files, and only the first is the durable one. And the 90-day retention this deployment
-configures cannot fire on the runtime it runs, so the store only grows.
-[ADR 0014](docs/adr/0014-one-conversation-store.md) is the design;
-[open work](docs/open-work.md) keeps the gaps.
-
-**Every figure says what it cannot support.** Accuracy is quoted at a stated coverage,
-configurations are compared with a paired test rather than by subtracting two scores, and
-[open work](docs/open-work.md) lists every defect this project has found in itself — including
-the defects in its own measuring instrument.
-
-**What "governed" means concretely.** Six checks run over every statement before the database sees
-it, and any one of them can refuse. It must parse as a single read; it must contain no write;
-every function it calls must be on an allowlist; every reference must bind to exactly one column,
-which is what rejects a bare `SELECT *`; no column may be one the corpus excludes; and no table
-may be one the question did not license. Every turn then leaves a record of what ran, what was
-rejected and why. [Architecture](docs/architecture.md) has the wiring.
-
-## The semantic layer
-
-governed-bi does not read your database and guess. It reads a semantic layer you curate: files
-describing your tables, columns, joins, metrics and business vocabulary. That is where "active
-customer" gets the definition your finance team agrees with, and where the engine learns that a
-question about Arizona means `estado = 'AZ'`.
-
-A ready-made one for the BIRD lake is in a separate repository,
-[BIRD-corpus](https://github.com/Minhao-Zhang/BIRD-corpus) — 13,304 assets across 57 schemas.
-Point `GOVERNED_BI_CORPUS_DIR` at your own to serve your own data; the format is in
-[corpus format](docs/corpus-format.md).
-
-## Quick start
-
-You need PostgreSQL, Python 3.13, Node 22, and a model provider — OpenAI by default, Bedrock
-supported. Queries cost whatever that provider charges. To reproduce the demo above you also
-need its two inputs, cloned as siblings of this repository: the
-[obfuscated lake](https://github.com/Minhao-Zhang/BIRD-Obfuscation) (a Postgres dump, restored with
-the `docker compose` in that repo) and the
-[semantic layer](https://github.com/Minhao-Zhang/BIRD-corpus).
+You need [uv](https://docs.astral.sh/uv/), Python 3.13, Node 22, PostgreSQL, and an OpenAI key. OpenAI bills the model calls.
 
 ```bash
-uv sync                       # the engine
-uv sync --extra bedrock       # instead, if the provider is Bedrock
-npm --prefix ui ci            # the web client, optional
+uv sync
 ```
 
-Copy `.env.example` to `.env` and fill in four values:
+Copy [`.env.example`](.env.example) to `.env` and set the two secrets it names, `OPENAI_API_KEY` and `GOVERNED_BI_PG_DSN`. A `.env` file may also set names that start with `LANGSMITH_`. Any other name with a value stops startup. Other settings are process environment variables. The defaults live in [`src/governed_bi/registry/settings.py`](src/governed_bi/registry/settings.py).
+
+The corpus defaults to `../BIRD-corpus`, resolved from this repository's root. Set `GOVERNED_BI_CORPUS_DIR` when the layer lives somewhere else. The database in `GOVERNED_BI_PG_DSN` has to be the one that corpus describes. The chat model defaults to `gpt-6-luna`, and embeddings default to `text-embedding-3-large`.
+
+You can load a small demo database and ask it one question from the command line, without a curated corpus. The chat server still needs a corpus directory. [Usage](docs/usage.md) has both.
 
 ```bash
-GOVERNED_BI_PG_DSN=host=127.0.0.1 port=5432 dbname=... user=... password=...
-OPENAI_API_KEY=sk-...
-GOVERNED_BI_CORPUS_DIR=../BIRD-corpus
-GOVERNED_BI_EMBEDDING_MODEL=text-embedding-3-large
+uv run langgraph dev
 ```
-
-The last one sits among the optional overrides in `.env.example` and is not optional: unset, the
-semantic retrieval channel reports `not_configured` on every retrieval channel and routing runs on lexical
-matching alone, which surfaces as a wall of `no_schema_matched` refusals rather than as a
-configuration error.
-
-Then start the two processes:
 
 ```bash
-uv run langgraph dev            # engine  :2024
-npm --prefix ui run dev         # client  :3000
+cd ui
+npm ci
+npm run dev
 ```
 
-**The engine authenticates nobody.** No route asks for a credential, so anything that can reach
-`:2024` can post a turn and read every past one — including the SQL — out of `GET /threads/{id}/state`.
-That is a deliberate choice for a single-operator engine on loopback, taken on 2026-08-13 because
-LangGraph Studio's bootstrap calls cannot carry a header; it re-opens audit findings A1 and A7,
-and [the usage guide](docs/usage.md#serve-langgraph-server) says so in full. Do not put this port
-anywhere but `127.0.0.1`. Copy [`ui/.env.example`](ui/.env.example) to `ui/.env.local` to point
-the client at the engine.
+The server listens on `127.0.0.1:2024`. The page is at <http://localhost:3000>. Copy [`ui/.env.example`](ui/.env.example) to `ui/.env.local`, and set `NEXT_PUBLIC_LANGGRAPH_URL` to `http://localhost:2024`. `NEXT_PUBLIC_ASSISTANT_ID` defaults to `serve`, the graph name in [`langgraph.json`](langgraph.json). When the URL is unset, the page draws fixture conversations and does not call the server.
 
-Chat is one of eight views. The others show the semantic layer as an ER diagram and a knowledge
-graph, page through every corpus asset, list past conversations, replay any served turn stage by
-stage, report what this engine is running on, hold the questions the engine asked that nobody
-came back to answer — a clarification whose reader closed the tab leaves no trace in the thread's
-own channels, so that queue is read out of the platform's interrupt state and is the only place an
-abandoned one is visible — and give a data steward the return path: the queue of answers readers
-handed back, the evidence for one of them beside the statement that produced it, and a corpus edit
-drafted, verified against a snapshot and exported as a diff an engineer applies by hand
-([the return path](docs/return-path.md)). Leave `NEXT_PUBLIC_LANGGRAPH_URL` unset and the client
-runs on mock fixtures with no engine attached.
+The server admits every caller. Anyone who can reach port 2024 can ask a question and read past conversations, so leave it on localhost.
 
-Everything else — every environment variable, both API surfaces, and the UI's own quirks — is in
-[the usage guide](docs/usage.md).
+## How an answer reads
 
-## How well it works
+The page has a sidebar and one conversation. "New conversation" is at the top of the sidebar. Conversations are grouped by day, and one that is waiting on a clarifying question is listed first, under "Waiting for you". The open conversation is `/?thread=<id>`.
 
-Measured on [BIRD](https://bird-bench.github.io/), a public text-to-SQL benchmark, in the
-obfuscated variant linked above: 1,351 questions across 57 schemas. *EX* is the benchmark's own
-score — the query ran and its result matched the reference answer. A configuration is fixed and
-named before a run so two of them can be compared; this one is `v4`, engine `3c0079a`, corpus
-[`BIRD-corpus`](https://github.com/Minhao-Zhang/BIRD-corpus) @ `30872d3`, questions
-[`BIRD-Obfuscation`](https://github.com/Minhao-Zhang/BIRD-Obfuscation) @ `22fe2a6`.
+An empty conversation says "What do you want to know?" and lists up to three example questions from the corpus. Clicking one fills the composer. Under the composer, the page says "Read-only. Every query is checked before it runs."
 
-**That last identifier is here because the count is not one.** That test split has had four
-versions and only one of them holds 1,351 questions, so a rerun against a replaced dataset would
-report the same *n* over a different population — and pass every quotability check, because the
-checks compare the corpus digest and the settings and both would match. Every configuration now declares its
-question set in [`configs.toml`](src/governed_bi/registry/configs.toml) and the driver refuses a
-mismatch before the first paid question.
+While a turn runs, one grey line names the current step, such as "Finding your definitions…" or "Checking the query…".
 
-| | |
-| --- | ---: |
-| Correct, among the questions it answered | **0.714** (n = 1,278, 94.6% coverage) |
-| Questions it declined | 73 (5.4%) |
-| Declined questions it would have got wrong | **77.4%** (48 of the 62 where that is knowable) |
-| Correct over all 1,351 turns, unfiltered EX | 0.676 |
+An answer shows the text, then the rows. When the page holds fewer rows than the query returned, the caption reads "Showing 20 of 1,204 rows" for those counts. Then "To answer this, I assumed:" and one bullet per assumption. An assumption the semantic layer backs ends with "From your definition:" and the definition's name. A guess ends with "This is a guess." and a Change button. Change sends the same question again with the correction appended, in the form "(Assume instead: …)". Something the server found in the SQL, and the model did not state, ends with "The query does this, though you didn't ask for it." A convention is the statement on its own. Copy copies the text and the table. Details opens the SQL, the checks, the tables the turn used, the model, and the time taken.
 
-For scale, [WrenAI](https://github.com/Canner/WrenAI) — an open-source engine with no abstention —
-scores 0.678 on the same questions and the same database, graded by its own harness. That is a
-sense of the neighbourhood, not a head-to-head: it differs on every dimension at once, so it can
-bound a claim but cannot attribute one.
+A clarifying question is the question, a sentence saying why, outlined choices, and a box if you would rather type. Defer lets the engine choose and carry on. Decline stops the turn.
 
-Three caveats travel with the table. The declines are **not** a difficulty estimate — they track
-whether this engine had enough context on the turn, and every refusal and clarification among them
-is a retrieval failure. Roughly 4 points of any score on this benchmark are output *shape* rather
-than reasoning, since the grader compares result rows and column choice moves them; that is a
-confounder in the metric every system carries, not a discount on this one. And two runs with the
-configuration held fixed disagree on 12.7% of outcomes, so a gap under about 2 percentage points
-is not a result. [Measurement](docs/measurement.md) and [failure modes](docs/failure-modes.md)
-carry all three in full.
+A refusal says "I can't answer this from your data.", then the reason, then nearby questions from the corpus. Choosing one fills the composer.
 
-What the governance layers themselves are worth is a separate measurement, and unlike the above it
-costs nothing to reproduce: the stack is deterministic, so it needs no credential, no database and
-no model call. The suite is 95 cases — 49 attacks and 46 ordinary analytics statements — carried
-as data in [`govern/adversarial.toml`](src/governed_bi/govern/adversarial.toml).
+## Evaluation
 
-| | |
-| --- | ---: |
-| Attacks that reached executable SQL | **0** (of 49) |
-| Attacks refused, but by the wrong layer or rule | **0** (of 49) |
-| Ordinary statements wrongly refused | **0** (of 46) |
-| Cases where a layer crashed instead of deciding | **0** (of 95) |
-| Per-layer recall, over the attacks each layer owns | **1.000** (all six layers) |
+How to run an evaluation, and how to read the result, is in [Measurement](docs/measurement.md). The commands are in [Usage](docs/usage.md).
 
-Read that with its bound, which is not small: 49 is the number of attacks somebody sat down and
-wrote, so zero bypasses is a fact about those 49, not a claim about attacks nobody thought of. The
-same holds in reverse for the 46 benign statements. Reproduce with
-`uv run --frozen pytest tests/govern/test_adversarial_suite.py`.
+On BIRD-Obfuscation, with the current default model, execution accuracy is PLACEHOLDER (P16) and coverage is PLACEHOLDER (P16). Run-to-run disagreement is PLACEHOLDER (P16). Cost per question is PLACEHOLDER (P16). The assumption figures are PLACEHOLDER (P16).
+
+## Export
+
+The corpus stays in its YAML files. This repository can write one Apache Ossie model per database, plus a report of what did not map. The layout and the command are in [Corpus format](docs/corpus-format.md). A separate project opens those files.
+
+## Repository
+
+`src/governed_bi/` is the engine: the corpus, retrieval, the SQL checks, the chat graph, and the evaluation. `ui/` is the chat page. `docs/` is the design. `tools/` holds the data lake evaluation and the checks that are not part of the server.
 
 ## Documentation
 
-| | |
-| --- | --- |
-| [Usage](docs/usage.md) | install, configure, serve |
-| [Architecture](docs/architecture.md) | how a turn is put together |
-| [Corpus format](docs/corpus-format.md) | writing a semantic layer |
-| [Measurement](docs/measurement.md) | running an evaluation and reading the result |
-| [Failure modes](docs/failure-modes.md) | how the engine gets things wrong |
-| [ADRs](docs/adr/) | the binding design decisions |
-| [Open work](docs/open-work.md) | the defect list, the instrument's own defects included |
-| [Frontend](docs/usage.md#ui) | running the Next.js client in `ui/`, and its checks |
-| [AGENTS.md](AGENTS.md) | the working rules for this repository, human or agent |
+- [Usage](docs/usage.md): install, configure, serve, evaluate, and export.
+- [Corpus format](docs/corpus-format.md): the semantic layer, and the Ossie export.
+- [Architecture](docs/architecture.md): how a question becomes an answer.
+- [Failure modes](docs/failure-modes.md): how answers go wrong.
+- [Measurement](docs/measurement.md): running an evaluation and reading the result.
+- [Glossary](docs/glossary.md): the words this repository uses.
+- [Design decisions](docs/design-decisions.md): where the decisions are written.
+- [Open work](docs/open-work.md): what is unfinished.
+- [ADRs](docs/adr/): the decision records.
+- [AGENTS.md](AGENTS.md): the working rules for this repository.
 
 ## License
 
-MIT (see [LICENSE](LICENSE)), copyright 2026 Minhao Zhang. No third-party data is bundled: the
-BIRD lake and the semantic layer are separate repositories under their own terms.
+MIT. See [LICENSE](LICENSE). Copyright 2026 Minhao Zhang. The database and the semantic layer are separate repositories, and they are not included here.
