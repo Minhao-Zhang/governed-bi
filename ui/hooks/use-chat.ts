@@ -18,8 +18,7 @@
  * separate clarify path stands in for the `ask_user` HITL interrupt.
  *
  * The { messages, send, isRunning, steps, reset } shape below is transport-neutral, which is
- * what let the streamed hook arrive beside it without the UI layer (MessageList /
- * AgentTimeline / Composer) changing. Keep it that way.
+ * what let the streamed hook arrive beside it without the column changing. Keep it that way.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";

@@ -1,15 +1,15 @@
 /**
  * Typed client for the engine's custom REST routes (`../docs/openapi.json`). Every response is
  * zod-validated at the boundary and fails loud. Chat goes through `useStream`, not this. With no
- * `NEXT_PUBLIC_LANGGRAPH_URL` each call resolves to a fixture from `lib/mock/fixtures`.
+ * `NEXT_PUBLIC_LANGGRAPH_URL` each call returns without fetching.
  */
 
 import { z } from "zod";
 
 import { LANGGRAPH_URL, USE_MOCKS } from "@/lib/env";
 import { MOCK_CAPABILITIES } from "@/lib/mock/fixtures";
-import { capabilitiesSchema } from "@/lib/schemas";
-import type { Capabilities } from "@/lib/types";
+import { capabilitiesSchema, pendingClarificationsSchema } from "@/lib/schemas";
+import type { Capabilities, PendingClarifications } from "@/lib/types";
 
 export class ApiError extends Error {
   constructor(
@@ -48,7 +48,31 @@ async function get<T>(path: string, schema: z.ZodType<T>, mock: T): Promise<T> {
   return getLive(path, schema);
 }
 
+/** Empty on purpose: mock mode has no engine pauses to list. */
+const MOCK_PENDING: PendingClarifications = {
+  rows: [],
+  meta: {
+    n: 0,
+    truncated: false,
+    threads_scanned: 0,
+    limit: 50,
+    offset: 0,
+    columns: [
+      "asked_at",
+      "question",
+      "why",
+      "clarification_id",
+      "turn_id",
+      "thread_id",
+      "source",
+      "basis",
+    ],
+  },
+};
+
 export const api = {
   capabilities: (): Promise<Capabilities> =>
     get("/capabilities", capabilitiesSchema, MOCK_CAPABILITIES),
+  pendingClarifications: (): Promise<PendingClarifications> =>
+    get("/clarifications/pending", pendingClarificationsSchema, MOCK_PENDING),
 };

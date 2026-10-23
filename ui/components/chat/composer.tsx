@@ -1,16 +1,11 @@
 "use client";
 
 import { useState, type KeyboardEvent } from "react";
-import { SendHorizontal, Square } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { SendHorizontal } from "lucide-react";
 
 /**
- * The question input. Enter submits; Shift+Enter inserts a newline. While a turn
- * is running the Send button becomes a Stop button (when the transport can abort)
- * so a long agent loop or stream can be cancelled. Uses a native, auto-growing
- * textarea styled to match the shadcn Input (no Textarea primitive in the set).
+ * The question input. Enter sends; Shift+Enter inserts a line. While a turn
+ * is running, Stop replaces Send.
  */
 export function Composer({
   onSend,
@@ -40,39 +35,46 @@ export function Composer({
   const canStop = isRunning && onStop !== undefined;
 
   return (
-    <form
-      className="flex items-end gap-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        submit();
-      }}
-    >
-      <textarea
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        onKeyDown={onKeyDown}
-        disabled={isRunning}
-        rows={1}
-        placeholder="Ask a question about the governed data…"
-        aria-label="Ask a question about the governed data"
-        className={cn(
-          "flex max-h-40 min-h-9 w-full resize-y rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none transition-colors",
-          "placeholder:text-muted-foreground",
-          "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
-          "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
+    <div>
+      <form
+        className="flex items-end gap-2 rounded-3xl border border-black/10 bg-white px-3 py-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <textarea
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={onKeyDown}
+          disabled={isRunning}
+          rows={1}
+          placeholder="Ask a question about the governed data…"
+          aria-label="Ask a question about the governed data"
+          className="max-h-40 min-h-6 w-full resize-none bg-transparent py-1 text-sm text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-50"
+        />
+        {canStop ? (
+          <button
+            type="button"
+            onClick={onStop}
+            className="shrink-0 rounded-full px-3 py-1 text-sm text-[var(--muted)]"
+          >
+            Stop
+          </button>
+        ) : (
+          <button
+            type="submit"
+            aria-label="Send"
+            disabled={isRunning || value.trim() === ""}
+            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[var(--text)] text-white disabled:opacity-30"
+          >
+            <SendHorizontal className="size-4" aria-hidden />
+          </button>
         )}
-      />
-      {canStop ? (
-        <Button type="button" variant="outline" onClick={onStop} className="shrink-0">
-          <Square className="size-4" />
-          Stop
-        </Button>
-      ) : (
-        <Button type="submit" disabled={isRunning || value.trim() === ""} className="shrink-0">
-          <SendHorizontal className="size-4" />
-          Send
-        </Button>
-      )}
-    </form>
+      </form>
+      <p className="mt-2 text-xs text-[var(--muted)]">
+        Read-only. Every query is checked before it runs.
+      </p>
+    </div>
   );
 }

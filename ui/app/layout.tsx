@@ -27,12 +27,10 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} h-dvh antialiased`}
     >
-      <body className="min-h-full">
-        <Providers>
-          <main className="h-dvh overflow-y-auto">{children}</main>
-        </Providers>
+      <body className="h-dvh">
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

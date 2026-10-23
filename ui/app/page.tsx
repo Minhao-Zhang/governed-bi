@@ -1,14 +1,14 @@
 import { ChatPanel } from "@/components/chat/chat-panel";
-import { PageShell } from "@/components/layout/page-shell";
+import { Sidebar } from "@/components/sidebar/sidebar";
 
-/** The only page. ChatPanel is the client boundary that owns chat state and the transport. */
+/** The only page: a sidebar, then the conversation. */
 export default function ChatPage() {
   return (
-    <PageShell
-      title="Chat"
-      description="Ask a question about your data."
-    >
-      <ChatPanel />
-    </PageShell>
+    <div className="flex h-full min-h-0 bg-white">
+      <Sidebar />
+      <main className="min-h-0 min-w-0 flex-1">
+        <ChatPanel />
+      </main>
+    </div>
   );
 }

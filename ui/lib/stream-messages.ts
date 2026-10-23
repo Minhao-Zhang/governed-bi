@@ -3,7 +3,7 @@
  *
  * The serve agent streams its whole ReAct loop through `messages` (AI turns,
  * tool results, system frames). Those are node-local reasoning — the live
- * surface for them is the AgentTimeline (ADR 0001 / gotcha G2). This module is
+ * surface for them is the running line (ADR 0001 / gotcha G2). This module is
  * the check that keeps tool dumps like `{"columns":…,"rows":…}` out of the
  * bubble list once the turn settles.
  */
@@ -227,7 +227,7 @@ export function turnAnswersByMessageId(
  *   current run is doing.
  * - The newest turn, finished, with a channel `AnswerView` → a card on its AI frame, or appended
  *   when it left none.
- * - The newest turn, mid-run or suspended at a clarification → no bubble (ServeProgress is live).
+ * - The newest turn, mid-run or suspended at a clarification → no bubble (the running line is live).
  * - Finished turn without a channel answer → last AI text only, as a fallback.
  */
 export function mapStreamToChatMessages(args: {
@@ -328,7 +328,7 @@ export function mapStreamToChatMessages(args: {
         }
       }
 
-      // Mid-turn: the AgentTimeline is the live surface — don't spill ReAct
+      // Mid-turn: the running line is the live surface — don't spill ReAct
       // frames into the transcript.
       if (!idle) return null;
 

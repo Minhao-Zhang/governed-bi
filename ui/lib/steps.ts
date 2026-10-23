@@ -1,61 +1,11 @@
 /**
- * The step model: wire stage events → UI timeline rows.
+ * Fold stage events into rows.
  *
- * The serve graph emits one custom event per governed boundary — every rail from
- * `serve/wrap.py`, every tool and every governance result from `serve/tools.py`,
- * and the terminal from `serve/nodes/finish.py`. ADR 0010 is the spec for that
- * event; this module owns the client half of it:
- *
- * - `reduceSteps` folds the ordered stream into append-only rows, merging a
- * step's `start` and its resolution into one row on the shared `id`.
- * - `buildStepsFromLedger` maps a completed recorded ledger to the SAME rows, so
- * the post-answer audit reuses the live renderer over one data shape.
- *
- * **The vocabulary is `register/stages.py`, not this file** (ADR 0010 §2). Two
- * consequences that look like omissions and are not:
- *
- * - There is no `run_query`. A SQL call emits `check` (the governance result)
- * and then `execute` (what reached the database); a third row would
- * double-count an action the ledger and every rate already agree on. So a
- * *repair* is a `check` row that did not pass — see `countRepairs` — and a
- * *query* is an `execute` row.
- * - `execute` and `cap` never emit `start`, because their status is read off a
- * completed record rather than declared on entry (ADR 0010 §3). Nothing here
- * may assume a row passes through `running`.
- *
- * v1's `refuse_check`, `cache`, `schema_route`, `finalize`, `search_corpus`,
- * `read_notes`, `grep_notes` and `run_query` name concepts this engine does not
- * have, so they are gone rather than kept as fallbacks: a name this module still
- * answers to is a name a reader will believe the engine can produce.
- *
- * The step view is driven by these custom events only — never by the agent's
- * internal chat messages (ADR 0001 / gotcha G2), which stay node-local.
+ * `reduceSteps` merges a step's start and its resolution on a shared id, in
+ * arrival order. `buildStepsFromLedger` maps a finished ledger onto the same
+ * rows. The wire sends no labels; `defaultLabel` is the client copy (ADR 0010).
+ * `execute` and `cap` have no start event, and there is no `run_query` row.
  */
-
-import {
-  Ban,
-  BookOpenText,
-  Bot,
-  CircleSlash,
-  Gavel,
-  Hand,
-  Inbox,
-  Layers,
-  Link2,
-  MessageCircleQuestionMark,
-  Network,
-  PenLine,
-  Play,
-  Rows3,
-  Search,
-  ShieldCheck,
-  ShieldX,
-  Sparkles,
-  Stamp,
-  Table2,
-  Waypoints,
-  type LucideIcon,
-} from "lucide-react";
 
 /** The custom stream event (backend contract, ADR 0010). start/resolve share `id`. */
 export interface GovEvent {
@@ -158,63 +108,8 @@ const CHANNEL_NOUNS = new Map<string, string>([
   ["channel_example", "Examples"],
 ]);
 
-export function isTool(step: string): boolean {
+function isTool(step: string): boolean {
   return TOOL_STEPS.has(step);
-}
-
-/**
- * Everything the agent loop does not do. Note `finish` answers `true` here while
- * its wire `kind` is `final` — when a caller holds a row, prefer `row.kind`.
- */
-export function isRail(step: string): boolean {
-  return !isTool(step);
-}
-
-/** Icon per step, so rails and each tool read distinctly at a glance. */
-export function stepIcon(step: string): LucideIcon {
-  if (CHANNEL_NOUNS.has(step)) return Search; // the five channels are one gesture
-  switch (step) {
-    case "accept":
-      return Inbox;
-    case "guard":
-      return ShieldCheck;
-    case "rewrite":
-      return PenLine;
-    case "negative_gate":
-      return Ban;
-    case "route":
-      return Waypoints;
-    case "resolve":
-      return Link2;
-    case "connect":
-      return Network;
-    case "assemble":
-      return Layers;
-    case "agent_core":
-      return Bot;
-    case "read_body":
-      return BookOpenText;
-    case "inspect_schema":
-      return Table2;
-    case "sample_rows":
-      return Rows3;
-    case "check":
-      return Gavel;
-    case "execute":
-      return Play;
-    case "cap":
-      return CircleSlash;
-    case "ask_user":
-      return MessageCircleQuestionMark;
-    case "refuse":
-      return ShieldX;
-    case "decline":
-      return Hand;
-    case FINAL_STEP:
-      return Stamp;
-    default:
-      return Sparkles;
-  }
 }
 
 function num(detail: Record<string, unknown> | undefined, key: string): number | null {
@@ -648,33 +543,6 @@ export function reduceSteps(prev: TimelineStep[], ev: GovEvent): TimelineStep[] 
 }
 
 /**
- * How many repair loops the turn went through.
- *
- * A repair is a `check` row that did not pass: the model proposed a statement,
- * governance blocked it (or the check itself errored), and the model had to try
- * again. There is no `run_query` step to count instead (ADR 0010 §2), and this
- * is the better definition anyway — it counts governance decisions, not attempts.
- */
-export function countRepairs(steps: TimelineStep[]): number {
-  return steps.filter(
-    (s) => s.step === "check" && (s.status === "blocked" || s.status === "error"),
-  ).length;
-}
-
-/** One-line summary shown when the completed trace collapses. */
-export function summarizeSteps(steps: TimelineStep[]): string {
-  // Actions the agent took. `check` and `cap` are results *about* an action, and
-  // counting them here would report one SQL call as two steps.
-  const actions = steps.filter((s) => s.kind === "tool" && s.step !== "check" && s.step !== "cap");
-  const queries = actions.filter((s) => s.step === "execute").length;
-  const repairs = countRepairs(steps);
-  const parts = [plural(actions.length, "step")];
-  if (queries > 0) parts.push(`${queries} quer${queries === 1 ? "y" : "ies"}`);
-  if (repairs > 0) parts.push(plural(repairs, "repair"));
-  return `Reasoning · ${parts.join(", ")}`;
-}
-
-/**
  * One recorded ledger entry as it lands on `answer.provenance.governance_ledger`.
  * Loosely typed — the engine owns the exact shape and it may grow; we read the
  * fields we render and pass the rest through as `detail`, so a v2 row's
@@ -720,11 +588,7 @@ function ledgerStatus(entry: LedgerEntry): StepStatus {
   return "ok";
 }
 
-/**
- * Map a completed ledger to the same `TimelineStep[]` the live stream produces,
- * so the audit trace and the live trace are one renderer over one data shape.
- * Returns `[]` for anything that isn't a non-empty array.
- */
+/** Map a finished ledger onto the same rows `reduceSteps` produces. Returns `[]` when it is not an array. */
 export function buildStepsFromLedger(ledger: unknown): TimelineStep[] {
   if (!Array.isArray(ledger)) return [];
   return ledger
@@ -746,6 +610,3 @@ export function buildStepsFromLedger(ledger: unknown): TimelineStep[] {
       } satisfies TimelineStep;
     });
 }
-
-/** Small helpers reused by the row renderer for counts. */
-export const stepCounts = { num, str };

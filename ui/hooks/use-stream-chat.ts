@@ -12,7 +12,7 @@
  * The serve graph is the governed agentic core (ADR 0002): it streams a
  * governance ledger live as custom `GovEvent`s (`rail` / `tool` / `final`, the
  * first tagged `serve_path: "agent"`). `reduceSteps` folds that ordered stream
- * into the append-only agent timeline shown in <ServeProgress/>, and the same
+ * into the rows the running line reads, and the same
  * rows are rebuilt from the completed ledger via `buildStepsFromLedger`
  * (live == audit). The terminal AnswerView prefers `stream.values.answer`
  * (ADR 0007 §4: `answer` is the system-copy channel and the model's prose lives in
@@ -24,7 +24,7 @@
  *
  * Transcript rows are built by `mapStreamToChatMessages` (`lib/stream-messages.ts`):
  * tool/system frames and intermediate ReAct AI text never become bubbles — the
- * AgentTimeline is the live surface for those (gotcha G2).
+ * The running line is the live surface for those (gotcha G2).
  */
 
 import { useRef, useState } from "react";
@@ -321,10 +321,8 @@ export function useStreamChat(
   // `choices`, when present, are short strings. Absent, the prompt is freeform,
   // which is the path that has to work when the model names no options.
   const clarification = parseClarification(stream.interrupt?.value);
-  // A pending clarification means the turn is *suspended*, not finished:
-  // `stream.isLoading` is false while the graph waits at `interrupt()`, but the
-  // progress timeline (and the "Asked a question…" row) must stay on screen
-  // beside the prompt, so treat this as still-in-progress for display.
+  // A pending clarification suspends the turn: `isLoading` is false, but the
+  // turn has not finished, so send stays locked.
   const awaitingClarification = clarification != null;
 
   // Everything the user has answered on this thread, keyed by `clarification_id`.
@@ -450,7 +448,7 @@ export function useStreamChat(
     // interrupt, so without `awaitingClarification` the composer could start a
     // second run on a thread that is waiting for an answer to its first.
     if (!trimmed || isRunning || awaitingClarification) return;
-    // Reset the agent timeline for the new turn; events refill it as they arrive.
+    // Reset the stage rows for the new turn; events refill them as they arrive.
     stepsRef.current = [];
     setSteps([]);
     void stream.submit({ messages: [{ type: "human", content: trimmed }] }, SUBMIT_OPTIONS);
@@ -460,11 +458,8 @@ export function useStreamChat(
     messages,
     send,
     isRunning,
-    // Progress state only means anything mid-run; clear it when idle. (The
-    // completed trace re-renders on the answer card, so nothing is lost.) While
-    // the graph waits at `interrupt()` the timeline carries the synthesised
-    // `ask_user` row, so the question the user is answering is also *on* the
-    // trace, not only in the prompt below it.
+    // Stage rows stay through a clarification: `isLoading` is false at an
+    // interrupt, and clearing them would drop the turn's stages before it resumes.
     steps: isRunning || awaitingClarification ? withClarifications(steps, liveFacts) : [],
     stop: () => stream.stop(),
     clarification,

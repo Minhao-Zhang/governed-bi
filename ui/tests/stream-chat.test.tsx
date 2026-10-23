@@ -14,9 +14,8 @@ import { renderWithProviders } from "./render";
 
 /**
  * `useStream` replaced by a stand-in whose state the test drives, so the transport under test is
- * the real `useStreamChat` fold: custom events into the timeline, `values.answer` into the card,
- * and `respondClarification` into `submit`. The options the component passed are kept so the
- * test can deliver events through the same callbacks the SDK would.
+ * the real `useStreamChat` fold: custom events into the running line, `values.answer` into the
+ * transcript, and `respondClarification` into `submit`.
  */
 type FakeState = {
   isLoading: boolean;
@@ -69,17 +68,17 @@ describe("StreamChat", () => {
 
     act(() => harness.setState!({ isLoading: true, messages: [HUMAN], values: {} }));
     act(() => MOCK_AGENT_EVENTS.forEach((ev) => harness.options!.onCustomEvent(ev)));
-    expect(screen.getByText("How this answer is being built")).toBeTruthy();
-    expect(screen.getByText("Governance blocked: r_table_not_retrieved (table)")).toBeTruthy();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.getByRole("status").textContent).toBe("Finishing the answer…");
 
     finishWith(MOCK_AGENT_ANSWER);
 
-    expect(screen.queryByText("How this answer is being built")).toBeNull();
-    expect(screen.getByText("Top categories by revenue?")).toBeTruthy();
-    expect(screen.getByText(AI.content)).toBeTruthy();
-    expect(screen.getByText("answered")).toBeTruthy();
-    // The finished card keeps the live trace it was built from.
-    expect(screen.getByText("Executed, 4 rows")).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+    const question = screen.getByText("Top categories by revenue?");
+    expect(question.hasAttribute("data-question")).toBe(true);
+    expect(screen.getByText(AI.content).closest("[data-answer]")).toBeTruthy();
+    expect(screen.queryByText("answered")).toBeNull();
+    expect(screen.queryByText("Executed, 4 rows")).toBeNull();
   });
 
   it("sends a question with the subgraph stream options", async () => {
@@ -97,13 +96,13 @@ describe("StreamChat", () => {
     const { unmount } = renderWithProviders(<StreamChat />);
     finishWith(MOCK_REFUSAL);
     expect(screen.getByText(/needs a table this corpus does not license/)).toBeTruthy();
-    expect(screen.getByText("refused")).toBeTruthy();
+    expect(screen.queryByText("refused")).toBeNull();
     unmount();
 
     renderWithProviders(<StreamChat />);
     finishWith(MOCK_CLARIFICATION_CLOSED);
     expect(screen.getByText(/The user declined this clarification/)).toBeTruthy();
-    expect(screen.getByText("clarification")).toBeTruthy();
+    expect(screen.queryByText("clarification")).toBeNull();
     expect(screen.queryByText("refused")).toBeNull();
   });
 
@@ -125,8 +124,7 @@ describe("StreamChat", () => {
       }),
     );
 
-    // On the prompt, and on the synthesised `ask_user` row of the live trace beside it.
-    expect(screen.getAllByText("Which fiscal year do you mean?").length).toBeGreaterThan(0);
+    expect(screen.getByText("Which fiscal year do you mean?")).toBeTruthy();
     expect((screen.getByRole("textbox", { name: "Ask a question about the governed data" }) as HTMLTextAreaElement).disabled).toBe(true);
     await userEvent.type(
       screen.getByRole("textbox", { name: "Answer the clarification" }),

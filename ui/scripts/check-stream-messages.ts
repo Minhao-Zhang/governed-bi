@@ -5,7 +5,7 @@
  *
  * Reproduces the screenshot failure mode: after a finished turn, tool outputs
  * like `{"columns":…,"rows":…}` were rendered as assistant text beside the
- * AnswerCard. This script fails if any mapped bubble still carries that spill.
+ * answer. This script fails if any mapped bubble still carries that spill.
  */
 
 import {
@@ -114,7 +114,7 @@ const mapped = mapStreamToChatMessages({
 });
 
 check(mapped.filter((m) => m.role === "user").length === 1, "one user bubble");
-check(mapped.filter((m) => m.answer != null).length === 1, "exactly one AnswerCard");
+check(mapped.filter((m) => m.answer != null).length === 1, "exactly one answer");
 check(!hasToolSpill(mapped), "fixed mapper drops tool JSON from transcript text");
 check(
   mapped.every((m) => m.role === "user" || m.answer != null),

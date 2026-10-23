@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
  * Renders model-written text as markdown. The one place in the app that does.
  *
  * **This replaces a hand-rolled renderer, and the trade it makes is deliberate.** The
- * previous `Narration`/`Emphasised` pair in `answer/answer-card.tsx` supported four
+ * previous `Narration`/`Emphasised` pair supported four
  * constructs — paragraphs, bullets, `**bold**`, pipe tables — and argued that a general
  * renderer is "a dependency and a surface: this text comes from a model, so every construct
  * a renderer supports is a construct the model can emit". That argument was sound and its
