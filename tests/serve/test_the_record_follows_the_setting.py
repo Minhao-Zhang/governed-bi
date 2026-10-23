@@ -268,10 +268,9 @@ def test_the_prompt_variant_is_named_and_not_only_hashed(two_schema_assets):
     # Total over the registry, so a stage nobody overrode still says which variant it ran.
     assert v4_set["narrate"] == "v1"
 
-    # The digests are the ones the four measured configs carry, so this is pinned to the real
-    # prompt text rather than to whatever it happens to be today.
-    assert v4_hash == "ca8905d1182d35eb"
-    assert v5_hash == "9c29f1e14b31885b"
+    # Pinned to the prompt text. An edit that leaves these unchanged missed the digest.
+    assert v4_hash == "31c5b22dd8f43aec"
+    assert v5_hash == "6e24adc60629b6fc"
     assert (v4_set, v4_hash) != (v5_set, v5_hash)
     # ...and only the overridden stage moved, or "they differ" would hold for a resolver
     # that never repeats itself.
@@ -284,7 +283,7 @@ def test_the_recorded_prompt_set_is_the_one_the_hash_was_taken_over(two_schema_a
 
     session = _session(two_schema_assets, prompt_variants={"analyst": "v3"})
     recorded = session.settings_resolved["prompt_set"]
-    assert digest_of(recorded) == session.prompt_set_hash == "32684b0db595aae6"
+    assert digest_of(recorded) == session.prompt_set_hash == "4d8b92b1d16b48be"
 
 
 def test_an_undeclared_prompt_name_refuses_at_session_build(two_schema_assets):

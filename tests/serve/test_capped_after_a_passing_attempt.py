@@ -20,6 +20,7 @@ def _attempt(passed: bool, reason_code: str, path: str = "agent") -> dict[str, A
         "reason_code": reason_code,
         "path": path,
         "executed_sql": "SELECT 1" if passed else None,
+        "checked_sql": "SELECT 1" if passed else None,
     }
 
 

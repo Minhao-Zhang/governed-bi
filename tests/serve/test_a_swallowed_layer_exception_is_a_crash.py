@@ -22,6 +22,7 @@ def _attempt(reason_code: str) -> dict[str, Any]:
         "reason_code": reason_code,
         "path": "agent",
         "executed_sql": None,
+        "checked_sql": None,
     }
 
 

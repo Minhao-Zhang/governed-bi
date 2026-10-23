@@ -267,6 +267,7 @@ def record_node() -> Any:
             if not isinstance(record_dict, Mapping) or not record_dict.get("turn_id"):
                 # A paused ``ask_user`` has no ``turn_id`` yet, and ``keep_turns`` cannot upsert one.
                 return {}
+            assumptions = record_dict.get("assumptions")
             entry: TurnEntry = {
                 "asked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "question": str(state.get("question") or "") or None,
@@ -275,6 +276,7 @@ def record_node() -> Any:
                 # is resolved here; a reader re-deriving it would be a second answer.
                 "outcome": (answer.get("outcome") if answer.get("outcome") is not None else record_dict.get("outcome")),
                 "record": dict(record_dict),
+                "assumptions": list(assumptions) if isinstance(assumptions, list) else [],
             }
         except Exception:  # noqa: BLE001 — a turn that answered is not a turn that failed
             _log_dropped_row(state)

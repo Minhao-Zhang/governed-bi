@@ -1381,7 +1381,7 @@ the graph lazily. **Size:** fixes only.
 | `tools/check_*.py` | 12 | |
 | Declared knobs or settings | 63 | |
 | UI pages | 8 | |
-| Snapshot SHA-256 and wall time | `b4f62e8c8b16518176ff223edbf30cf0fafcdf5e9f60dbfbc23116045fd231b4`, 387 s | |
+| Snapshot SHA-256 and wall time | `b4f62e8c8b16518176ff223edbf30cf0fafcdf5e9f60dbfbc23116045fd231b4`, 387 s | `d87881ff9ae80f7c779ae70aa1e52292c154ddb8b4c9d5c477aa5d0fde5f85e6` at P10, byte-identical to the P9b snapshot: the snapshot does not run the agent |
 | CI time of the `test` job | 145 s at `6ea775a`, before P5; 67 s at `1dd66e1`, after P5 | |
 | Checkpoint size after one turn | (P12) | |
 | EX and coverage, two runs, total and by half | (P16) | |

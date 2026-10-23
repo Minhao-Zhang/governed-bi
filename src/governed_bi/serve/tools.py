@@ -26,6 +26,13 @@ from governed_bi.govern.policy import GovernancePolicy
 from governed_bi.registry.prompts import prompt_text
 from governed_bi.serve import fetch
 from governed_bi.serve.agent_state import CAP_LEDGER_KEY, AttemptBook
+from governed_bi.serve.assumptions import (
+    AssumptionClaim,
+    check_layer_claims,
+    delivered_statement,
+    found_in_query,
+    merged,
+)
 from governed_bi.serve.clarification import (
     interrupt_payload,
     parse_basis,
@@ -234,6 +241,7 @@ def build_tools(
     config: Mapping[str, Any] | None,
     *,
     bounds: ToolBounds | None = None,
+    answer_epoch: str | None = None,
 ) -> list[Any]:
     cfg = configurable(config)
     bounds = bounds or tool_bounds_from_state(state)
@@ -245,6 +253,8 @@ def build_tools(
     read_cap = fetch.read_body_cap(state, cfg)
     book = AttemptBook(policy.run_query_attempt_cap)
     turn_id = str(state.get("turn_id") or "")
+    epoch = turn_id if answer_epoch is None else answer_epoch
+    question = str(state.get("question") or "")
 
     @tool
     async def read_body(asset_ids: list[str], runtime: ToolRuntime) -> Command:
@@ -467,4 +477,87 @@ def build_tools(
             clarifications_by_call={_call_id(runtime): row},
         )
 
-    return [read_body, inspect_schema, sample_rows, run_query, ask_user]
+    @tool
+    async def answer(
+        answer_text: str,
+        assumptions: list[AssumptionClaim],
+        runtime: ToolRuntime,
+    ) -> Command:
+        """Record the answer and every assumption it depends on.
+
+        A layer claim the server cannot back is sent back once, so the basis or the asset id
+        can be corrected. The next call is kept, including that correction.
+        """
+        claims = [
+            item if isinstance(item, AssumptionClaim) else AssumptionClaim.model_validate(item)
+            for item in assumptions or []
+        ]
+        checked = check_layer_claims(
+            claims,
+            known_assets=set(assets),
+            retrieved_assets=bounds.readable_assets | bounds.retrieved_tables,
+        )
+        # The first downgrade is a reply the agent can correct. A later call is the answer.
+        bad = _downgraded_asset_ids(claims, checked)
+        if bad and _completed_answer_calls(runtime) == 0:
+            named = ", ".join(bad)
+            return _reply(
+                runtime,
+                "answer rejected: a layer claim named an asset that does not exist or was "
+                f"not retrieved this turn ({named}). Fix the basis or the asset id, then "
+                "call answer again.",
+            )
+        turn_state = getattr(runtime, "state", None) or {}
+        attempts = [
+            row
+            for row in (turn_state.get("attempts_by_call") or {}).values()
+            if isinstance(row, Mapping)
+        ]
+        suspect = getattr(corpus, "suspect_columns", ()) or ()
+        found = found_in_query(
+            delivered_statement(attempts),
+            question=str(turn_state.get("question") or question),
+            suspect_columns=suspect,
+        )
+        return _reply(
+            runtime,
+            "Answer recorded.",
+            answer_text=answer_text,
+            assumptions=merged(checked, found),
+            answer_accepted_epoch=epoch,
+        )
+
+    return [read_body, inspect_schema, sample_rows, run_query, ask_user, answer]
+
+
+def _downgraded_asset_ids(claims: list[AssumptionClaim], checked: list[Any]) -> list[str]:
+    """Asset ids of ``layer`` claims the check stored under another basis."""
+    bad: list[str] = []
+    for index, claim in enumerate(claims):
+        if claim.basis != "layer":
+            continue
+        item = checked[index] if index < len(checked) else None
+        basis = item.get("basis") if isinstance(item, Mapping) else None
+        if basis != "layer":
+            bad.append(str(claim.asset_id))
+    return bad
+
+
+def _completed_answer_calls(runtime: Any) -> int:
+    """This turn's answer calls that already have a reply. Earlier turns' calls do not count."""
+    messages = list((getattr(runtime, "state", None) or {}).get("messages") or [])
+    humans = [i for i, m in enumerate(messages) if str(getattr(m, "type", "") or "") == "human"]
+    messages = messages[humans[-1] + 1 :] if humans else messages
+    replied = {
+        str(getattr(message, "tool_call_id", "") or "")
+        for message in messages
+        if str(getattr(message, "type", "") or "") == "tool"
+    }
+    count = 0
+    for message in messages:
+        for call in getattr(message, "tool_calls", None) or ():
+            if not isinstance(call, Mapping):
+                continue
+            if call.get("name") == "answer" and str(call.get("id") or "") in replied:
+                count += 1
+    return count

@@ -163,6 +163,7 @@ def test_a_timeout_overlapping_in_flight_run_query_still_records_the_attempt(
                 "reason_code": "passed",
                 "path": "agent",
                 "executed_sql": "SELECT 1 AS n",
+                "checked_sql": "SELECT 1 AS n",
             },
         )
 

@@ -221,7 +221,12 @@ def sample_rows(
         dialect=dialect,
         policy=policy,
     )
-    attempt = attempt_record(result=prepared.result, path="sample", executed_sql=prepared.sql)
+    attempt = attempt_record(
+        result=prepared.result,
+        path="sample",
+        executed_sql=prepared.sql,
+        checked_sql=prepared.canonical if prepared.sql is not None else None,
+    )
     if prepared.sql is None:
         detail = prepared.result.get("detail") or prepared.result.get("reason_code")
         return f"sample_rows refused: {detail}", False, attempt
@@ -283,7 +288,10 @@ def run_query(
         policy=policy,
     )
     attempt = attempt_record(
-        result=prepared.result, path="agent", executed_sql=prepared.sql
+        result=prepared.result,
+        path="agent",
+        executed_sql=prepared.sql,
+        checked_sql=prepared.canonical if prepared.sql is not None else None,
     )
     if prepared.sql is None:
         detail = prepared.result.get("detail") or prepared.result.get("reason_code")

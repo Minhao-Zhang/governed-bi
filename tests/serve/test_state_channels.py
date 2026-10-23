@@ -189,6 +189,9 @@ def test_turn_clears_every_per_turn_channel_through_the_real_reducers(guard_off_
         # render the previous turn's rows beside its own explanation.
         "result_table": {"columns": ["n"], "rows": [[1]], "row_count": 1, "truncated": False},
         "answer_text": "There are 9,590 restaurants in total.",
+        # A carried-over list would publish the previous turn's choices as this turn's.
+        "assumptions": [{"statement": "stale", "about": None, "basis": "guess", "asset_id": None}],
+        "answer_tool_called": True,
         # A carried-over result is the previous turn's opinion filed against this turn's SQL,
         # and the record would publish it as this turn's — an observer's judgement about a
         # statement it never saw.

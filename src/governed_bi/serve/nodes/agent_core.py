@@ -45,7 +45,9 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     if model is None:
         return _stub(state)
 
-    tools = build_tools(state, config)
+    # Shared with the tool. A checkpointed accept from another turn carries a different id.
+    epoch = str(state.get("turn_id") or "")
+    tools = build_tools(state, config, answer_epoch=epoch)
     agent = create_agent(
         model=model,
         tools=tools,
@@ -55,7 +57,9 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
         middleware=[
             *_context_middleware(state, model),
             _CapEndsTheTurn(policy_from_config(config).run_query_attempt_cap),
-            _ClarificationEndsTheTurn(),
+            # One before_model node. A second spends a recursion step each loop, and the
+            # sample-then-query cap then dies on the default limit before it can record itself.
+            _EndsTheTurn(epoch),
         ],
     )
 
@@ -112,6 +116,13 @@ async def agent_core_node(state: dict, config: RunnableConfig) -> dict:
     result_table = result.get("result_table")
     if result_table:
         update["result_table"] = result_table
+    if epoch and result.get("answer_accepted_epoch") == epoch:
+        text = result.get("answer_text")
+        if isinstance(text, str) and text.strip():
+            update["answer_text"] = text.strip()
+        assumptions = result.get("assumptions")
+        update["assumptions"] = list(assumptions) if isinstance(assumptions, list) else []
+        update["answer_tool_called"] = True
     return update
 
 
@@ -302,6 +313,37 @@ class _ClarificationEndsTheTurn(AgentMiddleware):
         if not (state or {}).get("clarification_requested"):
             return None
         return {"jump_to": "end"}
+
+
+class _AnswerEndsTheTurn(AgentMiddleware):
+    """An accepted answer ends the loop. A downgraded layer claim stays for one correction."""
+
+    def __init__(self, epoch: str) -> None:
+        super().__init__()
+        self.epoch = epoch
+
+    @hook_config(can_jump_to=["end"])
+    def before_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        accepted = (state or {}).get("answer_accepted_epoch")
+        if not self.epoch or accepted != self.epoch:
+            return None
+        return {"jump_to": "end"}
+
+
+class _EndsTheTurn(AgentMiddleware):
+    """Both endings share one node, so the loop does not spend a step on each."""
+
+    def __init__(self, epoch: str) -> None:
+        super().__init__()
+        self._clarification = _ClarificationEndsTheTurn()
+        self._answer = _AnswerEndsTheTurn(epoch)
+
+    @hook_config(can_jump_to=["end"])
+    def before_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        return (
+            self._clarification.before_model(state, runtime)
+            or self._answer.before_model(state, runtime)
+        )
 
 
 def _unanswered_tool_calls(state: Any, answered: Container[str]) -> list[Any]:

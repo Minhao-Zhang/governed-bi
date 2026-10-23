@@ -18,10 +18,9 @@ from governed_bi.serve.tools import analyst_prompt
 #: record its hash, and send this. The assertions below are unchanged — they are about the
 SYSTEM_PROMPT = analyst_prompt()
 
-#: The five tools ADR 0005 §3.5 declares. Named here rather than derived from ``build_tools``
-#: on purpose: deriving the expectation from the thing under test is how "the tool set could
-#: have been emptied" passed in the first place.
-ADR_TOOLS = {"read_body", "inspect_schema", "sample_rows", "run_query", "ask_user"}
+#: Named here rather than derived from ``build_tools``: an expectation taken from the
+#: implementation is how an emptied tool set passed. Five are ADR 0005 §3.5; ``answer`` is ADR 0018.
+ADR_TOOLS = {"read_body", "inspect_schema", "sample_rows", "run_query", "ask_user", "answer"}
 
 
 def _session(
@@ -98,12 +97,12 @@ def test_the_system_prompt_reaches_the_model(two_schema_index, two_schema_assets
         )
 
 
-def test_all_five_declared_tools_are_bound(two_schema_index, two_schema_assets, guard_off_policy):
-    """ADR 0005 §3.5's five, and no sixth."""
+def test_the_declared_tools_are_bound(two_schema_index, two_schema_assets, guard_off_policy):
+    """ADR 0005 §3.5's five, plus the answer tool from ADR 0018."""
     model, _ = _served(two_schema_index, two_schema_assets, guard_off_policy)
     assert model.tools_seen, "bind_tools was never called: the model was handed no tools"
     assert model.tool_names == ADR_TOOLS, (
-        f"bound {sorted(model.tool_names)}; ADR 0005 §3.5 declares {sorted(ADR_TOOLS)}. "
+        f"bound {sorted(model.tool_names)}; the declared set is {sorted(ADR_TOOLS)}. "
         f"missing={sorted(ADR_TOOLS - model.tool_names)} "
         f"extra={sorted(model.tool_names - ADR_TOOLS)}"
     )

@@ -151,6 +151,8 @@ class TurnEntry(TypedDict, total=False):
     answer_text: str | None
     outcome: str | None
     record: dict[str, Any]
+    #: Same list as ``record["assumptions"]``, beside the fields the chat page already reads.
+    assumptions: list[dict[str, Any]]
 
     #: Absent only on the newest row, so an empty drop list means trimmed nothing.
     compacted: dict[str, Any]
@@ -383,6 +385,10 @@ class ServeState(TypedDict, total=False):
     result_table: dict[str, Any] | None
     #: From ``narrate``, distinct from system ``answer["text"]``.
     answer_text: str | None
+    #: The answer tool's list, after the server's checks. Empty when the tool was not accepted.
+    assumptions: list[dict[str, Any]] | None
+    #: True when an accepted ``answer`` call ended the turn. Finish records the fault when this stays unset.
+    answer_tool_called: bool | None
     #: Per-turn: streamed config is bound with no question.
     query_vector: list[float] | None
     #: Wall clock, so a resumed clarification still has a span when the checkpointer
@@ -413,6 +419,8 @@ PER_TURN_RESET: dict[str, Any] = {
     "generated_sql": None,
     "result_table": None,
     "answer_text": None,
+    "assumptions": None,
+    "answer_tool_called": None,
     "query_vector": None,
     # Or the next turn's latency includes the gap between turns.
     "turn_started_at": None,

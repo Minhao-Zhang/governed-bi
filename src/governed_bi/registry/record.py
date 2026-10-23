@@ -299,6 +299,15 @@ RECORD_REGISTER: tuple[RecordField, ...] = (
        "LangGraph node RetryPolicy re-serving a crashed draw; that policy is banned, and "
        "provider SDK retries (llm_max_retries) are invisible here. Demoted from Tier.health "
        "so it cannot sit as an always-pass quotability check"),
+
+    _f("assumptions", Tier.outcome, Absence.never, Stage.finish,
+       "what the answer depends on, each basis one of layer, convention, guess or "
+       "found_in_query (ADR 0018). An empty list is a turn that did not accept an answer "
+       "call, not a list that was dropped"),
+    _f("answer_tool_called", Tier.outcome, Absence.never, Stage.finish,
+       "false when an answered or no-SQL turn ended without an accepted answer call. "
+       "Refuse, decline, clarification, cap and crash record true: those endings are not "
+       "a missing call"),
 )
 
 #: Refuse; do not warn.

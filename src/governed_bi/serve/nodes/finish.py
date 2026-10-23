@@ -183,6 +183,14 @@ def _extract_factory(
             return latency
         if name in ("cache_read_tokens", "cache_write_tokens"):
             return _cache_total(usage, name)
+        if name == "assumptions":
+            raw = state.get("assumptions")
+            return [dict(item) for item in raw] if isinstance(raw, list) else []
+        if name == "answer_tool_called":
+            # Refuse, decline, clarification, cap and crash are not a missing call.
+            if state.get("answer_tool_called") is True:
+                return True
+            return outcome not in (Outcome.answered, Outcome.no_sql)
 
         if name == "schemas":
             return state.get("schemas")

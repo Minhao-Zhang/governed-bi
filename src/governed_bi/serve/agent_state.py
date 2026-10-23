@@ -66,6 +66,12 @@ class GovernedAgentState(AgentState):
     # A fail-closed decline. :func:`any_fail_closed`, not last-write.
     clarification_requested: Annotated[bool, any_fail_closed]
 
+    # The answer tool's writes. LastValue would abort the turn on a second call.
+    answer_text: Annotated[str | None, keep_newest]
+    assumptions: Annotated[list[Any] | None, keep_newest]
+    # Matches the turn id the middleware holds. A later turn's id does not.
+    answer_accepted_epoch: Annotated[str | None, keep_newest]
+
 
 def _chargeable(committed: Mapping[str, Any] | None) -> set[str]:
     """``run_query`` rows only. ``sample_rows`` and the cap row do not spend a slot.

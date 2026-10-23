@@ -1,5 +1,5 @@
 """Audit ledger. See ADR 0006 and ADR 0010. Hash the executed string. Do not add a second, redacted projection:
-:func:`attempt_record` stores ``executed_sql`` raw."""
+:func:`attempt_record` stores ``executed_sql`` raw and ``checked_sql`` as the text that cleared the checks."""
 
 
 from __future__ import annotations
@@ -41,8 +41,10 @@ class AttemptRecord(TypedDict):
     passed: bool
     reason_code: str
     path: ExecutorPath
-    #: Statement sent after canonicalisation and row limit; ``None`` when nothing ran.
+    #: Statement sent after canonicalisation and the row limit; ``None`` when nothing ran.
     executed_sql: str | None
+    #: Canonical text that cleared the checks, before the row limit; ``None`` when nothing ran.
+    checked_sql: str | None
 
 
 class ExecutionRecord(TypedDict):
@@ -77,9 +79,19 @@ def structural_fingerprint(sql: str, *, dialect: str = DEFAULT_DIALECT) -> str:
 
 
 def attempt_record(
-    result: CheckResult, path: ExecutorPath, *, executed_sql: str | None = None
+    result: CheckResult,
+    path: ExecutorPath,
+    *,
+    executed_sql: str | None = None,
+    checked_sql: str | None = None,
 ) -> AttemptRecord:
-    """``executed_sql`` is what ``prepare`` produced. ``None`` means a refused attempt sent nothing."""
+    """``executed_sql`` is what ``prepare`` sent, limit included. ``checked_sql`` is the text that cleared the checks.
+
+    ``None`` means nothing ran. A refusal keeps no checked text, even when canonicalisation produced one.
+    """
+    # The row limit is applied only after the checks pass, so a statement that never ran has neither string.
+    if executed_sql is None:
+        checked_sql = None
     failed = result["failed_layer"]
     return AttemptRecord(
         result_layer=failed.name if failed is not None else None,
@@ -87,6 +99,7 @@ def attempt_record(
         reason_code=result["reason_code"],
         path=path,
         executed_sql=executed_sql,
+        checked_sql=checked_sql,
     )
 
 

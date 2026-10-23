@@ -25,6 +25,7 @@ _PASSING_ATTEMPT: dict[str, Any] = {
     "reason_code": "passed",
     "path": "agent",
     "executed_sql": "SELECT count(*) FROM sales.orders",
+    "checked_sql": "SELECT count(*) FROM sales.orders",
 }
 
 

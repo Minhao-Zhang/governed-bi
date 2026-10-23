@@ -48,6 +48,21 @@ class Prompt:
         return self.variants[key]
 
 
+#: Appended to every analyst variant. ADR 0018 §1: the list is how a turn states its choices.
+_ANSWER_RULE = (
+    "Finish every answered turn by calling the answer tool. Put the answer in answer_text and "
+    "list every assumption that answer depends on, including defaults that seem obvious: time "
+    "ranges, how missing values are treated, distinct counting, tie-breaking, rounding, and "
+    "which rows a join keeps. Each entry has a statement in the person's words, about set to "
+    "the phrase of the question it concerns or left empty, a basis, and asset_id when the basis "
+    "is layer. basis is layer when a retrieved definition says so and asset_id is that "
+    "definition's id; convention when it is a standing reading you would use again; guess when "
+    "you are choosing without a definition. For example: statement \"Closed businesses are "
+    "included\", about \"closed\", basis layer, asset_id the definition that says so; and "
+    "statement \"Last year means the previous calendar year\", about \"last year\", basis guess."
+)
+
+
 #: SQL-writing agent system prompt.
 ANALYST = Prompt(
     name="analyst",
@@ -241,6 +256,17 @@ ANALYST = Prompt(
     },
     default="v4",
 )
+ANALYST = Prompt(
+    name=ANALYST.name,
+    stage=ANALYST.stage,
+    why=(
+        ANALYST.why
+        + "\nEvery answered turn ends on the answer tool, which is where the assumptions "
+        "of ADR 0018 are stated."
+    ),
+    variants={key: f"{text}\n{_ANSWER_RULE}" for key, text in ANALYST.variants.items()},
+    default=ANALYST.default,
+)
 
 
 #: Guard scope check: is this a BI question? Reply YES/NO; fail closed on YES.
@@ -418,8 +444,8 @@ NARRATE = Prompt(
             "- Lead with the number or the name that answers the question.\n"
             "- Use the result exactly as given. Do not round, re-derive or estimate.\n"
             "- If the result is empty, say that no rows matched.\n"
-            "- Do not add caveats about accuracy, data quality or your own confidence. "
-            "Reliability is reported separately and is not yours to assert.\n"
+            "- Do not hedge about accuracy or data quality. An assumption the figure depends "
+            "on is part of the answer.\n"
             "- No preamble, no restating of the question, no description of the SQL."
         ),
     },

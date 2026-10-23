@@ -288,7 +288,7 @@ def test_the_analyst_prompt_names_the_id_convention_and_every_tool() -> None:
 
     text = prompt_text("analyst")
     assert "id=" in text, "the id convention is rendered but never explained"
-    for tool in ("read_body", "inspect_schema", "sample_rows", "run_query", "ask_user"):
+    for tool in ("read_body", "inspect_schema", "sample_rows", "run_query", "ask_user", "answer"):
         assert tool in text, f"{tool} is bound on every turn and never mentioned"
     assert "v1" in PROMPT_REGISTRY["analyst"].variants, (
         "v1 is the baseline v2 has to beat; deleting it deletes the comparison"

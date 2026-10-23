@@ -1,8 +1,8 @@
 """Say the answer in a sentence, after ``agent_core``. See ADR 0002, amendment 3.
 
-Adopts the agent's prose, and generates only when that text is missing. A capped turn always
-generates: its last message is the budget's exit line, and adopting it would present that
-line as the answer.
+Adopts the answer tool's text, then the agent's prose, and generates only when both are
+missing. A capped turn always generates: its last message is the budget's exit line, and
+adopting it would present that line as the answer.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def _ended_at_the_cap(state: Mapping[str, Any]) -> bool:
 
 
 async def narrate_node(state: dict, config: RunnableConfig) -> dict:
-    """Write ``answer_text``. Adopt the agent's prose; generate only when there is none.
+    """Write ``answer_text``. Adopt the tool's text, then the agent's prose.
 
     Returns ``{}`` when there is nothing to say. Never raises into the wrapper: a crash would
     mark an answered turn crashed. A capped turn generates, so the rows get a sentence.
@@ -61,6 +61,9 @@ async def narrate_node(state: dict, config: RunnableConfig) -> dict:
 
     try:
         if not capped:
+            tool_text = state.get("answer_text")
+            if isinstance(tool_text, str) and tool_text.strip():
+                return {"answer_text": tool_text.strip()}
             adopted = last_ai_text(state)
             if adopted:
                 return {"answer_text": adopted.strip()}

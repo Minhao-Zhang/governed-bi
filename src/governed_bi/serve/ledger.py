@@ -84,6 +84,7 @@ def pipeline_error_attempt(path: ExecutorPath, detail: str) -> AttemptRecord:
         reason_code=GUARDRAIL_ERROR,
         path=path,
         executed_sql=None,
+        checked_sql=None,
     )
 
 
@@ -91,7 +92,7 @@ def cap_attempt() -> AttemptRecord:
     """The row a capped turn needs, or an empty ledger makes ``capped`` hold vacuously.
 
     Not a layer result (ADR 0006 §5). A rule id would name a layer that never ran.
-    ``executed_sql`` is set: a ``TypedDict`` tolerates a missing key, so every reader would ``.get()``.
+    ``executed_sql`` and ``checked_sql`` are set: a ``TypedDict`` tolerates a missing key.
     """
     return AttemptRecord(
         result_layer=None,
@@ -99,4 +100,5 @@ def cap_attempt() -> AttemptRecord:
         reason_code=ATTEMPT_CAP_REFUSED_BY,
         path="agent",
         executed_sql=None,
+        checked_sql=None,
     )

@@ -71,6 +71,7 @@ def _fat_record(turn_id: str = "turn-0001") -> dict[str, Any]:
         "prompt_set_hash": "beef", "settings_resolved": {f"knob_{i}": i for i in range(200)},
         "guard": {"allowed": True}, "execution": {"attempts": [{"passed": True}], "terminal": "ok"},
         "guardrail_errors": 0, "outcome": "answered",
+        "assumptions": [], "answer_tool_called": True,
         "usage": [{"turn_index": 1, "input_tokens": 10, "output_tokens": 2}],
         "n_re_served": 0,
         "terminal_reason": None, "schemas": ["facilities"],

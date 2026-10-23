@@ -302,9 +302,15 @@ def test_the_row_that_is_written_carries_the_statement_verbatim(prepare) -> None
         retrieved_tables=CUSTOMERS,
         allowed_columns=ALLOWED,
     )
-    row = attempt_record(prepared.result, "agent", executed_sql=prepared.sql)
+    assert prepared.canonical is not None and prepared.sql is not None
+    row = attempt_record(
+        prepared.result, "agent", executed_sql=prepared.sql, checked_sql=prepared.canonical
+    )
     assert row["passed"] is True
     assert row["executed_sql"] == prepared.sql
+    assert row["checked_sql"] == prepared.canonical
+    assert "limit" not in row["checked_sql"].lower()
+    assert "limit" in row["executed_sql"].lower()
     assert "424242" in str(row["executed_sql"]), (
         "the durable row carries the literal. If that changes, it is a decision, not a detail"
     )
@@ -318,6 +324,7 @@ def test_a_refused_attempt_records_that_nothing_ran(check) -> None:
     result = check("SELECT pg_read_file('/etc/passwd')", retrieved_tables=CUSTOMERS)
     row = attempt_record(result, "agent")
     assert row["executed_sql"] is None
+    assert row["checked_sql"] is None
     assert row["passed"] is False
     assert row["result_layer"] == "FUNCTIONS"
     assert row["reason_code"] == "r_function_not_permitted"
@@ -340,8 +347,14 @@ def test_the_execution_record_derives_its_error_count_from_its_attempts() -> Non
     from governed_bi.govern.ledger import AttemptRecord, execution_record
 
     attempts = [
-        AttemptRecord(result_layer=None, passed=True, reason_code="passed", path="agent"),
-        AttemptRecord(result_layer=None, passed=False, reason_code=GUARDRAIL_ERROR, path="agent"),
+        AttemptRecord(
+            result_layer=None, passed=True, reason_code="passed", path="agent",
+            executed_sql=None, checked_sql=None,
+        ),
+        AttemptRecord(
+            result_layer=None, passed=False, reason_code=GUARDRAIL_ERROR, path="agent",
+            executed_sql=None, checked_sql=None,
+        ),
     ]
     assert execution_record(attempts, "answered")["guardrail_errors"] == 1
     assert execution_record(attempts[:1], "answered")["guardrail_errors"] == 0
@@ -417,9 +430,13 @@ def test_the_ledger_records_the_statement_that_ran_not_the_one_that_was_asked_fo
     from governed_bi.govern.ledger import attempt_record
     from governed_bi.serve.ledger import execution_from_attempts
 
-    executed = 'SELECT COUNT(*) FROM "address"."CBSA" LIMIT 200001'
-    row = attempt_record(allow(evaluated=[], bound={}), "agent", executed_sql=executed)
+    checked = 'SELECT COUNT(*) FROM "address"."CBSA"'
+    executed = f"{checked} LIMIT 200001"
+    row = attempt_record(
+        allow(evaluated=[], bound={}), "agent", executed_sql=executed, checked_sql=checked
+    )
     assert row["executed_sql"] == executed
+    assert row["checked_sql"] == checked
 
     # Survives the projection into the record, which is where it has to arrive.
     attempts = execution_from_attempts([row])["attempts"]
@@ -429,10 +446,13 @@ def test_the_ledger_records_the_statement_that_ran_not_the_one_that_was_asked_fo
     # present and null, so a reader never has to tell "absent" from "did not run".
     refused = attempt_record(refuse("r_table_not_retrieved", "nope"), "agent")
     assert "executed_sql" in refused and refused["executed_sql"] is None
+    assert refused["checked_sql"] is None
 
     from governed_bi.serve.ledger import cap_attempt
 
-    assert "executed_sql" in cap_attempt()
+    capped = cap_attempt()
+    assert "executed_sql" in capped and capped["executed_sql"] is None
+    assert capped["checked_sql"] is None
 
 
 def test_agent_core_prefers_the_executed_statement_over_the_tool_argument() -> None:
