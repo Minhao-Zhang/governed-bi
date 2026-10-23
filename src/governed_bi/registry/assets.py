@@ -16,7 +16,6 @@ __all__ = [
     "AssetPolicy",
     "ASSET_REGISTER",
     "INDEXED_TYPES",
-    "CONTEXT_TYPES",
 ]
 
 
@@ -33,7 +32,6 @@ class AssetType(str, Enum):
     metric = "metric"
     term = "term"
     few_shot = "few_shot"
-    negative_example = "negative_example"
 
 
 class TagRule(str, Enum):
@@ -45,12 +43,10 @@ class TagRule(str, Enum):
     binding_target = "binding_target"
     #: Cross-schema joins vote once, from the left endpoint.
     left_table = "left_table"
-    #: Own ``schema`` if set, otherwise untagged.
-    own_schema_or_global = "own_schema_or_global"
 
 
-#: Retrieval budget. ``"all"`` never budgeted; ``"n/a"`` never enters context.
-Budget = int | Literal["all", "n/a"]
+#: Retrieval budget. ``"all"`` is never budgeted.
+Budget = int | Literal["all"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,19 +123,10 @@ ASSET_REGISTER: Mapping[AssetType, AssetPolicy] = {
         tag_rule=TagRule.own_schema,
         budget=3,
     ),
-    AssetType.negative_example: _p(
-        AssetType.negative_example,
-        identifier_fields=(),
-        tag_rule=TagRule.own_schema_or_global,
-        budget="n/a",
-    ),
 }
 
 INDEXED_TYPES: frozenset[AssetType] = frozenset(ASSET_REGISTER)
 
-CONTEXT_TYPES: frozenset[AssetType] = frozenset(
-    t for t, p in ASSET_REGISTER.items() if p.budget != "n/a"
-)
 
 
 def _assert_register_is_total() -> None:

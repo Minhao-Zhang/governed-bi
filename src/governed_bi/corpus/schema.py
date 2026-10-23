@@ -1,4 +1,4 @@
-"""The eight asset types. See ADR 0005.
+"""The seven asset types. See ADR 0005.
 
 Common fields are repeated on each class: a shared base would order them wrongly. An import check keeps the copies
 aligned.
@@ -17,18 +17,15 @@ from ..registry.assets import ASSET_REGISTER, AssetType
 __all__ = [
     "Cardinality",
     "ColumnRole",
-    "Complexity",
     "LogicalType",
     "ProvenanceSource",
     "ProvenanceStatus",
     "ReliabilityStatus",
-    "TermRelation",
     "Governance",
     "Reliability",
     "Provenance",
     "Audit",
     "Binding",
-    "RelatedTerm",
     "SchemaAsset",
     "TableAsset",
     "ColumnAsset",
@@ -36,7 +33,6 @@ __all__ = [
     "MetricAsset",
     "TermAsset",
     "FewShotAsset",
-    "NegativeExampleAsset",
     "Asset",
     "ASSET_CLASSES",
     "COMMON_FIELDS",
@@ -77,16 +73,8 @@ class Cardinality(str, Enum):
     many_to_many = "many_to_many"
 
 
-class Complexity(str, Enum):
-    simple = "simple"
-    medium = "medium"
-    complex = "complex"
 
 
-class TermRelation(str, Enum):
-    synonym_of = "synonym_of"
-    broader_than = "broader_than"
-    uses = "uses"
 
 
 class ProvenanceSource(str, Enum):
@@ -153,14 +141,10 @@ class Binding:
     target_id: str
 
 
-@dataclass(frozen=True, slots=True)
-class RelatedTerm:
-    id: str
-    relation: TermRelation
 
 
-#: Fields every asset carries. Asserted at import so the eight copies cannot drift.
-COMMON_FIELDS: tuple[str, ...] = ("id", "summary", "body", "governance", "confidence", "audit")
+#: Fields every asset carries. Asserted at import so the copies cannot drift.
+COMMON_FIELDS: tuple[str, ...] = ("id", "summary", "body", "governance", "audit")
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,7 +156,6 @@ class SchemaAsset:
     body: str | None = None
     rules: tuple[str, ...] = ()
     governance: Governance = field(default_factory=Governance)
-    confidence: float | None = None
     audit: Audit | None = None
 
 
@@ -191,7 +174,6 @@ class TableAsset:
     rules: tuple[str, ...] = ()
     columns: tuple[str, ...] = ()
     governance: Governance = field(default_factory=Governance)
-    confidence: float | None = None
     audit: Audit | None = None
 
 
@@ -209,13 +191,9 @@ class ColumnAsset:
     physical_type: str | None = None
     logical_type: LogicalType | None = None
     nullable: bool | None = None
-    is_unique: bool | None = None
-    sample_values: tuple[Any, ...] = ()
     role: ColumnRole | None = None
-    references: str | None = None
     reliability: Reliability = field(default_factory=Reliability)
     governance: Governance = field(default_factory=Governance)
-    confidence: float | None = None
     audit: Audit | None = None
 
 
@@ -232,9 +210,7 @@ class JoinAsset:
     summary: str
     body: str | None = None
     cardinality: Cardinality | None = None
-    cost: float | None = None
     governance: Governance = field(default_factory=Governance)
-    confidence: float | None = None
     audit: Audit | None = None
 
 
@@ -251,7 +227,6 @@ class MetricAsset:
     body: str | None = None
     dimensions: tuple[str, ...] = ()
     governance: Governance = field(default_factory=Governance)
-    confidence: float | None = None
     audit: Audit | None = None
 
 
@@ -266,41 +241,25 @@ class TermAsset:
     body: str | None = None
     synonyms: tuple[str, ...] = ()
     binding: Binding | None = None
-    related_terms: tuple[RelatedTerm, ...] = ()
     governance: Governance = field(default_factory=Governance)
-    confidence: float | None = None
     audit: Audit | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class FewShotAsset:
-    """``body`` repeats the question and the SQL. The index reads ``summary``; the hit text has to stand alone."""
+    """``body`` is derived from the question and the SQL, never stored. The hit text has to stand alone."""
 
     asset_type: ClassVar[AssetType] = AssetType.few_shot
     id: str
     schema: str
     sql: str
     summary: str
-    body: str | None = None
-    bound_terms: tuple[str, ...] = ()
-    complexity: Complexity | None = None
+    body: str | None = field(init=False, default=None)
     governance: Governance = field(default_factory=Governance)
-    confidence: float | None = None
     audit: Audit | None = None
 
-
-@dataclass(frozen=True, slots=True)
-class NegativeExampleAsset:
-    """One question class. ``schema=None`` is system-wide."""
-
-    asset_type: ClassVar[AssetType] = AssetType.negative_example
-    id: str
-    summary: str
-    body: str | None = None
-    schema: str | None = None
-    governance: Governance = field(default_factory=Governance)
-    confidence: float | None = None
-    audit: Audit | None = None
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "body", f"Question: {self.summary}\nSQL:\n{self.sql}")
 
 
 Asset = (
@@ -311,10 +270,9 @@ Asset = (
     | MetricAsset
     | TermAsset
     | FewShotAsset
-    | NegativeExampleAsset
 )
 
-#: Enum to class. A value outside the eight cannot reach a class.
+#: Enum to class. An unknown value cannot reach a class.
 ASSET_CLASSES: Mapping[AssetType, type[Asset]] = {
     AssetType.schema: SchemaAsset,
     AssetType.table: TableAsset,
@@ -323,7 +281,6 @@ ASSET_CLASSES: Mapping[AssetType, type[Asset]] = {
     AssetType.metric: MetricAsset,
     AssetType.term: TermAsset,
     AssetType.few_shot: FewShotAsset,
-    AssetType.negative_example: NegativeExampleAsset,
 }
 
 
@@ -333,12 +290,12 @@ def class_for(asset_type: object) -> type:
         member = AssetType(asset_type)
     except ValueError:
         known = ", ".join(sorted(t.value for t in AssetType))
-        raise ValueError(f"asset_type={asset_type!r} is not one of the eight: {known}") from None
+        raise ValueError(f"asset_type={asset_type!r} is not one of: {known}") from None
     return ASSET_CLASSES[member]
 
 
 def _assert_every_asset_carries_the_common_fields() -> None:
-    """The six common fields are copied per class because a base class would order them wrongly."""
+    """The five common fields are copied per class because a base class would order them wrongly."""
     missing_rows = sorted(t.value for t in ASSET_CLASSES if t not in ASSET_REGISTER)
     if missing_rows:  # pragma: no cover - import-time guard
         raise AssertionError(f"asset classes with no register policy row: {missing_rows}")

@@ -97,7 +97,7 @@ def test_unparseable_metric_expressions_are_counted() -> None:
 
 def test_the_round_trip_loses_only_what_is_listed() -> None:
     lost = ox.round_trip_loss(fixture_assets())
-    assert lost == {("column", "physical_type"): 9, ("few_shot", "body"): 1}
+    assert lost == {("column", "physical_type"): 9}
 
 
 def test_the_reader_restores_a_flipped_join() -> None:
@@ -150,5 +150,5 @@ def test_every_bird_export_is_valid(tmp_path: Path) -> None:
     result = _validate(sorted(tmp_path.glob("*.yaml")))
     assert result.returncode == 0, result.stdout + result.stderr
     lost = ox.round_trip_loss(store.load(BIRD)[0])
-    assert set(lost) == {("few_shot", "body"), ("column", "physical_type"), ("schema", "summary"), ("schema", "body")}
+    assert set(lost) == {("column", "physical_type")}
     json.loads((tmp_path / ox.REPORT_NAME).read_text(encoding="utf-8"))

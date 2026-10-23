@@ -36,7 +36,7 @@ The words for the current tree. When a term here disagrees with a casual use of 
 | Term | Meaning |
 |---|---|
 | **Semantic layer** | The definitions the engine answers from: tables, columns, joins, metrics, terms and few-shot questions. Say this in prose and on the page. |
-| **Corpus** | The directory that holds the semantic layer (`GOVERNED_BI_CORPUS_DIR`): YAML assets loaded by `corpus/`. Eight types, in `registry/assets.py`: schema, table, column, join, metric, term, few-shot, and negative example. |
+| **Corpus** | The directory that holds the semantic layer (`GOVERNED_BI_CORPUS_DIR`): YAML assets loaded by `corpus/`. Seven types, in `registry/assets.py`: schema, table, column, join, metric, term, and few-shot. |
 | **Retrieval channel** | One of schema, term, metric, entity, or example. Entity covers tables, columns, and joins. Example covers few-shot questions. Each channel can score a lexical match, a semantic match, or both. Example is semantic only. In code the scoring kinds are `lexical` and `semantic`, and the five searches are stages named `channel_schema` and so on. |
 | **Retrieved tables** | The tables retrieval found on this turn, including tables added while joining. The TABLES check asks only whether a statement's tables are in that set. It is not a permission. The record field is `retrieved_tables`. |
 | **Check** | One of six deterministic passes over SQL before it runs: `PARSE`, `NO_WRITE`, `FUNCTIONS`, `BINDING`, `COLUMNS`, `TABLES`. See [ADR 0006](adr/0006-execution-time-governance.md). |

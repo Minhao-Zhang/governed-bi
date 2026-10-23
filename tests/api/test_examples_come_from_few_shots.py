@@ -43,7 +43,6 @@ def client() -> Any:
                 schema=db_id,
                 sql=sql,
                 summary=question,
-                body=f"Question: {question}\nSQL:\n{sql}",
             )
         )
     session = from_assets(

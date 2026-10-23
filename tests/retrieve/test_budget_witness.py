@@ -30,14 +30,6 @@ def test_nothing_dropped_reports_nothing() -> None:
     assert result.best_dropped_score == {}
 
 
-def test_an_n_a_budget_counts_as_a_drop_rather_than_vanishing() -> None:
-    """A declared ``n/a`` with no record is the same silence as a missing default of zero."""
-    assert budget_for(AssetType.negative_example) == "n/a"
-    result = apply_budgets(
-        [("sales.neg", AssetType.negative_example, 0.9)], pulled_in=[]
-    )
-    assert result.hits == []
-    assert result.dropped == {"negative_example": 1}
 
 
 def test_equal_scores_break_on_the_asset_id_not_on_dict_order() -> None:

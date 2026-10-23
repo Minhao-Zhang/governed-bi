@@ -125,7 +125,7 @@ ASSET_TYPE = re.compile(r"^\s*\"?asset_type\"?\s*:\s*\"?([A-Za-z_]+)", re.MULTIL
 #: an unrecognised type is scanned. A literal, not ``registry.assets``, so a corpus
 #: whose type names differ from this tree is still checked.
 EXEMPT_ASSET_TYPES: frozenset[str] = frozenset(
-    {"table", "column", "join", "metric", "term", "few_shot", "negative_example"}
+    {"table", "column", "join", "metric", "term", "few_shot"}
 )
 
 #: Only under a corpus root — an arbitrary JSON fixture is not a semantic-layer summary.

@@ -53,9 +53,6 @@ def apply_budgets(
 
     for asset_id, asset_type, score in ranked:
         cap = budget_for(asset_type)
-        if cap == "n/a":
-            _drop(asset_type, score)
-            continue
         if cap == "all":
             kept.append((asset_id, asset_type, score))
             continue

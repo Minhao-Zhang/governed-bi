@@ -29,7 +29,6 @@ from .schema import (
     FewShotAsset,
     JoinAsset,
     MetricAsset,
-    NegativeExampleAsset,
     SchemaAsset,
     TableAsset,
     TermAsset,
@@ -112,7 +111,6 @@ class DatabaseReport:
     terms: int = 0
     unresolved_bindings: list[str] = field(default_factory=list)
     verified_queries: int = 0
-    unanswerable: int = 0
 
 
 def _text(summary: str, body: str | None) -> str:
@@ -302,13 +300,7 @@ def _export_database(name: str, assets: Sequence[Asset]) -> tuple[dict[str, Any]
         {k: v for k, v in to_mapping(t).items() if k != "asset_type"} for t in assets if isinstance(t, TermAsset)
     ]
     model_context["verified_queries"] = [_verified_query(a) for a in assets if isinstance(a, FewShotAsset)]
-    model_context["unanswerable"] = [
-        {k: v for k, v in to_mapping(a).items() if k != "asset_type"}
-        for a in assets
-        if isinstance(a, NegativeExampleAsset)
-    ]
     report.verified_queries = len(model_context["verified_queries"])
-    report.unanswerable = len(model_context["unanswerable"])
     model_context = {k: v for k, v in model_context.items() if v}
 
     model: dict[str, Any] = {"version": OSSIE_VERSION, "name": name, "description": _text(schema.summary, schema.body)}
@@ -485,7 +477,6 @@ def read_model(model: Mapping[str, Any]) -> list[Asset]:
             }
         )
     out.extend({"asset_type": "term", **t} for t in context.get("terms", []))
-    out.extend({"asset_type": "negative_example", **n} for n in context.get("unanswerable", []))
     for query in context.get("verified_queries", []):
         out.append(
             {

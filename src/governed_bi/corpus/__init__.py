@@ -1,4 +1,4 @@
-"""Eight asset types and the on-disk store. See ADR 0005.
+"""Seven asset types and the on-disk store. See ADR 0005.
 
 May import ``ports``, ``register``, and ``measure``. Import has no side effects.
 """

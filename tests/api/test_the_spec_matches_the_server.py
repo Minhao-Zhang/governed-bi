@@ -198,11 +198,6 @@ def _session(connector: Any) -> Any:
                 schema="beer",
                 sql="SELECT count(*) FROM beer.brands",
                 summary="How many root beer brands are there?",
-                body=(
-                    "Question: How many root beer brands are there?\n"
-                    "SQL:\n"
-                    "SELECT count(*) FROM beer.brands"
-                ),
             ),
         ],
         connector=connector,

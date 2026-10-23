@@ -21,11 +21,8 @@ def test_every_channel_target_is_a_real_asset_type() -> None:
     retrieved: set[assets.AssetType] = set()
     for targets in channels.CHANNEL_TARGETS.values():
         retrieved |= targets
-    reachable = retrieved | channels.CHECK_CONSUMED_TYPES
-    assert reachable == assets.INDEXED_TYPES, (
-        "an indexed asset type that no retrieval channel retrieves and no check consumes is "
-        "unreachable — which is exactly how v1's negative examples were embedded, "
-        "budgeted at zero by a dict default, and never retrievable"
+    assert retrieved == assets.INDEXED_TYPES, (
+        "an indexed asset type that no retrieval channel retrieves is unreachable"
     )
 
 

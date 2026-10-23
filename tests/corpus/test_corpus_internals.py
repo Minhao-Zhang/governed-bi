@@ -230,9 +230,8 @@ def test_a_valid_asset_reports_nothing() -> None:
         ({"summary": "customers " + "x" * 250}, "over the 250 cap"),
         ({"summary": "one row per registered buyer"}, "does not contain physical_name"),
         ({"schema": ""}, "schema is missing"),
-        ({"confidence": 1.5}, "not a number in [0, 1]"),
     ],
-    ids=["empty", "over_cap", "identifier_absent", "untagged", "confidence"],
+    ids=["empty", "over_cap", "identifier_absent", "untagged"],
 )
 def test_each_rule_fires(overrides: dict, expected: str) -> None:
     """One asset, one rule broken at a time, so a validator that failed everything
@@ -279,7 +278,6 @@ def test_the_common_field_guard_fires_on_a_class_that_forgets_governance(monkeyp
         id: str = ""
         summary: str = ""
         body: str | None = None
-        confidence: float | None = None
         audit: object = None
         name: str = ""
 

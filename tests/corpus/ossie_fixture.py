@@ -114,6 +114,5 @@ def fixture_assets() -> list[Asset]:
             schema="shop",
             sql="SELECT COUNT(*) FROM orders",
             summary="How many orders are there?",
-            body="Question: How many orders are there?\nSQL:\nSELECT COUNT(*) FROM orders",
         ),
     ]

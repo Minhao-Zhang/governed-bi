@@ -11,6 +11,7 @@ from typing import Mapping
 
 from ..registry.assets import ASSET_REGISTER, AssetType, TagRule
 from ..registry.settings import Unset, setting_default
+from .schema import ColumnAsset, JoinAsset, MetricAsset, SchemaAsset, TableAsset
 
 __all__ = ["Problem", "TAG_RULE_FIELDS", "problems_with"]
 
@@ -28,7 +29,7 @@ class Problem:
 
 
 #: Field, and whether a missing value is a problem. Closed against ``TagRule`` at import.
-#: ``binding`` and ``own_schema_or_global`` are optional: those assets may stay untagged.
+#: ``binding`` is optional: an unbound term stays untagged.
 TAG_RULE_FIELDS: Mapping[TagRule, tuple[str, bool]] = {
     TagRule.itself: ("name", True),
     TagRule.own_schema: ("schema", True),
@@ -36,7 +37,6 @@ TAG_RULE_FIELDS: Mapping[TagRule, tuple[str, bool]] = {
     TagRule.base_table: ("base_table", True),
     TagRule.left_table: ("left_table", True),
     TagRule.binding_target: ("binding", False),
-    TagRule.own_schema_or_global: ("schema", False),
 }
 
 
@@ -55,7 +55,7 @@ def problems_with(asset: object) -> list[str]:
     """Reasons ``asset`` breaks. Never raises: a bad item is a problem, not a crash."""
     asset_type = getattr(asset, "asset_type", None)
     if not isinstance(asset_type, AssetType):
-        return [f"{_name(asset)}: asset_type is {asset_type!r}, not one of the eight"]
+        return [f"{_name(asset)}: asset_type is {asset_type!r}, not a known asset type"]
     policy = ASSET_REGISTER[asset_type]
     where = _name(asset)
     out: list[str] = []
@@ -99,17 +99,13 @@ def problems_with(asset: object) -> list[str]:
             "not vote in route and there is no rule saying it should not"
         )
 
-    confidence = getattr(asset, "confidence", None)
-    if confidence is not None and (
-        not isinstance(confidence, (int, float))
-        or isinstance(confidence, bool)
-        or not 0.0 <= confidence <= 1.0
-    ):
-        out.append(
-            f"{where}: confidence={confidence!r} is not a number in [0, 1]. This is a "
-            "curation-time belief and never an outcome score -- the first thing a "
-            "feedback loop will want is to write a hit rate here"
-        )
+    # The Ossie file joins summary and body with a blank line and rules with newlines (ADR 0022).
+    joined = (SchemaAsset, TableAsset, ColumnAsset, JoinAsset, MetricAsset)
+    if isinstance(asset, joined) and "\n" in asset.summary:
+        out.append(f"{where}: summary contains a newline; it must be one paragraph")
+    for rule in getattr(asset, "rules", ()):
+        if "\n" in rule:
+            out.append(f"{where}: a rule contains a newline; write each rule on one line")
 
     physical = getattr(asset, "physical_name", None)
     if physical is not None:

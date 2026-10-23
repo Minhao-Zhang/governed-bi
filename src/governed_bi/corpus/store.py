@@ -122,7 +122,7 @@ def _one(raw: Any, *, where: str) -> tuple[list[Asset], list[str]]:
     if not isinstance(raw, Mapping):
         return [], [f"expected a mapping, got {type(raw).__name__}"]
     if "asset_type" not in raw:
-        return [], ["no asset_type: the discriminator decides which of the eight this is"]
+        return [], ["no asset_type: the discriminator decides which type this is"]
 
     try:
         class_for(raw["asset_type"])  # loud on an unknown type before anything else runs

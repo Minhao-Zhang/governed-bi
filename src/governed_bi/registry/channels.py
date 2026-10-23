@@ -18,7 +18,6 @@ __all__ = [
     "DECLARED_CHANNELS",
     "CHANNEL_EXTRACTS",
     "CHANNEL_TARGETS",
-    "CHECK_CONSUMED_TYPES",
     "SCORING_CHANNELS",
     "expected_channel_state",
     "channel_anomaly",
@@ -86,8 +85,6 @@ CHANNEL_TARGETS: Mapping[Stage, frozenset[AssetType]] = {
     Stage.channel_example: frozenset({AssetType.few_shot}),
 }
 
-#: Indexed, but matched by a check: a refuse decision, not a ranking.
-CHECK_CONSUMED_TYPES: frozenset[AssetType] = frozenset({AssetType.negative_example})
 
 
 def expected_channel_state(stage: Stage, channel: Channel) -> ChannelState:
@@ -135,26 +132,17 @@ def _assert_every_indexed_type_has_a_consumer() -> None:
     retrieved: set[AssetType] = set()
     for targets in CHANNEL_TARGETS.values():
         retrieved |= targets
-    reachable = retrieved | CHECK_CONSUMED_TYPES
-
-    orphaned = INDEXED_TYPES - reachable
+    orphaned = INDEXED_TYPES - retrieved
     if orphaned:  # pragma: no cover - import-time guard
         raise AssertionError(
-            f"indexed asset types no retrieval channel retrieves and no check consumes: "
+            f"indexed asset types no retrieval channel retrieves: "
             f"{sorted(t.value for t in orphaned)}"
         )
-    phantom = reachable - INDEXED_TYPES
+    phantom = retrieved - INDEXED_TYPES
     if phantom:  # pragma: no cover - import-time guard
         raise AssertionError(
-            f"a retrieval channel or a check targets asset types that are not indexed: "
+            f"a retrieval channel targets asset types that are not indexed: "
             f"{sorted(t.value for t in phantom)}"
-        )
-    overlap = retrieved & CHECK_CONSUMED_TYPES
-    if overlap:  # pragma: no cover - import-time guard
-        raise AssertionError(
-            f"asset types both retrieved and check-consumed: "
-            f"{sorted(t.value for t in overlap)}. A type whose hit is a decision "
-            "must not also be ranked into context."
         )
 
 

@@ -75,7 +75,7 @@ def _coerce(value: Any, annotation: Any, *, where: str) -> Any:
 def _build(cls: type, raw: Mapping[str, Any], *, where: str = "") -> Any:
     """Build ``cls`` from ``raw``. Unknown keys raise, unless the class has an ``extra`` field."""
     hints = get_type_hints(cls)
-    declared = {f.name: f for f in fields(cls)}
+    declared = {f.name: f for f in fields(cls) if f.init}
     prefix = f"{where}." if where else ""
     extra_sink = "extra" if "extra" in declared else None
 
@@ -108,7 +108,7 @@ def from_mapping(raw: Mapping[str, Any]) -> Asset:
     if not isinstance(raw, Mapping):
         raise ValueError(f"expected a mapping, got {type(raw).__name__}")
     if "asset_type" not in raw:
-        raise ValueError("no asset_type: the discriminator decides which of the eight this is")
+        raise ValueError("no asset_type: the discriminator decides which type this is")
     return _build(class_for(raw["asset_type"]), raw)
 
 
@@ -122,6 +122,8 @@ def to_mapping(asset: Asset) -> dict[str, Any]:
 def _unbuild(obj: Any) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for spec in fields(obj):
+        if not spec.init:
+            continue
         value = getattr(obj, spec.name)
         default = (
             spec.default_factory()  # type: ignore[misc]

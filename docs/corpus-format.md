@@ -27,7 +27,7 @@ A checkout such as BIRD-corpus is arranged like this:
 
 That arrangement is a convention. The loader reads every `.yaml` file under the root, wherever it sits. It skips `.git`, `.hg`, `.svn`, `__pycache__`, `.ipynb_checkpoints`, `.github`, and `.conformance`. A file with another suffix is reported and not loaded. The writer, `corpus/store.py`, writes `<root>/<namespace>/<asset id>.yaml` with no further subdirectory. On the way out, the namespace has to be a bare identifier. An asset id has to be a legal filename.
 
-## The eight asset types
+## The seven asset types
 
 The types are declared in `src/governed_bi/registry/assets.py`. Each one has `summary` and `body`. `governance` can hide an asset. `audit` records why an authored field was written, and it stays out of the text the model sees.
 
@@ -35,12 +35,13 @@ The types are declared in `src/governed_bi/registry/assets.py`. Each one has `su
 |---|---|
 | Schema | The schema name, `summary`, `body`, and `rules` |
 | Table | `physical_name`, an optional grain and row count, `rules`, and the column ids |
-| Column | The parent table, `physical_name`, `physical_type`, nullability, sample values, a role, and a reliability note. `suspect` marks the column unreliable |
+| Column | The parent table, `physical_name`, `physical_type`, nullability, a role, and a reliability note. `suspect` marks the column unreliable |
 | Join | The two tables, the `on` expression, and an optional cardinality |
 | Metric | A name, a base table, and an `expression` |
 | Term | A business word, its synonyms, and the asset it binds to |
 | Few-shot | A question the layer can answer, with the SQL |
-| Negative example | A question the layer should not answer |
+
+A few-shot's `body` is built from its question and SQL and is not stored. A summary of a schema, table, column, join or metric, and each rule, is one line: the loader reports a newline in one.
 
 `GET /examples` serves the few-shot questions. It does not send the SQL.
 

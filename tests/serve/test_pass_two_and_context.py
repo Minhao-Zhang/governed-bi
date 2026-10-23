@@ -437,7 +437,6 @@ def test_a_few_shot_reaches_retrieved_and_the_prompt() -> None:
         schema="sales",
         sql="SELECT count(*) FROM sales.customers",
         summary="How many customers are there?",
-        body="Question: How many customers are there?\nSQL:\nSELECT count(*) FROM sales.customers",
     )
     index, embedder = _semantic_index([table, column, shot])
     question = "How many customers are there?"

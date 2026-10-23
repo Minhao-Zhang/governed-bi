@@ -259,6 +259,8 @@ def from_assets(
     prompt_variants: Mapping[str, str] | None = None,
 ) -> Session:
     """Session over an in-memory asset set. The other constructors call this."""
+    # Sorted, so the order a corpus reader yields cannot break a retrieval tie (ADR 0022).
+    assets = sorted(assets, key=lambda a: (a.asset_type.value, a.id))
     visible = visible_assets(assets)
     structure, structure_problems = build_structure(visible)
     entries = _index_entries(visible, structure)

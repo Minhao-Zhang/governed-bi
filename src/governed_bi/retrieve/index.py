@@ -69,8 +69,6 @@ def schema_tag_for(
         return binding_schema  # unbound → None (untagged)
     if rule is TagRule.left_table:
         return left_table_schema
-    if rule is TagRule.own_schema_or_global:
-        return schema  # absent → untagged / system-wide
     raise ValueError(f"unknown tag rule: {rule!r}")
 
 
