@@ -317,10 +317,9 @@ export function useStreamChat(
 
   // HITL: when the graph pauses at `interrupt()` inside its `ask_user` tool, the
   // interrupt value IS the ClarificationRequest. Parse fail-loud (it arrives as
-  // `unknown`); a malformed interrupt is dropped rather than half-rendered. The
-  // engine's payload is `{kind, clarification_id, question, why}` with no
-  // `choices`, so <ClarificationPrompt/> renders freeform-only — which is why the
-  // textarea path, not the option buttons, is the one that has to work.
+  // `unknown`); a malformed interrupt is dropped rather than half-rendered.
+  // `choices`, when present, are short strings. Absent, the prompt is freeform,
+  // which is the path that has to work when the model names no options.
   const clarification = parseClarification(stream.interrupt?.value);
   // A pending clarification means the turn is *suspended*, not finished:
   // `stream.isLoading` is false while the graph waits at `interrupt()`, but the

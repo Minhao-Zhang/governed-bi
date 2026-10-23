@@ -23,8 +23,11 @@ from governed_bi.serve.scripted_model import ScriptedChatModel, answer_call
 DEADLINE_S = 60.0
 
 
-def _asking_model() -> ScriptedChatModel:
+def _asking_model(choices: list[str] | None = None) -> ScriptedChatModel:
     """A model that asks once, then answers in prose."""
+    args: dict[str, Any] = {"question": "which year?", "basis": "data_definition"}
+    if choices:
+        args["choices"] = choices
     return ScriptedChatModel(
         responses=[
             AIMessage(
@@ -32,7 +35,7 @@ def _asking_model() -> ScriptedChatModel:
                 tool_calls=[
                     {
                         "name": "ask_user",
-                        "args": {"question": "which year?", "basis": "data_definition"},
+                        "args": args,
                         "id": "c1",
                         "type": "tool_call",
                     }
@@ -97,20 +100,24 @@ def _bounded(work: Any, what: str) -> dict[str, Any]:
     return box
 
 
-def _pause_one(db: Path, thread: str) -> None:
+def _pause_one(db: Path, thread: str, choices: list[str] | None = None) -> dict[str, Any]:
     """Write a real, paused ``ask_user`` interrupt to ``db``, then close everything that wrote it."""
     def work() -> Any:
         with compile_durable(path=db) as graph:
-            paused = graph.invoke(_turn(thread), _config(thread, _asking_model()))
-            assert paused.get("__interrupt__"), (
+            paused = graph.invoke(_turn(thread), _config(thread, _asking_model(choices)))
+            interrupts = paused.get("__interrupt__") or ()
+            assert interrupts, (
                 "precondition: the scripted model's `ask_user` must pause the turn, or this test "
                 "would assert a resume of nothing"
             )
-            return True
+            value = getattr(interrupts[0], "value", interrupts[0])
+            assert isinstance(value, dict)
+            return value
 
     box = _bounded(work, "the paused turn")
     if "error" in box:
         raise box["error"]
+    return box["value"]
 
 
 def test_a_pause_is_resumed_by_a_graph_that_did_not_write_it(tmp_path: Path) -> None:
@@ -147,6 +154,36 @@ def test_a_pause_is_resumed_by_a_graph_that_did_not_write_it(tmp_path: Path) -> 
         f"the resumed turn did not complete: outcome={outcome!r}, "
         f"path_kind={done.get('path_kind')!r}, failure={done.get('failure')!r}"
     )
+
+
+def test_a_pause_with_choices_is_resumed_by_a_graph_that_did_not_write_it(tmp_path: Path) -> None:
+    """The stored interrupt carries the choices, and a fresh graph can still answer it."""
+    db = tmp_path / "conversations.sqlite"
+    thread = "t-restart-choices"
+    choices = ["calendar year", "fiscal year"]
+    payload = _pause_one(db, thread, choices)
+    assert payload["choices"] == choices
+
+    def work() -> Any:
+        with compile_durable(path=db) as graph:
+            snapshot = graph.get_state({"configurable": {"thread_id": thread}})
+            stored = snapshot.interrupts
+            assert stored, "the pause with choices was not on the checkpoint"
+            value = stored[0].value
+            assert isinstance(value, dict)
+            assert value["choices"] == choices
+            assert value["kind"] == "clarification"
+            return resume_clarification(
+                graph,
+                config=_config(thread, _asking_model(choices)),
+                answer=choices[1],
+            )
+
+    box = _bounded(work, "the resume of a pause that carried choices")
+    if "error" in box:
+        raise box["error"]
+    clarifications = box["value"].get("clarifications") or []
+    assert any(c.get("answer") == "fiscal year" for c in clarifications), clarifications
 
 
 def test_a_resume_reaches_only_the_thread_it_names(tmp_path: Path) -> None:

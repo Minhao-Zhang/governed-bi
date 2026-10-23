@@ -153,6 +153,8 @@ class TurnEntry(TypedDict, total=False):
     record: dict[str, Any]
     #: Same list as ``record["assumptions"]``, beside the fields the chat page already reads.
     assumptions: list[dict[str, Any]]
+    #: The preview ``run_query`` delivered. ``None`` when that turn ran no query.
+    result_table: dict[str, Any] | None
 
     #: Absent only on the newest row, so an empty drop list means trimmed nothing.
     compacted: dict[str, Any]
@@ -170,6 +172,9 @@ COMPACT_MIN_VALUE_BYTES = 256
 #: Each super-step rewrites the channel (18 per turn measured). 25 plateaus near
 #: 253 KB. Elided rows remain in that turn's checkpoints.
 MAX_TURNS_RETAINED = 25
+
+#: Turns, newest first, that keep their ``result_table`` preview (at most 20 rows each).
+PREVIEWS_RETAINED = 10
 
 #: Register-optional keys a one-line summary of a past turn still needs.
 _LIST_VIEW_KEYS: frozenset[str] = frozenset({
@@ -253,7 +258,12 @@ def keep_turns(left: Any, right: Any) -> list[dict[str, Any]]:
             rows[at] = fresh
 
     # The newest row stays verbatim; ``answer`` already holds that turn's record.
+    # A reopened thread shows recent tables; older turns lose theirs, oldest first.
+    keep_from = len(rows) - PREVIEWS_RETAINED
     for index, row in enumerate(rows[:-1]):
+        if index < keep_from and "result_table" in row:
+            row = {k: v for k, v in row.items() if k != "result_table"}
+            rows[index] = row
         if "compacted" in row:
             continue
         record = row.get("record")

@@ -1383,7 +1383,7 @@ the graph lazily. **Size:** fixes only.
 | UI pages | 8 | |
 | Snapshot SHA-256 and wall time | `b4f62e8c8b16518176ff223edbf30cf0fafcdf5e9f60dbfbc23116045fd231b4`, 387 s | `d87881ff9ae80f7c779ae70aa1e52292c154ddb8b4c9d5c477aa5d0fde5f85e6` at P10, byte-identical to the P9b snapshot: the snapshot does not run the agent |
 | CI time of the `test` job | 145 s at `6ea775a`, before P5; 67 s at `1dd66e1`, after P5 | |
-| Checkpoint size after one turn | (P12) | |
+| Checkpoint size after one turn | (P12) | 65,107 bytes over 26 checkpoints for a scripted turn with a 150-row result at P12; the stored 20-row preview adds 335 bytes |
 | EX and coverage, two runs, total and by half | (P16) | |
 | Comment and docstring share of non-blank lines in `src/governed_bi` | 38% (10% comments, 28% docstrings) | 12.1% (5.0% comments, 7.1% docstrings) at P9b, of 18,869 non-blank lines; 34.6% on the same count just before the sweep |
 | Phrases BIRD-corpus defines more than one way (P11 rule) | | 2: "predominant" in `mondial_geo`, "name" in `superstore`; the rule is tested on a fixture corpus, not measured on BIRD |

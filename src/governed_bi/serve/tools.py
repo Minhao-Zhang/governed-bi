@@ -239,6 +239,31 @@ def _delivered(runtime: Any, payload: str) -> dict[str, Any]:
     return {"tool_delivered": {_call_id(runtime): payload_digest(payload)}}
 
 
+_MAX_CHOICES = 4
+
+
+def _choices_reply(choices: Any) -> str | None:
+    """A correction the agent can apply, or ``None`` when ``choices`` may be sent."""
+    if choices is None:
+        return None
+    if not isinstance(choices, list) or any(not isinstance(item, str) for item in choices):
+        return (
+            "ask_user rejected: choices must be a list of at most four short strings. "
+            "Call ask_user again."
+        )
+    if len(choices) > _MAX_CHOICES:
+        return (
+            "ask_user rejected: choices accepts at most four short strings, "
+            f"got {len(choices)}. Call ask_user again with four or fewer."
+        )
+    if any(not item.strip() for item in choices):
+        return (
+            "ask_user rejected: a choice was empty. Give each choice a short phrase "
+            "and call ask_user again."
+        )
+    return None
+
+
 def build_tools(
     state: Mapping[str, Any],
     config: Mapping[str, Any] | None,
@@ -398,10 +423,13 @@ def build_tools(
         basis: str,
         runtime: ToolRuntime,
         why: str = "",
+        choices: list[str] | None = None,
     ) -> Command:
         """Pause for one clarification in plain language, with no table or column names.
 
-        A question that names a schema identifier is rejected before the turn pauses."""
+        A question or choice that names a schema identifier is rejected before the turn pauses.
+        ``choices`` is at most four short strings, and is omitted from the payload when empty.
+        """
         if pending_clarification:
             # Refused, not queued. No await before the append, so two sends cannot both pass.
             return _reply(
@@ -411,13 +439,17 @@ def build_tools(
                 "if more are needed, ask them after this one is answered.",
             )
         # Reject before the latch and before ``interrupt``: pausing would show the leak, and ``why`` is rendered.
-        leak = find_schema_leak(question, why)
+        choice_reply = _choices_reply(choices)
+        if choice_reply is not None:
+            return _reply(runtime, choice_reply)
+        cleaned = [item.strip() for item in choices] if choices else None
+        leak = find_schema_leak(question, why, *(cleaned or ()))
         if leak is not None:
             return _reply(
                 runtime,
                 f"ask_user rejected: {leak!r} looks like a raw schema identifier, not plain "
                 "business language, and this question is shown to a business reader. Rephrase "
-                "question/why without table.column paths, snake_case, or camelCase "
+                "question, why, and choices without table.column paths, snake_case, or camelCase "
                 "identifiers, then call ask_user again.",
             )
         resolved_basis = parse_basis(basis)
@@ -449,6 +481,7 @@ def build_tools(
                 question=question,
                 why=why_text,
                 basis=resolved_basis,
+                choices=cleaned,
             )
         )
         # Released when ``interrupt`` returns, so a later question in this execution can pause.

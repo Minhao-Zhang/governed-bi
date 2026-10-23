@@ -75,3 +75,8 @@ export const answerViewSchema = z.object({
   audit_logged: z.boolean().optional(),
   audit_error: z.string().nullable().optional(),
 });
+
+/* ── Clarifying question ─────────────────────────────────────────────────── */
+
+/** Outlined answers on a clarifying question. Omitted on the wire when the question is freeform. */
+export const clarificationChoicesSchema = z.array(z.string());

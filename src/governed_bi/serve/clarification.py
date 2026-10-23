@@ -68,15 +68,20 @@ def interrupt_payload(
     question: str,
     why: str,
     basis: str,
-) -> dict[str, str]:
+    choices: list[str] | None = None,
+) -> dict[str, Any]:
     """The value ``interrupt()`` surfaces. Extend, do not rename ``kind``."""
-    return {
+    payload: dict[str, Any] = {
         "kind": CLARIFICATION_KIND,
         "clarification_id": clarification_id,
         "question": question,
         "why": why,
         "basis": basis,
     }
+    # Absent when the question is freeform, so an older client sees the keys it knows.
+    if choices:
+        payload["choices"] = list(choices)
+    return payload
 
 
 def parse_resume(resume: Any, *, why: str, expected_id: str | None = None) -> tuple[str, str, bool]:

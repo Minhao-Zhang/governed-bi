@@ -276,7 +276,7 @@ def classify_turn(inputs: OutcomeInputs) -> TurnOutcome:
 
 
 def finish(state: Mapping[str, Any]) -> dict[str, Any]:
-    """``result_table`` and ``answer_text`` stay off the record."""
+    """``result_table`` and ``answer_text`` stay off the record. The turn entry keeps the rows."""
     state = normalised(state)
     inputs = OutcomeInputs.from_state(state)
     result = classify_turn(inputs)

@@ -3,7 +3,7 @@
     uv run --frozen python tools/smoke_api.py
 
 Loads `.env`, builds the session from the environment (a Postgres DSN and a corpus on disk), and
-drives the app `langgraph.json` mounts through a `TestClient`. It checks the four custom routes
+drives the app `langgraph.json` mounts through a `TestClient`. It checks the five custom routes
 and nothing else, because they are the only ones the app declares:
 
 * `GET /livez` answers `{"ok": true}`.
@@ -11,7 +11,8 @@ and nothing else, because they are the only ones the app declares:
 * `GET /capabilities` answers, and `can_clarify` is true only with `can_stream` and a live model.
 * `GET /clarifications/pending` answers with a whole wrapper: `rows`, and `meta` carrying `n`,
   `truncated`, `threads_scanned`, `limit`, `offset` and `columns`.
-* The app declares exactly those four custom routes.
+* `GET /examples` answers with `examples`, each item a `question` and a `db_id` and nothing else.
+* The app declares exactly those five custom routes.
 * The production pending reader, used outside the LangGraph server, refuses by name
   (`InProcessServerRequired`) rather than leaking a transport.
 
@@ -36,7 +37,9 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 #: The custom routes the app declares. The platform's `/threads` routes are not the app's.
-CUSTOM_ROUTES = frozenset({"/livez", "/readyz", "/capabilities", "/clarifications/pending"})
+CUSTOM_ROUTES = frozenset({
+    "/livez", "/readyz", "/capabilities", "/clarifications/pending", "/examples",
+})
 
 PENDING_META = frozenset({"n", "truncated", "threads_scanned", "limit", "offset", "columns"})
 
@@ -108,10 +111,23 @@ def run_checks(client: Any, *, out: Callable[[str], None] = print) -> list[str]:
         f"n={meta.get('n')} truncated={meta.get('truncated')}",
     )
 
+    out("\nGET /examples")
+    examples = get("/examples")
+    rows = examples.get("examples")
+    check(
+        "examples are questions and databases, with no SQL",
+        isinstance(rows, list)
+        and all(
+            set(row) == {"question", "db_id"} and row["question"] and row["db_id"]
+            for row in rows
+        ),
+        f"n={len(rows) if isinstance(rows, list) else None}",
+    )
+
     out("\nthe route table")
     declared = {getattr(route, "path", None) for route in client.app.routes}
     custom = {p for p in declared if p and not p.startswith(("/docs", "/openapi", "/redoc"))}
-    check("exactly the four custom routes", custom == CUSTOM_ROUTES, ", ".join(sorted(custom)))
+    check("exactly the five custom routes", custom == CUSTOM_ROUTES, ", ".join(sorted(custom)))
 
     return failures
 

@@ -170,6 +170,8 @@ Duplicating the model's text into `answer.text` would create two fields that mus
 > the same reason: *"There are 9,590 restaurants"* is the result set spelled out, and ADR 0006
 > §11 puts result rows in the class the durable projection drops.
 
+ADR 0006 §11's retention table was withdrawn. The turn entry keeps the preview `run_query` delivered, outside the record.
+
 **And `messages` is the conversation at *every* namespace, because the client cannot tell them
 apart.** `messagesKey` names a key, not a graph level. LangGraph streams a nested graph's whole
 state under `values|<node>:<task_id>`, and the SDK applies the values of any namespace it does

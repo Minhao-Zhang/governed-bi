@@ -176,6 +176,7 @@ def _session(connector: Any) -> Any:
         AssetType,
         Binding,
         ColumnAsset,
+        FewShotAsset,
         SchemaAsset,
         TableAsset,
         TermAsset,
@@ -192,6 +193,17 @@ def _session(connector: Any) -> Any:
                         physical_name="name", summary="Brand name."),
             TermAsset(id="term.root_beer", name="root beer", summary="root beer, sarsaparilla",
                       binding=Binding(target_type=AssetType.column, target_id="beer.brands.name")),
+            FewShotAsset(
+                id="fs_beer_0000",
+                schema="beer",
+                sql="SELECT count(*) FROM beer.brands",
+                summary="How many root beer brands are there?",
+                body=(
+                    "Question: How many root beer brands are there?\n"
+                    "SQL:\n"
+                    "SELECT count(*) FROM beer.brands"
+                ),
+            ),
         ],
         connector=connector,
         policy=GovernancePolicy(guard_rules_enabled={}),
@@ -255,7 +267,7 @@ def wire() -> dict[str, Any]:
 #: asserted by :func:`test_every_operation_in_the_spec_is_exercised_here`.
 CASES: list[tuple[str, str, str]] = [
     ("GET", p, p)
-    for p in ("/livez", "/readyz", "/capabilities", "/clarifications/pending")
+    for p in ("/livez", "/readyz", "/capabilities", "/clarifications/pending", "/examples")
 ]
 
 

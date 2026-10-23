@@ -134,6 +134,7 @@ def test_ask_first_is_selectable_and_is_not_the_default() -> None:
     text = prompt_text("analyst", {"analyst": "ask_first"})
     assert text != prompt_text("analyst")
     assert "ranking_ambiguity" in text
+    assert "choices" in text
     assert "sample_rows" in text
     assert "schema.table" in text
     sent = analyst_prompt({"configurable": {"prompt_variants": {"analyst": "ask_first"}}})

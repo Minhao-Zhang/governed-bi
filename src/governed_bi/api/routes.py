@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from governed_bi.model.provider import reasoning_effort_of
 from governed_bi.paths import REPO_ROOT
+from governed_bi.registry.assets import AssetType
 
 __all__ = ["make_app", "app_from_environment", "app"]
 
@@ -78,6 +79,14 @@ def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
                 "columns": list(pending.PENDING_FIELDS),
             },
         }
+
+    @app.get("/examples")
+    def examples(
+        limit: int = Query(3, ge=1, le=10),
+        near: str | None = Query(None),
+    ) -> dict[str, Any]:
+        """Few-shot questions from the corpus loaded at startup. The SQL stays off the wire."""
+        return examples_for(get_session(), limit=limit, near=near)
 
     return app
 
@@ -150,6 +159,42 @@ def served_graph_declared() -> bool:
 
 def _not_ready(reason: str) -> JSONResponse:
     return JSONResponse(status_code=503, content={"ready": False, "reason": reason})
+
+
+def examples_for(session: Any, *, limit: int, near: str | None = None) -> dict[str, Any]:
+    """``summary`` is the question. ``body`` repeats it beside the SQL, so the wire uses ``summary``.
+
+    ``schema`` is the database the few-shot belongs to. Blank ``near`` keeps asset-id order.
+    """
+    shots = [
+        asset
+        for asset in session.assets_by_id.values()
+        if getattr(asset, "asset_type", None) is AssetType.few_shot
+    ]
+    text = near.strip() if isinstance(near, str) else ""
+    if text:
+        # ``restrict_to`` keeps this index's IDF. A second index over few-shots would rescore the same words.
+        ranked = session.index.lexical.restrict_to(asset.id for asset in shots).search(text)
+        by_id = {asset.id: asset for asset in shots}
+        ordered = [
+            by_id[asset_id]
+            for asset_id, _score in sorted(ranked, key=lambda item: (-item[1], item[0]))
+            if asset_id in by_id
+        ]
+    else:
+        # One database at a time, so a new conversation's three examples are not all from one.
+        seen: dict[str, int] = {}
+        rank: dict[str, int] = {}
+        for asset in sorted(shots, key=lambda asset: asset.id):
+            rank[asset.id] = seen.get(asset.schema, 0)
+            seen[asset.schema] = rank[asset.id] + 1
+        ordered = sorted(shots, key=lambda asset: (rank[asset.id], asset.schema, asset.id))
+    return {
+        "examples": [
+            {"question": asset.summary.strip(), "db_id": asset.schema}
+            for asset in ordered[:limit]
+        ]
+    }
 
 
 def capabilities_for(session: Any) -> dict[str, Any]:

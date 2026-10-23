@@ -277,6 +277,8 @@ def record_node() -> Any:
                 "outcome": (answer.get("outcome") if answer.get("outcome") is not None else record_dict.get("outcome")),
                 "record": dict(record_dict),
                 "assumptions": list(assumptions) if isinstance(assumptions, list) else [],
+                # Beside the record. ``None`` when this turn ran no query.
+                "result_table": state.get("result_table"),
             }
         except Exception:  # noqa: BLE001 — a turn that answered is not a turn that failed
             _log_dropped_row(state)

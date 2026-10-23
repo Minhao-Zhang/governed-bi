@@ -203,7 +203,7 @@ def _indexed_session(*, model: Any = None, connector: Any = None, policy: Any = 
     return session
 
 
-def test_the_app_declares_exactly_the_four_custom_routes() -> None:
+def test_the_app_declares_exactly_the_five_custom_routes() -> None:
     """The route table, not a status check: a deleted route and a missed path parameter look the same."""
     from governed_bi.api.routes import make_app
 
@@ -212,7 +212,9 @@ def test_the_app_declares_exactly_the_four_custom_routes() -> None:
         path for route in app.routes
         if (path := getattr(route, "path", None)) and not path.startswith(("/docs", "/openapi", "/redoc"))
     }
-    assert declared == {"/livez", "/readyz", "/capabilities", "/clarifications/pending"}, declared
+    assert declared == {
+        "/livez", "/readyz", "/capabilities", "/clarifications/pending", "/examples",
+    }, declared
 
 
 class _Pending:

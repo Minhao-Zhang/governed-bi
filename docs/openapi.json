@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "governed-bi",
-    "summary": "Health, capabilities and the pending-clarification queue, as JSON.",
-    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\nEvery route here is a read, and none of them serves a turn. A turn is served by the graph `langgraph.json` mounts, over the platform's `POST /threads/{thread_id}/runs/stream`, which is not described here. `GET /clarifications/pending` lists unanswered `ask_user` interrupts read from thread state.",
+    "summary": "Health, capabilities, example questions and the pending-clarification queue, as JSON.",
+    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\nEvery route here is a read, and none of them serves a turn. A turn is served by the graph `langgraph.json` mounts, over the platform's `POST /threads/{thread_id}/runs/stream`, which is not described here. `GET /clarifications/pending` lists unanswered `ask_user` interrupts read from thread state. `GET /examples` returns few-shot questions from the corpus loaded at startup.",
     "version": "2"
   },
   "paths": {
@@ -124,6 +124,63 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PendingClarificationsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/examples": {
+      "get": {
+        "tags": [
+          "examples"
+        ],
+        "summary": "Examples",
+        "description": "Few-shot questions from the corpus this process loaded at startup, which are the train split. `near` ranks them with the lexical index already built for that corpus. The SQL is not returned. Without `near`, the order is by asset id.",
+        "operationId": "examples_examples_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "maximum": 10,
+              "title": "Limit"
+            },
+            "description": "How many questions. Rejected outside 1..10."
+          },
+          {
+            "name": "near",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "title": "Near"
+            },
+            "description": "Rank few-shot questions by lexical overlap with this text. Absent or blank, the list is ordered by asset id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExamplesResponse"
                 }
               }
             }
@@ -566,6 +623,42 @@
         ],
         "title": "ConnectionResponse",
         "description": "Which warehouse this engine is pointed at (`api/routes.py::connection_for`), **credential-free by construction**: the redaction lives in the connector that owns the DSN (`datasource/postgres.py::endpoint`), which never parses `user` or `password` out at all, so there is no field here for a caller to leak. Only `dialect` is guaranteed -- the other three are whatever `connector.endpoint` returned, and an unparseable DSN returns an empty mapping."
+      },
+      "ExampleQuestion": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "title": "Question",
+            "description": "The few-shot question (`FewShotAsset.summary`). The body, which repeats the SQL, is not returned."
+          },
+          "db_id": {
+            "type": "string",
+            "title": "Db Id",
+            "description": "The database the few-shot belongs to (`FewShotAsset.schema`)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "question",
+          "db_id"
+        ],
+        "title": "ExampleQuestion"
+      },
+      "ExamplesResponse": {
+        "properties": {
+          "examples": {
+            "items": {
+              "$ref": "#/components/schemas/ExampleQuestion"
+            },
+            "type": "array",
+            "title": "Examples"
+          }
+        },
+        "type": "object",
+        "required": [
+          "examples"
+        ],
+        "title": "ExamplesResponse"
       },
       "HTTPValidationError": {
         "properties": {

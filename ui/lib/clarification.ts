@@ -20,6 +20,8 @@
 
 import { z } from "zod";
 
+import { clarificationChoicesSchema } from "@/lib/schemas";
+
 /* ── Server → client: the `interrupt()` value (contract §3) ──────────────── */
 
 export const clarificationChoiceSchema = z.object({
@@ -35,7 +37,14 @@ export const clarificationRequestSchema = z.object({
   basis: z.enum(["data_definition", "ranking_ambiguity"]).optional(),
   // Absent ⇒ freeform-only. Present ⇒ render the options; `allow_freeform`
   // decides whether a text box is also offered alongside them.
-  choices: z.array(clarificationChoiceSchema).optional(),
+  // The wire sends short strings (`clarificationChoicesSchema`). The mock still
+  // sends `{id, label}`; both become that object so a button can name its reply.
+  choices: z
+    .union([
+      clarificationChoicesSchema.transform((items) => items.map((label) => ({ id: label, label }))),
+      z.array(clarificationChoiceSchema),
+    ])
+    .optional(),
   allow_freeform: z.boolean().optional(),
   tier: z.string().optional(), // provenance tier of the question (D12); "audit" today
 });
