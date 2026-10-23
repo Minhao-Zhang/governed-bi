@@ -191,7 +191,7 @@ Counts are from BIRD. "Derived" means the reader rebuilds the value and a test s
 | Metric | `expression` | `expression`, dialect `ANSI_SQL` | Ossie has no Postgres dialect |
 | Metric | `summary`, `body` | `description`, joined the same way | |
 | Term, 603 | the whole term but `binding` | an item in the bound entity's extension, `terms` | |
-| Term | `binding` | position: field (576), dataset (26), metric (0), model (1) | an unbound term goes in the model extension's `terms` with `unbound: true`; 0 in BIRD |
+| Term | `binding` | position: field (576), dataset (26), metric (0), model (1) | a term bound to anything else keeps its binding in the model extension's `terms`; an unbound term belongs to no schema, so writing it fails; 0 in BIRD |
 | Term | `related_terms` | deleted | 0, no reader |
 | Few-shot, 4,857 | `id`, `summary`, `sql`, `audit`, `governance` | an item in the model extension's `few_shots` | |
 | Few-shot | `schema` | position | |
