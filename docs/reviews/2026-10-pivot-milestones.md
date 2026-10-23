@@ -1174,9 +1174,11 @@ all 1,351 questions, with the assumption figures, recorded as the baseline later
 **Deliverables:** two run directories under `runs/eval/`, the report, the doc update.
 
 **Sign-off criteria**
-- [ ] Both runs cover 1,351 questions with no crashed rows after resume.
-- [ ] Section 8 holds accuracy, coverage and disagreement for both runs, by half and in total.
-- [ ] The run manifest names engine commit, corpus commit, model and split.
+- [ ] Both runs cover 1,351 questions with no crashed rows after resume. Both cover 1,351; run B
+  keeps one crashed row (`train_4799`), because the resume guard refused the retry after
+  `.claude/launch.json` changed (see `docs/measurement.md`).
+- [x] Section 8 holds accuracy, coverage and disagreement for both runs, by half and in total.
+- [x] The run manifest names engine commit, corpus commit, model and split.
 
 **Out of scope:** tuning to raise the number.
 
@@ -1384,7 +1386,7 @@ the graph lazily. **Size:** fixes only.
 | Snapshot SHA-256 and wall time | `b4f62e8c8b16518176ff223edbf30cf0fafcdf5e9f60dbfbc23116045fd231b4`, 387 s | `d87881ff9ae80f7c779ae70aa1e52292c154ddb8b4c9d5c477aa5d0fde5f85e6` at P10, byte-identical to the P9b snapshot: the snapshot does not run the agent; `120288781310aaa0f900a8f155d7fb52df73642ba1ae3b1618b9ecd6f835315a` at P15, after BIRD-corpus `8ba312ed` wrote 15 metric expressions as SQL: the corpus hash and 251 context hashes change, and the P15 code on the old corpus reproduces the P10 snapshot exactly |
 | CI time of the `test` job | 145 s at `6ea775a`, before P5; 67 s at `1dd66e1`, after P5 | 72 s at `ead514e` (P14) |
 | Checkpoint size after one turn | not measured | 65,107 bytes over 26 checkpoints for a scripted turn with a 150-row result at P12; the stored 20-row preview adds 335 bytes |
-| EX and coverage, two runs, total and by half | not measured | PLACEHOLDER (P16) |
+| EX and coverage, two runs, total and by half | not measured | At P16 on `64ffa4c`: run A EX 0.553 (dev 0.578, holdout 0.532), coverage 0.843 (dev 0.852, holdout 0.835); run B EX 0.544 (dev 0.578, holdout 0.516), coverage 0.851 (dev 0.856, holdout 0.848); disagreement 11.3%; $0.0028 per question |
 | Comment and docstring share of non-blank lines in `src/governed_bi` | 38% (10% comments, 28% docstrings) | 12.1% (5.0% comments, 7.1% docstrings) at P9b, of 18,869 non-blank lines; 34.6% on the same count just before the sweep |
 | Phrases BIRD-corpus defines more than one way (P11 rule) | none measured | 2: "predominant" in `mondial_geo`, "name" in `superstore`; the rule is tested on a fixture corpus, not measured on BIRD |
 | BIRD exports that pass Ossie `validate.py` (P15) | no exporter | 57 of 57 at Ossie `53418ba`, and again at `d85e9e1`, which adds dataset-scoped metrics; 592 relationships, 112 `many_to_many` kept in the extension, 2 joins without cardinality |

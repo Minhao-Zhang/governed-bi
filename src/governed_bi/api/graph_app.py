@@ -185,6 +185,7 @@ def _utility_model(settings: Mapping[str, Any]) -> Any:
         effort=settings["llm_utility_reasoning_effort"] or None,
         timeout=float(settings["llm_utility_timeout_s"]),
         max_retries=int(settings["llm_max_retries"]),
+        max_output_tokens=int(settings["llm_utility_max_output_tokens"]),
     )
 
 

@@ -1,6 +1,6 @@
 # Failure modes
 
-These are the ways a turn can end without a trustworthy answer, as the code behaves now. Each one says what the person sees on the chat page and what the turn record stores. Measured rates for the current model setup are [PLACEHOLDER (P16)](open-work.md). How a turn is graded is in [measurement](measurement.md).
+These are the ways a turn can end without a trustworthy answer, as the code behaves now. Each one says what the person sees on the chat page and what the turn record stores. In the baseline, about 13% of questions ended in a clarifying question, 1% to 2% were refused, and about 1% hit the step cap ([measurement](measurement.md)). How a turn is graded is in [measurement](measurement.md).
 
 ## The input check stops the question
 

@@ -31,6 +31,7 @@ def run_config(
     session: Any | None = None,
     workers: int = 1,
     connector_factory: Any | None = None,
+    model_factory: Any | None = None,
     on_row: Any | None = None,
 ) -> list[dict[str, Any]]:
     """In input order. A fabricated corpus hash equates different corpora. Each worker needs its own connector, or a
@@ -100,6 +101,7 @@ def run_config(
         order_sensitive_qids=order_sensitive_qids,
         workers=workers,
         connector_factory=connector_factory,
+        model_factory=model_factory,
         on_row=on_row,
     )
 
@@ -114,12 +116,14 @@ def _run_one(
     run_id: str,
     order_sensitive_qids: frozenset[str],
     connector: Any | None = None,
+    models: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One question through to a graded row, for both the serial and concurrent paths."""
     qid = str(question["question_id"])
     conf = dict(base_cfg)
     if connector is not None:
         conf["connector"] = connector
+    conf.update(models or {})
     model = model_for_question(conf, qid)
     if model is not None:
         conf["agent_model"] = model
@@ -223,6 +227,7 @@ def _run_concurrently(
     workers: int,
     connector_factory: Any,
     on_row: Any | None,
+    model_factory: Any | None = None,
 ) -> list[dict[str, Any]]:
     """One graph and one connector per worker. A raised question is a crashed row, not a shorter file."""
     import threading
@@ -232,18 +237,26 @@ def _run_concurrently(
     # Every graph this pool builds, closed in `finally`. Each worker needs its
     # own graph: a shared connection answers only the loop that opened it.
     built: list[Any] = []
+    #: ``(graph, aclose)`` per worker: a client's sockets must close on its own loop, or that loop never closes.
+    closers: list[tuple[Any, Any]] = []
     built_lock = threading.Lock()
 
-    def worker_state() -> tuple[Any, Any]:
-        if not hasattr(local, "pair"):
+    def worker_state() -> tuple[Any, Any, Mapping[str, Any]]:
+        if not hasattr(local, "state"):
             compiled = compile_durable()
             with built_lock:
                 built.append(compiled)
-            local.pair = (compiled, connector_factory())
-        return local.pair
+            # Each worker runs its own event loop, and an async model client binds to the first loop it meets.
+            models = dict(model_factory()) if model_factory is not None else {}
+            aclose = models.pop("aclose", None)
+            if aclose is not None:
+                with built_lock:
+                    closers.append((compiled, aclose))
+            local.state = (compiled, connector_factory(), models)
+        return local.state
 
     def run_index(index: int) -> tuple[int, dict[str, Any]]:
-        compiled, connector = worker_state()
+        compiled, connector, models = worker_state()
         question = questions[index]
         try:
             row = _run_one(
@@ -255,6 +268,7 @@ def _run_concurrently(
                 run_id=run_id,
                 order_sensitive_qids=order_sensitive_qids,
                 connector=connector,
+                models=models,
             )
         except Exception as err:  # noqa: BLE001 — one bad question must not end the config
             row = {
@@ -291,6 +305,11 @@ def _run_concurrently(
                 if on_row is not None:
                     on_row(index, row)
     finally:
+        for compiled, aclose in closers:
+            try:
+                compiled.run_coro(aclose())
+            except Exception:  # noqa: BLE001 -- a client that will not close is not a row
+                pass
         # An unclosed connection holds a non-daemon thread, and the process waits for it.
         for compiled in built:
             close = getattr(compiled, "close", None)

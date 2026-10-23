@@ -586,6 +586,7 @@ def main(argv: list[str] | None = None) -> int:
             run_id=f"live-{tag}",
             workers=args.workers,
             connector_factory=lambda: PostgresConnector(dsn),
+            model_factory=lambda: _worker_models(args),
             on_row=append,
         )
     finally:
@@ -597,7 +598,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 
-def _build_models(args):
+def _build_models(args, clients: dict | None = None):
     """``(model, utility_model, embedder, vector_cache)`` on the OpenAI gateway.
 
     A 429 inside a node is marked crashed, so retries are a measurement, not a nicety.
@@ -608,13 +609,18 @@ def _build_models(args):
     vector_cache = None
     utility_model = None
     retries = max(0, int(args.max_retries))
+    from governed_bi.registry.settings import setting_default
+
+    # The same caps as the served app, so the run measures that configuration.
     model = provider_mod.chat_model(
         args.model,
         surface="agent",
         effort=args.effort or None,
         timeout=float(args.timeout),
         max_retries=retries,
+        max_output_tokens=int(setting_default("llm_max_output_tokens")),
         tools=True,
+        **(clients or {}),
     )
     if args.utility_model:
         utility_model = provider_mod.chat_model(
@@ -623,6 +629,8 @@ def _build_models(args):
             effort=args.utility_effort or None,
             timeout=float(args.timeout),
             max_retries=retries,
+            max_output_tokens=int(setting_default("llm_utility_max_output_tokens")),
+            **(clients or {}),
         )
     if args.embed:
         from governed_bi.retrieve.vector_cache import vector_cache_from_environment
@@ -633,6 +641,27 @@ def _build_models(args):
         )
         vector_cache = vector_cache_from_environment(model=embedder.requested_model)
     return model, utility_model, embedder, vector_cache
+
+
+def _worker_models(args) -> dict:
+    """Chat models with this worker's own HTTP clients, configured as ``_build_models`` does.
+
+    langchain-openai shares one cached async client per process, and it binds to the first
+    worker's event loop. ``aclose`` closes the worker's sockets on that worker's loop.
+    """
+    import httpx
+
+    sync_client, async_client = httpx.Client(), httpx.AsyncClient()
+    clients = {"http_client": sync_client, "http_async_client": async_client}
+    model, utility_model, _, _ = _build_models(
+        argparse.Namespace(**{**vars(args), "embed": False}), clients=clients
+    )
+
+    async def aclose() -> None:
+        await async_client.aclose()
+        sync_client.close()
+
+    return {"agent_model": model, "utility_model": utility_model or model, "aclose": aclose}
 
 
 if __name__ == "__main__":

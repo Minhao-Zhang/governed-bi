@@ -112,7 +112,9 @@ SETTING_REGISTER: tuple[Setting, ...] = (
     _k("llm_utility_model", "gpt-6-luna"),
     _k("llm_utility_reasoning_effort", "medium"),
     _k("llm_max_retries", 3),
-    _k("llm_max_output_tokens", 32_000),
+    # Near real use: a capped request bounds a runaway answer, and may hold less of the token limit.
+    _k("llm_max_output_tokens", 16_000),
+    _k("llm_utility_max_output_tokens", 2_000),
     _k("llm_timeout_s", 300.0),
     _k("llm_utility_timeout_s", 30.0),
     _k("rail_node_timeout_s", 120.0),

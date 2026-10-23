@@ -182,7 +182,7 @@ It needs `OPENAI_API_KEY` and `GOVERNED_BI_PG_DSN`, and it exits 2 when either i
 | `--force-fresh` | off | Allow a first run when sibling artifacts exist and this output file does not |
 | `--truncate` | off | Delete the artifact at `--out` and start over. This is the flag that discards a measured run |
 
-How to read the report, and which numbers may be quoted, is in [measurement](measurement.md). The current baseline figures are PLACEHOLDER (P16).
+How to read the report, and which numbers may be quoted, is in [measurement](measurement.md). The current baseline figures are there too.
 
 A smaller harness runs gold SQL, a stub, or a scripted config against a SQLite file. It does not call the chat model.
 

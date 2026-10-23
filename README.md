@@ -50,7 +50,7 @@ A refusal says "I can't answer this from your data.", then the reason, then near
 
 How to run an evaluation, and how to read the result, is in [Measurement](docs/measurement.md). The commands are in [Usage](docs/usage.md).
 
-On BIRD-Obfuscation, with the current default model, execution accuracy is PLACEHOLDER (P16) and coverage is PLACEHOLDER (P16). Run-to-run disagreement is PLACEHOLDER (P16). Cost per question is PLACEHOLDER (P16). The assumption figures are PLACEHOLDER (P16).
+On BIRD-Obfuscation's 1,351 questions, with the current default model, two runs reached execution accuracy of 0.553 and 0.544, with coverage of 0.843 and 0.851. The two runs disagreed on 11.3% of questions, and a question cost about $0.0028. Answers that included a guess were right 46% to 50% of the time, against 67% to 68% for answers with no guess. The figures by half are in [Measurement](docs/measurement.md).
 
 ## Export
 

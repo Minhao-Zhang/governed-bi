@@ -1,6 +1,6 @@
 # Measurement
 
-The baseline has not been run on the current model setup. Execution accuracy, coverage, run-to-run disagreement, cost per question, and the assumption figures are PLACEHOLDER (P16). What the run will fill in is [open work](open-work.md).
+The baseline was run twice on 2026-10-23 (P16), on all 1,351 questions. Execution accuracy was 0.553 and 0.544, coverage was 0.843 and 0.851, the two runs disagreed on 11.3% of questions, and a question cost about $0.0028. [The baseline](#the-baseline) gives each figure by half and the conditions it was measured under.
 
 ## How a lake run works
 
@@ -22,16 +22,30 @@ Rows land in `runs/eval/`, one JSON object per line. The name is derived from th
 
 After the last row, [`tools/datalake_report.py`](../tools/datalake_report.py) prints the row count, then execution accuracy and table coverage for the whole file. It prints the same two rates for the `dev` half and the `holdout` half in [`docs/data/db-split.csv`](data/db-split.csv), which assigns 28 databases to `dev` and 29 to `holdout`. A question whose database is not in that file is counted as unassigned and left out of both halves. Anything designed from failures reads `dev` only, and a decision to keep a change reads `holdout` only. With `--against`, it also prints how often the two runs disagree on `correct`, matched by question id.
 
-Execution accuracy is the share of graded rows whose result matched gold. A row with no gold is left out of that share. Coverage is the share of questions whose gold tables were all retrieved. The current figures are:
+Execution accuracy is the share of graded rows whose result matched gold. A row with no gold is left out of that share. Coverage is the share of questions whose gold tables were all retrieved.
 
-| | Total | Dev | Holdout |
-|---|---|---|---|
-| Execution accuracy | PLACEHOLDER (P16) | PLACEHOLDER (P16) | PLACEHOLDER (P16) |
-| Coverage | PLACEHOLDER (P16) | PLACEHOLDER (P16) | PLACEHOLDER (P16) |
-| Run-to-run disagreement | PLACEHOLDER (P16) | | |
-| Cost per question | PLACEHOLDER (P16) | | |
+## The baseline
 
-Cost per question comes from the token totals on each row. P16 will turn those totals into the figure above. The tree has no price table, so the printer's lines stop at the rates.
+Both runs used engine commit `64ffa4c` (branch `p16/caps`, squash-merged to `main`), BIRD-corpus `8ba312ed`, the `test_final` split of 1,351 questions, and `--embed`. The agent ran `gpt-6-luna` at `xhigh` with a 16,000-token output cap, and the utility calls ran it at `medium` with a 2,000-token cap. Run A used 16 workers and took about 65 minutes. Run B used 32 workers and took about 37 minutes. The artifacts are `runs/eval/p16/run_a.jsonl` and `run_b.jsonl`, which are not committed.
+
+| | Run A total | Run A dev | Run A holdout | Run B total | Run B dev | Run B holdout |
+|---|---|---|---|---|---|---|
+| Execution accuracy | 747/1351 = 0.553 | 352/609 = 0.578 | 395/742 = 0.532 | 735/1351 = 0.544 | 352/609 = 0.578 | 383/742 = 0.516 |
+| Coverage | 0.843 | 0.852 | 0.835 | 0.851 | 0.856 | 0.848 |
+
+| Figure | Value |
+|---|---|
+| Run-to-run disagreement | 152/1351 = 0.113 |
+| Cost per question | $0.0027 (A) and $0.0028 (B), or $3.71 and $3.75 per run |
+| Clarifying questions, scored incorrect | 180 (A) and 176 (B), about 13% |
+| Refused, capped and no SQL | 1.6%, 1.1% and 0.3% (A); 1.2%, 1.0% and 0.4% (B) |
+| Median, 90th-percentile and longest question time | 41 s, 67 s and 218 s (A); 43 s, 69 s and 296 s (B) |
+
+Run A's one crashed row was retried and answered. Run B's one crashed row, `train_4799`, failed with a Postgres `OperationalError`. Its retry was refused because the uncommitted `.claude/launch.json` had changed since the run, and the resume guard refuses to add rows to a run when the uncommitted diff has changed since it started. So the row stays crashed and scores incorrect, which moves run B's accuracy by at most 0.07 points.
+
+Cost per question comes from the token totals on each row, priced per million tokens at $0.10 for input, $0.01 for cache reads, $0.125 for cache writes and $0.50 for output. A question averaged about 25,300 input tokens, of which about 15,000 were cache reads and 9,900 were cache writes, plus 2,660 output tokens over 5.8 model calls. The printer reports only the rates, so the cost was computed from the rows separately.
+
+The token totals on the rows come to about 600,000 tokens a minute at 16 workers, which is 30% of the 2,000,000 tokens-per-minute limit. Neither run hit a rate-limit error.
 
 `grade_turn` in [`eval/grade.py`](../src/governed_bi/eval/grade.py) compares an `answered` turn's rows with the gold rows. Whole numbers must match exactly. A fractional number may differ by one part in a billion, or by 1e-12 when the values are near zero. Text and numbers stay different types. `refused`, `clarification`, `capped`, `crashed` and `no_sql` score incorrect, and the grader executes only a statement the engine delivered. A missing gold on an answered turn is `correct: null`, which leaves the row out of the accuracy share.
 
@@ -39,14 +53,14 @@ Cost per question comes from the token totals on each row. P16 will turn those t
 
 Each answered row can carry `assumption_counts`, a count for `layer`, `convention`, `guess` and `found_in_query`. [`eval/report.py`](../src/governed_bi/eval/report.py) `assumption_figures` reads those counts. It reports the mean number of assumptions per answer for each basis. It reports execution accuracy for answers with at least one guess and for answers with none. It reports how many `found_in_query` entries the server added, which are the choices the model did not state, and how many answers have at least one. It reports the total of `ambiguous_guess_refusals` across every row, not only answers, because a refused guess often ends as a clarifying question. An answered row with no `assumption_counts` is counted as not recorded and left out of the means. Treating that gap as zero would claim the model stated nothing.
 
-Those figures on the current setup are PLACEHOLDER (P16):
+The baseline's figures, run A then run B:
 
 | Figure | Value |
 |---|---|
-| Assumptions per answer, by basis | PLACEHOLDER (P16) |
-| Execution accuracy with a guess | PLACEHOLDER (P16) |
-| Execution accuracy with no guess | PLACEHOLDER (P16) |
-| `found_in_query` entries the model did not state | PLACEHOLDER (P16) |
-| Ambiguous-guess refusals | PLACEHOLDER (P16) |
+| Assumptions per answer, by basis | `layer` 0.69 and 0.68, `convention` 2.93 and 2.95, `guess` 0.14 and 0.13, `found_in_query` 1.79 and 1.75, over 1,131 and 1,139 answers with none unrecorded |
+| Execution accuracy with a guess | 67/135 = 0.496 and 60/130 = 0.462 |
+| Execution accuracy with no guess | 680/996 = 0.683 and 675/1009 = 0.669 |
+| `found_in_query` entries the model did not state | 2,019 in 968 answers (86%) and 1,991 in 971 answers (85%) |
+| Ambiguous-guess refusals | 1 and 0 |
 
 `python -m governed_bi.eval` is the small harness over a SQLite file, with configurations `oracle`, `stub` and `scripted`. Its JSON summary includes this same assumption block, plus execution accuracy, a refusal breakdown, and the single-run checks. The lake command is the one above.
