@@ -57,6 +57,15 @@ export const capabilitiesSchema = z.object({
 
 /* ── Answer (chat terminal state) ────────────────────────────────────────── */
 
+/** The preview `run_query` kept: at most 20 rows, beside the record, not inside it. */
+export const resultTableSchema = z.object({
+  columns: z.array(z.string()),
+  rows: z.array(z.array(z.unknown())),
+  row_count: z.number().optional(),
+  truncated: z.boolean().optional(),
+  preview_rows: z.number().optional(),
+});
+
 /**
  * The engine's answer (engine ADR 0007 §3). No reliability tier, and none may be defaulted in.
  * `text` is the system's copy and `answer_text` the model's; never fall back from one to the
@@ -71,6 +80,8 @@ export const answerViewSchema = z.object({
   error_type: z.string().nullable().optional(),
   refused_by: z.string().nullable().optional(),
   record: z.record(z.string(), z.unknown()).default({}),
+  // Null when that turn ran no query.
+  result_table: resultTableSchema.nullable().optional(),
   // Whether this turn reached the durable turn log, and why not.
   audit_logged: z.boolean().optional(),
   audit_error: z.string().nullable().optional(),
@@ -107,4 +118,16 @@ export const pendingClarificationsSchema = z.object({
     offset: z.number(),
     columns: z.array(z.string()),
   }),
+});
+
+/* ── /examples ───────────────────────────────────────────────────────────── */
+
+/** One few-shot question. The SQL stays off the wire (`docs/openapi.json`). */
+export const exampleQuestionSchema = z.object({
+  question: z.string(),
+  db_id: z.string(),
+});
+
+export const examplesResponseSchema = z.object({
+  examples: z.array(exampleQuestionSchema),
 });

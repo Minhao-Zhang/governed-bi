@@ -1,18 +1,13 @@
 /**
- * Client-side delivery state for an AnswerView. The engine has no `delivery` field, so the four
- * render states are derived from `outcome` and the attempt ledger's terminal. Branch UI on
- * `deriveDelivery`, never on a raw field, so the mapping lives in one place.
+ * Hand-copy of the engine's `refused_by` sentences. The page shows `answer.text` for a refusal.
+ * The map stays because the vocabulary test reads it and the client cannot import the registry.
  */
 
 import type { AnswerView } from "@/lib/types";
 
 export type AnswerDelivery = "clean" | "graded" | "refused" | "no_statement";
 
-/**
- * `answered` is a delivery and everything else is not. `no_sql` is its own state because a turn
- * that queried nothing was neither refused nor a clean delivery. `graded` is declared in
- * `govern/ledger.py` and nothing writes it yet; the branch is kept so that turn already renders.
- */
+/** `no_sql` is its own state. `graded` is a ledger terminal nothing writes; the function still names it. */
 export function deriveDelivery(answer: AnswerView): AnswerDelivery {
   if (answer.outcome === "no_sql") return "no_statement";
   if (answer.outcome !== "answered") return "refused";

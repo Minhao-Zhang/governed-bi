@@ -2,14 +2,12 @@
 
 import { useState } from "react";
 
-import { ModelMarkdown } from "@/components/common/model-markdown";
 import type { ClarificationRequest, ClarificationResponse } from "@/lib/clarification";
 
 /**
- * The question the engine asked mid-turn. A choice submits its id; free text
- * submits the words. Decline ends the turn and Defer continues under the stated why.
- * Decline is the only fail-closed control. The server still accepts an older cancel
- * spelling, and this prompt does not send it.
+ * The engine's question in plain text, with outlined choices and a free-text
+ * answer. Defer continues under the stated why. Decline is the only fail-closed
+ * control, so this prompt does not send the older cancel spelling.
  */
 export function ClarificationPrompt({
   request,
@@ -20,13 +18,12 @@ export function ClarificationPrompt({
 }) {
   const [text, setText] = useState("");
   const hasChoices = !!request.choices && request.choices.length > 0;
-  const showFreeform = !hasChoices || request.allow_freeform === true;
   const id = request.clarification_id;
 
   return (
     <div className="mb-3 space-y-2 text-sm text-[var(--text)]">
-      <ModelMarkdown text={request.question} />
-      <ModelMarkdown text={request.why} className="text-xs text-[var(--muted)]" />
+      <p className="whitespace-pre-wrap">{request.question}</p>
+      <p className="whitespace-pre-wrap text-[var(--muted)]">{request.why}</p>
 
       {hasChoices && (
         <div className="flex flex-col gap-1.5">
@@ -43,40 +40,38 @@ export function ClarificationPrompt({
         </div>
       )}
 
-      {showFreeform && (
-        <form
-          className="flex items-end gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const trimmed = text.trim();
-            if (!trimmed) return;
-            onRespond({ clarification_id: id, answer: trimmed });
-            setText("");
+      <form
+        className="flex items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const trimmed = text.trim();
+          if (!trimmed) return;
+          onRespond({ clarification_id: id, answer: trimmed });
+          setText("");
+        }}
+      >
+        <textarea
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              (event.currentTarget.form as HTMLFormElement)?.requestSubmit();
+            }
           }}
+          rows={1}
+          placeholder={hasChoices ? "Or answer in your own words…" : "Type your answer…"}
+          aria-label="Answer the clarification"
+          className="max-h-32 min-h-8 w-full resize-none rounded-lg border border-black/15 bg-transparent px-2.5 py-1.5 text-sm text-[var(--text)] outline-none placeholder:text-[var(--muted)]"
+        />
+        <button
+          type="submit"
+          disabled={text.trim() === ""}
+          className="shrink-0 rounded-lg border border-black/15 px-3 py-1.5 text-sm disabled:opacity-40"
         >
-          <textarea
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                (event.currentTarget.form as HTMLFormElement)?.requestSubmit();
-              }
-            }}
-            rows={1}
-            placeholder={hasChoices ? "Or answer in your own words…" : "Type your answer…"}
-            aria-label="Answer the clarification"
-            className="max-h-32 min-h-8 w-full resize-none rounded-lg border border-black/15 bg-transparent px-2.5 py-1.5 text-sm text-[var(--text)] outline-none placeholder:text-[var(--muted)]"
-          />
-          <button
-            type="submit"
-            disabled={text.trim() === ""}
-            className="shrink-0 rounded-lg border border-black/15 px-3 py-1.5 text-sm disabled:opacity-40"
-          >
-            Answer
-          </button>
-        </form>
-      )}
+          Answer
+        </button>
+      </form>
 
       <div className="flex flex-wrap gap-3 pt-0.5">
         <button

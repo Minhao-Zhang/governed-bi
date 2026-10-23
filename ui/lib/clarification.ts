@@ -35,8 +35,8 @@ export const clarificationRequestSchema = z.object({
   question: z.string(),
   why: z.string(), // governance transparency: the user always sees WHY they're asked
   basis: z.enum(["data_definition", "ranking_ambiguity"]).optional(),
-  // Absent ⇒ freeform-only. Present ⇒ render the options; `allow_freeform`
-  // decides whether a text box is also offered alongside them.
+  // Absent ⇒ freeform-only. Present ⇒ outlined buttons. The prompt always
+  // offers a typed answer too (ADR 0019 §3); `allow_freeform` is still parsed.
   // The wire sends short strings (`clarificationChoicesSchema`). The mock still
   // sends `{id, label}`; both become that object so a button can name its reply.
   choices: z

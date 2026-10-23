@@ -5,8 +5,8 @@
 - **Scope:** the whole web UI. What an answer contains is
   [0018](0018-every-answer-states-its-assumptions.md); what the project is, is
   [0017](0017-a-served-chat-app-over-a-layer-the-user-brings.md).
-- **Reference mockup:** `variant-11-simple.html`, kept outside the repository with the ten
-  rejected variants.
+- **Reference:** the plain chat pages of ChatGPT and Open WebUI. The owner dropped the
+  `variant-11-simple.html` mockup and asked for that style, built so that features can be added later.
 
 ## Context
 

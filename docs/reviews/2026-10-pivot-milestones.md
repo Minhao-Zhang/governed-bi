@@ -1038,7 +1038,7 @@ limit.
 ### P13. The new page, part 1: sidebar, conversation and running line
 
 **Goal:** the chat page has the sidebar, single column, composer and running status line of 0019
-§1 and §3, in the style of `variant-11-simple.html`.
+§1 and §3, in the plain style of ChatGPT and Open WebUI (the owner's choice; the mockup is not kept).
 
 **Depends on:** P9b (names and comments) and P4 (one page).
 
@@ -1101,7 +1101,7 @@ limit.
       for "Change".
 - [ ] `grep -rnE "badge|Badge|dark:" ui/components ui/app` returns nothing.
 - [ ] By hand, with the chosen model: one answered question, one clarification and one refusal
-      each match the corresponding panel of `variant-11-simple.html`; screenshots go in the PR.
+      each read as ADR 0019 §2 and §3 describe, in the plain ChatGPT and Open WebUI style; screenshots go in the PR.
 - [ ] By hand: reloading an old conversation shows its table without a new query (no `run_query`
       event in the server log).
 

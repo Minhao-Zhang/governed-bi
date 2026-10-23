@@ -28,6 +28,15 @@ export function useConversations(limit = 50) {
   });
 }
 
+/** Few-shot questions (`GET /examples`). A failure leaves the caller nothing to show. */
+export function useExamples(params: { limit: number; near?: string }) {
+  return useQuery({
+    queryKey: ["examples", params.limit, params.near ?? ""] as const,
+    queryFn: () => api.examples(params),
+    retry: false,
+  });
+}
+
 /** Unanswered clarifying questions (`GET /clarifications/pending`), oldest first. */
 export function usePendingClarifications() {
   return useQuery({

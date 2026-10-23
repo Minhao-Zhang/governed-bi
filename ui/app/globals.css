@@ -2,7 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-/* shadcn components still ship `dark:` utilities. The page never sets `.dark`. */
+/* shadcn components still ship a dark-mode variant. The page never sets the dark class. */
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

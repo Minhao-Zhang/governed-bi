@@ -47,7 +47,15 @@ export function flattenContent(content: unknown): string {
 
 export function parseAnswer(raw: unknown): AnswerView | null {
   const parsed = answerViewSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+  if (parsed.success) return parsed.data;
+  // A preview that does not match the table schema must not drop the answer around it.
+  if (raw !== null && typeof raw === "object" && "result_table" in raw) {
+    const rest = { ...(raw as Record<string, unknown>) };
+    delete rest.result_table;
+    const again = answerViewSchema.safeParse(rest);
+    if (again.success) return again.data;
+  }
+  return null;
 }
 
 /** Frames that are never a user-visible chat bubble. */
@@ -172,7 +180,7 @@ function statedQuestionNumber(record: Record<string, unknown>): number | null {
  * a declined turn has no bubble to carry a card either way.
  *
  * @param turns `stream.values.turns`, unvalidated: each row is `{asked_at, question,
- * answer_text, outcome, record}` (`serve/state.TurnEntry`).
+ * answer_text, outcome, record, result_table}` (`serve/state.TurnEntry`).
  * @param messages `stream.messages`.
  * @returns The record for each turn, by the id of the message that carries its answer.
  */
@@ -203,15 +211,15 @@ export function turnAnswersByMessageId(
     next = turn + 1;
     const id = frameOfTurn.get(turn);
     if (id === undefined) continue;
-    // Parsed, not cast: `outcome` is a closed vocabulary (`register/stages.Outcome`) and the
-    // card reads it. A row that does not match is dropped rather than rendered with a made-up
-    // outcome. `text` is null on purpose — it is *system* copy (refusal wording) and the turn
-    // wrapper carries only `answer_text`, which is what the model said; see `answerViewSchema`.
+    // Parsed, not cast: a row whose outcome is not in the vocabulary is dropped.
+    // `text` stays null: the row carries the model's `answer_text`, not the system copy.
+    // `result_table` sits beside `record`, so a reloaded thread still has its rows.
     const answer = parseAnswer({
       outcome: entry?.outcome ?? "answered",
       text: null,
       answer_text: typeof entry?.answer_text === "string" ? entry.answer_text : null,
       record,
+      result_table: entry?.result_table ?? null,
     });
     if (answer) out.set(id, answer);
   }

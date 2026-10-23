@@ -7,9 +7,17 @@
 import { z } from "zod";
 
 import { LANGGRAPH_URL, USE_MOCKS } from "@/lib/env";
-import { MOCK_CAPABILITIES } from "@/lib/mock/fixtures";
-import { capabilitiesSchema, pendingClarificationsSchema } from "@/lib/schemas";
-import type { Capabilities, PendingClarifications } from "@/lib/types";
+import {
+  MOCK_CAPABILITIES,
+  MOCK_EXAMPLE_QUESTIONS,
+  MOCK_NEARBY_QUESTIONS,
+} from "@/lib/mock/fixtures";
+import {
+  capabilitiesSchema,
+  examplesResponseSchema,
+  pendingClarificationsSchema,
+} from "@/lib/schemas";
+import type { Capabilities, ExamplesResponse, PendingClarifications } from "@/lib/types";
 
 export class ApiError extends Error {
   constructor(
@@ -75,4 +83,13 @@ export const api = {
     get("/capabilities", capabilitiesSchema, MOCK_CAPABILITIES),
   pendingClarifications: (): Promise<PendingClarifications> =>
     get("/clarifications/pending", pendingClarificationsSchema, MOCK_PENDING),
+  examples: ({ limit, near }: { limit: number; near?: string }): Promise<ExamplesResponse> => {
+    const search = new URLSearchParams({ limit: String(limit) });
+    const text = typeof near === "string" ? near : "";
+    if (text.trim() !== "") search.set("near", text);
+    const source = text.trim() !== "" ? MOCK_NEARBY_QUESTIONS : MOCK_EXAMPLE_QUESTIONS;
+    return get(`/examples?${search.toString()}`, examplesResponseSchema, {
+      examples: source.slice(0, limit),
+    });
+  },
 };

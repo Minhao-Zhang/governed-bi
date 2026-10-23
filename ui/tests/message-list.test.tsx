@@ -88,7 +88,7 @@ describe("MessageList", () => {
     expect(question.parentElement?.className).toContain("justify-end");
 
     const answer = screen.getByText(/needs a table this corpus does not license/);
-    expect(answer.closest("[data-answer]")).toBeTruthy();
+    expect(answer.closest("[data-refusal]")).toBeTruthy();
     expect(answer.closest("[data-question]")).toBeNull();
     expect(screen.queryByText("refused")).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();

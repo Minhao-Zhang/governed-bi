@@ -3,9 +3,12 @@
 import { useState, type KeyboardEvent } from "react";
 import { SendHorizontal } from "lucide-react";
 
+import { useComposerDraftControl } from "@/components/chat/composer-draft";
+
 /**
  * The question input. Enter sends; Shift+Enter inserts a line. While a turn
- * is running, Stop replaces Send.
+ * is running, Stop replaces Send. Inside a draft provider the text is controlled,
+ * so `setDraft` can fill the field.
  */
 export function Composer({
   onSend,
@@ -16,7 +19,10 @@ export function Composer({
   isRunning?: boolean;
   onStop?: () => void;
 }) {
-  const [value, setValue] = useState("");
+  const control = useComposerDraftControl();
+  const [local, setLocal] = useState("");
+  const value = control ? control.text : local;
+  const setValue = control ? control.setText : setLocal;
 
   function submit() {
     const trimmed = value.trim();
@@ -44,6 +50,7 @@ export function Composer({
         }}
       >
         <textarea
+          ref={control?.inputRef}
           value={value}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={onKeyDown}

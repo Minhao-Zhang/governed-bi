@@ -5,7 +5,7 @@
 
 import type { ClarificationRequest } from "@/lib/clarification";
 import type { GovEvent } from "@/lib/steps";
-import type { AnswerView, Capabilities } from "@/lib/types";
+import type { AnswerView, Capabilities, ExampleQuestion } from "@/lib/types";
 
 const SALES = "sales";
 
@@ -88,6 +88,32 @@ export const MOCK_RUN_RECORD: Record<string, unknown> = {
   cache_read_tokens: 10060,
   cache_write_tokens: 10287,
   latency_sec: 39.31,
+  assumptions: [
+    {
+      statement: "Closed businesses are included.",
+      about: "closed",
+      basis: "layer",
+      asset_id: "gbi_demo_sales.term.closed_business",
+    },
+    {
+      statement: "Counts are of distinct customers.",
+      about: null,
+      basis: "convention",
+      asset_id: null,
+    },
+    {
+      statement: "Active means logged in within 30 days.",
+      about: "active",
+      basis: "guess",
+      asset_id: null,
+    },
+    {
+      statement: "Unmatched regions are dropped.",
+      about: null,
+      basis: "found_in_query",
+      asset_id: null,
+    },
+  ],
 
   /* Tier.health */
   channel_scoring: {
@@ -95,6 +121,18 @@ export const MOCK_RUN_RECORD: Record<string, unknown> = {
     channel_entity: { lexical: "ran", semantic: "failed" },
   },
   guardrail_errors: 0,
+};
+
+/** The rows a turn keeps. `row_count` is the full result; `rows` is the preview. */
+export const MOCK_RESULT_TABLE = {
+  columns: ["region", "customers"],
+  rows: [
+    ["Kansai", 15],
+    ["Great Lakes", 15],
+  ],
+  row_count: 1204,
+  truncated: true,
+  preview_rows: 2,
 };
 
 export const MOCK_ANSWER: AnswerView = {
@@ -117,6 +155,7 @@ export const MOCK_ANSWER: AnswerView = {
     guardrail_errors: 0,
     n_re_served: 0,
   },
+  result_table: MOCK_RESULT_TABLE,
 };
 
 /** Graded delivery: SQL + result present, but assurance is unverified (§13.2). */
@@ -140,6 +179,7 @@ export const MOCK_GRADED_ANSWER: AnswerView = {
     guardrail_errors: 0,
     n_re_served: 0,
   },
+  result_table: MOCK_RESULT_TABLE,
 };
 
 /* ── A scripted v2 stage-event trajectory (ADR 0010) ──────────────────────────
@@ -359,6 +399,7 @@ export const MOCK_AGENT_ANSWER: AnswerView = {
     guardrail_errors: 0,
     n_re_served: 0,
   },
+  result_table: MOCK_RESULT_TABLE,
 };
 
 /* ── Serve-time clarification (HITL) ─────────────────────────────────────────
@@ -403,6 +444,7 @@ export const MOCK_CLARIFIED_ANSWER: AnswerView = {
     guardrail_errors: 0,
     n_re_served: 0,
   },
+  result_table: MOCK_RESULT_TABLE,
 };
 
 /** Decline / ranking cancel: fail closed, same outcome the live graph finishes. */
@@ -426,6 +468,19 @@ export const MOCK_CLARIFICATION_CLOSED: AnswerView = {
     n_re_served: 0,
   },
 };
+
+/** Questions for an empty conversation. `MOCK_NEARBY_QUESTIONS` is what a refusal offers. */
+export const MOCK_EXAMPLE_QUESTIONS: ExampleQuestion[] = [
+  { question: "How many customers are in each region?", db_id: "gbi_demo_sales" },
+  { question: "What is the total revenue this year?", db_id: "gbi_demo_sales" },
+  { question: "Which products sold the most last quarter?", db_id: "gbi_demo_catalog" },
+];
+
+export const MOCK_NEARBY_QUESTIONS: ExampleQuestion[] = [
+  { question: "How many customers joined last month?", db_id: "gbi_demo_sales" },
+  { question: "Which regions have the most orders?", db_id: "gbi_demo_sales" },
+  { question: "What is the average order value?", db_id: "gbi_demo_sales" },
+];
 
 export const MOCK_REFUSAL: AnswerView = {
   outcome: "refused",

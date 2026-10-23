@@ -15,10 +15,13 @@ export function MessageList({
   messages,
   isRunning,
   steps,
+  send = () => {},
 }: {
   messages: ChatMessage[];
   isRunning: boolean;
   steps?: TimelineStep[];
+  /** The transport's send. Omitted only where no follow-up can be started. */
+  send?: (text: string) => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -32,13 +35,13 @@ export function MessageList({
 
   return (
     <div className="space-y-6 py-4">
-      {messages.map((message) =>
+      {messages.map((message, index) =>
         message.role === "user" ? (
           <QuestionBubble key={message.id} text={message.text ?? ""} />
         ) : (
           <div key={message.id}>
             {message.answer ? (
-              <Answer answer={message.answer} />
+              <Answer answer={message.answer} question={questionBefore(messages, index)} send={send} />
             ) : (
               message.text && <p className="text-sm text-[var(--text)]">{message.text}</p>
             )}
@@ -51,6 +54,14 @@ export function MessageList({
       <div ref={bottomRef} />
     </div>
   );
+}
+
+/** The user message this answer responds to: the nearest question above it. */
+function questionBefore(messages: ChatMessage[], index: number): string {
+  for (let i = index - 1; i >= 0; i--) {
+    if (messages[i].role === "user") return messages[i].text ?? "";
+  }
+  return "";
 }
 
 /** How far from the bottom still counts as following along, in px. */
