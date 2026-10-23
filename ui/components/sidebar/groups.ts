@@ -3,8 +3,6 @@
  * is two to seven days ago and "Previous 30 days" is eight to thirty.
  */
 
-import type { ConversationSummary } from "@/lib/threads";
-
 const DATE_GROUPS = [
   "Today",
   "Yesterday",
@@ -15,11 +13,11 @@ const DATE_GROUPS = [
 
 export type DateGroup = (typeof DATE_GROUPS)[number];
 
-export function groupConversations(
-  rows: ConversationSummary[],
+export function groupConversations<Row extends { updated_at: string | null }>(
+  rows: Row[],
   now: Date,
-): { title: DateGroup; rows: ConversationSummary[] }[] {
-  const buckets = new Map<DateGroup, ConversationSummary[]>(
+): { title: DateGroup; rows: Row[] }[] {
+  const buckets = new Map<DateGroup, Row[]>(
     DATE_GROUPS.map((title) => [title, []]),
   );
   for (const row of rows) buckets.get(conversationGroup(row.updated_at, now))!.push(row);
@@ -29,8 +27,8 @@ export function groupConversations(
   });
 }
 
-function conversationGroup(updatedAt: string, now: Date): DateGroup {
-  const at = new Date(updatedAt);
+function conversationGroup(updatedAt: string | null, now: Date): DateGroup {
+  const at = new Date(updatedAt ?? "");
   if (Number.isNaN(at.getTime())) return "Older";
   const days = calendarDaysBefore(now, at);
   if (days <= 0) return "Today";

@@ -8,22 +8,25 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/lib/api-client";
 import { USE_MOCKS } from "@/lib/env";
-import { listConversations } from "@/lib/threads";
+import type { Ending } from "@/lib/types";
 
-/** The sidebar is not on the chat stream, so both lists poll. */
-const SIDEBAR_POLL_MS = 5_000;
+/** The conversation list is not on the chat stream, so it polls. */
+const LIST_POLL_MS = 5_000;
 
 export function useCapabilities() {
   return useQuery({ queryKey: ["capabilities"], queryFn: api.capabilities });
 }
 
-/** Threads, newest first. Polled, and refreshed on focus. */
-export function useConversations(limit = 50) {
+/** `GET /conversations`, newest first. Polled, and refreshed on focus. */
+export function useConversations({
+  limit = 50,
+  ending = null,
+}: { limit?: number; ending?: Ending | null } = {}) {
   return useQuery({
-    queryKey: ["conversations", limit] as const,
-    queryFn: () => listConversations(limit),
+    queryKey: ["conversations", limit, ending] as const,
+    queryFn: () => api.conversations({ limit, ending }),
     enabled: !USE_MOCKS,
-    refetchInterval: SIDEBAR_POLL_MS,
+    refetchInterval: LIST_POLL_MS,
     refetchOnWindowFocus: true,
   });
 }
@@ -34,16 +37,5 @@ export function useExamples(params: { limit: number; near?: string }) {
     queryKey: ["examples", params.limit, params.near ?? ""] as const,
     queryFn: () => api.examples(params),
     retry: false,
-  });
-}
-
-/** Unanswered clarifying questions (`GET /clarifications/pending`), oldest first. */
-export function usePendingClarifications() {
-  return useQuery({
-    queryKey: ["clarifications", "pending"] as const,
-    queryFn: api.pendingClarifications,
-    enabled: !USE_MOCKS,
-    refetchInterval: SIDEBAR_POLL_MS,
-    refetchOnWindowFocus: true,
   });
 }

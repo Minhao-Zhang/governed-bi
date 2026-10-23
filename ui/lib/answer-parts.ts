@@ -112,6 +112,79 @@ export function generatedSql(record: Record<string, unknown>): string | null {
   return typeof sql === "string" && sql.trim() !== "" ? sql : null;
 }
 
+/** Why the checks stopped a statement, by rule id (`govern/layers.py::RULES`). */
+export const REASON_WORDS: Record<string, string> = {
+  r_unparseable: "it could not be read as SQL.",
+  r_empty_statement: "there was no statement.",
+  r_multiple_statements: "it held more than one statement.",
+  r_control_characters: "it held hidden control characters.",
+  r_ambiguous_fold: "two names in it differ only by case.",
+  r_not_a_read: "it was not a read.",
+  r_write_construct: "it would change data.",
+  r_select_into: "it would write its result into a table.",
+  r_locking_clause: "it would lock rows.",
+  r_function_not_permitted: "it used a function that is not allowed.",
+  r_whole_row_argument: "it passed a whole row to a function.",
+  r_unbound_reference: "it named a column that none of its tables has.",
+  r_ambiguous_reference: "a column in it could come from more than one table.",
+  r_star_projection: "it asked for every column with *.",
+  r_natural_join: "it used a natural join.",
+  r_table_function: "it read from a table function.",
+  r_whole_row_reference: "it used a whole row as a value.",
+  r_column_not_allowed: "a column in it is not one the layer allows.",
+  r_column_excluded: "a column in it is excluded from questions.",
+  r_column_suspect: "a column in it is marked unreliable.",
+  r_table_not_retrieved: "the table is not one retrieval found.",
+  guardrail_error: "the checks broke while reading it.",
+};
+
+export interface FailedAttempt {
+  sql: string | null;
+  sentence: string;
+}
+
+/**
+ * The query attempts that failed before the one that answered, in order. With no answering
+ * attempt, every failed one. Sampling and the attempt-cap row are not attempts at the answer.
+ */
+export function triedFirst(record: Record<string, unknown>): FailedAttempt[] {
+  const raw = attemptsOfRecord(record);
+  if (!Array.isArray(raw)) return [];
+  const rows = raw.filter(
+    (item): item is Record<string, unknown> =>
+      item !== null &&
+      typeof item === "object" &&
+      (item as Record<string, unknown>).path === "agent" &&
+      (item as Record<string, unknown>).reason_code !== "attempt_cap",
+  );
+  const failed = (row: Record<string, unknown>) => row.passed !== true || text(row.error) !== null;
+  const answeredAt = rows.findLastIndex((row) => !failed(row));
+  const before = answeredAt >= 0 ? rows.slice(0, answeredAt) : rows;
+  return before.filter(failed).map((row) => ({
+    sql: text(row.submitted_sql) ?? text(row.checked_sql) ?? text(row.executed_sql),
+    sentence: failureSentence(row),
+  }));
+}
+
+function failureSentence(row: Record<string, unknown>): string {
+  if (row.passed === true) {
+    // The driver's `ExceptionType: ` prefix names our code, not the database's complaint.
+    const message = (text(row.error) ?? "").replace(/^[A-Za-z_][\w.]*:\s*/, "");
+    return `The database returned: ${sentenceEnd(message || "an error")}`;
+  }
+  const reason = typeof row.reason_code === "string" ? REASON_WORDS[row.reason_code] : undefined;
+  return `The checks stopped it: ${reason ?? "it broke one of the rules."}`;
+}
+
+function sentenceEnd(value: string): string {
+  const trimmed = value.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
 export function attemptsOfRecord(record: Record<string, unknown>): unknown {
   const execution = record.execution;
   if (execution === null || typeof execution !== "object" || Array.isArray(execution)) return null;

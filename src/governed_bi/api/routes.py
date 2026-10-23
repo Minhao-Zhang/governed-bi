@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 
+from governed_bi.api.thread_turns import Ending
 from governed_bi.model.provider import reasoning_effort_of
 from governed_bi.paths import REPO_ROOT
 from governed_bi.registry.assets import AssetType
@@ -18,21 +19,21 @@ from governed_bi.registry.assets import AssetType
 __all__ = ["make_app", "app_from_environment", "app"]
 
 
-def make_app(session: Any, pending: Any) -> FastAPI:
+def make_app(session: Any, threads: Any) -> FastAPI:
     """Both arguments are required. A default would put the environment back in the constructor."""
-    return _build_app(lambda: session, pending)
+    return _build_app(lambda: session, threads)
 
 
 def app_from_environment() -> FastAPI:
     """Resolve on first request. ``http.app`` is imported by name, and a session build needs Postgres."""
     from governed_bi.api.graph_app import configure_logging, session_from_environment
-    from governed_bi.api.thread_turns import PendingClarifications
+    from governed_bi.api.thread_turns import ThreadReader
 
     configure_logging()
-    return _build_app(session_from_environment, PendingClarifications())
+    return _build_app(session_from_environment, ThreadReader())
 
 
-def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
+def _build_app(get_session: Callable[[], Any], threads: Any) -> FastAPI:
     """A thunk, so :func:`make_app` can pass a session and :func:`app_from_environment` can defer."""
     app = FastAPI(title="governed-bi", version="2")
 
@@ -67,7 +68,7 @@ def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
         offset: int = Query(0, ge=0),
     ) -> dict[str, Any]:
         """Oldest first. A paused clarification writes nothing, so the queue is interrupt state."""
-        page = pending.pending(limit=limit, offset=offset)
+        page = threads.pending(limit=limit, offset=offset)
         return {
             "rows": list(page.rows),
             "meta": {
@@ -76,7 +77,28 @@ def _build_app(get_session: Callable[[], Any], pending: Any) -> FastAPI:
                 "threads_scanned": int(page.threads_scanned),
                 "limit": limit,
                 "offset": offset,
-                "columns": list(pending.PENDING_FIELDS),
+                "columns": list(threads.PENDING_FIELDS),
+            },
+        }
+
+    @app.get("/conversations")
+    def conversations(
+        limit: int = Query(50, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+        ending: Ending | None = Query(None),
+    ) -> dict[str, Any]:
+        """Newest first, with how each ended. Read from thread state; there is no store of its own."""
+        page = threads.conversations(limit=limit, offset=offset, ending=ending)
+        return {
+            "rows": list(page.rows),
+            "meta": {
+                "n": len(page.rows),
+                "total": int(page.total),
+                "truncated": bool(page.truncated),
+                "threads_scanned": int(page.threads_scanned),
+                "limit": limit,
+                "offset": offset,
+                "ending": ending,
             },
         }
 

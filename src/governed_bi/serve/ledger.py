@@ -10,7 +10,13 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from governed_bi.govern.layers import GUARDRAIL_ERROR
-from governed_bi.govern.ledger import AttemptRecord, ExecutionRecord, ExecutorPath, execution_record
+from governed_bi.govern.ledger import (
+    AttemptRecord,
+    ExecutionRecord,
+    ExecutorPath,
+    capped_error,
+    execution_record,
+)
 from governed_bi.registry.stages import ATTEMPT_CAP_REFUSED_BY
 
 __all__ = [
@@ -72,7 +78,9 @@ def ledger_ended_without_answer(state: Mapping[str, Any]) -> bool:
     return execution.get("terminal") in ("capped", "refused")
 
 
-def pipeline_error_attempt(path: ExecutorPath, detail: str) -> AttemptRecord:
+def pipeline_error_attempt(
+    path: ExecutorPath, detail: str, *, submitted_sql: str | None = None
+) -> AttemptRecord:
     """Ledger row when the attempt died before a result. ``result_layer`` is ``None``.
 
     No row made ``finish`` read an empty ledger as answered from context. No layer ran, so a
@@ -85,6 +93,8 @@ def pipeline_error_attempt(path: ExecutorPath, detail: str) -> AttemptRecord:
         path=path,
         executed_sql=None,
         checked_sql=None,
+        submitted_sql=submitted_sql,
+        error=capped_error(detail),
     )
 
 
@@ -92,7 +102,7 @@ def cap_attempt() -> AttemptRecord:
     """The row a capped turn needs, or an empty ledger makes ``capped`` hold vacuously.
 
     Not a layer result (ADR 0006 §5). A rule id would name a layer that never ran.
-    ``executed_sql`` and ``checked_sql`` are set: a ``TypedDict`` tolerates a missing key.
+    Every SQL field is set to ``None``: a ``TypedDict`` tolerates a missing key.
     """
     return AttemptRecord(
         result_layer=None,
@@ -101,4 +111,6 @@ def cap_attempt() -> AttemptRecord:
         path="agent",
         executed_sql=None,
         checked_sql=None,
+        submitted_sql=None,
+        error=None,
     )

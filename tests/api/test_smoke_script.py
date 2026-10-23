@@ -79,7 +79,7 @@ def test_every_check_the_script_makes_still_passes(smoke_api) -> None:
 
     assert not failures, "\n".join(lines)
     checks = [line for line in lines if line.startswith(("  ok  ", "  FAIL"))]
-    assert len(checks) >= 9, (
+    assert len(checks) >= 11, (
         f"the script made {len(checks)} checks, which is fewer than it declares. A `run_checks` "
         f"that returns early reports no failures and prints PASS:\n" + "\n".join(lines)
     )
@@ -97,6 +97,15 @@ class _Pending:
 
     def pending(self, *, limit: int = 50, offset: int = 0) -> Any:
         return self._Page()
+
+    class _Conversations:
+        rows: tuple[Any, ...] = ()
+        total = 0
+        truncated = False
+        threads_scanned = 0
+
+    def conversations(self, *, limit: int = 50, offset: int = 0, ending: Any = None) -> Any:
+        return self._Conversations()
 
 
 def test_the_help_is_the_module_docstring_and_exits_zero(smoke_api, capsys) -> None:

@@ -3,7 +3,7 @@
     uv run --frozen python tools/smoke_api.py
 
 Loads `.env`, builds the session from the environment (a Postgres DSN and a corpus on disk), and
-drives the app `langgraph.json` mounts through a `TestClient`. It checks the five custom routes
+drives the app `langgraph.json` mounts through a `TestClient`. It checks the six custom routes
 and nothing else, because they are the only ones the app declares:
 
 * `GET /livez` answers `{"ok": true}`.
@@ -11,12 +11,14 @@ and nothing else, because they are the only ones the app declares:
 * `GET /capabilities` answers, and `can_clarify` is true only with `can_stream` and a live model.
 * `GET /clarifications/pending` answers with a whole wrapper: `rows`, and `meta` carrying `n`,
   `truncated`, `threads_scanned`, `limit`, `offset` and `columns`.
+* `GET /conversations` answers with a whole wrapper: `rows`, and `meta` carrying `n`, `total`,
+  `truncated`, `threads_scanned`, `limit`, `offset` and `ending`.
 * `GET /examples` answers with `examples`, each item a `question` and a `db_id` and nothing else.
-* The app declares exactly those five custom routes.
+* The app declares exactly those six custom routes.
 * The production pending reader, used outside the LangGraph server, refuses by name
   (`InProcessServerRequired`) rather than leaking a transport.
 
-The queue is read over an empty thread store, because the real one is the Agent server's and this
+The queue and the conversations are read over an empty thread store, because the real one is the Agent server's and this
 script starts no server; a running server's routes are what `langgraph dev` and the chat page show.
 The checks live in `run_checks`, which takes a client, so `tests/api/test_smoke_script.py` runs
 them against assets in memory and they cannot rot unnoticed.
@@ -38,10 +40,14 @@ sys.path.insert(0, str(REPO / "src"))
 
 #: The custom routes the app declares. The platform's `/threads` routes are not the app's.
 CUSTOM_ROUTES = frozenset({
-    "/livez", "/readyz", "/capabilities", "/clarifications/pending", "/examples",
+    "/livez", "/readyz", "/capabilities", "/clarifications/pending", "/conversations", "/examples",
 })
 
 PENDING_META = frozenset({"n", "truncated", "threads_scanned", "limit", "offset", "columns"})
+
+CONVERSATIONS_META = frozenset(
+    {"n", "total", "truncated", "threads_scanned", "limit", "offset", "ending"}
+)
 
 
 def _load_env() -> list[str]:
@@ -111,6 +117,21 @@ def run_checks(client: Any, *, out: Callable[[str], None] = print) -> list[str]:
         f"n={meta.get('n')} truncated={meta.get('truncated')}",
     )
 
+    out("\nGET /conversations")
+    listed = get("/conversations", limit=5)
+    listed_meta = listed.get("meta") or {}
+    check(
+        "the envelope is whole",
+        isinstance(listed.get("rows"), list)
+        and CONVERSATIONS_META <= listed_meta.keys()
+        and listed_meta.get("n") == len(listed.get("rows") or []),
+        f"n={listed_meta.get('n')} total={listed_meta.get('total')}",
+    )
+    check(
+        "an unknown ending is refused",
+        client.get("/conversations", params={"ending": "nonsense"}).status_code == 422,
+    )
+
     out("\nGET /examples")
     examples = get("/examples")
     rows = examples.get("examples")
@@ -127,7 +148,7 @@ def run_checks(client: Any, *, out: Callable[[str], None] = print) -> list[str]:
     out("\nthe route table")
     declared = {getattr(route, "path", None) for route in client.app.routes}
     custom = {p for p in declared if p and not p.startswith(("/docs", "/openapi", "/redoc"))}
-    check("exactly the five custom routes", custom == CUSTOM_ROUTES, ", ".join(sorted(custom)))
+    check("exactly the six custom routes", custom == CUSTOM_ROUTES, ", ".join(sorted(custom)))
 
     return failures
 
@@ -158,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from governed_bi.api.graph_app import session_from_environment
     from governed_bi.api.routes import make_app
-    from governed_bi.api.thread_turns import InProcessServerRequired, PendingClarifications
+    from governed_bi.api.thread_turns import InProcessServerRequired, ThreadReader
 
     session = session_from_environment()
     print(f"corpus: {len(session.assets_by_id)} assets, hash {session.corpus_content_hash[:12]}…")
@@ -167,13 +188,13 @@ def main(argv: list[str] | None = None) -> int:
     print("\nthe pending reader outside the server")
     failures: list[str] = []
     try:
-        PendingClarifications().pending(limit=1)
+        ThreadReader().pending(limit=1)
         print("  FAIL the production reader answered with no server to read")
         failures.append("the production reader answered with no server to read")
     except InProcessServerRequired as refusal:
         print(f"  ok   refuses by name — {type(refusal).__name__}")
 
-    failures += run_checks(TestClient(make_app(session, PendingClarifications(_EmptyThreadStore))))
+    failures += run_checks(TestClient(make_app(session, ThreadReader(_EmptyThreadStore))))
 
     print(f"\n{'PASS' if not failures else 'FAIL: ' + ', '.join(failures)}")
     return 1 if failures else 0

@@ -15,10 +15,7 @@ from governed_bi.corpus.analyst import AnalystCorpus
 from governed_bi.corpus.schema import ColumnAsset, TableAsset
 from governed_bi.govern.bounds import OUT_OF_SCOPE_MESSAGE, ToolBounds
 from governed_bi.govern.check import GovernanceUsageError
-from governed_bi.govern.ledger import (
-    AttemptRecord,
-    attempt_record,
-)
+from governed_bi.govern.ledger import AttemptRecord, attempt_record, capped_error
 from governed_bi.govern.pipeline import prepare, spellings_for
 from governed_bi.govern.policy import GovernancePolicy
 
@@ -226,6 +223,7 @@ def sample_rows(
         path="sample",
         executed_sql=prepared.sql,
         checked_sql=prepared.canonical if prepared.sql is not None else None,
+        submitted_sql=statement,
     )
     if prepared.sql is None:
         detail = prepared.result.get("detail") or prepared.result.get("reason_code")
@@ -235,7 +233,8 @@ def sample_rows(
         _columns, rows, _truncated = connector.execute(prepared.sql)
     except Exception as exc:  # noqa: BLE001 — the row is the point, not the traceback
         # Cleared every layer and was sent, so the ledger owes a row.
-        return f"sample_rows error: {type(exc).__name__}: {exc}", False, attempt
+        error = f"{type(exc).__name__}: {exc}"
+        return f"sample_rows error: {error}", False, {**attempt, "error": capped_error(error)}
     payload = json.dumps(
         {
             "column_id": cid,
@@ -292,6 +291,7 @@ def run_query(
         path="agent",
         executed_sql=prepared.sql,
         checked_sql=prepared.canonical if prepared.sql is not None else None,
+        submitted_sql=sql,
     )
     if prepared.sql is None:
         detail = prepared.result.get("detail") or prepared.result.get("reason_code")
@@ -301,7 +301,8 @@ def run_query(
         columns, rows, truncated = connector.execute(prepared.sql)
     except Exception as exc:  # noqa: BLE001 — the row is the point, not the traceback
         # Passed every layer and was sent. An error string alone looks like no attempt.
-        return f"run_query error: {type(exc).__name__}: {exc}", attempt
+        error = f"{type(exc).__name__}: {exc}"
+        return f"run_query error: {error}", {**attempt, "error": capped_error(error)}
     preview = [list(r) for r in list(rows)[:20]]
     payload = json.dumps(
         {

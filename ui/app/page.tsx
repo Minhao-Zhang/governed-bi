@@ -1,7 +1,7 @@
 import { ChatPanel } from "@/components/chat/chat-panel";
 import { Sidebar } from "@/components/sidebar/sidebar";
 
-/** The only page: a sidebar, then the conversation. */
+/** Chat: a sidebar, then the conversation. */
 export default function ChatPage() {
   return (
     <div className="flex h-full min-h-0 bg-white">

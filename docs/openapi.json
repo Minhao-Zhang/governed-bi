@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "governed-bi",
-    "summary": "Health, capabilities, example questions and the pending-clarification queue, as JSON.",
-    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\nEvery route here is a read, and none of them serves a turn. A turn is served by the graph `langgraph.json` mounts, over the platform's `POST /threads/{thread_id}/runs/stream`, which is not described here. `GET /clarifications/pending` lists unanswered `ask_user` interrupts read from thread state. `GET /examples` returns few-shot questions from the corpus loaded at startup.",
+    "summary": "Health, capabilities, example questions, the pending-clarification queue and the conversation list, as JSON.",
+    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\nEvery route here is a read, and none of them serves a turn. A turn is served by the graph `langgraph.json` mounts, over the platform's `POST /threads/{thread_id}/runs/stream`, which is not described here. `GET /clarifications/pending` lists unanswered `ask_user` interrupts read from thread state. `GET /conversations` lists every conversation and how it ended. `GET /examples` returns few-shot questions from the corpus loaded at startup.",
     "version": "2"
   },
   "paths": {
@@ -124,6 +124,88 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PendingClarificationsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/conversations": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Conversations",
+        "description": "Every conversation, newest first, with each turn's question and outcome and how the conversation ended, read from thread state. `ending` filters on that ending. `meta.total` counts the matching conversations before the window; `meta.truncated` is set when the window is short of them or the walk stops on the 1000-thread bound.",
+        "operationId": "conversations_conversations_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 500,
+              "title": "Limit"
+            },
+            "description": "Max rows. Rejected outside 1..500."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "ending",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "answered",
+                    "not_answered",
+                    "waiting",
+                    "stopped",
+                    "failed"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ending"
+            },
+            "description": "Only conversations that ended this way."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationsResponse"
                 }
               }
             }
@@ -387,6 +469,230 @@
           "meta"
         ],
         "title": "PendingClarificationsResponse"
+      },
+      "ConversationTurnResponse": {
+        "properties": {
+          "asked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asked At",
+            "description": "UTC, to the second."
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome",
+            "description": "`answered`, `refused`, `clarification`, `capped`, `crashed` or `no_sql`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asked_at",
+          "question",
+          "outcome"
+        ],
+        "title": "ConversationTurnResponse"
+      },
+      "ConversationRowResponse": {
+        "properties": {
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status",
+            "description": "The thread's status: `idle`, `busy`, `interrupted` or `error`."
+          },
+          "waiting": {
+            "type": "boolean",
+            "title": "Waiting",
+            "description": "A clarifying question is waiting for an answer."
+          },
+          "ending": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "answered",
+                  "not_answered",
+                  "waiting",
+                  "stopped",
+                  "failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ending",
+            "description": "From the last turn's outcome: `no_sql` is `answered`, `refused` and `capped` are `not_answered`, a declined clarification is `stopped`, `crashed` and a thread in `error` are `failed`. Null when no turn has finished."
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question",
+            "description": "The most recent question, including one still waiting."
+          },
+          "elided_turns": {
+            "type": "integer",
+            "title": "Elided Turns",
+            "description": "Older turns the thread no longer keeps."
+          },
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationTurnResponse"
+            },
+            "type": "array",
+            "title": "Turns",
+            "description": "Oldest first. The last 25 turns."
+          }
+        },
+        "type": "object",
+        "required": [
+          "thread_id",
+          "updated_at",
+          "status",
+          "waiting",
+          "ending",
+          "question",
+          "elided_turns",
+          "turns"
+        ],
+        "title": "ConversationRowResponse"
+      },
+      "ConversationsMetaResponse": {
+        "properties": {
+          "n": {
+            "type": "integer",
+            "title": "N"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Matching conversations before the window."
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "threads_scanned": {
+            "type": "integer",
+            "title": "Threads Scanned"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "ending": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "answered",
+                  "not_answered",
+                  "waiting",
+                  "stopped",
+                  "failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ending"
+          }
+        },
+        "type": "object",
+        "required": [
+          "n",
+          "total",
+          "truncated",
+          "threads_scanned",
+          "limit",
+          "offset",
+          "ending"
+        ],
+        "title": "ConversationsMetaResponse"
+      },
+      "ConversationsResponse": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationRowResponse"
+            },
+            "type": "array",
+            "title": "Rows",
+            "description": "Newest first."
+          },
+          "meta": {
+            "$ref": "#/components/schemas/ConversationsMetaResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "meta"
+        ],
+        "title": "ConversationsResponse"
       },
       "CapabilitiesModelsResponse": {
         "properties": {

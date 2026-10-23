@@ -10,8 +10,10 @@ import {
   layerChecks,
   modelsUsed,
   retrievedTables,
+  triedFirst,
   type ResultTable,
 } from "@/lib/answer-parts";
+import { formatSql } from "@/lib/sql-format";
 
 /** Copy and Details. Details opens under the row and shows only the sections the record has. */
 export function AnswerActions({
@@ -51,18 +53,43 @@ export function AnswerActions({
   );
 }
 
+function SqlText({ sql, final }: { sql: string; final?: boolean }) {
+  return (
+    <pre
+      data-final-sql={final ? "" : undefined}
+      className="mt-1 max-h-64 overflow-auto font-mono text-xs whitespace-pre"
+    >
+      {formatSql(sql)}
+    </pre>
+  );
+}
+
 function Details({ record }: { record: Record<string, unknown> }) {
   const sql = generatedSql(record);
+  const tried = triedFirst(record);
   const checks = layerChecks(attemptsOfRecord(record));
   const tables = retrievedTables(record);
   const models = modelsUsed(record);
   const seconds = latencySeconds(record);
   return (
     <div data-details className="mt-3 space-y-3">
-      {sql && (
-        <section>
+      {(sql || tried.length > 0) && (
+        <section data-sql>
           <h3 className="text-[var(--muted)]">SQL</h3>
-          <pre className="mt-1 max-h-48 overflow-auto font-mono text-xs whitespace-pre">{sql}</pre>
+          {tried.length > 0 && (
+            <div className="mt-1">
+              <p>{sql ? "Tried first:" : "Tried:"}</p>
+              <ol className="mt-1 space-y-2">
+                {tried.map((attempt, index) => (
+                  <li key={index} data-tried>
+                    {attempt.sql && <SqlText sql={attempt.sql} />}
+                    <p className="text-[var(--muted)]">{attempt.sentence}</p>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+          {sql && <SqlText sql={sql} final />}
         </section>
       )}
       {checks && (

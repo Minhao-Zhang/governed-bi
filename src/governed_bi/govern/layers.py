@@ -42,7 +42,7 @@ class CheckResult(TypedDict):
     layers_evaluated: list[Layer]
     #: A rule id from :data:`RULES`, or :data:`PASSED`, or :data:`GUARDRAIL_ERROR`.
     reason_code: str
-    #: Operator text. Never surfaced.
+    #: Operator text. Kept as the attempt's ``error``; the page words ``reason_code`` instead.
     detail: str
     #: Every reference to the source it bound to. The only input of the column and table
     #: layers, so the two cannot disagree about what a reference means.

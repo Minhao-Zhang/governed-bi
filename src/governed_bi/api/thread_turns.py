@@ -1,4 +1,4 @@
-"""Interrupt state via ``get_client(url=None)``, which LangGraph mounts at ``/noauth``.
+"""Thread state via ``get_client(url=None)``, which LangGraph mounts at ``/noauth``.
 Outside the server, raise rather than register a transport nothing drains.
 """
 
@@ -7,11 +7,17 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Callable, Mapping
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple, get_args
+
+from governed_bi.registry.stages import Outcome
 
 __all__ = [
-    "PendingClarifications",
+    "ThreadReader",
     "PendingPage",
+    "ConversationPage",
+    "Ending",
+    "ENDINGS",
+    "ending_of",
     "InProcessServerRequired",
     "PENDING_FIELDS",
     "PENDING_SOURCE_INTERRUPT",
@@ -41,6 +47,23 @@ PENDING_SOURCE_INTERRUPT = "interrupt"
 
 _CLARIFICATION_PREFIX = "clar-"
 
+#: How a conversation ended, from its last turn's ``Outcome``. ``no_sql`` is an answer from context.
+Ending = Literal["answered", "not_answered", "waiting", "stopped", "failed"]
+ENDINGS: tuple[str, ...] = get_args(Ending)
+
+_ENDING_OF_OUTCOME: dict[str, str] = {
+    Outcome.answered.value: "answered",
+    Outcome.no_sql.value: "answered",
+    Outcome.refused.value: "not_answered",
+    Outcome.capped.value: "not_answered",
+    # A recorded clarification is a decline: a pause writes no turn.
+    Outcome.clarification.value: "stopped",
+    Outcome.crashed.value: "failed",
+}
+
+#: Only what the list shows. ``values.turns`` is extracted whole, since a path cannot fan out.
+_CONVERSATION_EXTRACT: dict[str, str] = {"turns": "values.turns", "question": "values.question"}
+
 
 class InProcessServerRequired(RuntimeError):
     """Raised instead of ``get_client``: that call appends an ``app=None`` transport only server startup drains."""
@@ -66,7 +89,16 @@ def turn_of_clarification(clarification_id: str) -> str | None:
     return turn_id
 
 
-class PendingClarifications:
+class ConversationPage(NamedTuple):
+    """``total`` counts the rows that match the filter before the window."""
+
+    rows: list[dict[str, Any]]
+    total: int
+    truncated: bool
+    threads_scanned: int
+
+
+class ThreadReader:
     """Unanswered clarifications write nothing, so the queue is ``threads.search(status="interrupted")``."""
 
     PENDING_FIELDS = PENDING_FIELDS
@@ -79,6 +111,19 @@ class PendingClarifications:
         wanted = max(1, int(limit))
         start = max(0, int(offset))
         return _pending(limit=wanted, offset=start, client=self._client_once())
+
+    def conversations(
+        self, *, limit: int = 50, offset: int = 0, ending: str | None = None
+    ) -> ConversationPage:
+        """Newest first. ``ending`` filters on :func:`ending_of`."""
+        return _blocking(
+            _conversations_async(
+                limit=max(1, int(limit)),
+                offset=max(0, int(offset)),
+                ending=ending,
+                client=self._client_once(),
+            )
+        )
 
     def _client_once(self) -> Any:
         """One client: each ``get_client()`` opens an ``httpx.AsyncClient`` nothing closes.
@@ -129,43 +174,47 @@ def _pending(*, limit: int, offset: int, client: Any) -> PendingPage:
     return _blocking(_pending_async(limit=limit, offset=offset, client=client))
 
 
-async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage:
-    """The window is over rows, not threads: one thread can hold more than one interrupt."""
+async def _walk(
+    client: Any,
+    *,
+    status: str | None,
+    sort_order: str,
+    select: list[str],
+    extract: dict[str, str] | None,
+    rows_of: Callable[[Any], list[dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], bool, int]:
+    """``(rows, truncated, threads)``. Truncated when the walk hits the bound, including a store that ends on it."""
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
+    page_offset = 0
+    while page_offset < _MAX_THREADS:
+        page = await client.threads.search(
+            status=status,
+            limit=_THREAD_PAGE,
+            offset=page_offset,
+            sort_by="updated_at",
+            sort_order=sort_order,
+            select=select,
+            extract=extract,
+        )
+        if not page:
+            return rows, False, len(seen)
+        for thread in page:
+            if isinstance(thread, Mapping):
+                seen.add(str(thread.get("thread_id") or ""))
+            rows.extend(rows_of(thread))
+        page_offset += len(page)
+        if len(page) < _THREAD_PAGE:
+            return rows, False, len(seen)
+    return rows, True, len(seen)
 
-    async def _walk(
-        *,
-        status: str | None,
-        select: list[str],
-        extract: dict[str, str] | None,
-        rows_of: Callable[[Any], list[dict[str, Any]]],
-    ) -> bool:
-        """``True`` when the walk hits the bound, including a store that ends exactly on it."""
-        page_offset = 0
-        while page_offset < _MAX_THREADS:
-            page = await client.threads.search(
-                status=status,
-                limit=_THREAD_PAGE,
-                offset=page_offset,
-                sort_by="updated_at",
-                sort_order="asc",
-                select=select,
-                extract=extract,
-            )
-            if not page:
-                return False
-            for thread in page:
-                if isinstance(thread, Mapping):
-                    seen.add(str(thread.get("thread_id") or ""))
-                rows.extend(rows_of(thread))
-            page_offset += len(page)
-            if len(page) < _THREAD_PAGE:
-                return False
-        return True
 
-    truncated = await _walk(
+async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage:
+    """The window is over rows, not threads: one thread can hold more than one interrupt."""
+    rows, truncated, scanned = await _walk(
+        client,
         status="interrupted",
+        sort_order="asc",
         select=["thread_id", "updated_at", "interrupts", "metadata"],
         extract=None,
         rows_of=_open_questions_of,
@@ -175,7 +224,74 @@ async def _pending_async(*, limit: int, offset: int, client: Any) -> PendingPage
     window = rows[offset : offset + limit]
     if offset + limit < len(rows):
         truncated = True
-    return PendingPage(rows=window, truncated=truncated, threads_scanned=len(seen))
+    return PendingPage(rows=window, truncated=truncated, threads_scanned=scanned)
+
+
+async def _conversations_async(
+    *, limit: int, offset: int, ending: str | None, client: Any
+) -> ConversationPage:
+    rows, truncated, scanned = await _walk(
+        client,
+        status=None,
+        sort_order="desc",
+        select=["thread_id", "updated_at", "status", "interrupts"],
+        extract=_CONVERSATION_EXTRACT,
+        rows_of=_conversation_of,
+    )
+    if ending is not None:
+        rows = [row for row in rows if row["ending"] == ending]
+    window = rows[offset : offset + limit]
+    return ConversationPage(
+        rows=window,
+        total=len(rows),
+        truncated=truncated or offset + limit < len(rows),
+        threads_scanned=scanned,
+    )
+
+
+def ending_of(*, waiting: bool, status: Any, last_outcome: Any) -> str | None:
+    """``None`` for a conversation with no finished turn and nothing failed."""
+    if waiting:
+        return "waiting"
+    if status == "error":
+        return "failed"
+    if last_outcome is None:
+        return None
+    return _ENDING_OF_OUTCOME.get(str(last_outcome), "failed")
+
+
+def _conversation_of(thread: Any) -> list[dict[str, Any]]:
+    if not isinstance(thread, Mapping):
+        return []
+    extracted = thread.get("extracted")
+    extracted = extracted if isinstance(extracted, Mapping) else {}
+    entries = [e for e in (extracted.get("turns") or ()) if isinstance(e, Mapping)]
+    turns = [
+        {
+            "asked_at": entry.get("asked_at"),
+            "question": entry.get("question"),
+            "outcome": entry.get("outcome"),
+        }
+        for entry in entries
+    ]
+    waiting = bool(_open_questions_of(thread))
+    question = extracted.get("question")
+    return [
+        {
+            "thread_id": thread.get("thread_id"),
+            "updated_at": thread.get("updated_at"),
+            "status": thread.get("status"),
+            "waiting": waiting,
+            "ending": ending_of(
+                waiting=waiting,
+                status=thread.get("status"),
+                last_outcome=turns[-1]["outcome"] if turns else None,
+            ),
+            "question": question if isinstance(question, str) and question.strip() else None,
+            "elided_turns": int(entries[0].get("elided_turns") or 0) if entries else 0,
+            "turns": turns,
+        }
+    ]
 
 
 def _open_questions_of(thread: Any) -> list[dict[str, Any]]:

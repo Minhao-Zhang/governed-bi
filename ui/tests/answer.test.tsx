@@ -200,6 +200,55 @@ describe("Details and Copy", () => {
     expect(screen.getByText("1.5 seconds")).toBeTruthy();
   });
 
+  it("shows what was tried first, in order, above the SQL that answered", async () => {
+    const user = userEvent.setup();
+    const final =
+      'SELECT r.name, count(*) FROM sales.regions AS r JOIN sales.customers AS c ON c.region = r.id GROUP BY r.name';
+    renderAnswer(
+      answered({
+        assumptions: [],
+        record: {
+          generated_sql: final,
+          execution: {
+            attempts: [
+              { path: "agent", passed: false, reason_code: "r_table_not_retrieved",
+                result_layer: "TABLES", submitted_sql: "SELECT * FROM sales.secret", error: "x" },
+              { path: "sample", passed: true, reason_code: "passed", submitted_sql: "SELECT 1", error: null },
+              { path: "agent", passed: true, reason_code: "passed", result_layer: null,
+                submitted_sql: "SELECT x FROM sales.regions",
+                error: 'UndefinedColumn: column "x" does not exist' },
+              { path: "agent", passed: true, reason_code: "passed", result_layer: null,
+                submitted_sql: final, executed_sql: final, error: null },
+            ],
+          },
+        },
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Details" }));
+
+    const section = document.querySelector("[data-sql]")!;
+    expect(section.textContent).toContain("Tried first:");
+    const tried = [...section.querySelectorAll("[data-tried]")].map((li) => li.textContent);
+    expect(tried).toEqual([
+      "SELECT * FROM sales.secretThe checks stopped it: the table is not one retrieval found.",
+      'SELECT x FROM sales.regionsThe database returned: column "x" does not exist.',
+    ]);
+    const shown = section.querySelector("[data-final-sql]")!.textContent!;
+    expect(shown.split("\n")[0]).toBe("SELECT r.name,");
+    expect(shown.replace(/\s+/g, " ")).toBe(final);
+    // The final statement follows what was tried.
+    const order = [...section.querySelectorAll("[data-tried], [data-final-sql]")];
+    expect(order.at(-1)?.hasAttribute("data-final-sql")).toBe(true);
+  });
+
+  it("says nothing was tried first when the first statement answered", async () => {
+    const user = userEvent.setup();
+    renderAnswer(answered({ assumptions: [] }));
+    await user.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.queryByText("Tried first:")).toBeNull();
+  });
+
   it("copies the answer text and the table", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);

@@ -219,7 +219,7 @@ def wire() -> dict[str, Any]:
     from fastapi.testclient import TestClient
 
     from governed_bi.api.routes import make_app
-    from governed_bi.api.thread_turns import PendingClarifications
+    from governed_bi.api.thread_turns import ThreadReader
     from governed_bi.datasource.postgres import PostgresConnector
 
     # A real connector, never connected: `endpoint` is pure DSN parsing, and it is the only way
@@ -237,7 +237,18 @@ def wire() -> dict[str, Any]:
         "status": "interrupted",
         "metadata": {"graph_id": "serve"},
         "interrupts": {"task-spec-1": [{"id": "int-spec-1", "value": asked}]},
+        "values": {
+            "question": "how many brands use cane sugar?",
+            "turns": [
+                {"asked_at": "2026-08-22T09:59:00Z", "question": "how many brands?",
+                 "outcome": "answered", "record": {"turn_id": TURN_ID}},
+            ],
+        },
     }
+    # Nothing asked yet: `ending`, `question` and `asked_at` are null on the wire.
+    empty = {"thread_id": "t-spec-empty", "updated_at": "2026-08-22T08:00:00Z", "status": "idle",
+             "values": {"turns": [{"asked_at": None, "question": None, "outcome": None}]}}
+    unstarted = {"thread_id": "t-spec-new", "updated_at": "2026-08-22T07:00:00Z", "status": "idle"}
     degenerate = {
         "updated_at": "2026-08-22T09:00:00Z",
         "status": "interrupted",
@@ -247,9 +258,9 @@ def wire() -> dict[str, Any]:
     }
 
     class _Client:
-        threads = _FakeThreads([thread, degenerate])
+        threads = _FakeThreads([thread, degenerate, empty, unstarted])
 
-    queue = PendingClarifications(client_factory=lambda: _Client())
+    queue = ThreadReader(client_factory=lambda: _Client())
     app = make_app(session, queue)
 
     return {
@@ -262,7 +273,10 @@ def wire() -> dict[str, Any]:
 #: asserted by :func:`test_every_operation_in_the_spec_is_exercised_here`.
 CASES: list[tuple[str, str, str]] = [
     ("GET", p, p)
-    for p in ("/livez", "/readyz", "/capabilities", "/clarifications/pending", "/examples")
+    for p in (
+        "/livez", "/readyz", "/capabilities", "/clarifications/pending", "/conversations",
+        "/examples",
+    )
 ]
 
 

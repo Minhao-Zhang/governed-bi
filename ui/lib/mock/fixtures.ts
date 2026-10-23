@@ -147,7 +147,16 @@ export const MOCK_ANSWER: AnswerView = {
     ...MOCK_RUN_RECORD,
     outcome: "answered",
     generated_sql: "SELECT r.name AS region, count(c.id) AS customers FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.name;",
-    execution: { terminal: "answered", attempts: [{ passed: true, reason_code: "passed", result_layer: null, path: "agent" }], guardrail_errors: 0 },
+    // A refusal and a database error before the answer, so Details shows "Tried first:".
+    execution: {
+      terminal: "answered",
+      attempts: [
+        { passed: false, reason_code: "r_table_not_retrieved", result_layer: "TABLES", path: "agent", submitted_sql: "SELECT region, count(*) FROM gbi_demo_sales.orders GROUP BY region", error: "orders is not a retrieved table" },
+        { passed: true, reason_code: "passed", result_layer: null, path: "agent", submitted_sql: "SELECT r.region, count(c.id) FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.region", error: 'UndefinedColumn: column r.region does not exist' },
+        { passed: true, reason_code: "passed", result_layer: null, path: "agent", submitted_sql: "SELECT r.name AS region, count(c.id) AS customers FROM gbi_demo_sales.customers c JOIN gbi_demo_sales.regions r ON c.region_id = r.id GROUP BY r.name;", error: null },
+      ],
+      guardrail_errors: 0,
+    },
     retrieved_tables: ["gbi_demo_sales.customers", "gbi_demo_sales.regions"],
     context_hash: "907e44d8b21c2212f21e01bf79e04737d3bf5305a24aeda98d4b326d54311921",
     corpus_content_hash: "c1296e937e4d7fe0a1b2c3d4e5f60718",

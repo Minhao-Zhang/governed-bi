@@ -12,12 +12,8 @@ import {
   MOCK_EXAMPLE_QUESTIONS,
   MOCK_NEARBY_QUESTIONS,
 } from "@/lib/mock/fixtures";
-import {
-  capabilitiesSchema,
-  examplesResponseSchema,
-  pendingClarificationsSchema,
-} from "@/lib/schemas";
-import type { Capabilities, ExamplesResponse, PendingClarifications } from "@/lib/types";
+import { capabilitiesSchema, conversationsSchema, examplesResponseSchema } from "@/lib/schemas";
+import type { Capabilities, Conversations, Ending, ExamplesResponse } from "@/lib/types";
 
 export class ApiError extends Error {
   constructor(
@@ -56,33 +52,32 @@ async function get<T>(path: string, schema: z.ZodType<T>, mock: T): Promise<T> {
   return getLive(path, schema);
 }
 
-/** Empty on purpose: mock mode has no engine pauses to list. */
-const MOCK_PENDING: PendingClarifications = {
-  rows: [],
-  meta: {
-    n: 0,
-    truncated: false,
-    threads_scanned: 0,
-    limit: 50,
-    offset: 0,
-    columns: [
-      "asked_at",
-      "question",
-      "why",
-      "clarification_id",
-      "turn_id",
-      "thread_id",
-      "source",
-      "basis",
-    ],
-  },
-};
+/** Empty on purpose: mock mode has no threads to list. */
+function mockConversations(limit: number, ending: Ending | null): Conversations {
+  return {
+    rows: [],
+    meta: { n: 0, total: 0, truncated: false, threads_scanned: 0, limit, offset: 0, ending },
+  };
+}
 
 export const api = {
   capabilities: (): Promise<Capabilities> =>
     get("/capabilities", capabilitiesSchema, MOCK_CAPABILITIES),
-  pendingClarifications: (): Promise<PendingClarifications> =>
-    get("/clarifications/pending", pendingClarificationsSchema, MOCK_PENDING),
+  conversations: ({
+    limit,
+    ending = null,
+  }: {
+    limit: number;
+    ending?: Ending | null;
+  }): Promise<Conversations> => {
+    const search = new URLSearchParams({ limit: String(limit) });
+    if (ending) search.set("ending", ending);
+    return get(
+      `/conversations?${search.toString()}`,
+      conversationsSchema,
+      mockConversations(limit, ending),
+    );
+  },
   examples: ({ limit, near }: { limit: number; near?: string }): Promise<ExamplesResponse> => {
     const search = new URLSearchParams({ limit: String(limit) });
     const text = typeof near === "string" ? near : "";

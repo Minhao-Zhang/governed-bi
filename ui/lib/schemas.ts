@@ -92,31 +92,38 @@ export const answerViewSchema = z.object({
 /** Outlined answers on a clarifying question. Omitted on the wire when the question is freeform. */
 export const clarificationChoicesSchema = z.array(z.string());
 
-/* ── /clarifications/pending ─────────────────────────────────────────────── */
+/* ── /conversations ──────────────────────────────────────────────────────── */
 
-/** One unanswered ask_user interrupt. `thread_id` and `question` may arrive null. */
-export const pendingClarificationRowSchema = z.object({
+/** How a conversation ended (`api/thread_turns.py::ENDINGS`). */
+export const endingSchema = z.enum(["answered", "not_answered", "waiting", "stopped", "failed"]);
+
+export const conversationTurnSchema = z.object({
   asked_at: z.string().nullable(),
   question: z.string().nullable(),
-  why: z.string().nullable(),
-  clarification_id: z.string().nullable(),
-  turn_id: z.string().nullable(),
-  thread_id: z.string().nullable(),
-  source: z.literal("interrupt"),
-  basis: z.string().nullable(),
-  interrupt_id: z.string().nullable().optional(),
-  task_id: z.string().optional(),
+  outcome: z.string().nullable(),
 });
 
-export const pendingClarificationsSchema = z.object({
-  rows: z.array(pendingClarificationRowSchema),
+export const conversationRowSchema = z.object({
+  thread_id: z.string().nullable(),
+  updated_at: z.string().nullable(),
+  status: z.string().nullable(),
+  waiting: z.boolean(),
+  ending: endingSchema.nullable(),
+  question: z.string().nullable(),
+  elided_turns: z.number(),
+  turns: z.array(conversationTurnSchema),
+});
+
+export const conversationsSchema = z.object({
+  rows: z.array(conversationRowSchema),
   meta: z.object({
     n: z.number(),
+    total: z.number(),
     truncated: z.boolean(),
     threads_scanned: z.number(),
     limit: z.number(),
     offset: z.number(),
-    columns: z.array(z.string()),
+    ending: endingSchema.nullable(),
   }),
 });
 

@@ -394,7 +394,9 @@ def build_tools(
                     book.cap,
                 ),
                 attempts_by_call={
-                    call_id: pipeline_error_attempt("agent", f"{type(exc).__name__}: {exc}")
+                    call_id: pipeline_error_attempt(
+                        "agent", f"{type(exc).__name__}: {exc}", submitted_sql=sql
+                    )
                 },
             )
         _emit_attempt(runtime, attempt, number=attempt_number, payload=payload)

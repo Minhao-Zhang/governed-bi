@@ -19,6 +19,8 @@ __all__ = [
     "ExecutorPath",
     "EXECUTOR_PATHS",
     "AttemptRecord",
+    "ERROR_MAX_CHARS",
+    "capped_error",
     "ExecutionRecord",
     "statement_sha256",
     "structural_fingerprint",
@@ -45,6 +47,21 @@ class AttemptRecord(TypedDict):
     executed_sql: str | None
     #: Canonical text that cleared the checks, before the row limit; ``None`` when nothing ran.
     checked_sql: str | None
+    #: The statement as the agent wrote it, kept on a refusal too, so Details can show it.
+    submitted_sql: str | None
+    #: The check's detail on a refusal, ``ExceptionType: message`` on a database error, else ``None``.
+    error: str | None
+
+
+#: A driver message can be pages long, and every super-step rewrites the checkpoint.
+ERROR_MAX_CHARS = 500
+
+
+def capped_error(text: str | None) -> str | None:
+    """Empty text is no error. Cut at :data:`ERROR_MAX_CHARS` with an ellipsis."""
+    if not text:
+        return None
+    return text if len(text) <= ERROR_MAX_CHARS else text[: ERROR_MAX_CHARS - 1] + "…"
 
 
 class ExecutionRecord(TypedDict):
@@ -84,10 +101,12 @@ def attempt_record(
     *,
     executed_sql: str | None = None,
     checked_sql: str | None = None,
+    submitted_sql: str | None = None,
 ) -> AttemptRecord:
     """``executed_sql`` is what ``prepare`` sent, limit included. ``checked_sql`` is the text that cleared the checks.
 
-    ``None`` means nothing ran. A refusal keeps no checked text, even when canonicalisation produced one.
+    ``None`` means nothing ran. A refusal keeps no checked text, even when canonicalisation produced
+    one; it keeps ``submitted_sql`` and the check's detail as ``error``.
     """
     # The row limit is applied only after the checks pass, so a statement that never ran has neither string.
     if executed_sql is None:
@@ -100,6 +119,8 @@ def attempt_record(
         path=path,
         executed_sql=executed_sql,
         checked_sql=checked_sql,
+        submitted_sql=submitted_sql,
+        error=None if result["passed"] else capped_error(result["detail"] or result["reason_code"]),
     )
 
 

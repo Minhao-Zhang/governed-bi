@@ -96,6 +96,7 @@ These routes are the ones this app adds. Their shapes are in [openapi.json](open
 | `GET /readyz` | Ready, or 503 with a reason |
 | `GET /capabilities` | The model, the database, and related facts the page reads at startup |
 | `GET /clarifications/pending` | Clarifying questions nobody has answered, oldest first |
+| `GET /conversations` | Every conversation, newest first, with each turn's question and outcome and how it ended. `ending` filters on that |
 | `GET /examples` | Example questions from the corpus. `limit` defaults to 3. `near` ranks them against a question. The SQL stays off the response |
 
 `langgraph.json` allows browser calls from `localhost` and `127.0.0.1` on ports 3000 and 3100, and from `https://smith.langchain.com`. Restart the server after changing that list.

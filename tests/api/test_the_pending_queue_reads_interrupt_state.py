@@ -18,7 +18,7 @@ from langgraph_sdk._shared.utilities import _registered_transports
 from governed_bi.api.thread_turns import (
     PENDING_FIELDS,
     InProcessServerRequired,
-    PendingClarifications,
+    ThreadReader,
     turn_of_clarification,
 )
 
@@ -124,9 +124,9 @@ class _FakeClient:
         self.threads = _FakeThreads(threads)
 
 
-def _queue(threads: list[dict[str, Any]]) -> tuple[PendingClarifications, _FakeClient]:
+def _queue(threads: list[dict[str, Any]]) -> tuple[ThreadReader, _FakeClient]:
     client = _FakeClient(threads)
-    return PendingClarifications(client_factory=lambda: client), client
+    return ThreadReader(client_factory=lambda: client), client
 
 
 def test_the_queue_asks_for_interrupted_threads_and_selects_the_interrupts() -> None:
@@ -441,7 +441,7 @@ def test_with_no_server_module_the_reader_refuses_by_name_and_registers_no_trans
     """The exception alone would pass on the leaky version, so the transport list's length is asserted."""
     monkeypatch.setitem(sys.modules, "langgraph_api.server", None)
     before = len(_registered_transports)
-    reader = PendingClarifications()
+    reader = ThreadReader()
 
     with pytest.raises(InProcessServerRequired) as first:
         reader.pending(limit=5)
@@ -457,7 +457,7 @@ def test_the_import_window_is_refused_too_rather_than_deferred(monkeypatch: Any)
     monkeypatch.setenv("__LANGGRAPH_DEFER_LOOPBACK_TRANSPORT", "true")
     before = len(_registered_transports)
     with pytest.raises(InProcessServerRequired) as raised:
-        PendingClarifications().pending(limit=5)
+        ThreadReader().pending(limit=5)
     assert "still importing" in str(raised.value)
     assert len(_registered_transports) == before
 
@@ -472,7 +472,7 @@ def test_an_imported_server_that_is_not_running_is_refused_as_well(monkeypatch: 
     monkeypatch.setattr(server_loop, "_MAIN_LOOP", None)
     before = len(_registered_transports)
     with pytest.raises(InProcessServerRequired) as raised:
-        PendingClarifications().pending(limit=5)
+        ThreadReader().pending(limit=5)
     assert "no server is running" in str(raised.value)
     assert len(_registered_transports) == before
 
@@ -486,7 +486,7 @@ def test_the_client_is_built_once_for_the_life_of_the_reader() -> None:
         built.append(client)
         return client
 
-    reader = PendingClarifications(client_factory=factory)
+    reader = ThreadReader(client_factory=factory)
     reader.pending(limit=5)
     reader.pending(limit=5, offset=1)
     assert len(built) == 1
