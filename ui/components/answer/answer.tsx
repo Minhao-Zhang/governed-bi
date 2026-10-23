@@ -8,6 +8,8 @@ import { ModelMarkdown } from "@/components/common/model-markdown";
 import { readAssumptions, shownTable } from "@/lib/answer-parts";
 import type { AnswerView } from "@/lib/types";
 
+export const CRASHED = "Something went wrong with this question. You can ask it again.";
+
 /**
  * An answer, top to bottom. A refusal is the refusal block. The other unfinished
  * outcomes show the system text and nothing else.
@@ -25,7 +27,9 @@ export function Answer({
     return <Refusal reason={answer.text} question={question} />;
   }
   if (answer.outcome !== "answered") {
-    const text = answer.text ?? answer.answer_text ?? null;
+    // A crash carries no system text, and a blank turn reads as nothing happened.
+    const text =
+      answer.text ?? answer.answer_text ?? (answer.outcome === "crashed" ? CRASHED : null);
     if (!text) return null;
     return (
       <div data-answer className="text-sm text-[var(--text)]">

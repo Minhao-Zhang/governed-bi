@@ -20,11 +20,11 @@ Five `run_query` calls end the loop, including calls the checks refused. The nar
 
 ## The turn crashes
 
-An exception in a wrapped node, a crash path from `accept` when the conversation has no question, or a guardrail error sets outcome `crashed`. The record stores `error_type` as the exception class and `failed_stage` as the node. The page shows the answer text when there is any, and otherwise nothing for that turn. If the stream itself fails, the page toasts that no answer was produced and the question can be asked again on the same thread.
+An exception in a wrapped node, a crash path from `accept` when the conversation has no question, or a guardrail error sets outcome `crashed`. The record stores `error_type` as the exception class and `failed_stage` as the node. The page shows the answer text when there is any, and otherwise says the question went wrong and can be asked again. If the stream itself fails, the page toasts that no answer was produced and the question can be asked again on the same thread.
 
 ## The model ends in prose without answering
 
-The model is told to finish through `answer` or `ask_user`. If it ends in plain text instead, the server reminds it once. If it ends in plain text again, the prose is not used as the answer: the outcome is `crashed`, `error_type` is `NoAnswerCall`, and `answer_tool_called` is false. The page shows nothing for that turn. A refused or capped turn is not reminded, because its outcome is already decided.
+The model is told to finish through `answer` or `ask_user`. If it ends in plain text instead, the server reminds it once. If it ends in plain text again, the prose is not used as the answer: the outcome is `crashed`, `error_type` is `NoAnswerCall`, and `answer_tool_called` is false. The page says the question went wrong and can be asked again. A refused or capped turn is not reminded, because its outcome is already decided.
 
 ## The engine asks, and the person declines
 

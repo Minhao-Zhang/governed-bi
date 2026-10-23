@@ -261,3 +261,18 @@ describe("parseAnswer", () => {
     expect(none?.result_table ?? null).toBeNull();
   });
 });
+
+describe("crashed turn", () => {
+  it("says the turn failed instead of drawing nothing", () => {
+    renderAnswer({ outcome: "crashed", text: null, answer_text: null, record: { error_type: "NoAnswerCall" } });
+    expect(
+      screen.getByText("Something went wrong with this question. You can ask it again."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
+  });
+
+  it("keeps system text when a crash has some", () => {
+    renderAnswer({ outcome: "crashed", text: "The query timed out.", answer_text: null, record: {} });
+    expect(screen.getByText("The query timed out.")).toBeTruthy();
+  });
+});

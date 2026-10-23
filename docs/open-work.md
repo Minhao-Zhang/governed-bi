@@ -15,5 +15,3 @@ The layer viewer is a separate project, `ossie-viewer`, with no backend ([ADR 00
 The lake printer reports accuracy, coverage, and disagreement only. The assumption figures ([`eval/report.py`](../src/governed_bi/eval/report.py)) and the cost per question (from the token totals on each row) are computed elsewhere, and P16 has to put both in the result.
 
 Details lists the SQL, the checks, the retrieved tables, the model, and the time. [ADR 0019](adr/0019-one-plain-chat-page.md) also asks which part of the question each piece of the SQL came from, and the page has no such section.
-
-A crashed turn, including one recorded as `NoAnswerCall`, shows nothing on the page: the system text for a crash is empty and the page draws no line for it. It should say that the turn failed and that the question can be asked again.
