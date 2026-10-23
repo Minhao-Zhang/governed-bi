@@ -6,10 +6,11 @@
 
 ## Current priorities
 
-All work follows `docs/reviews/2026-10-pivot-milestones.md`, which carries out the decisions in
-`docs/reviews/2026-10-pivot.md` and ADRs 0017 to 0020. Read its "Rules for every milestone" before
-starting any change, and name the milestone the change serves. The trim plan, its milestones, the
-Ossie plan and the September milestones are superseded.
+All work follows `docs/reviews/2026-10-workspace-and-ossie-storage.md`: the views around the chat
+(Track W) and Ossie as the storage format (Track S). Read its "Rules" section before starting any
+change, and name the milestone the change serves. The pivot milestones are finished; their rules
+still apply where that plan says so. The trim plan, its milestones, the Ossie plan and the
+September milestones are superseded.
 
 ## Repo Structure
 
