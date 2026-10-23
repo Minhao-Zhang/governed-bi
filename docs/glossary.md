@@ -35,11 +35,14 @@ The words for the current tree. When a term here disagrees with a casual use of 
 
 | Term | Meaning |
 |---|---|
-| **Corpus** | The semantic layer: YAML assets loaded by `corpus/`. Eight types, in `registry/assets.py`: schema, table, column, join, metric, term, few-shot, and negative example. |
+| **Semantic layer** | The definitions the engine answers from: tables, columns, joins, metrics, terms and few-shot questions. Say this in prose and on the page. |
+| **Corpus** | The directory that holds the semantic layer (`GOVERNED_BI_CORPUS_DIR`): YAML assets loaded by `corpus/`. Eight types, in `registry/assets.py`: schema, table, column, join, metric, term, few-shot, and negative example. |
 | **Retrieval channel** | One of schema, term, metric, entity, or example. Entity covers tables, columns, and joins. Example covers few-shot questions. Each channel can score a lexical match, a semantic match, or both. Example is semantic only. In code the scoring kinds are `lexical` and `semantic`, and the five searches are stages named `channel_schema` and so on. |
 | **Retrieved tables** | The tables retrieval found on this turn, including tables added while joining. The TABLES check asks only whether a statement's tables are in that set. It is not a permission. The record field is `retrieved_tables`. |
 | **Check** | One of six deterministic passes over SQL before it runs: `PARSE`, `NO_WRITE`, `FUNCTIONS`, `BINDING`, `COLUMNS`, `TABLES`. See [ADR 0006](adr/0006-execution-time-governance.md). |
 | **Assumption** | One choice the answer depends on. `basis` is `layer` (a definition in the corpus, with an `asset_id`), `convention`, `guess`, or `found_in_query` (the server found it in the SQL and added it). See [ADR 0018](adr/0018-every-answer-states-its-assumptions.md). |
+| **Conversation** | One chat, with its turns. LangGraph's API calls it a thread, and the code says `thread` only where it speaks that API. |
+| **Turn** | One question and what came of it: the answer, the turn record, and up to 20 result rows. |
 | **Turn record** | What `finish` writes. It includes `outcome`, the SQL, the assumptions, and the config hash. It has no field that scores how much to trust the answer. |
 | **Outcome** | How the turn ended: `answered`, `refused`, `clarification`, `capped`, `crashed`, or `no_sql`. |
 | **Conversation store** | `runs/conversations.sqlite`, the checkpointer `langgraph.json` mounts for the server. The one-question command and the evaluation use `runs/harness-checkpoints.sqlite` instead, so a benchmark does not become the conversation list. Neither file may be the warehouse. See [ADR 0014](adr/0014-one-conversation-store.md). |

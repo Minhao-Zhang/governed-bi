@@ -1,6 +1,7 @@
 # 0019: One plain chat page
 
-- **Status:** Accepted (2026-10-19).
+- **Status:** Accepted (2026-10-19). Amended by [0021](0021-views-around-the-chat.md) (2026-10-23):
+  the app adds a conversation list and the semantic layer view around this page.
 - **Deciders:** project owner.
 - **Scope:** the whole web UI. What an answer contains is
   [0018](0018-every-answer-states-its-assumptions.md); what the project is, is

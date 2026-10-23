@@ -1,6 +1,7 @@
 # 0017: A served chat app over a semantic layer the user brings
 
-- **Status:** Accepted (2026-10-19).
+- **Status:** Accepted (2026-10-19). Amended by [0021](0021-views-around-the-chat.md) (views around
+  the chat) and [0022](0022-ossie-is-the-storage-format.md) (Ossie as storage), both 2026-10-23.
 - **Deciders:** project owner.
 - **Scope:** what the project is, what it keeps, and what it deletes. The answer's assumptions
   are [0018](0018-every-answer-states-its-assumptions.md), the page is

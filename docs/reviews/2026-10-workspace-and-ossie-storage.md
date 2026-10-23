@@ -232,8 +232,7 @@ snapshot rule, whose tools P17 deleted. Track S restores those tools for its own
 deletes them again in S4; its proof is stated at the top of Track S.
 Branches are named `w<N>/<short-name>` for the pages and `s<N>/<short-name>` for storage.
 
-`AGENTS.md` names the pivot milestones as the current priorities. Pointing it here needs the
-owner's consent.
+`AGENTS.md` points at this plan.
 
 ## 5. Milestones
 

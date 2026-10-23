@@ -44,12 +44,17 @@ What is edited is everything around the decision. A superseded ADR is rewritten 
 - [0017](adr/0017-a-served-chat-app-over-a-layer-the-user-brings.md): what the project is. Accepted.
 - [0018](adr/0018-every-answer-states-its-assumptions.md): every answer states its assumptions, and the server checks them. Accepted.
 - [0019](adr/0019-one-plain-chat-page.md): the one chat page. Accepted.
-- [0020](adr/0020-ossie-export-and-a-separate-viewer.md): Ossie as an export, and a viewer in another repository. Accepted.
+- [0020](adr/0020-ossie-export-and-a-separate-viewer.md): reversed in part. Ossie is now the storage, and the app embeds the viewer.
+- [0021](adr/0021-views-around-the-chat.md): three views: chat, the conversation list, and the semantic layer in the viewer. Accepted.
+- [0022](adr/0022-ossie-is-the-storage-format.md): one Ossie document per database is the only corpus format. Accepted.
 - [Design decisions](design-decisions.md): a short pointer into these records.
 
 ## Dated reviews
 
-The current work follows the pivot milestones. The earlier plans stay as the record of what they decided.
+The current work follows the workspace and Ossie storage plan. The earlier plans stay as the record of what they decided.
+
+- [2026-10 workspace and Ossie storage](reviews/2026-10-workspace-and-ossie-storage.md): the views around the chat, and Ossie as the storage format.
+- [2026-10 Ossie storage brief](reviews/2026-10-ossie-storage-brief.md) and [assessment](reviews/2026-10-ossie-storage-assessment.md): the independent assessment behind that plan.
 
 - [2026-10 pivot](reviews/2026-10-pivot.md): why the project is a chat app over a semantic layer the user brings.
 - [2026-10 pivot milestones](reviews/2026-10-pivot-milestones.md): the work that carries out that decision.
