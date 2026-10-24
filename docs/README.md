@@ -4,8 +4,8 @@ What is in `docs/`.
 
 ## Using the app
 
-- [Usage](usage.md): install, configure, and run the server, the page, the evaluation, and the exporter.
-- [Corpus format](corpus-format.md): the YAML layout of the semantic layer, and the Ossie export.
+- [Usage](usage.md): install, configure, and run the server, the page, and the evaluation.
+- [Corpus format](corpus-format.md): the semantic layer as one Ossie model per schema.
 - [OpenAPI](openapi.json): the custom HTTP routes the page calls besides chat.
 
 ## How it works

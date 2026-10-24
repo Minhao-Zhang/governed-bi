@@ -17,7 +17,6 @@ from sqlglot.errors import SqlglotError
 
 __all__ = [
     "UnsafeName",
-    "SHARED_NAMESPACE",
     "validate_path_component",
     "validate_asset_id",
     "slug",
@@ -33,10 +32,6 @@ __all__ = [
 class UnsafeName(ValueError):
     """A name that must not reach the filesystem. A ``ValueError``, so a loader records it per item."""
 
-
-#: Directory for join, metric, and term assets, which have no schema field.
-#: ``write`` will not guess one; pass this when the asset is system-wide.
-SHARED_NAMESPACE = "_shared"
 
 #: Tool directories, never corpus content. See ``_is_tooling``.
 _NON_CORPUS_DIRS = frozenset(
@@ -144,11 +139,11 @@ def corpus_files(
 ) -> list[Path]:
     """Corpus files under ``root``, sorted by relative path.
 
-    ``schemas=None`` treats the whole tree as the manifest. A named manifest also keeps ``_shared``.
+    ``schemas=None`` treats the whole tree as the manifest.
     """
     if not root.is_dir():
         return []
-    allowed = None if schemas is None else {*schemas, SHARED_NAMESPACE}
+    allowed = None if schemas is None else set(schemas)
     wanted = None if suffixes is None else {s.lower() for s in suffixes}
     out = [
         path

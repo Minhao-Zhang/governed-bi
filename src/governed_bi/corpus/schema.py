@@ -161,7 +161,7 @@ class SchemaAsset:
 
 @dataclass(frozen=True, slots=True)
 class TableAsset:
-    """``columns`` holds derived ids. Inline column objects exist only on disk. See ADR 0005."""
+    """``columns`` holds derived ids, in the order of the dataset's fields on disk. See ADR 0022."""
 
     asset_type: ClassVar[AssetType] = AssetType.table
     id: str

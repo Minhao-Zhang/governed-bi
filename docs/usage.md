@@ -1,6 +1,6 @@
 # Usage
 
-How to run the server, the page, one question from the command line, the evaluation, and the Ossie export. How a turn is built is in [architecture](architecture.md). The decision records are in [adr/](adr/).
+How to run the server, the page, one question from the command line, and the evaluation. How a turn is built is in [architecture](architecture.md). The decision records are in [adr/](adr/).
 
 ## Prerequisites
 
@@ -199,14 +199,6 @@ uv run --frozen python -m governed_bi.eval --db path/to.sqlite --questions path/
 | `--oracle-only` | off | Run only the oracle config |
 | `--limit` | none | Stop after this many questions |
 | `--pair` | none | `configA,configB`. The summary then includes the paired test |
-
-## Export
-
-```bash
-uv run --frozen python -m governed_bi.corpus.ossie_export --corpus-dir ../BIRD-corpus --out runs/ossie
-```
-
-`--corpus-dir` and `--out` are both required. The command writes one Ossie model per database under `--out`, and `export-report.json` beside them. It prints the totals. Load problems exit 1. The mapping is in [corpus format](corpus-format.md).
 
 ## Checks
 

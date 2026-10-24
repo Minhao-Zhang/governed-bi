@@ -111,94 +111,59 @@ def test_the_library_really_does_resolve_on_as_a_boolean() -> None:
 def test_a_join_keeps_its_on_clause_through_the_loader(tmp_path) -> None:
     """YAML 1.1 would turn the key ``on`` into ``True`` and drop the clause."""
     from governed_bi.corpus import store
+    from governed_bi.corpus.parse import from_mapping
 
-    (tmp_path / "j.yaml").write_text(JOIN_YAML, encoding="utf-8")
+    join = from_mapping(yaml.safe_load(JOIN_YAML.replace("on:", "'on':")))
+    store.write(tmp_path, "beer_factory", [*_model(), join])
     assets, problems = store.load(tmp_path)
     assert not problems
-    assert assets[0].on == "kunden.betrieb_id = geoposition.standort_id"
-
-
-# ── inline columns: identity is derived, not read ─────────────────────────────
-
-
-def test_inline_columns_become_their_own_assets_with_derived_ids(tmp_path) -> None:
-    from governed_bi.corpus import store
-
-    (tmp_path / "t.yaml").write_text(
-        TABLE_YAML
-        + "columns:\n"
-        + "  - physical_name: email\n    summary: email - contact address\n"
-        + "  - physical_name: id\n    summary: id - surrogate key\n",
-        encoding="utf-8",
-    )
-    assets, problems = store.load(tmp_path)
-    assert not problems, problems
-    by_id = {a.id: a for a in assets}
-    assert set(by_id) == {
-        "beer_factory.customers",
-        "beer_factory.customers.email",
-        "beer_factory.customers.id",
-    }
-    table = by_id["beer_factory.customers"]
-    assert set(table.columns) == {"beer_factory.customers.email", "beer_factory.customers.id"}
-    # The table id, not the physical name: a reference names one asset (ADR 0008).
-    assert by_id["beer_factory.customers.email"].parent_table == "beer_factory.customers"
-
-
-def test_an_inline_column_that_states_a_conflicting_parent_is_a_problem(tmp_path) -> None:
-    """A stated parent is not an override. Identity comes from where the column is stored."""
-    from governed_bi.corpus import store
-
-    (tmp_path / "t.yaml").write_text(
-        TABLE_YAML
-        + "columns:\n"
-        + "  - physical_name: email\n    parent_table: somewhere_else\n"
-        + "    summary: email - contact address\n",
-        encoding="utf-8",
-    )
-    assets, problems = store.load(tmp_path)
-    assert not assets
-    assert len(problems) == 1 and "parent_table" in str(problems[0])
+    assert next(a for a in assets if a.id == join.id).on == "kunden.betrieb_id = geoposition.standort_id"
 
 
 # ── the manifest is the contamination fix ────────────────────────────────────
+
+
+def _model(schema: str = "beer_factory"):
+    from governed_bi.corpus.parse import from_mapping
+    from governed_bi.corpus.schema import SchemaAsset
+
+    return [
+        SchemaAsset(id=schema, name=schema, summary=f"{schema}: a schema of customers and orders"),
+        from_mapping(yaml.safe_load(TABLE_YAML.replace("beer_factory", schema))),
+    ]
 
 
 def test_a_subtree_outside_the_manifest_is_not_loaded(tmp_path) -> None:
     from governed_bi.corpus import store
 
     for schema in ("beer_factory", "leftover"):
-        (tmp_path / schema).mkdir()
-        (tmp_path / schema / "t.yaml").write_text(
-            TABLE_YAML.replace("beer_factory", schema), encoding="utf-8"
-        )
+        store.write(tmp_path, schema, _model(schema))
 
     everything, _ = store.load(tmp_path)
-    assert len(everything) == 2, "with no manifest the tree is the manifest"
+    assert len(everything) == 4, "with no manifest the tree is the manifest"
 
     listed, problems = store.load(tmp_path, schemas=["beer_factory"])
-    assert [a.id for a in listed] == ["beer_factory.customers"]
+    assert sorted(a.id for a in listed) == ["beer_factory", "beer_factory.customers"]
     assert not problems
 
 
-def test_a_manifest_schema_with_no_directory_is_reported(tmp_path) -> None:
+def test_a_manifest_schema_with_no_model_is_reported(tmp_path) -> None:
     from governed_bi.corpus import store
 
-    (tmp_path / "beer_factory").mkdir()
-    (tmp_path / "beer_factory" / "t.yaml").write_text(TABLE_YAML, encoding="utf-8")
-
+    store.write(tmp_path, "beer_factory", _model())
     assets, problems = store.load(tmp_path, schemas=["beer_factory", "absent_schema"])
-    assert len(assets) == 1
+    assert len(assets) == 2
     assert len(problems) == 1 and "absent_schema" in str(problems[0])
 
 
 def test_a_near_miss_suffix_is_reported_rather_than_skipped(tmp_path) -> None:
     from governed_bi.corpus import store
 
-    (tmp_path / "t.yml").write_text(TABLE_YAML, encoding="utf-8")
+    path = store.write(tmp_path, "beer_factory", _model())
+    path.rename(path.with_suffix(".yml"))
     assets, problems = store.load(tmp_path)
     assert not assets
-    assert len(problems) == 1 and "t.yml" in str(problems[0])
+    assert len(problems) == 1 and "beer_factory.yml" in str(problems[0])
 
 
 # ── validation: each rule fires, and a valid asset reports nothing ────────────
@@ -286,119 +251,17 @@ def test_the_common_field_guard_fires_on_a_class_that_forgets_governance(monkeyp
         module._assert_every_asset_carries_the_common_fields()
 
 
-# ── write: the security half is not error-isolated ───────────────────────────
-
-
-def test_write_then_load_returns_an_equal_asset(tmp_path) -> None:
-    from governed_bi.corpus import store
-
-    asset = _table(body="what a customer is", columns=("beer_factory.customers.email",))
-    store.write(tmp_path, asset)
-    loaded, problems = store.load(tmp_path, schemas=["beer_factory"])
-    assert not problems
-    assert loaded == [asset]
-
-
-def test_write_refuses_an_invalid_asset(tmp_path) -> None:
-    from governed_bi.corpus import store
-
-    with pytest.raises(ValueError, match="cap"):
-        store.write(tmp_path, _table(summary="customers " + "x" * 250))
-
-
-def test_write_refuses_a_namespace_that_escapes_the_root(tmp_path) -> None:
-    from governed_bi.corpus import store
-    from governed_bi.corpus.identity import UnsafeName
-
-    with pytest.raises(UnsafeName):
-        store.write(tmp_path, _table(), namespace="../evil")
-
-
-def test_write_refuses_to_guess_a_namespace_for_a_type_that_has_none(tmp_path) -> None:
-    """No default directory: the namespace is a fact on another asset."""
-    from governed_bi.corpus import store
-    from governed_bi.corpus.identity import SHARED_NAMESPACE
-    from governed_bi.corpus.parse import from_mapping
-
-    join = from_mapping(yaml.safe_load(JOIN_YAML.replace("on:", "'on':")))
-    with pytest.raises(ValueError, match="namespace"):
-        store.write(tmp_path, join)
-    assert store.write(tmp_path, join, namespace=SHARED_NAMESPACE).exists()
-
-
-def test_a_metric_is_not_written_into_a_directory_named_after_the_metric(tmp_path) -> None:
-    """``name`` is a business name, so it is not the directory."""
-    from governed_bi.corpus import store
-    from governed_bi.corpus.schema import MetricAsset
-
-    metric = MetricAsset(
-        id="metric_beer_factory_revenue",
-        name="revenue",
-        base_table="beer_factory.orders",
-        expression="SUM(amount)",
-        summary="revenue: the total value of orders in a period",
-    )
-    with pytest.raises(ValueError, match="namespace"):
-        store.write(tmp_path, metric)
-
-
 # ── the hash honours the manifest, and absence is out of band ─────────────────
 
 
 def test_the_hash_ignores_a_schema_outside_the_manifest(tmp_path) -> None:
     """A leftover schema must not move a digest limited to the schemas that were served."""
+    from governed_bi.corpus import store
     from governed_bi.corpus.hash import corpus_content_hash
 
     for schema in ("beer_factory", "leftover"):
-        (tmp_path / schema).mkdir()
-        (tmp_path / schema / "t.yaml").write_text(
-            TABLE_YAML.replace("beer_factory", schema), encoding="utf-8"
-        )
+        store.write(tmp_path, schema, _model(schema))
 
     before = corpus_content_hash(tmp_path, schemas=["beer_factory"])
-    (tmp_path / "leftover" / "t.yaml").write_text("asset_type: table\n", encoding="utf-8")
+    (tmp_path / "leftover" / "leftover.yaml").write_text("version: 0.2.0.dev0\n", encoding="utf-8")
     assert corpus_content_hash(tmp_path, schemas=["beer_factory"]) == before
-    assert corpus_content_hash(tmp_path) != before, "the unrestricted digest must still move"
-
-
-def test_a_missing_corpus_has_no_digest_rather_than_a_sentinel_one(tmp_path) -> None:
-    from governed_bi.corpus.hash import corpus_content_hash
-
-    with pytest.raises(FileNotFoundError):
-        corpus_content_hash(tmp_path / "no_such_corpus")
-
-
-def test_the_hash_ignores_the_version_controls_own_bookkeeping(tmp_path) -> None:
-    """``.git`` must not move the digest, or a commit would change the corpus identity."""
-    from governed_bi.corpus.hash import corpus_content_hash
-
-    (tmp_path / "beer_factory").mkdir()
-    (tmp_path / "beer_factory" / "t.yaml").write_text(TABLE_YAML, encoding="utf-8")
-    for noise in (".git", "__pycache__"):
-        (tmp_path / noise).mkdir()
-        (tmp_path / noise / "HEAD").write_text("ref: refs/heads/v2\n", encoding="utf-8")
-
-    before = corpus_content_hash(tmp_path)
-    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/other\n", encoding="utf-8")
-    (tmp_path / ".git" / "index").write_bytes(b"\x00binary")
-    assert corpus_content_hash(tmp_path) == before, "committing must not restate the corpus"
-
-    # Corpus bytes still move the digest, so the exclusion is not the whole tree.
-    (tmp_path / "beer_factory" / "t.yaml").write_text(
-        TABLE_YAML + "\nnote: edited\n", encoding="utf-8"
-    )
-    assert corpus_content_hash(tmp_path) != before
-
-
-def test_a_corpus_repositorys_readme_is_still_corpus_content(tmp_path) -> None:
-    """Prose at the root still counts. Only tool directories are dropped."""
-    from governed_bi.corpus.hash import corpus_content_hash
-
-    (tmp_path / "beer_factory").mkdir()
-    (tmp_path / "beer_factory" / "t.yaml").write_text(TABLE_YAML, encoding="utf-8")
-    before = corpus_content_hash(tmp_path)
-    (tmp_path / "README.md").write_text("# BIRD-corpus\n", encoding="utf-8")
-    assert corpus_content_hash(tmp_path) != before
-    assert corpus_content_hash(tmp_path, schemas=["beer_factory"]) == corpus_content_hash(
-        tmp_path, schemas=["beer_factory"]
-    )

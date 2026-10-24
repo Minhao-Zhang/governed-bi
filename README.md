@@ -52,9 +52,9 @@ How to run an evaluation, and how to read the result, is in [Measurement](docs/m
 
 On BIRD-Obfuscation's 1,351 questions, with the current default model, two runs reached execution accuracy of 0.553 and 0.544, with coverage of 0.843 and 0.851. The two runs disagreed on 11.3% of questions, and a question cost about $0.0028. Answers that included a guess were right 46% to 50% of the time, against 67% to 68% for answers with no guess. The figures by half are in [Measurement](docs/measurement.md).
 
-## Export
+## The semantic layer
 
-The corpus stays in its YAML files. This repository can write one Apache Ossie model per database, plus a report of what did not map. The layout and the command are in [Corpus format](docs/corpus-format.md). A separate project opens those files.
+The corpus is one Apache Ossie model per schema, so any Ossie tool can open it. What Ossie has no field for is kept in a `GOVERNED_BI` extension. The layout is in [Corpus format](docs/corpus-format.md). The app shows the layer in [ossie-viewer](https://github.com/Minhao-Zhang/ossie-viewer), a separate project.
 
 ## Repository
 
@@ -63,7 +63,7 @@ The corpus stays in its YAML files. This repository can write one Apache Ossie m
 ## Documentation
 
 - [Usage](docs/usage.md): install, configure, serve, evaluate, and export.
-- [Corpus format](docs/corpus-format.md): the semantic layer, and the Ossie export.
+- [Corpus format](docs/corpus-format.md): the semantic layer, one Ossie model per schema.
 - [Architecture](docs/architecture.md): how a question becomes an answer.
 - [Failure modes](docs/failure-modes.md): how answers go wrong.
 - [Measurement](docs/measurement.md): running an evaluation and reading the result.

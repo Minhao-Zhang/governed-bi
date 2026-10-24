@@ -13,7 +13,6 @@ import pathlib
 import sys
 
 import pytest
-import yaml
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
@@ -40,31 +39,24 @@ HELD_OUT = [
 ]
 
 
-def _corpus(root: pathlib.Path, *, table_body: str) -> pathlib.Path:
-    (root / "restaurant").mkdir(parents=True, exist_ok=True)
-    (root / "restaurant" / "restaurant.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "asset_type": "schema",
-                "id": "restaurant",
-                "name": "restaurant",
-                "summary": "restaurant: dining directory",
-            }
-        ),
-        encoding="utf-8",
-    )
-    (root / "restaurant" / "generalinfo.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "asset_type": "table",
-                "id": "restaurant.generalinfo",
-                "schema": "restaurant",
-                "physical_name": "generalinfo",
-                "summary": "generalinfo: name cuisine rating city",
-                "body": table_body,
-            }
-        ),
-        encoding="utf-8",
+def _corpus(root: pathlib.Path, *, table_body: str, evidence: str | None = None) -> pathlib.Path:
+    from governed_bi.corpus.schema import Audit, SchemaAsset, TableAsset
+    from governed_bi.corpus.store import write
+
+    write(
+        root,
+        "restaurant",
+        [
+            SchemaAsset(id="restaurant", name="restaurant", summary="restaurant: dining directory"),
+            TableAsset(
+                id="restaurant.generalinfo",
+                schema="restaurant",
+                physical_name="generalinfo",
+                summary="generalinfo: name cuisine rating city",
+                body=table_body,
+                audit=Audit(evidence=evidence) if evidence else None,
+            ),
+        ],
     )
     return root
 
@@ -125,20 +117,10 @@ def test_shared_vocabulary_alone_is_not_a_containment(tmp_path: pathlib.Path) ->
 def test_a_test_side_provenance_citation_fails(tmp_path: pathlib.Path) -> None:
     """The exact check. A corpus whose own audit names the held-out set was authored against it."""
     tool = _tool()
-    root = _corpus(tmp_path / "cited", table_body="One row per restaurant.")
-    (root / "restaurant" / "generalinfo.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "asset_type": "table",
-                "id": "restaurant.generalinfo",
-                "schema": "restaurant",
-                "physical_name": "generalinfo",
-                "summary": "generalinfo: name cuisine rating city",
-                "body": "One row per restaurant.",
-                "audit": {"evidence": "derived from held_1 in test_final.jsonl"},
-            }
-        ),
-        encoding="utf-8",
+    root = _corpus(
+        tmp_path / "cited",
+        table_body="One row per restaurant.",
+        evidence="derived from held_1 in test_final.jsonl",
     )
     out = tool.scan(root, HELD_OUT)
     assert out["test_provenance_citations"] >= 1

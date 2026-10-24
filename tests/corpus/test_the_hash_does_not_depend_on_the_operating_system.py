@@ -9,18 +9,21 @@ import pathlib
 import tempfile
 
 from governed_bi.corpus.hash import corpus_content_hash
-from governed_bi.corpus.schema import TableAsset
+from governed_bi.corpus.schema import Asset, SchemaAsset, TableAsset
 from governed_bi.corpus.store import write
 
 
-def _asset(name: str = "t") -> TableAsset:
-    return TableAsset(id=f"s.{name}", schema="s", physical_name=name, summary="a table")
+def _asset(name: str = "t") -> list[Asset]:
+    return [
+        SchemaAsset(id="s", name="s", summary="s: a schema"),
+        TableAsset(id=f"s.{name}", schema="s", physical_name=name, summary="a table"),
+    ]
 
 
 def test_a_written_asset_carries_no_carriage_return() -> None:
     """Assert no carriage return, so the check fails on a CRLF host."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="corpus-eol-"))
-    path = write(root, _asset())
+    path = write(root, "s", _asset())
 
     raw = path.read_bytes()
     assert b"\r" not in raw, (
@@ -33,7 +36,7 @@ def test_a_written_asset_carries_no_carriage_return() -> None:
 def test_the_same_asset_hashes_the_same_whatever_wrote_the_bytes() -> None:
     """A CRLF copy of the same asset must hash differently, or this only checks determinism."""
     engine_root = pathlib.Path(tempfile.mkdtemp(prefix="corpus-engine-"))
-    engine_path = write(engine_root, _asset())
+    engine_path = write(engine_root, "s", _asset())
 
     crlf_root = pathlib.Path(tempfile.mkdtemp(prefix="corpus-crlf-"))
     crlf_path = crlf_root / engine_path.relative_to(engine_root)
@@ -46,7 +49,7 @@ def test_the_same_asset_hashes_the_same_whatever_wrote_the_bytes() -> None:
     )
 
     second_root = pathlib.Path(tempfile.mkdtemp(prefix="corpus-second-"))
-    write(second_root, _asset())
+    write(second_root, "s", _asset())
     assert corpus_content_hash(engine_root) == corpus_content_hash(second_root), (
         "two runs of the engine's own writer disagree, which is the defect this covers"
     )
@@ -67,7 +70,7 @@ def test_the_writer_does_not_rely_on_the_platform_newline(monkeypatch) -> None:
     monkeypatch.setattr(pathlib.Path, "write_text", as_if_windows)
 
     root = pathlib.Path(tempfile.mkdtemp(prefix="corpus-asif-"))
-    raw = write(root, _asset()).read_bytes()
+    raw = write(root, "s", _asset()).read_bytes()
 
     assert raw.count(b"\n") > 1, "nothing was written, so the assertion below proves nothing"
     assert b"\r" not in raw, (

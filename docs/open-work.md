@@ -4,13 +4,7 @@ Items that are finished are deleted from this page. What remains is work the cur
 
 The baseline is in [measurement](measurement.md). One row of run B, `train_4799`, is still crashed, because the resume guard refused the retry after `.claude/launch.json` changed.
 
-The layer viewer is a separate project, `ossie-viewer`, with no backend ([ADR 0020](adr/0020-ossie-export-and-a-separate-viewer.md)). Its repository is separate from this one.
-
-- V0. An empty static web app whose lint, types, tests, and build pass in CI, and whose build opens from disk with no server.
-- V1. A file from a picker, a URL, or a drop is checked against the Ossie schema, the version is shown, and datasets and relationships are drawn as a graph.
-- V2. Each dataset's fields, the metrics and what they reference, the AI context, and each extension by vendor name.
-- V3. A URL can open on one dataset, field, or metric, and an unknown name says it is not in the file.
-- V4. The Ossie examples and the exported BIRD layer open without errors, and the largest model draws quickly enough to use. After that, the chat page's Details can link to the viewer.
+The layer viewer, `ossie-viewer`, is its own repository and stands at V3. Its V4 is to open the Ossie examples and all 57 BIRD models without errors, with the largest drawn quickly enough to use. The app then embeds its build as the semantic layer view (W4 of the [plan](reviews/2026-10-workspace-and-ossie-storage.md)).
 
 The lake printer reports accuracy, coverage, and disagreement only. The assumption figures ([`eval/report.py`](../src/governed_bi/eval/report.py)) and the cost per question (from the token totals on each row) are computed separately, as they were for the baseline.
 

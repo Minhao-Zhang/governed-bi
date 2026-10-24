@@ -336,6 +336,9 @@ def hits(paths: list[pathlib.Path], repo: pathlib.Path = REPO) -> list[str]:
                         found.append(f"{rel}:{number}: rule A, {table}[{schema!r}] = {phrase!r}")
             continue
 
+        if text.startswith("version:"):
+            found.extend(_model_hits(rel, text, retired))
+            continue
         blocks = summary_blocks(lines)
         for number, value in blocks:
             for schema, phrase, table in retired:
@@ -353,6 +356,28 @@ def hits(paths: list[pathlib.Path], repo: pathlib.Path = REPO) -> list[str]:
                         f"{rel}:{number}: rule B, a shouted negative discriminator "
                         f"({match.group(0)!r}) in a schema summary"
                     )
+    return found
+
+
+def _model_hits(rel: str, text: str, retired: list[tuple[str, str, str]]) -> list[str]:
+    """Both rules on an Ossie model file, by asset: its summaries sit in descriptions and JSON."""
+    import yaml
+
+    from governed_bi.corpus.ossie import read_model
+
+    try:
+        items = read_model(yaml.safe_load(text), where=rel)
+    except Exception as err:  # noqa: BLE001 - an unreadable model is named, not skipped
+        return [f"{rel}: unreadable as a model ({type(err).__name__}), so unchecked"]
+    found: list[str] = []
+    for item in items:
+        value, where = str(item.get("summary", "")), f"{rel}: {item.get('asset_type')} {item.get('id')}"
+        for schema, phrase, table in retired:
+            if leads_with(value, phrase):
+                found.append(f"{where}: rule A, summary opens with {table}[{schema!r}] = {phrase!r}")
+        match = NEGATIVE_DISCRIMINATOR.search(value)
+        if item.get("asset_type") not in EXEMPT_ASSET_TYPES and match is not None:
+            found.append(f"{where}: rule B, a shouted negative discriminator ({match.group(0)!r}) in a schema summary")
     return found
 
 

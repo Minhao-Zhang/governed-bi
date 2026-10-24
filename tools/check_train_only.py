@@ -195,7 +195,7 @@ def _quote_views(root: pathlib.Path) -> list[tuple[str, dict[str, object], pathl
                 "summary": getattr(asset, "summary", None),
                 "body": getattr(asset, "body", None),
             },
-            pathlib.Path(f"{asset.id}.yaml"),
+            pathlib.Path(asset.id),
         )
         for asset in assets
     ]

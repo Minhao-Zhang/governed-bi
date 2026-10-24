@@ -47,6 +47,10 @@ Cost per question comes from the token totals on each row, priced per million to
 
 The token totals on the rows come to about 600,000 tokens a minute at 16 workers, which is 30% of the 2,000,000 tokens-per-minute limit. Neither run hit a rate-limit error.
 
+### The corpus after the Ossie conversion
+
+BIRD-corpus `f9392dca` stores the same definitions as `8ba312ed`, the baseline's corpus, as one Ossie model per database ([ADR 0022](adr/0022-ossie-is-the-storage-format.md)). Its corpus hash is `449d31603161410f3dc9e501a143f2a533f63c42f8ff5164570599fc38fac76a`. In between, `5bf45e4a` removed fields nothing read: 22 `confidence` values and the 4,857 few-shot bodies, which the engine now builds from the question and SQL. The offline snapshot of retrieval, join planning, context rendering and the SQL checks, over all 1,351 questions, 111 statements and 4 probes, is identical between `8ba312ed` read as YAML and `f9392dca` read as Ossie, except for the corpus hash. Runs are compared by their context hashes, not the corpus hash, so a run on `f9392dca` can be compared with the baseline.
+
 `grade_turn` in [`eval/grade.py`](../src/governed_bi/eval/grade.py) compares an `answered` turn's rows with the gold rows. Whole numbers must match exactly. A fractional number may differ by one part in a billion, or by 1e-12 when the values are near zero. Text and numbers stay different types. `refused`, `clarification`, `capped`, `crashed` and `no_sql` score incorrect, and the grader executes only a statement the engine delivered. A missing gold on an answered turn is `correct: null`, which leaves the row out of the accuracy share.
 
 ## Assumption figures

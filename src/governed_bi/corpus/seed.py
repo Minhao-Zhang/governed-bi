@@ -96,8 +96,9 @@ def seed(introspection: Introspection, schema: str) -> tuple[list[Asset], list[P
         assets.append(
             JoinAsset(
                 id=jid,
-                left_table=fk.from_table,
-                right_table=fk.to_table,
+                # Table ids, not bare names: a reference names one asset (ADR 0008).
+                left_table=table_id_for(schema, fk.from_table),
+                right_table=table_id_for(schema, fk.to_table),
                 on=on,
                 summary=fit_summary(
                     f"{fk.from_table} joins {fk.to_table} on ", list(fk.from_columns)

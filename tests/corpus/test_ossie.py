@@ -180,25 +180,20 @@ def test_the_written_model_passes_the_upstream_validator(tmp_path: Path) -> None
 BIRD = REPO.parent / "BIRD-corpus"
 
 
-def test_bird_round_trips_and_validates(tmp_path: Path) -> None:
+def test_bird_is_canonical_and_valid() -> None:
+    """Every BIRD model loads with no problem, rewrites to its own bytes, and passes the upstream validator."""
     if not BIRD.is_dir():
         pytest.skip("../BIRD-corpus is absent")
     from governed_bi.corpus.store import load
 
     assets, problems = load(BIRD)
     assert problems == []
-    paths = []
-    for name, group in ossie.group_by_schema(assets).items():
-        path = tmp_path / f"{name}.yaml"
-        path.write_text(ossie.model_text(name, group), encoding="utf-8")
-        paths.append(path)
-    back = [
-        from_mapping(m) for p in paths for m in ossie.read_model(yaml.safe_load(p.read_text("utf-8")), where=p.name)
-    ]
-    assert len(paths) == 57
-    assert sorted(back, key=_key) == sorted(assets, key=_key)
+    groups = ossie.group_by_schema(assets)
+    assert len(groups) == 57
+    for name, group in groups.items():
+        on_disk = (BIRD / name / f"{name}.yaml").read_text(encoding="utf-8")
+        assert ossie.model_text(name, group) == on_disk, f"{name} is not in canonical form"
     if VALIDATE.is_file():
-        result = subprocess.run(
-            [sys.executable, str(VALIDATE), *map(str, paths)], capture_output=True, text=True, check=False
-        )
+        paths = sorted(str(p) for p in BIRD.glob("*/*.yaml"))
+        result = subprocess.run([sys.executable, str(VALIDATE), *paths], capture_output=True, text=True, check=False)
         assert result.returncode == 0, result.stdout[-2000:]

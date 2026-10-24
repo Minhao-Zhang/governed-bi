@@ -18,7 +18,7 @@ from ..corpus.analyst import for_analyst
 from ..corpus.hash import corpus_content_hash
 from ..corpus.schema import Asset, AssetType, MetricAsset, TableAsset, TermAsset
 from ..corpus.store import load as load_corpus
-from ..corpus.store import write as write_asset
+from ..corpus.store import write as write_model
 from ..model.embedder import embedding_settings
 from ..model.provider import reasoning_effort_of
 from ..ports import Embedder
@@ -37,9 +37,6 @@ if TYPE_CHECKING:
     from ..retrieve.vector_cache import VectorCache
 
 __all__ = ["Session", "from_corpus_dir", "from_live_schema", "visible_assets"]
-
-#: ``store.write`` needs a namespace these types do not declare; the seeder supplies the left endpoint's.
-_NEEDS_NAMESPACE = frozenset({"join", "metric", "term"})
 
 
 def _digest(*parts: object) -> str:
@@ -333,9 +330,7 @@ def from_live_schema(schema: str, *, connector: Any, corpus_root: Path | str, **
 
     root = Path(corpus_root)
     assets, problems = seed(connector.introspect(schema), schema)
-    for asset in assets:
-        namespace = schema if asset.asset_type.value in _NEEDS_NAMESPACE else None
-        write_asset(root, asset, namespace=namespace)
+    write_model(root, schema, assets)
     session = from_corpus_dir(root, schemas=[schema], connector=connector, db_id=schema, **kwargs)
     if problems:
         return Session(**{**{f: getattr(session, f) for f in _FIELDS}, "problems": (*problems, *session.problems)})
