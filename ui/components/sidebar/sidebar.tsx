@@ -60,9 +60,15 @@ export function Sidebar({ now }: { now?: Date }) {
       </button>
       <Link
         href="/conversations"
-        className="mb-2 block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-white"
+        className="block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-white"
       >
         Conversations
+      </Link>
+      <Link
+        href="/layer"
+        className="mb-2 block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-white"
+      >
+        Semantic layer
       </Link>
       <nav aria-label="Conversations" className="min-h-0 flex-1 overflow-y-auto">
         {waiting.length > 0 && (

@@ -12,8 +12,8 @@ import {
   MOCK_EXAMPLE_QUESTIONS,
   MOCK_NEARBY_QUESTIONS,
 } from "@/lib/mock/fixtures";
-import { capabilitiesSchema, conversationsSchema, examplesResponseSchema } from "@/lib/schemas";
-import type { Capabilities, Conversations, Ending, ExamplesResponse } from "@/lib/types";
+import { capabilitiesSchema, conversationsSchema, examplesResponseSchema, layerSchema } from "@/lib/schemas";
+import type { Capabilities, Conversations, Ending, ExamplesResponse, Layer } from "@/lib/types";
 
 export class ApiError extends Error {
   constructor(
@@ -87,4 +87,6 @@ export const api = {
       examples: source.slice(0, limit),
     });
   },
+  /** Empty in mock mode: there is no server to serve a model file. */
+  layer: (): Promise<Layer> => get("/layer", layerSchema, { schemas: [] }),
 };

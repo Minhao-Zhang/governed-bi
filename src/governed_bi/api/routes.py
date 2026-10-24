@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from governed_bi.api.thread_turns import Ending
 from governed_bi.model.provider import reasoning_effort_of
@@ -110,7 +111,28 @@ def _build_app(get_session: Callable[[], Any], threads: Any) -> FastAPI:
         """Few-shot questions from the corpus loaded at startup. The SQL stays off the wire."""
         return examples_for(get_session(), limit=limit, near=near)
 
+    @app.get("/layer")
+    def layer() -> dict[str, Any]:
+        """The schemas whose Ossie model the viewer can open (ADR 0021)."""
+        return {"schemas": layer_schemas(getattr(get_session(), "corpus_root", None))}
+
+    @app.get("/layer/{schema}", response_model=None)
+    def layer_model(schema: str) -> PlainTextResponse | JSONResponse:
+        """One schema's model file, byte for byte. A name that is not a served schema is a 404."""
+        root = getattr(get_session(), "corpus_root", None)
+        if root is None or schema not in layer_schemas(root):
+            return JSONResponse({"detail": f"no model for schema {schema!r}"}, status_code=404)
+        path = Path(root) / schema / f"{schema}.yaml"
+        return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="application/yaml")
+
     return app
+
+
+def layer_schemas(root: Path | str | None) -> list[str]:
+    """Directories holding ``<schema>/<schema>.yaml``. Listing, not path joining, decides what is served."""
+    if root is None or not Path(root).is_dir():
+        return []
+    return sorted(d.name for d in Path(root).iterdir() if (d / f"{d.name}.yaml").is_file())
 
 
 def models_for(session: Any) -> dict[str, Any]:

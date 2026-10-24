@@ -11,7 +11,8 @@ already marked inline in the body and nowhere in the header):*
 - **§7**'s capability set was **re-decided by** [ADR 0009](0009-browsing-and-filtering-api.md)
   (`can_clarify` binds to both the tool and the model) and **amended by**
   [ADR 0014](0014-one-conversation-store.md) §3a for the two durability flags. 0009 is reversed:
-  `can_scope` and `can_search` went with the browse routes, and the app mounts four reads.
+  `can_scope` and `can_search` went with the browse routes. The app mounts the eight reads in
+  `docs/openapi.json` ([ADR 0021](0021-views-around-the-chat.md) added three).
 - **§6**'s deferred resume-identity gap was **closed 2026-08-18**, forced by retiring
   `POST /chat/resume`; see the note in that section.
 - **Amendment 3**'s statement of what an unauthenticated port costs got *wider* under
@@ -307,7 +308,9 @@ hence the durability flags saying what the checkpointer actually does.
 **The routes that remain.** The chat page needs `/capabilities` plus the platform's thread API.
 `/clarifications/pending` lists unanswered `ask_user` interrupts, and `/livez` and `/readyz` are
 the probes a deployment calls. Every other custom read went with the pages that used it
-([ADR 0009](0009-browsing-and-filtering-api.md), reversed).
+([ADR 0009](0009-browsing-and-filtering-api.md), reversed). Since then `/examples` serves the new
+conversation's questions, and [ADR 0021](0021-views-around-the-chat.md) added `/conversations`,
+`/layer` and `/layer/{schema}`.
 
 ### Amendment 3 (2026-08-13): the transport authenticates nobody
 

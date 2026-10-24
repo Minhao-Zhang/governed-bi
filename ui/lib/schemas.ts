@@ -138,3 +138,8 @@ export const exampleQuestionSchema = z.object({
 export const examplesResponseSchema = z.object({
   examples: z.array(exampleQuestionSchema),
 });
+
+/** `GET /layer`: the schemas whose Ossie model the viewer can open. */
+export const layerSchema = z.object({
+  schemas: z.array(z.string()),
+});

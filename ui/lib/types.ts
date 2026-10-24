@@ -9,6 +9,7 @@ import type {
   conversationRowSchema,
   conversationsSchema,
   endingSchema,
+  layerSchema,
 } from "./schemas";
 
 export type Capabilities = z.infer<typeof capabilitiesSchema>;
@@ -18,3 +19,4 @@ export type ConversationRow = z.infer<typeof conversationRowSchema>;
 export type Conversations = z.infer<typeof conversationsSchema>;
 export type ExampleQuestion = z.infer<typeof exampleQuestionSchema>;
 export type ExamplesResponse = z.infer<typeof examplesResponseSchema>;
+export type Layer = z.infer<typeof layerSchema>;

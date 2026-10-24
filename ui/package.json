@@ -2,14 +2,15 @@
   "name": "governed-bi-ui",
   "version": "0.1.0",
   "private": true,
-  "description": "Web frontend for the governed-bi engine in the same repository (../src/governed_bi): one chat page. A pure HTTP client -- it shares no module with the engine.",
+  "description": "Web frontend for the governed-bi engine in the same repository (../src/governed_bi): the chat page, the conversation list, and the semantic layer in the embedded Ossie viewer. A pure HTTP client -- it shares no module with the engine.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "check:stream-messages": "node --experimental-strip-types scripts/check-stream-messages.ts"
+    "check:stream-messages": "node --experimental-strip-types scripts/check-stream-messages.ts",
+    "sync-viewer": "node scripts/sync-viewer.mjs"
   },
   "dependencies": {
     "@langchain/core": "^1.2.13",

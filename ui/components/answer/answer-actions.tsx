@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 
 import {
@@ -13,6 +14,7 @@ import {
   triedFirst,
   type ResultTable,
 } from "@/lib/answer-parts";
+import { layerHrefForTable } from "@/lib/layer";
 import { formatSql } from "@/lib/sql-format";
 
 /** Copy and Details. Details opens under the row and shows only the sections the record has. */
@@ -69,6 +71,7 @@ function Details({ record }: { record: Record<string, unknown> }) {
   const tried = triedFirst(record);
   const checks = layerChecks(attemptsOfRecord(record));
   const tables = retrievedTables(record);
+  const layerHref = layerHrefForTable(tables[0]);
   const models = modelsUsed(record);
   const seconds = latencySeconds(record);
   return (
@@ -114,6 +117,11 @@ function Details({ record }: { record: Record<string, unknown> }) {
               </li>
             ))}
           </ul>
+          {layerHref && (
+            <Link href={layerHref} className="mt-1 inline-block underline">
+              Open in the semantic layer
+            </Link>
+          )}
         </section>
       )}
       {models.length > 0 && (

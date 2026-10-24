@@ -31,6 +31,11 @@ export function useConversations({
   });
 }
 
+/** The schemas the semantic layer view can open (`GET /layer`). */
+export function useLayer() {
+  return useQuery({ queryKey: ["layer"], queryFn: api.layer, retry: false });
+}
+
 /** Few-shot questions (`GET /examples`). A failure leaves the caller nothing to show. */
 export function useExamples(params: { limit: number; near?: string }) {
   return useQuery({

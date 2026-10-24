@@ -275,9 +275,12 @@ CASES: list[tuple[str, str, str]] = [
     ("GET", p, p)
     for p in (
         "/livez", "/readyz", "/capabilities", "/clarifications/pending", "/conversations",
-        "/examples",
+        "/examples", "/layer",
     )
 ]
+
+#: Operations whose body is not JSON, each checked by its own test below.
+NOT_JSON: set[tuple[str, str]] = {("GET", "/layer/{schema}")}
 
 
 @pytest.mark.parametrize(("method", "path", "url"), CASES, ids=[c[2] for c in CASES])
@@ -326,8 +329,42 @@ def test_every_operation_in_the_spec_is_exercised_here() -> None:
         for path, operations in spec["paths"].items()
         for method in operations
     }
-    exercised = {(method, path) for method, path, _ in CASES}
+    exercised = {(method, path) for method, path, _ in CASES} | NOT_JSON
     assert not declared - exercised, (
         f"docs/openapi.json declares {sorted(declared - exercised)} and nothing here validates a "
         "response for it -- add a case to CASES, or say in the docstring why it is unreachable"
     )
+
+
+def test_the_layer_serves_a_listed_model_byte_for_byte_and_nothing_else(tmp_path) -> None:
+    """The viewer opens the file as it is on disk; a name outside the listing is a 404, not a path."""
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from governed_bi.api.routes import make_app
+    from governed_bi.corpus.schema import SchemaAsset, TableAsset
+    from governed_bi.corpus.store import write
+
+    path = write(
+        tmp_path,
+        "beer",
+        [
+            SchemaAsset(id="beer", name="beer", summary="beer: brands of root beer and their sales"),
+            TableAsset(id="beer.brands", schema="beer", physical_name="brands", summary="brands: one row per brand"),
+        ],
+    )
+    client = TestClient(make_app(SimpleNamespace(corpus_root=tmp_path), object()))
+    spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+
+    listing = client.get("/layer")
+    assert listing.json() == {"schemas": ["beer"]}
+    assert not _violations(listing.json(), _declared(spec, "GET", "/layer", "200"), spec, "GET /layer $")
+
+    served = client.get("/layer/beer")
+    assert served.status_code == 200
+    assert served.headers["content-type"].startswith("application/yaml")
+    assert served.content == path.read_bytes()
+
+    for name in ("absent", "..", "beer.yaml"):
+        assert client.get(f"/layer/{name}").status_code == 404

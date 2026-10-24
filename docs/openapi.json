@@ -3,7 +3,7 @@
   "info": {
     "title": "governed-bi",
     "summary": "Health, capabilities, example questions, the pending-clarification queue and the conversation list, as JSON.",
-    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\nEvery route here is a read, and none of them serves a turn. A turn is served by the graph `langgraph.json` mounts, over the platform's `POST /threads/{thread_id}/runs/stream`, which is not described here. `GET /clarifications/pending` lists unanswered `ask_user` interrupts read from thread state. `GET /conversations` lists every conversation and how it ended. `GET /examples` returns few-shot questions from the corpus loaded at startup.",
+    "description": "The custom REST surface `langgraph.json` mounts at the server root, beside LangGraph Server's own routes. Spec-of-record for this surface (ADR 0007, ADR 0010).\n\nEvery route here is a read, and none of them serves a turn. A turn is served by the graph `langgraph.json` mounts, over the platform's `POST /threads/{thread_id}/runs/stream`, which is not described here. `GET /clarifications/pending` lists unanswered `ask_user` interrupts read from thread state. `GET /conversations` lists every conversation and how it ended. `GET /examples` returns few-shot questions from the corpus loaded at startup. `GET /layer` lists the schemas whose Ossie model the embedded viewer can open, and `GET /layer/{schema}` returns that model file as it is on disk.",
     "version": "2"
   },
   "paths": {
@@ -273,6 +273,71 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/layer": {
+      "get": {
+        "tags": [
+          "layer"
+        ],
+        "summary": "Layer",
+        "description": "The schemas of the corpus this process serves that have an Ossie model file, `<schema>/<schema>.yaml`, sorted by name (ADR 0021, ADR 0022). Empty when the process serves no corpus directory.",
+        "operationId": "layer_layer_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayerResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/layer/{schema}": {
+      "get": {
+        "tags": [
+          "layer"
+        ],
+        "summary": "Layer Model",
+        "description": "One schema's Ossie model file, byte for byte, for the embedded viewer. Only a name `GET /layer` lists is served; any other is a 404, so no path is built from the request.",
+        "operationId": "layer_model_layer__schema__get",
+        "parameters": [
+          {
+            "name": "schema",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schema"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The model file",
+            "content": {
+              "application/yaml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No model for that schema",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayerNotFound"
                 }
               }
             }
@@ -1065,6 +1130,37 @@
           "reason"
         ],
         "title": "ReadyzNotReadyResponse"
+      },
+      "LayerResponse": {
+        "type": "object",
+        "title": "LayerResponse",
+        "required": [
+          "schemas"
+        ],
+        "properties": {
+          "schemas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "title": "Schemas"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LayerNotFound": {
+        "type": "object",
+        "title": "LayerNotFound",
+        "required": [
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

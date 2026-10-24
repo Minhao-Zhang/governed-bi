@@ -98,6 +98,8 @@ These routes are the ones this app adds. Their shapes are in [openapi.json](open
 | `GET /clarifications/pending` | Clarifying questions nobody has answered, oldest first |
 | `GET /conversations` | Every conversation, newest first, with each turn's question and outcome and how it ended. `ending` filters on that |
 | `GET /examples` | Example questions from the corpus. `limit` defaults to 3. `near` ranks them against a question. The SQL stays off the response |
+| `GET /layer` | The schemas whose Ossie model the semantic layer view can open |
+| `GET /layer/{schema}` | That schema's model file as it is on disk. A schema `/layer` does not list is a 404 |
 
 `langgraph.json` allows browser calls from `localhost` and `127.0.0.1` on ports 3000 and 3100, and from `https://smith.langchain.com`. Restart the server after changing that list.
 
@@ -120,9 +122,11 @@ npm run dev
 
 The page is one chat. "New conversation" starts a thread, and the open thread is `/?thread=<id>`. The sidebar groups older conversations by day. A thread that is waiting on a clarifying question is listed first, under "Waiting for you".
 
-You type a question and send it. Enter sends, and Shift+Enter inserts a line. While a turn runs, Stop replaces Send, and one line names the current step. An answer shows the text, the rows, the assumptions, and Copy and Details. A guess has a Change button, which resends the question with "(Assume instead: …)" appended. A refusal offers nearby example questions, and clicking one fills the composer. A clarifying question offers choices, a typed answer, Defer, and Decline.
+Two links sit under "New conversation". Conversations lists every conversation with how it ended, with a filter. Semantic layer lists the schemas and shows the chosen one's model in the embedded [ossie-viewer](https://github.com/Minhao-Zhang/ossie-viewer) build, `ui/public/viewer/index.html`. To update that build, run `npm run build` in `../ossie-viewer`, then `npm run sync-viewer` here; it refuses a viewer checkout with uncommitted changes, and writes the commit it copied to `ui/public/viewer/COMMIT`.
 
-The checks the page runs, from `ui/`, are `npm run lint`, `npx tsc --noEmit`, `npm test`, and `npm run build`. `npm run check:stream-messages` stays manual.
+You type a question and send it. Enter sends, and Shift+Enter inserts a line. While a turn runs, Stop replaces Send, and one line names the current step. An answer shows the text, the rows, the assumptions, and Copy and Details. Details shows the SQL, and above it each attempt that failed first with its error, then the checks, the tables, a link to the first table in the semantic layer view, the model and the time. A guess has a Change button, which resends the question with "(Assume instead: …)" appended. A refusal offers nearby example questions, and clicking one fills the composer. A clarifying question offers choices, a typed answer, Defer, and Decline.
+
+The checks the page runs, from `ui/`, are `npm run lint`, `npx tsc --noEmit`, `npm test`, and `npm run build`. `npm run check:stream-messages` stays manual. `npm test` needs Node 22.15 or later: under 22.14 the test workers do not start, because a dependency calls `zlib.createZstdDecompress`.
 
 ## One question from the command line
 

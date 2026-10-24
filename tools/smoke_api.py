@@ -3,7 +3,7 @@
     uv run --frozen python tools/smoke_api.py
 
 Loads `.env`, builds the session from the environment (a Postgres DSN and a corpus on disk), and
-drives the app `langgraph.json` mounts through a `TestClient`. It checks the six custom routes
+drives the app `langgraph.json` mounts through a `TestClient`. It checks the eight custom routes
 and nothing else, because they are the only ones the app declares:
 
 * `GET /livez` answers `{"ok": true}`.
@@ -14,7 +14,8 @@ and nothing else, because they are the only ones the app declares:
 * `GET /conversations` answers with a whole wrapper: `rows`, and `meta` carrying `n`, `total`,
   `truncated`, `threads_scanned`, `limit`, `offset` and `ending`.
 * `GET /examples` answers with `examples`, each item a `question` and a `db_id` and nothing else.
-* The app declares exactly those six custom routes.
+* `GET /layer` lists schemas, and the first one's model is served by `GET /layer/{schema}`.
+* The app declares exactly those eight custom routes.
 * The production pending reader, used outside the LangGraph server, refuses by name
   (`InProcessServerRequired`) rather than leaking a transport.
 
@@ -41,6 +42,7 @@ sys.path.insert(0, str(REPO / "src"))
 #: The custom routes the app declares. The platform's `/threads` routes are not the app's.
 CUSTOM_ROUTES = frozenset({
     "/livez", "/readyz", "/capabilities", "/clarifications/pending", "/conversations", "/examples",
+    "/layer", "/layer/{schema}",
 })
 
 PENDING_META = frozenset({"n", "truncated", "threads_scanned", "limit", "offset", "columns"})
@@ -145,10 +147,19 @@ def run_checks(client: Any, *, out: Callable[[str], None] = print) -> list[str]:
         f"n={len(rows) if isinstance(rows, list) else None}",
     )
 
+    out("\nGET /layer")
+    schemas = get("/layer").get("schemas")
+    listed_n = len(schemas) if isinstance(schemas, list) else None
+    check("the layer lists schemas", isinstance(schemas, list), f"n={listed_n}")
+    if schemas:
+        served = client.get(f"/layer/{schemas[0]}")
+        as_yaml = served.status_code == 200 and served.text.startswith("version:")
+        check("the first schema's model is served as YAML", as_yaml)
+
     out("\nthe route table")
     declared = {getattr(route, "path", None) for route in client.app.routes}
     custom = {p for p in declared if p and not p.startswith(("/docs", "/openapi", "/redoc"))}
-    check("exactly the six custom routes", custom == CUSTOM_ROUTES, ", ".join(sorted(custom)))
+    check("exactly the eight custom routes", custom == CUSTOM_ROUTES, ", ".join(sorted(custom)))
 
     return failures
 

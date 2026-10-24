@@ -305,7 +305,7 @@ answer shows all three in order.
 #### W4. The semantic layer in the Ossie viewer
 
 The viewer stays its own repository, `ossie-viewer`. The app embeds its build: one self-contained
-`index.html` of about 220 KB that opens a model from `?file=<url>` and an item from `#…`.
+`index.html` of about 730 KB at viewer `eef5c88` that opens a model from `?file=<url>` and an item from `#…`.
 
 1. A script, `npm run sync-viewer`, copies `../ossie-viewer/dist/index.html` to
    `ui/public/viewer/index.html` and writes the viewer commit beside it. The copy is committed, so
