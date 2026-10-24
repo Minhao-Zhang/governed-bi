@@ -178,9 +178,13 @@ packages = ["src/governed_bi"]
 # parsed against the client's schemas as before. A pause also survived a hard kill
 # and a fresh process. `Threads.sweep_ttl` is still `return (0, 0)` at 0.35.1. The restart check
 # surfaced a pre-existing wedge, not a regression — see docs/open-work.md §4.4.
+#
+# **Moved 0.15 -> 0.16 on 2026-10-24**, `langgraph-runtime-inmem` 0.35 -> 0.36 beside it. A live
+# server booted, mounted the custom routes, reported `checkpoint_durable: true`, and
+# `Threads.sweep_ttl` is still `return (0, 0)`. A streamed live-model turn was not re-run.
 [tool.uv]
 constraint-dependencies = [
-    "langgraph-api>=0.15,<0.16",
+    "langgraph-api>=0.16,<0.17",
     "langgraph-sdk>=0.4.2,<0.5",
     # **Added 2026-08-20.** Three more transitive packages this repository reaches into and
     # that nothing declared. Each is here for a named behaviour, not for tidiness:
@@ -199,7 +203,7 @@ constraint-dependencies = [
     #
     # `langgraph-prebuilt` arrives under `langgraph` and carries the agent scaffolding the
     # nested `create_agent` is built on.
-    "langgraph-runtime-inmem>=0.35,<0.36",
+    "langgraph-runtime-inmem>=0.36,<0.37",
     "langgraph-checkpoint>=4.1,<5",
     "langgraph-prebuilt>=1.1,<2",
 ]
