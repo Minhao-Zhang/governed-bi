@@ -1,6 +1,6 @@
 # Plan: pages around the chat, and Ossie as the storage format
 
-Status: proposed, 2026-10-23; the owner answered section 7 the same day. Written
+Status: carried out, 2026-10-23. D0, W1 to W5 and S1 to S5 are on `main` (`612fbc9b` to `ea847513`), with BIRD-corpus at `f9392dca` and ossie-viewer at `eef5c88`. The owner answered section 7 the same day. Written
 against `main` at `491f6c9`, after the [pivot milestones](2026-10-pivot-milestones.md) P0 to P17.
 
 The owner wants two decisions changed:
