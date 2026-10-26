@@ -1,9 +1,7 @@
 # The governed-bi frontend
 
-The web frontend for **[governed-bi](../README.md)** — an agentic BI /
-Generative-BI engine that turns natural-language questions into **grounded,
-governed, auditable** answers over relational data. The engine is `../src/`; this
-directory is the client.
+The web app for **[governed-bi](../README.md)**, a chat app that answers questions about a
+database from a semantic layer you bring. The engine is `../src/`; this directory is the client.
 
 **Same repository, and still a pure client.** It holds no BI logic of its own, no
 module shared with the engine and no import in either direction — it renders what
@@ -11,28 +9,29 @@ the engine serves over HTTP. The spec of record for this client is
 [ADR 0007 — the HTTP surface and the UI contract](../docs/adr/0007-http-surface-and-the-ui-contract.md),
 and [`docs/usage.md`](../docs/usage.md) is how to run the engine this talks to.
 
-> **Status:** early. By default the UI runs on neutral **mock data** so it renders
-> with no backend attached; point it at a running engine to see live answers.
+With no backend URL set, the UI draws fixture conversations so it renders with no engine attached.
 
 ## What it shows
 
-One page, the chat ([ADR 0019](../docs/adr/0019-one-plain-chat-page.md) describes the page that
-replaces it). Ask a question, watch the governed pipeline live (the engine's
-`registry/stages.py` is the vocabulary), and get an answer card. The card reports only what the
-engine **observed**: the `outcome` (`answered` / `refused` / `clarification` / `capped` /
-`crashed` / `no_sql`), how many statements passed or were blocked by governance, the answer text,
-and the step trace, which carries the SQL that ran. There is no reliability tier: the engine
-produces none (ADR 0007 §3). Refusals show the engine's own copy. A new conversation lists the
-server's recent conversations; opening one loads `?thread=<id>`.
+Three views ([ADR 0021](../docs/adr/0021-views-around-the-chat.md)):
+
+- **Chat**, `/`, and `/?thread=<id>` for one conversation. An answer shows its text, its rows,
+  the assumptions behind it, and Details with the SQL and each failed attempt
+  ([ADR 0018](../docs/adr/0018-every-answer-states-its-assumptions.md),
+  [ADR 0019](../docs/adr/0019-one-plain-chat-page.md)). The [root README](../README.md#an-example)
+  has a real answer.
+- **Conversations**, `/conversations`: every conversation with how its last turn ended.
+- **Semantic layer**, `/layer`: the chosen schema's Ossie model in the embedded ossie-viewer build
+  under `public/viewer/`.
 
 ## Architecture
 
 The UI is a **pure client** of the engine's **LangGraph Server** (see
 [ADR 0001](../docs/adr/0001-langgraph-server-chat-runtime.md)): chat streams over the LangChain
-**`useStream`** protocol, conversations are the server's threads, and the one custom route it
-reads is `GET /capabilities` (inventoried in [`docs/openapi.json`](../docs/openapi.json)). It
-owns no database. When no backend URL is configured, `/capabilities` resolves to a mock fixture
-and chat uses a synthetic transport.
+**`useStream`** protocol, and conversations are the server's threads. Besides chat it reads
+`/capabilities`, `/conversations`, `/examples`, `/layer` and `/layer/{schema}`, inventoried in
+[`docs/openapi.json`](../docs/openapi.json). It owns no database. When no backend URL is
+configured, those routes resolve to fixtures and chat uses a synthetic transport.
 
 **Stack:** Next.js 16 (App Router) · React 19 · TypeScript (strict) · Tailwind CSS
 v4 · shadcn/ui · TanStack Query · zod · `@langchain/langgraph-sdk`.

@@ -1,6 +1,6 @@
 # Measurement
 
-The baseline was run twice on 2026-10-23 (P16), on all 1,351 questions. Execution accuracy was 0.553 and 0.544, coverage was 0.843 and 0.851, the two runs disagreed on 11.3% of questions, and a question cost about $0.0028. [The baseline](#the-baseline) gives each figure by half and the conditions it was measured under.
+The baseline was run twice on 2026-10-23 (P16), on all 1,351 questions. Execution accuracy was 0.553 and 0.544, coverage was 0.843 and 0.851, the two runs disagreed on 11.3% of questions, and a question cost about $0.0028. [The baseline](#the-baseline) gives each figure by half and the conditions it was measured under. Two runs on `gpt-6.1-sol` on 2026-10-26 scored 0.548 and 0.539 at about $0.032 a question ([gpt-6.1-sol](#gpt-61-sol)). Where each wrong answer was lost is in [Error analysis](error-analysis.md).
 
 ## How a lake run works
 
@@ -51,6 +51,30 @@ The token totals on the rows come to about 600,000 tokens a minute at 16 workers
 
 BIRD-corpus `f9392dca` stores the same definitions as `8ba312ed`, the baseline's corpus, as one Ossie model per database ([ADR 0022](adr/0022-ossie-is-the-storage-format.md)). Its corpus hash is `449d31603161410f3dc9e501a143f2a533f63c42f8ff5164570599fc38fac76a`. In between, `5bf45e4a` removed fields nothing read: 22 `confidence` values and the 4,857 few-shot bodies, which the engine now builds from the question and SQL. The offline snapshot of retrieval, join planning, context rendering and the SQL checks, over all 1,351 questions, 111 statements and 4 probes, is identical between `8ba312ed` read as YAML and `f9392dca` read as Ossie, except for the corpus hash. Runs are compared by their context hashes, not the corpus hash, so a run on `f9392dca` can be compared with the baseline.
 
+## gpt-6.1-sol
+
+The same 1,351 questions were run twice on 2026-10-26 with the agent on `gpt-6.1-sol` at `high` and the utility calls on `gpt-6.1-sol` at `low`. Output caps, `--embed` and every other setting were the baseline's. Both runs used engine commit `35840723` (branch `docs/sol-experiment`, a clean tree) and BIRD-corpus `f9392dca`, 10 workers, and took about 52 and 54 minutes. The artifacts are `runs/eval/sol/run_a.jsonl` and `run_b.jsonl`, which are not committed. Run B's one crashed row, `train_8349`, hit the agent's recursion limit; `--resume` ran it again and it was answered, wrongly.
+
+The engine commit is not the baseline's. Between `64ffa4c` and `35840723` are the Ossie storage work, the views, and a dependency upgrade. The corpus reads the same ([above](#the-corpus-after-the-ossie-conversion)), but the comparison below is of two configurations, not of two models alone.
+
+| | Luna A | Luna B | Sol A | Sol B |
+|---|---|---|---|---|
+| Execution accuracy | 0.553 | 0.544 | 0.548 (741) | 0.539 (728) |
+| Dev / holdout | 0.578 / 0.532 | 0.578 / 0.516 | 0.565 / 0.535 | 0.553 / 0.527 |
+| Coverage, as printed | 0.843 | 0.851 | 0.852 | 0.856 |
+| Clarifying questions | 13.3% | 13.0% | 11.3% | 10.8% |
+| Refused, capped, no SQL | 1.6%, 1.1%, 0.3% | 1.2%, 1.0%, 0.4% | 2.1%, 0.1%, 0.7% | 2.4%, 0.4%, 0.7% |
+| Cost per question | $0.0027 | $0.0028 | $0.0321 | $0.0324 |
+| Cost per run | $3.71 | $3.75 | $43.41 | $43.83 |
+| Median and 90th-percentile time | 41 s, 67 s | 43 s, 69 s | 20 s, 32 s | 20 s, 34 s |
+| Run-to-run disagreement | 152 (11.3%) | | 99 (7.3%) | |
+
+Sol costs about 12 times as much per question and scores the same. Averaged over each model's two runs, Sol's execution accuracy is 0.4 points lower, with a 95% interval from 2.2 points lower to 1.2 points higher, paired by question. Sol is twice as fast and more repeatable: its runs disagree on 99 questions where Luna's disagree on 152. 576 questions were right in all four runs and 892 in at least one.
+
+Sol is priced at $2.00 per million input tokens, $0.10 for cache reads, $2.50 for cache writes and $10.00 for output, from OpenAI's pricing page on 2026-10-25. A question averaged about 28,100 input tokens, of which 18,500 were cache reads and 9,100 cache writes, plus 670 output tokens over 6.3 model calls. Sol writes a quarter of the output Luna does, so most of its cost is the context: cache writes are about 70% of it. At 10 workers the runs used about 750,000 tokens a minute against Sol's 1,000,000 limit, and hit no rate-limit error.
+
+Neither model's cost includes the turns that paused on a clarifying question, which record no tokens, and neither coverage figure excludes them. [Error analysis](error-analysis.md) gives the size of both gaps.
+
 `grade_turn` in [`eval/grade.py`](../src/governed_bi/eval/grade.py) compares an `answered` turn's rows with the gold rows. Whole numbers must match exactly. A fractional number may differ by one part in a billion, or by 1e-12 when the values are near zero. Text and numbers stay different types. `refused`, `clarification`, `capped`, `crashed` and `no_sql` score incorrect, and the grader executes only a statement the engine delivered. A missing gold on an answered turn is `correct: null`, which leaves the row out of the accuracy share.
 
 ## Assumption figures
@@ -66,5 +90,17 @@ The baseline's figures, run A then run B:
 | Execution accuracy with no guess | 680/996 = 0.683 and 675/1009 = 0.669 |
 | `found_in_query` entries the model did not state | 2,019 in 968 answers (86%) and 1,991 in 971 answers (85%) |
 | Ambiguous-guess refusals | 1 and 0 |
+
+Sol's figures, run A then run B:
+
+| Figure | Value |
+|---|---|
+| Assumptions per answer, by basis | `layer` 0.87 and 0.84, `convention` 3.02 and 3.06, `guess` 0.01 and 0.00, `found_in_query` 1.61 and 1.58, over 1,159 and 1,157 answers with none unrecorded |
+| Execution accuracy with a guess | 3/9 = 0.333 and 2/4 = 0.500 |
+| Execution accuracy with no guess | 738/1150 = 0.642 and 726/1153 = 0.630 |
+| `found_in_query` entries the model did not state | 1,869 in 956 answers (82%) and 1,828 in 943 answers (82%) |
+| Ambiguous-guess refusals | 0 and 0 |
+
+Sol almost never marks a guess, so on Sol the guess marker no longer singles out the answers worth checking.
 
 `python -m governed_bi.eval` is the small harness over a SQLite file, with configurations `oracle`, `stub` and `scripted`. Its JSON summary includes this same assumption block, plus execution accuracy, a refusal breakdown, and the single-run checks. The lake command is the one above.

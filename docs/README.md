@@ -18,6 +18,7 @@ What is in `docs/`.
 ## Measurement
 
 - [Measurement](measurement.md): how to run an evaluation and how to read the result.
+- [Error analysis](error-analysis.md): every question through the pipeline, where the wrong answers went, and the metrics to track.
 
 ## Decisions
 
