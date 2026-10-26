@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Iterable, Literal, Sequence, TypedDict, get_args, get_type_hints
+from typing import Iterable, Literal, NotRequired, Sequence, TypedDict, get_args, get_type_hints
 
 import sqlglot
 from sqlglot import expressions as exp
@@ -51,6 +51,8 @@ class AttemptRecord(TypedDict):
     submitted_sql: str | None
     #: The check's detail on a refusal, ``ExceptionType: message`` on a database error, else ``None``.
     error: str | None
+    #: Re-ran an earlier statement with an ``OFFSET``: it read more rows and is never delivered.
+    reads_page: NotRequired[bool]
 
 
 #: A driver message can be pages long, and every super-step rewrites the checkpoint.

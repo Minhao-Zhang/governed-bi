@@ -13,6 +13,7 @@ from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
 from governed_bi.registry.stages import Outcome
 from governed_bi.registry.stored_names import artifact_get
 from governed_bi.serve.graph import compile_durable
+from governed_bi.serve.nodes.agent_core import paused_agent_update
 
 __all__ = ["EvictionWouldHang", "run_config", "run_comparison", "project_turn"]
 
@@ -160,6 +161,7 @@ def _run_one(
         turn[PINNED_SCHEMAS_KEY] = list(question[PINNED_SCHEMAS_KEY])
 
     result = compiled.invoke(turn, {"configurable": conf})
+    result = with_paused_agent(compiled, {"configurable": conf}, result, model=conf.get("agent_model"))
     row = project_turn(
         result,
         question=question,
@@ -170,6 +172,35 @@ def _run_one(
     row["run_id"] = run_id
     _evict(compiled, thread_id)
     return row
+
+
+def with_paused_agent(compiled: Any, config: Mapping[str, Any], result: Any, *, model: Any) -> Any:
+    """A turn paused on ``ask_user`` gains the agent's spend and attempts, from the agent's checkpoint.
+
+    Without them a paused row recorded no tokens, so cost and the funnel left out 11% to 13% of questions.
+    """
+    if not isinstance(result, Mapping) or not result.get("__interrupt__") or result.get("answer"):
+        return result
+    try:
+        values = _paused_agent_values(compiled, config)
+    except Exception:  # noqa: BLE001 -- the outer state still has routing and retrieval
+        return result
+    if not isinstance(values, Mapping):
+        return result
+    return {**result, **paused_agent_update(result, values, model)}
+
+
+def _paused_agent_values(compiled: Any, config: Mapping[str, Any]) -> Any:
+    """The agent runs inside a node, so ``get_state(subgraphs=True)`` has no state for it; its saver namespace does."""
+    snapshot = compiled.get_state(config)
+    task = next((t for t in snapshot.tasks if t.name == "agent_core"), None)
+    saver = getattr(getattr(compiled, "_app", compiled), "checkpointer", None)
+    if task is None or saver is None:
+        return None
+    configurable = {**config["configurable"], "checkpoint_ns": f"agent_core:{task.id}"}
+    configurable.pop("checkpoint_id", None)
+    found = compiled.run_coro(saver.aget_tuple({"configurable": configurable}))
+    return None if found is None else found.checkpoint.get("channel_values")
 
 
 def _turn_settings(question: Mapping[str, Any], session: Any) -> dict[str, Any] | None:

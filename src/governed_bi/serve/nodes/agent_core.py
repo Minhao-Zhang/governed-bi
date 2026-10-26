@@ -22,13 +22,20 @@ from langchain_core.runnables import RunnableConfig
 from governed_bi.serve.agent_state import CAP_LEDGER_KEY, NO_ANSWER_CALL, GovernedAgentState
 from governed_bi.serve.delivery import DeliveryTracker
 from governed_bi.serve.events import emit, tool_event_id
-from governed_bi.serve.ledger import answering_attempts, cap_attempt, execution_from_attempts
+from governed_bi.serve.ledger import cap_attempt, delivering_attempt, execution_from_attempts
 from governed_bi.serve.runtime import configurable
 from governed_bi.serve.state import TERMINAL_PATH_KINDS
 from governed_bi.serve.tools import analyst_prompt, build_tools, policy_from_config
 from governed_bi.serve.usage import NO_TOKEN_USAGE, usage_row
 
-__all__ = ["agent_core_node", "STUB_ANSWER", "NO_TOKEN_USAGE", "ANSWER_REMINDER", "NO_ANSWER_CALL"]
+__all__ = [
+    "agent_core_node",
+    "paused_agent_update",
+    "STUB_ANSWER",
+    "NO_TOKEN_USAGE",
+    "ANSWER_REMINDER",
+    "NO_ANSWER_CALL",
+]
 
 STUB_ANSWER = "STUB_ANSWER"
 
@@ -145,6 +152,24 @@ def _ended_without_answer(
     if result.get("clarification_requested") or execution.get("terminal") in ("refused", "capped"):
         return False
     return any(_is_reminder(m) for m in result.get("messages") or ())
+
+
+def paused_agent_update(state: Mapping[str, Any], agent_values: Mapping[str, Any], model: Any) -> dict[str, Any]:
+    """What an agent paused on ``ask_user`` spent and ran, read from its own checkpoint.
+
+    The pause raises through this node, so the node's update never reaches the turn state.
+    """
+    history = list(state.get("messages") or [])
+    inbound = len(history) + (0 if _question_message(dict(state), history) is None else 1)
+    fresh = list(agent_values.get("messages") or [])[inbound:]
+    attempts = list((agent_values.get("attempts_by_call") or {}).values())
+    return {
+        "usage": [
+            *(state.get("usage") or []),
+            usage_row(stage="agent_core", model=model, messages=fresh, turn_index=state.get("turn_index", 1)),
+        ],
+        "execution": execution_from_attempts(attempts),
+    }
 
 
 async def _run(
@@ -466,15 +491,10 @@ def _as_count(value: Any) -> int:
 
 
 def _last_executed_sql(attempts: Any) -> str | None:
-    """See ADR 0008. ``sample`` rows are excluded.
+    """See ADR 0008. ``sample`` rows and page reads are excluded.
 
     Never the model's argument: canonicalise and the row limit rewrite it.
     """
-    last: str | None = None
-    for attempt in answering_attempts(list(attempts or ())):
-        if not isinstance(attempt, Mapping):
-            continue
-        sql = attempt.get("executed_sql")
-        if sql:
-            last = str(sql)
-    return last
+    attempt = delivering_attempt([a for a in attempts or () if isinstance(a, Mapping)])
+    sql = attempt.get("executed_sql") if attempt is not None else None
+    return str(sql) if sql else None

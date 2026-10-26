@@ -1,6 +1,6 @@
 # Measurement
 
-The baseline was run twice on 2026-10-23 (P16), on all 1,351 questions. Execution accuracy was 0.553 and 0.544, coverage was 0.843 and 0.851, the two runs disagreed on 11.3% of questions, and a question cost about $0.0028. [The baseline](#the-baseline) gives each figure by half and the conditions it was measured under. Two runs on `gpt-6.1-sol` on 2026-10-26 scored 0.548 and 0.539 at about $0.032 a question ([gpt-6.1-sol](#gpt-61-sol)). Where each wrong answer was lost is in [Error analysis](error-analysis.md).
+The baseline was run twice on 2026-10-23 (P16), on all 1,351 questions. Execution accuracy was 0.553 and 0.544, coverage was 0.843 and 0.851, the two runs disagreed on 11.3% of questions, and a question cost about $0.0028. [The baseline](#the-baseline) gives each figure by half and the conditions it was measured under. Two runs on `gpt-6.1-sol` on 2026-10-26 scored 0.548 and 0.539 at about $0.032 a question ([gpt-6.1-sol](#gpt-61-sol)). After the paged-delivery and paused-turn fixes, the Luna baseline was run twice more and scored 0.569 and 0.568, 2.0 points above P16, at $0.0031 a question with paused turns now counted ([After the fixes](#after-the-fixes)). Where each wrong answer was lost is in [Error analysis](error-analysis.md).
 
 ## How a lake run works
 
@@ -73,7 +73,31 @@ Sol costs about 12 times as much per question and scores the same. Averaged over
 
 Sol is priced at $2.00 per million input tokens, $0.10 for cache reads, $2.50 for cache writes and $10.00 for output, from OpenAI's pricing page on 2026-10-25. A question averaged about 28,100 input tokens, of which 18,500 were cache reads and 9,100 cache writes, plus 670 output tokens over 6.3 model calls. Sol writes a quarter of the output Luna does, so most of its cost is the context: cache writes are about 70% of it. At 10 workers the runs used about 750,000 tokens a minute against Sol's 1,000,000 limit, and hit no rate-limit error.
 
-Neither model's cost includes the turns that paused on a clarifying question, which record no tokens, and neither coverage figure excludes them. [Error analysis](error-analysis.md) gives the size of both gaps.
+Neither model's cost includes the turns that paused on a clarifying question, which recorded no tokens in these runs, and the printed coverage counts those turns as retrieving nothing. [Error analysis](error-analysis.md) gives the size of both gaps, and the runs below fix them.
+
+## After the fixes
+
+Two fixes landed on branch `fix/paged-delivery-and-paused-record` at engine commit `0cf6502d`. A statement that re-runs an earlier one with `OFFSET` is a page read and never the delivered SQL, and a result longer than 20 rows tells the agent the answer delivers every row. A turn paused on `ask_user` now records its tokens, routing, retrieval and attempts. The Luna baseline was then run twice on 2026-10-26 with the defaults and `--embed`, on BIRD-corpus `f9392dca`. Run A used 16 workers and took about 63 minutes. Run B used 32 workers and took about 33 minutes of running, in two parts: at question 470 the driver failed to allocate memory, because the Docker VM's file cache had filled Windows' commit limit, and `--resume` finished it after the cache was dropped. Each run had one row that hit the agent's recursion limit, and `--resume` ran it again. The artifacts are `runs/eval/fix/run_a.jsonl` and `run_b.jsonl`, which are not committed.
+
+| | P16 A | P16 B | Fixed A | Fixed B |
+|---|---|---|---|---|
+| Execution accuracy | 0.553 (747) | 0.544 (735) | 0.569 (769) | 0.568 (768) |
+| Dev / holdout | 0.578 / 0.532 | 0.578 / 0.516 | 0.593 / 0.550 | 0.586 / 0.554 |
+| Answers delivering a page | 20 | 30 | 0 | 0 |
+| Capped at five statements | 15 | 13 | 1 | 2 |
+| Clarifying questions | 180 | 176 | 159 | 171 |
+| Coverage, as printed | 0.843 | 0.851 | 0.910 | 0.908 |
+| Coverage, turns not paused | 0.965 | 0.971 | 0.971 | 0.969 |
+| Cost per question, all turns | not recorded | not recorded | $0.0031 | $0.0031 |
+| Cost per question, paused turns left out | $0.0027 | $0.0028 | $0.0027 | $0.0028 |
+| Median time per question | 41 s | 43 s | 40 s | 38 s |
+| Run-to-run disagreement | 152 (11.3%) | | 139 (10.3%) | |
+
+Averaged over two runs each and paired by question, the fixed engine is 2.0 points more accurate than P16, with a 95% interval from 0.6 to 3.5 points. Paging stopped: no statement in either run was marked a page read, and no answer delivered one, so it appears the note in the tool reply is what did the work. The page-read rule stays as the backstop. The one `OFFSET` delivered in each run is `LIMIT 1 OFFSET 2` for "the third-highest freight", which is correct. Of the 20 questions run A of P16 answered with a page, 13 are now right, and so are 7 of its 15 capped turns.
+
+The printed coverage rose because paused turns now record what they retrieved. Retrieval itself did not change: coverage on turns that did not pause is the same. A paused turn cost about $0.0027, the same as a finished one, and paused turns were $0.43 and $0.45 of each run's $4.13 and $4.17.
+
+The engine is otherwise the Sol runs' engine plus these two fixes, so the Sol runs above were measured with paging and without paused-turn records.
 
 `grade_turn` in [`eval/grade.py`](../src/governed_bi/eval/grade.py) compares an `answered` turn's rows with the gold rows. Whole numbers must match exactly. A fractional number may differ by one part in a billion, or by 1e-12 when the values are near zero. Text and numbers stay different types. `refused`, `clarification`, `capped`, `crashed` and `no_sql` score incorrect, and the grader executes only a statement the engine delivered. A missing gold on an answered turn is `correct: null`, which leaves the row out of the accuracy share.
 
@@ -102,5 +126,7 @@ Sol's figures, run A then run B:
 | Ambiguous-guess refusals | 0 and 0 |
 
 Sol almost never marks a guess, so on Sol the guess marker no longer singles out the answers worth checking.
+
+After the fixes, Luna's answers with a guess were right 71/142 = 0.500 and 82/137 = 0.599 of the time, against 698/1026 = 0.680 and 686/1016 = 0.675 with none. 85% of answers carried at least one `found_in_query` entry in both runs.
 
 `python -m governed_bi.eval` is the small harness over a SQLite file, with configurations `oracle`, `stub` and `scripted`. Its JSON summary includes this same assumption block, plus execution accuracy, a refusal breakdown, and the single-run checks. The lake command is the one above.

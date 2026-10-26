@@ -117,11 +117,15 @@ When the agent calls `ask_user`, the turn pauses, and the eval writes its row fr
 - Cost per question leaves out what those turns spent. If a paused turn cost as much as the average finished one, run A cost about $4.28, not $3.71, or $0.0032 a question, not $0.0027.
 - The published coverage counts a paused turn as retrieving nothing. Coverage over all 1,224 questions whose gold reads a table is 0.843. Over the turns that did not pause it is 0.965. Retrieval misses a gold table on 3.5% of turns, not 15.7%.
 
-The pauses are mostly the same questions: 111 paused in both runs, and 245 in at least one. A sample of the 111 includes "How many cities are in the Philippines?" and "List the names of business in AZ with a rating of 5.", which read as answerable. Whether the model is too cautious cannot be checked until a paused turn records its context.
+The pauses are mostly the same questions: 111 paused in both runs, and 245 in at least one. A sample of the 111 includes "How many cities are in the Philippines?" and "List the names of business in AZ with a rating of 5.", which read as answerable. Whether the model is too cautious could not be checked from these runs. The rerun after the fix could, and it mostly is not: [After the fixes](#after-the-fixes) shows that about half of the paused turns had not retrieved the tables the question needs.
+
+Fixed after these runs: the eval now reads a paused agent's own checkpoint and builds the row with the same projection `finish` uses (`with_paused_agent` in [`eval/harness.py`](../src/governed_bi/eval/harness.py), `paused_record` in [`serve/nodes/finish.py`](../src/governed_bi/serve/nodes/finish.py)). In the two full reruns, all 159 and 171 paused rows carried them.
 
 ### 2. The delivered statement can be a page of the answer
 
 `run_query` returns at most 20 rows to the model ([`serve/fetch.py`](../src/governed_bi/serve/fetch.py)), with the full row count. When the count is larger, the model sometimes reads further with `LIMIT 20 OFFSET 20`. The last statement it ran becomes the delivered SQL, so the graded result is one page. Every such answer was wrong: 19 in run A and 30 in run B, or 1.4% and 2.2% of all questions. In Sol's run A, 41 wrong answers were paged.
+
+Fixed after these runs. A statement that re-runs an earlier one with an `OFFSET` above zero is recorded as a page read ([`serve/paging.py`](../src/governed_bi/serve/paging.py)): it counts against the attempt limit, but it never replaces the delivered statement or the result table. A result longer than 20 rows now tells the model that the answer delivers every row, so it need not page. A model that starts with `LIMIT 20` and pages from there still delivers its first page, because no full statement ran.
 
 ### 3. 9% of golds cannot test the engine
 
@@ -200,6 +204,30 @@ Two things are more common on Sol:
 
 Fewer of Sol's mistakes are a wrong table or join (18 against 27), but it still picked the wrong database three times, and twice it hard-coded the answer it expected, `'Madagascar'` and `'China'`, instead of querying for it. Once it delivered an exploratory statement, `SELECT DISTINCT JobTitle`, as the answer.
 
+## After the fixes
+
+The Luna baseline was run twice more with both fixes in ([Measurement](measurement.md#after-the-fixes) has the conditions). Execution accuracy was 0.569 and 0.568, against 0.553 and 0.544. Paired by question and averaged over the two runs, that is 2.0 points better, with a 95% interval from 0.6 to 3.5 points.
+
+| | P16 A, B | Fixed A, B |
+|---|---|---|
+| Answers delivering a page | 20, 30 | 0, 0 |
+| Capped at five statements | 15, 13 | 1, 2 |
+| Paused on a clarifying question | 180, 176 | 159, 171 |
+| Correct, of answers | 0.660, 0.645 | 0.658, 0.666 |
+| Correct, of answers with every gold table retrieved | 0.702, 0.682 | 0.705, 0.711 |
+| Accuracy on golds that read a table | 0.580, 0.568 | 0.599, 0.600 |
+| Right in both runs, wrong in both, disagreed | 665, 534, 152 | 699, 513, 139 |
+
+The clearest gains are the answers that used to be pages or caps. Paging used up the attempt limit, so removing it freed both. Of P16 run A's 20 paged answers, 13 are now right, and so are 7 of its 15 capped turns. 33 of its 180 paused questions were answered correctly this time.
+
+### Why turns pause
+
+Paused turns now record their routing and retrieval, so the question in finding 1 has an answer. The gold schema was in the top three for 82 of 159 paused turns in run A (52%) and 100 of 171 in run B (58%), against 98% for turns that did not pause. Among paused turns whose gold reads a table, a gold table was missing from what was retrieved in 78 of 139 and 80 of 146, more than half. 34 paused turns in each run had run a statement first.
+
+So the model mostly asks when it cannot see the data the question needs, and the question is a reasonable response to a retrieval miss. The pauses are a retrieval problem more than a caution problem, and retrieval on these questions, not the agent's prompt, is the place to reduce them. 106 questions paused in both runs and 224 in at least one. In 50 of the 139 disagreements, one run paused and the other did not.
+
+With paused turns counted, retrieval misses a gold table on about 9% of questions whose gold reads a table (coverage 0.910 and 0.908), and most of those misses are on the turns that paused.
+
 ## Metrics to track
 
 These are the metrics a run should report, with the denominator each one needs. Each can be read from the rows today, except where noted.
@@ -210,7 +238,7 @@ These are the metrics a run should report, with the denominator each one needs. 
 | Accuracy on tabled golds | correct / questions whose gold reads a table | The engine's accuracy without the constant golds. |
 | Pause rate | paused / all questions | The largest single loss. |
 | Routing recall at 3 | gold schema in the top 3 / turns not paused | Routing. |
-| Coverage | every gold table retrieved / turns not paused whose gold reads a table | Retrieval. The published figure includes paused turns and should not. |
+| Coverage | every gold table retrieved / questions whose gold reads a table | Retrieval. Since the paused-turn fix the printed figure includes paused turns correctly; report it beside coverage on turns that did not pause. |
 | Answer rate | answered / turns not paused | How often a turn that started ends in an answer. |
 | Answer accuracy | correct / answered | What a person who gets an answer can expect. |
 | Answer accuracy given coverage | correct / answered with every gold table retrieved | The model's share of the loss, with retrieval held fixed. |
@@ -218,9 +246,9 @@ These are the metrics a run should report, with the denominator each one needs. 
 | Paged deliveries | answers whose SQL has `OFFSET` above 0 or `LIMIT 20` / answered | Should be zero. |
 | Retry and guess accuracy | accuracy for answers with three or more statements, and with a guess | Whether the warning signals still separate. |
 | Stability | right in both runs, wrong in both, disagreed / all questions | Run-to-run noise. Any change smaller than the disagreement needs both runs. |
-| Cost per question | priced tokens / all questions | Needs paused turns to record their tokens first. |
+| Cost per question | priced tokens / all questions | Includes paused turns since the fix. |
 
-The figures that can be reported with confidence now are execution accuracy, accuracy on tabled golds, the pause rate, routing recall, answer accuracy, and stability. Coverage and cost need the paused-turn record fixed first.
+The figures that can be reported with confidence are execution accuracy, accuracy on tabled golds, the pause rate, routing recall, answer accuracy and stability, and, from the fixed runs on, coverage and cost.
 
 The two runs disagree on 152 questions, which puts the standard error of a paired difference in execution accuracy at about 0.9 points. A difference of under about 2 points between two configurations is within what a rerun of the same configuration produces. The intervals in the tables are for one run.
 

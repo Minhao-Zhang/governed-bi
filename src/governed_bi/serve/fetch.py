@@ -36,6 +36,9 @@ _DEFAULT_READ_BODY_MAX_CHARS = 80_000
 #: Ceiling ``sample_rows`` cannot widen. Nothing here writes a setting (ADR 0006).
 SAMPLE_ROWS_MAX_VALUES = 20
 
+#: Rows of a ``run_query`` result the agent sees. The answer delivers all of them.
+PREVIEW_ROWS = 20
+
 
 def read_body_cap(state: Mapping[str, Any], cfg: Mapping[str, Any]) -> int:
     for source in (state, state.get("settings_resolved") or {}, cfg):
@@ -303,14 +306,18 @@ def run_query(
         # Passed every layer and was sent. An error string alone looks like no attempt.
         error = f"{type(exc).__name__}: {exc}"
         return f"run_query error: {error}", {**attempt, "error": capped_error(error)}
-    preview = [list(r) for r in list(rows)[:20]]
-    payload = json.dumps(
-        {
-            "columns": list(columns),
-            "rows": preview,
-            "truncated": bool(truncated),
-            "row_count": len(rows),
-        },
-        default=str,
-    )
+    preview = [list(r) for r in list(rows)[:PREVIEW_ROWS]]
+    body: dict[str, Any] = {
+        "columns": list(columns),
+        "rows": preview,
+        "truncated": bool(truncated),
+        "row_count": len(rows),
+    }
+    if len(rows) > PREVIEW_ROWS:
+        # Without this, agents re-ran the statement with LIMIT and OFFSET to read on.
+        body["note"] = (
+            f"Only the first {PREVIEW_ROWS} of {len(rows)} rows are shown. The answer delivers every "
+            "row of this statement, so do not re-run it with LIMIT or OFFSET to read more."
+        )
+    payload = json.dumps(body, default=str)
     return payload, attempt

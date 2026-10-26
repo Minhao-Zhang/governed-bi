@@ -20,7 +20,7 @@ from governed_bi.corpus.schema import Binding, TermAsset
 from governed_bi.govern.identifiers import column_key, fold, normalise_column_key
 from governed_bi.govern.policy import DEFAULT_DIALECT
 from governed_bi.govern.scopes import iter_scopes
-from governed_bi.serve.ledger import answering_attempts, attempt_field
+from governed_bi.serve.ledger import delivering_attempt
 
 __all__ = [
     "Basis",
@@ -155,14 +155,8 @@ def check_layer_claims(
 
 def delivered_statement(attempts: Sequence[Mapping[str, Any]]) -> str | None:
     """The checked text of the statement whose rows became ``result_table``, before the row limit."""
-    text: str | None = None
-    ran = False
-    for attempt in answering_attempts(attempts):
-        if attempt_field(attempt, "executed_sql") is None:
-            continue
-        ran = True
-        text = _text_before_limit(attempt)
-    return text if ran else None
+    attempt = delivering_attempt(attempts)
+    return None if attempt is None else _text_before_limit(attempt)
 
 
 def found_in_query(

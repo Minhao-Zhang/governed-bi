@@ -110,6 +110,8 @@ STATE_READERS: dict[str, str] = {
     "_latency_sec": "the register's: a derived cost field, from turn_started_at",
     "_recorded_channels": "the register's: one reader for channel_scoring and channel_degraded",
     "extract": "the register's own reader, driven by RECORD_REGISTER field name",
+    "_record": "the register's: one projection shared by finish and a paused turn",
+    "paused_record": "a turn paused on ask_user, which finish has not reached; reads its ledger",
 }
 
 #: The functions that make up the decision. None may take a state mapping or name a channel.

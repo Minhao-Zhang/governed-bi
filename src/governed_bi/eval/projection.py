@@ -15,6 +15,7 @@ from governed_bi.eval.replay import PINNED_SCHEMAS_KEY
 from governed_bi.registry.quantity import Measured
 from governed_bi.registry.stages import Outcome
 from governed_bi.serve.messages import last_proposed_sql
+from governed_bi.serve.nodes.finish import paused_record
 
 __all__ = ["ASSUMPTION_BASES", "project_turn"]
 
@@ -59,6 +60,8 @@ def _attempt_trace(execution: Any) -> list[dict[str, Any]]:
                 "reason_code": attempt.get("reason_code"),
                 "passed": attempt.get("passed"),
                 "path": attempt.get("path"),
+                # Only when set, so a row without paging keeps the shape older artifacts have.
+                **({"reads_page": True} if attempt.get("reads_page") else {}),
             }
         )
     return trace
@@ -232,11 +235,13 @@ def project_turn(
     record = answer.get("record") if isinstance(answer, Mapping) else None
     if not isinstance(record, Mapping):
         record = {}
-    # A paused turn is not a crash. `ask_user` writes no answer, so the record
-    # fields below are null. A later decline is the same outcome with a full row.
+    # A paused turn is not a crash. `ask_user` writes no answer, so its record is
+    # built here. A later decline is the same outcome with a record from ``finish``.
     interrupted = bool(state.get("__interrupt__")) and not answer
     if interrupted:
         outcome = Outcome.clarification.value
+        # ``finish`` has not run, so build the record it would write from the paused state.
+        record = paused_record(state)
     else:
         outcome = str(answer.get("outcome") or record.get("outcome") or "crashed")
     crashed = outcome == "crashed"

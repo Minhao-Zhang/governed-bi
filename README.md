@@ -44,25 +44,22 @@ LIMIT 200001
 
 The app was measured on BIRD-Obfuscation: 1,351 questions over 57 renamed databases, graded by comparing the result rows with the gold query's rows. Each configuration was run twice on all 1,351 questions. The agent writes the SQL and the answer. The utility calls are the smaller steps, such as rewriting the question for each retrieval channel. Embeddings are `text-embedding-3-large` in both.
 
-- **Luna**, the default: the agent on `gpt-6-luna` at reasoning effort `xhigh`, the utility calls on `gpt-6-luna` at `medium`. Run on 2026-10-23.
-- **Sol**: the agent on `gpt-6.1-sol` at `high`, the utility calls on `gpt-6.1-sol` at `low`. Run on 2026-10-26.
+- **Luna**, the default: the agent on `gpt-6-luna` at reasoning effort `xhigh`, the utility calls on `gpt-6-luna` at `medium`.
+- **Sol**: the agent on `gpt-6.1-sol` at `high`, the utility calls on `gpt-6.1-sol` at `low`.
 
-| | Luna A | Luna B | Sol A | Sol B |
-|---|---|---|---|---|
-| Execution accuracy | 0.553 | 0.544 | 0.548 | 0.539 |
-| Accuracy on the held-out databases | 0.532 | 0.516 | 0.535 | 0.527 |
-| Every gold table retrieved, on turns that did not pause | 0.965 | 0.971 | 0.952 | 0.948 |
-| Ended in a clarifying question | 13.3% | 13.0% | 11.3% | 10.8% |
-| Cost per question | $0.0027 | $0.0028 | $0.0321 | $0.0324 |
-| Cost per run of 1,351 questions | $3.71 | $3.75 | $43.41 | $43.83 |
-| Median time per question | 41 s | 43 s | 20 s | 20 s |
-| Questions the two runs disagreed on | 152 (11.3%) | | 99 (7.3%) | |
+| Configuration | Execution accuracy | Held-out databases | Cost per question | Cost per run | Median time | Runs disagreed on |
+|---|---|---|---|---|---|---|
+| Luna, current engine (2026-10-26) | 0.569, 0.568 | 0.550, 0.554 | $0.0031 | $4.13, $4.17 | 40 s, 38 s | 139 (10.3%) |
+| Luna, P16 baseline (2026-10-23) | 0.553, 0.544 | 0.532, 0.516 | $0.0027 | $3.71, $3.75 | 41 s, 43 s | 152 (11.3%) |
+| Sol (2026-10-26) | 0.548, 0.539 | 0.535, 0.527 | $0.0321 | $43.41, $43.83 | 20 s, 20 s | 99 (7.3%) |
 
-Sol costs about 12 times as much and scores the same: averaged over two runs each, it is 0.4 points lower, with a 95% interval from 2.2 points lower to 1.2 points higher. It is twice as fast and more repeatable. Luna stays the default.
+The current engine is P16 plus two fixes the error analysis found. An answer no longer delivers one page of its result, and a turn that pauses on a clarifying question records what it spent and retrieved. Paired by question, it is 2.0 points more accurate than P16, with a 95% interval from 0.6 to 3.5 points. Its cost includes the paused turns, which P16's and Sol's did not; left out the same way, it is $0.0027 and $0.0028. Every gold table was retrieved for 91% of questions whose gold reads a table.
 
-The assumptions carry signal on Luna. Its answers that included a guess were right 46% to 50% of the time, against 67% to 68% with no guess, so "This is a guess" marks the answers worth checking. Sol almost never marks a guess, so on Sol the marker says little. On both, the server added at least one choice the model had not stated to more than 80% of answers.
+Sol ran on the engine before the fixes. Against P16 it costs about 12 times as much and scores the same: averaged over two runs each, it is 0.4 points lower, with a 95% interval from 2.2 points lower to 1.2 points higher. It is twice as fast and more repeatable. Luna stays the default.
 
-Most of the loss is not retrieval. On Luna, routing put the right database in the top three for 97% of turns. Of run A's 604 wrong questions, 30% paused on a clarifying question, and most of the rest were answered with SQL the grader rejected. Read by hand, about two thirds of those return the right rows in a different layout, differ on `DISTINCT` or ties, or have a doubtful gold. [Error analysis](docs/error-analysis.md) follows every question through the pipeline.
+The assumptions carry signal on Luna. Its answers that included a guess were right 46% to 60% of the time over the four runs, against 67% to 68% with no guess, so "This is a guess" marks the answers worth checking. Sol almost never marks a guess, so on Sol the marker says little. On both, the server added at least one choice the model had not stated to more than 80% of answers.
+
+Most of the loss is not routing. On Luna, routing put the right database in the top three for 98% of the turns that went on to answer. About 12% of questions end in a clarifying question, and more than half of those turns had not retrieved a table the question needs, so the model asks when it cannot see the data. Most of the other wrong answers are SQL the grader rejected. Read by hand, about two thirds of those return the right rows in a different layout, differ on `DISTINCT` or ties, or have a doubtful gold. [Error analysis](docs/error-analysis.md) follows every question through the pipeline.
 
 [Measurement](docs/measurement.md) gives every figure by half, the conditions of the runs, and how to run one.
 

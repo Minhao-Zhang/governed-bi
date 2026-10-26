@@ -23,7 +23,7 @@ from governed_bi.govern.ledger import (
     ExecutorPath,
     statement_sha256,
 )
-from governed_bi.govern.policy import GovernancePolicy
+from governed_bi.govern.policy import DEFAULT_DIALECT, GovernancePolicy
 from governed_bi.registry.prompts import prompt_text
 from governed_bi.serve import fetch
 from governed_bi.serve.agent_state import CAP_LEDGER_KEY, AttemptBook
@@ -49,6 +49,7 @@ from governed_bi.serve.ledger import (
     execution_from_attempts,
     pipeline_error_attempt,
 )
+from governed_bi.serve.paging import is_page_of
 from governed_bi.serve.runtime import bool_setting, configurable, prompt_variants
 from governed_bi.serve.schema_term_guard import find_schema_leak
 from governed_bi.serve.structured_check import percentage_scale_suffix
@@ -213,6 +214,28 @@ def _emit_attempt(runtime: Any, attempt: Mapping[str, Any], *, number: int, payl
         event_id=tool_event_id("execute", call_id),
         detail=detail,
     )
+
+
+PAGE_NOTE = (
+    "\nThis re-ran an earlier statement with OFFSET, so it only read more rows. The answer "
+    "delivers every row of the earlier statement, not this page."
+)
+
+
+def _reads_page(attempt: Any, committed: Any, call_id: str, *, dialect: str | None) -> bool:
+    """Against earlier statements that ran cleanly on the answering path, not samples or other pages."""
+    if attempt_field(attempt, "executed_sql") is None:
+        return False
+    earlier = [
+        attempt_field(row, "checked_sql")
+        for key, row in (committed or {}).items()
+        if key != call_id
+        and attempt_field(row, "path") == "agent"
+        and attempt_field(row, "executed_sql") is not None
+        and not attempt_field(row, "error")
+        and not attempt_field(row, "reads_page")
+    ]
+    return is_page_of(attempt_field(attempt, "checked_sql"), earlier, dialect=dialect or DEFAULT_DIALECT)
 
 
 def _result_table(payload: str) -> dict[str, Any] | None:
@@ -399,8 +422,12 @@ def build_tools(
                     )
                 },
             )
+        page = _reads_page(attempt, committed, call_id, dialect=getattr(connector, "dialect", None))
+        if page:
+            attempt = {**attempt, "reads_page": True}
         _emit_attempt(runtime, attempt, number=attempt_number, payload=payload)
-        table = _result_table(payload)
+        # A page keeps the earlier statement's table, the one the answer delivers.
+        table = None if page else _result_table(payload)
         # Hint from ``executed_sql``, on the reply text only. Layers rewrite the
         # argument, and ``result_table`` stays free of the hint.
         suffix = ""
@@ -410,7 +437,7 @@ def build_tools(
             )
         return _reply(
             runtime,
-            _attempt_budget(payload + suffix, attempt_number, book.cap),
+            _attempt_budget(payload + suffix + (PAGE_NOTE if page else ""), attempt_number, book.cap),
             attempts_by_call={call_id: attempt},
             **({"result_table": table} if table is not None else {}),
         )

@@ -14,10 +14,10 @@ from governed_bi.registry.record import project
 from governed_bi.registry.stages import ATTEMPT_CAP_REFUSED_BY, Outcome, Stage, classify_outcome
 from governed_bi.serve.agent_state import NO_ANSWER_CALL
 from governed_bi.serve.events import emit, rail_event_id
-from governed_bi.serve.ledger import answering_attempts, attempt_field
+from governed_bi.serve.ledger import answering_attempts, attempt_field, execution_from_attempts
 from governed_bi.serve.outcome import OutcomeInputs, TurnOutcome, normalised
 
-__all__ = ["classify_turn", "finish"]
+__all__ = ["classify_turn", "finish", "paused_record"]
 
 
 def _usage_for_turn(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -281,32 +281,9 @@ def finish(state: Mapping[str, Any]) -> dict[str, Any]:
     inputs = OutcomeInputs.from_state(state)
     result = classify_turn(inputs)
     outcome = result.outcome
-    execution = result.execution
     failed_stage = result.failed_stage
     error_type = result.error_type
-    usage = _usage_for_turn(state)
-
-    # Do not substitute a guard. The failed-open sentinel means the guard ran and
-    # let the question through. Absence is the wiring failure.
-    projected_state: dict[str, Any] = dict(state)
-    projected_state["execution"] = execution
-    projected_state["usage"] = usage
-    if projected_state.get("n_re_served") is None:
-        projected_state["n_re_served"] = 0
-    # Do not substitute ``{}`` for ``settings_resolved``. An empty mapping is a
-    # configuration of nulls, and the drift check would pass it. Absence stays absence.
-
-    record = project(
-        projected_state,
-        extract=_extract_factory(
-            outcome=outcome,
-            execution=execution,
-            usage=usage,
-            latency=_latency_sec(state),
-            failed_stage=failed_stage,
-            error_type=error_type,
-        ),
-    )
+    record = _record(state, outcome, result.execution, failed_stage=failed_stage, error_type=error_type)
 
     answer = {
         "outcome": outcome.value,
@@ -329,6 +306,49 @@ def finish(state: Mapping[str, Any]) -> dict[str, Any]:
         detail={"outcome": outcome.value, "failed_stage": failed_stage},
     )
     return {"answer": answer}
+
+
+def paused_record(state: Mapping[str, Any]) -> dict[str, Any]:
+    """The record of a turn paused on ``ask_user``, which ``finish`` has not reached.
+
+    Built by the same projection, so a paused row carries its routing, retrieval and spend.
+    """
+    state = normalised(state)
+    execution = state.get("execution")
+    if not isinstance(execution, Mapping):
+        execution = execution_from_attempts([])
+    return _record(state, Outcome.clarification, execution, failed_stage=None, error_type=None)
+
+
+def _record(
+    state: Mapping[str, Any],
+    outcome: Outcome,
+    execution: Mapping[str, Any],
+    *,
+    failed_stage: str | None,
+    error_type: str | None,
+) -> dict[str, Any]:
+    usage = _usage_for_turn(state)
+    # Do not substitute a guard. The failed-open sentinel means the guard ran and
+    # let the question through. Absence is the wiring failure.
+    projected_state: dict[str, Any] = dict(state)
+    projected_state["execution"] = execution
+    projected_state["usage"] = usage
+    if projected_state.get("n_re_served") is None:
+        projected_state["n_re_served"] = 0
+    # Do not substitute ``{}`` for ``settings_resolved``. An empty mapping is a
+    # configuration of nulls, and the drift check would pass it. Absence stays absence.
+    return project(
+        projected_state,
+        extract=_extract_factory(
+            outcome=outcome,
+            execution=execution,
+            usage=usage,
+            latency=_latency_sec(state),
+            failed_stage=failed_stage,
+            error_type=error_type,
+        ),
+    )
 
 
 def _final_status(path_kind: Any, outcome: Outcome) -> str:

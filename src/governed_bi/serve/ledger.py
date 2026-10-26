@@ -23,6 +23,7 @@ __all__ = [
     "attempt_field",
     "INTROSPECTION_PATHS",
     "answering_attempts",
+    "delivering_attempt",
     "execution_from_attempts",
     "cap_attempt",
     "pipeline_error_attempt",
@@ -47,6 +48,19 @@ def answering_attempts(attempts: Sequence[Any]) -> list[Any]:
     A second copy of "which attempts count" is how a turn gets reported as answered.
     """
     return [a for a in attempts if attempt_field(a, "path") not in INTROSPECTION_PATHS]
+
+
+def delivering_attempt(attempts: Sequence[Any]) -> Any | None:
+    """The last answering statement that ran and was not a page read. Its rows are the answer.
+
+    One reader for the delivered SQL and the statement ``found_in_query`` reads, so they agree.
+    """
+    last: Any | None = None
+    for attempt in answering_attempts(list(attempts or ())):
+        if attempt_field(attempt, "executed_sql") is None or attempt_field(attempt, "reads_page"):
+            continue
+        last = attempt
+    return last
 
 
 def execution_from_attempts(attempts: Sequence[Any]) -> ExecutionRecord:
