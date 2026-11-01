@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@langchain/core": "^1.2.13",
-    "@langchain/langgraph-sdk": "^1.12.0",
+    "@langchain/langgraph-sdk": "^1.12.8",
     "@langchain/react": "^1.2.0",
     "@tanstack/react-query": "^5.104.0",
     "class-variance-authority": "^0.7.1",
